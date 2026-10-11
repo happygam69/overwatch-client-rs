@@ -164,6 +164,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ow-range"
+version = "0.1.0"
+dependencies = [
+ "ow-casc",
+ "ow-sim",
+ "ow-tank",
+]
+
+[[package]]
+name = "ow-sim"
+version = "0.1.0"
+
+[[package]]
 name = "ow-stu"
 version = "0.1.0"
 

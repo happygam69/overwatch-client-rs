@@ -1,0 +1,16 @@
+[package]
+name = "ow-range"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Practice range: test extracted heroes and weapons against targets"
+
+[[bin]]
+name = "ow-range"
+path = "src/main.rs"
+
+[dependencies]
+ow-casc.workspace = true
+ow-tank.workspace = true
+ow-sim.workspace = true

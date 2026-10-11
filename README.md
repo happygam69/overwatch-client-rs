@@ -105,6 +105,7 @@ cargo run --release -p ow-probe -- weapon-params
 | `health` | per-hero health, armour and shields from the entity schema |
 | `weapons` | each hero's weapons and the state-script graph each uses |
 | `weapon-params [hero]` | named parameters inside those graphs, joined to their owning field |
+| `health` | per-hero health, armour and shields from the entity schema |
 | `settings [n]` | the per-hero tuning multipliers, with bounds resolved |
 | `classmap` | how many STU class names were recovered |
 | `buckets` | diagnosis for the container alone, before anything else runs |
@@ -129,7 +130,10 @@ crates/ow-casc   the container: build info, config, keyring, bucket index,
                  BLTE, encoding file, root file
 crates/ow-stu    structured-data assets, which is where gameplay data lives
 crates/ow-tank   Overwatch semantics: asset GUID typing, content manifest,
-                 class map, and the assembled GameData view
+                 class map, field names, entities, weapons, graphs
+crates/ow-sim    the combat simulation: fixed tick, weapons, hitscan,
+                 projectiles, pools, damage. No IO, unit-tested
+crates/ow-range  the practice range: drop a hero in and shoot targets
 crates/ow-probe  the command line probe
 docs/formats/    the file formats and layers, as verified against a real install
 docs/provenance.md  what was learned from where
@@ -139,6 +143,36 @@ dev/             development scratch: the format probes used to pin things
 
 The split mirrors the reference projects: format crates carry no game semantics,
 and a game-layer crate sits on top.
+
+## The practice range
+
+`ow-range` is where the data becomes a fight:
+
+```
+$ cargo run --release -p ow-range
+> hero 10
+hero 10 (0x02e000000000000a): 175 health, 0 armour, 0 shields, 1 weapon(s)
+  slot 1: castLength=100 numProjectilesPerShot=1 numShotsPerSecond=2/1
+          projectileLifetime=10 projectileSpeed=250 ...
+> damage 12
+> target add 200 15
+> ttk
+200 hp at 12.0 damage per shot = 17 shots, 8.50s at 2.00 shots/s
+> fire 3
+3 shot(s) in 1.50s: 3/3 pellets hit, 36.0 damage applied, 24.0 dps
+```
+
+It reads pools, fire rates, projectile speeds and ranges from the install. It
+asks for **per-shot damage**, because that could not be extracted. It treats the
+damage order and armour mitigation as **named assumptions** in
+`ow-sim/src/rules.rs`, changeable at runtime with `order` and `armour`, rather
+than burying them. And it surfaces two ambiguities instead of hiding them: a
+weapon graph may declare several firing modes with nothing saying which is the
+primary, and `numShotsPerSecond = 999` is a sentinel meaning "as fast as input
+allows", not a rate.
+
+See [`docs/practice-range.md`](docs/practice-range.md) for what is modelled, what
+is not, and why.
 
 ## Method
 
