@@ -171,11 +171,18 @@ pub fn derive_key_iv(
     Ok((key, iv))
 }
 
-/// Which manifest is being decrypted. They share a table but differ in
-/// constants, so the kind is part of the derivation.
+/// Which manifest is wanted. All three kinds are `.cmf` files distinguished only
+/// by a marker in the name, so the kind has to be matched explicitly rather than
+/// inferred from the extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManifestKind {
+    /// The base manifest, untagged and holding most assets.
     Content,
+    /// Localised text for one locale.
+    Text,
+    /// Localised audio for one locale. Nothing here reads it.
+    Speech,
+    /// The asset dependency graph, a `.trg`.
     ResourceGraph,
 }
 
@@ -183,15 +190,34 @@ impl ManifestKind {
     fn name(self) -> &'static str {
         match self {
             ManifestKind::Content => "content manifest (cmf)",
+            ManifestKind::Text => "text manifest (cmf)",
+            ManifestKind::Speech => "speech manifest (cmf)",
             ManifestKind::ResourceGraph => "resource graph (trg)",
         }
     }
 
     fn extension(self) -> &'static str {
         match self {
-            ManifestKind::Content => ".cmf",
             ManifestKind::ResourceGraph => ".trg",
+            _ => ".cmf",
         }
+    }
+
+    /// Marker that must appear in the file name, if any.
+    ///
+    /// Matched on underscore-delimited segments so a hero or map whose name
+    /// contains "text" cannot be mistaken for a text manifest.
+    fn marker(self) -> Option<&'static str> {
+        match self {
+            ManifestKind::Text => Some("text"),
+            ManifestKind::Speech => Some("speech"),
+            _ => None,
+        }
+    }
+
+    /// Whether this kind is per-locale and therefore needs a locale tag.
+    fn is_localised(self) -> bool {
+        matches!(self, ManifestKind::Text | ManifestKind::Speech)
     }
 }
 
@@ -214,17 +240,26 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// Find the content-manifest file name in a root file listing.
+    /// Find a manifest in a root file listing.
     ///
-    /// The root file lists every manifest for every platform, region and
-    /// locale; this picks the plain one for the given platform and region.
+    /// The root file lists every manifest for every platform, region and locale.
+    /// `locale` selects which locale tag is wanted; it must be `None` for the
+    /// untagged kinds and `Some` for the localised ones.
+    ///
+    /// Region is tried exactly first, then relaxed. It has to be: on the
+    /// reference install the base manifest is an `RDEV` file while the enUS text
+    /// manifest is an `RCN` one, so requiring one region for both finds nothing.
     pub fn find_manifest_name(
         root_file: &str,
         kind: ManifestKind,
         platform: &str,
         region: &str,
+        locale: Option<&str>,
     ) -> Option<(String, [u8; 16])> {
         let extension = kind.extension();
+        let marker = kind.marker();
+        let mut fallback: Option<(String, [u8; 16])> = None;
+
         for line in root_file.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -239,38 +274,57 @@ impl Registry {
                 continue;
             }
             let name = path.rsplit('/').next().unwrap_or(path);
-            // Locale manifests carry an `LxxYY` tag; skip those.
-            if name.contains("_L") && name.split('_').any(|p| {
-                p.len() >= 4 && p.starts_with('L') && p[1..].chars().all(|c| c.is_ascii_alphanumeric())
-            }) {
-                continue;
-            }
             if !name.starts_with(&format!("{platform}_")) {
                 continue;
             }
-            if !name.contains(region) {
+
+            let mut segments = name.split('_');
+            // platform tag, then the shape tag (`SPWin`, `SPWinPrism`, ...)
+            let _platform = segments.next();
+            let _shape = segments.next();
+            // The rest are markers, a locale tag, and the trailing `EExt.cmf`,
+            // so collect them and test membership rather than positions.
+            let rest: Vec<&str> = segments.collect();
+
+            // Exactly one of the three kinds' markers must be present.
+            let has_marker = |want: &str| rest.iter().any(|p| p.eq_ignore_ascii_case(want));
+            let is_text = has_marker("text");
+            let is_speech = has_marker("speech");
+            let marked = match marker {
+                Some(want) => has_marker(want),
+                None => !is_text && !is_speech,
+            };
+            if !marked {
                 continue;
             }
-            let key = fields[1];
-            if key.len() != 32 {
+
+            // A locale tag is `LxxYY` as its own segment.
+            let tagged = rest.iter().find(|p| {
+                p.len() == 5
+                    && p.starts_with('L')
+                    && p[1..].chars().all(|c| c.is_ascii_alphanumeric())
+            });
+            let matches_locale = match (kind.is_localised(), locale, tagged) {
+                (true, Some(want), Some(have)) => have[1..].eq_ignore_ascii_case(want),
+                (false, _, None) => true,
+                // an untagged request must not accept a tagged file, and a
+                // localised request must not accept an untagged one
+                _ => false,
+            };
+            if !matches_locale {
                 continue;
             }
-            let mut ckey = [0u8; 16];
-            let mut ok = true;
-            for (i, byte) in ckey.iter_mut().enumerate() {
-                match u8::from_str_radix(&key[i * 2..i * 2 + 2], 16) {
-                    Ok(v) => *byte = v,
-                    Err(_) => {
-                        ok = false;
-                        break;
-                    }
-                }
+
+            let Some(ckey) = parse_hex_key(fields[1]) else {
+                continue;
+            };
+            let found = (name.to_string(), ckey);
+            if name.contains(region) {
+                return Some(found);
             }
-            if ok {
-                return Some((name.to_string(), ckey));
-            }
+            fallback.get_or_insert(found);
         }
-        None
+        fallback
     }
 
     /// Open a content manifest from the store.
@@ -347,6 +401,19 @@ impl Registry {
             .map(|i| &self.records[i])
     }
 
+    /// Add records from another manifest, keeping the ones already here.
+    ///
+    /// The base manifest is authoritative for anything it covers; a locale
+    /// manifest mostly adds assets it alone carries. Records arrive sorted, so
+    /// the result is re-sorted rather than merged in place.
+    pub fn merge_missing(&mut self, other: &Registry) {
+        let known: std::collections::HashSet<u64> =
+            self.records.iter().map(|r| r.guid).collect();
+        self.records
+            .extend(other.records.iter().filter(|r| !known.contains(&r.guid)).copied());
+        self.records.sort_unstable_by_key(|r| r.guid);
+    }
+
     pub fn guids_of_type(&self, type_id: u16) -> Vec<u64> {
         self.records
             .iter()
@@ -354,6 +421,17 @@ impl Registry {
             .filter(|g| crate::guid::type_of(*g) == type_id)
             .collect()
     }
+}
+
+fn parse_hex_key(hex: &str) -> Option<[u8; 16]> {
+    if hex.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 fn decrypt(body: &[u8], key: &[u8; 32], iv: &[u8; 16]) -> Result<Vec<u8>> {
@@ -390,15 +468,105 @@ mod tests {
     }
 
     #[test]
-    fn picks_the_plain_manifest_not_a_locale_one() {
+    fn picks_the_right_manifest_kind_and_locale() {
         let root = "\
 #FILEID|MD5|CHUNK_ID|PRIORITY|MPRIORITY|FILENAME|INSTALLPATH
 Manifest/Win_SPWin_RDEV_LesES_text_EExt.cmf|FE5EA8AB10EBDB4210D3175CDD564004|0|0|255|x|
 Manifest/Win_SPWin_RDEV_EExt.cmf|B16ED5CF5EF79F00D8BAB691BF18EB10|0|0|255|x|
+Manifest/Win_SPWin_RDEV_LenUS_speech_EExt.cmf|11111111111111111111111111111111|0|0|255|x|
+Manifest/Win_SPWin_RDEV_LenUS_text_EExt.cmf|C306CF53339CDEB475EC97B3D55289E9|0|0|255|x|
+Manifest/WinPrism_SPWin_RDEV_LenUS_text_EExt.cmf|D724550C0834FE0EE77C34471A73EEBB|0|0|255|x|
+Manifest/Win_SPWin_RCN_LenUS_text_EExt.cmf|D3EBF113E2DD2AC5AD7738605D8C66DB|0|0|255|x|
+Manifest/Win_SPWin_RDEV_EExt.trg|22222222222222222222222222222222|0|0|255|x|
 ";
+        // The untagged base manifest, not a localised one and not the prism build.
         let (name, key) =
-            Registry::find_manifest_name(root, ManifestKind::Content, "Win", "RDEV").unwrap();
+            Registry::find_manifest_name(root, ManifestKind::Content, "Win", "RDEV", None).unwrap();
         assert_eq!(name, "Win_SPWin_RDEV_EExt.cmf");
         assert_eq!(key[0], 0xB1);
+
+        // Text and speech are both `.cmf` and both locale-tagged, so only the
+        // name marker tells them apart. Getting this wrong is silent.
+        let (name, key) =
+            Registry::find_manifest_name(root, ManifestKind::Text, "Win", "RDEV", Some("enUS"))
+                .unwrap();
+        assert_eq!(name, "Win_SPWin_RDEV_LenUS_text_EExt.cmf");
+        assert_eq!(key[0], 0xC3);
+
+        let (name, _) =
+            Registry::find_manifest_name(root, ManifestKind::Speech, "Win", "RDEV", Some("enUS"))
+                .unwrap();
+        assert_eq!(name, "Win_SPWin_RDEV_LenUS_speech_EExt.cmf");
+
+        // A different locale picks that locale's text manifest.
+        let (name, _) =
+            Registry::find_manifest_name(root, ManifestKind::Text, "Win", "RDEV", Some("esES"))
+                .unwrap();
+        assert_eq!(name, "Win_SPWin_RDEV_LesES_text_EExt.cmf");
+
+        // Region relaxes when the exact one has no such manifest.
+        let (name, _) =
+            Registry::find_manifest_name(root, ManifestKind::Text, "Win", "RCN", Some("enUS"))
+                .unwrap();
+        assert_eq!(name, "Win_SPWin_RCN_LenUS_text_EExt.cmf");
+
+        // An unavailable locale finds nothing rather than falling back.
+        assert!(
+            Registry::find_manifest_name(root, ManifestKind::Text, "Win", "RDEV", Some("deDE"))
+                .is_none()
+        );
+        // And a base request never returns a localised manifest.
+        assert!(Registry::find_manifest_name(
+            "Manifest/Win_SPWin_RDEV_LenUS_text_EExt.cmf|C306CF53339CDEB475EC97B3D55289E9|0|0|255|x|\n",
+            ManifestKind::Content,
+            "Win",
+            "RDEV",
+            None
+        )
+        .is_none());
+        // The graph kind resolves through its own extension.
+        let (name, _) = Registry::find_manifest_name(
+            root,
+            ManifestKind::ResourceGraph,
+            "Win",
+            "RDEV",
+            None,
+        )
+        .unwrap();
+        assert_eq!(name, "Win_SPWin_RDEV_EExt.trg");
+    }
+
+    #[test]
+    fn merge_keeps_existing_records_and_stays_sorted() {
+        let make = |records: Vec<(u64, u8)>| Registry {
+            header: Header {
+                build_version: 1,
+                data_patch_count: 0,
+                entry_patch_count: 0,
+                data_count: records.len() as i32,
+                entry_count: 0,
+                magic: 0,
+            },
+            records: records
+                .into_iter()
+                .map(|(guid, byte)| Record {
+                    guid,
+                    size: 1,
+                    unknown: 0,
+                    content_key: [byte; 16],
+                })
+                .collect(),
+            name: "test".to_string(),
+        };
+
+        let mut base = make(vec![(10, 0xAA), (30, 0xAA)]);
+        let extra = make(vec![(10, 0xBB), (20, 0xBB)]);
+        base.merge_missing(&extra);
+
+        let guids: Vec<u64> = base.records.iter().map(|r| r.guid).collect();
+        assert_eq!(guids, vec![10, 20, 30], "merged records must stay sorted");
+        // The overlapping GUID keeps the base manifest's content key.
+        assert_eq!(base.get(10).unwrap().content_key[0], 0xAA);
+        assert_eq!(base.get(20).unwrap().content_key[0], 0xBB);
     }
 }

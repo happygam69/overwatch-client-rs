@@ -258,8 +258,48 @@ all** — only `.cmf` and `.trg` — so the package-manifest path is dead code f
 this build and the content manifest is the asset registry.
 
 Manifest names encode platform, region and locale: `Win_SPWin_RDEV_EExt.cmf` and
-`Win_SPWin_RDEV_LfrFR_text_EExt.cmf`. Skip the locale-tagged ones and match the
-platform and region prefixes.
+`Win_SPWin_RDEV_LfrFR_text_EExt.cmf`.
+
+### The three `.cmf` kinds are told apart only by name
+
+Base, text and speech manifests all share the `.cmf` extension, so a matcher that
+filters on extension and locale alone will happily return a *speech* manifest
+when asked for text. The marker segment (`text`, `speech`) is the only
+distinction, and it is a silent failure when it is missed: the manifest opens
+fine and merges plausible-looking records.
+
+Region has to be matched exactly first and then relaxed, because the names do not
+agree: on the reference install the base manifest is `Win_SPWin_RDEV_EExt.cmf`
+while the enUS text manifest is also `RDEV`... but the RCN variants exist in
+parallel, and a `WinPrism_` build is present too. Requiring one region for every
+kind finds nothing for some of them.
+
+### A manifest does not cover everything
+
+Loading the base manifest alone is not enough. On the reference install:
+
+| manifest | records |
+|---|---|
+| `Win_SPWin_RDEV_EExt.cmf` (base) | 1,208,956 |
+| `Win_SPWin_RDEV_LenUS_text_EExt.cmf` | 117,346 |
+| merged | 1,326,302 |
+
+The two are **completely disjoint** — no GUID appears in both. Speech adds an
+overlapping set again. So the base manifest is not a superset of the localised
+ones, and code that reads only the base is missing roughly 117,000 assets.
+
+Merging is add-only-missing with the base authoritative, matching the reference
+tooling's registration order.
+
+### Some records are recorded but not present
+
+Being in the registry does not mean the bytes are on disk. A record whose content
+key has no entry in the encoding file cannot be opened, and this is not rare: of
+the 67 assets of the settings type, only 15 open, and only 1 of those is the
+hero-settings file. The other 52 are named in the manifest but their content keys
+are absent from the encoding file, which is the signature of content that was
+never downloaded. Not verified further, and worth knowing before concluding a
+parser is broken.
 
 ## Known gaps
 

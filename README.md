@@ -20,7 +20,9 @@ branch       eu (product pro)
 build name   prometheus-2_23_0_3-151177
 index keys   1058289
 keyring keys 327
-manifest     Win_SPWin_RDEV_EExt.cmf (build 150851, 1208956 records)
+registry     1326302 records from 2 manifest(s)
+  Win_SPWin_RDEV_EExt.cmf
+  Win_SPWin_RDEV_LenUS_text_EExt.cmf
 
 $ ow-probe heroes
 132 heroes
@@ -30,16 +32,22 @@ $ ow-probe heroes
      4  0x02e0000000000004  0x04000000000000e4  228       (0.980, 0.949, 0.678, 1.000)
 ...
 132 of 132 hero references resolve to a registered asset
+
+$ ow-probe settings
+settings asset 0x0ca0000000000126 (index 294) -- 377 float settings
+  42 of 377 leave min/max at the class default
+  59 have a default other than 1.0
 ```
 
 Concretely, this proves: the container opens, encrypted chunks decrypt, the
-content manifest decrypts to a sorted asset registry, and structured-data
-assets parse far enough to resolve obfuscated asset references and read typed
-fields out of them.
+content and text manifests decrypt to a sorted asset registry, and structured-data
+assets parse far enough to resolve obfuscated asset references, read typed fields,
+and honour the rule that a field absent from an instance takes its class default.
 
-The combat *simulation* is not implemented. Reading the numbers that feed it —
-weapon definitions, ability graphs, health — is the next step; see
-[`docs/formats/stu.md`](docs/formats/stu.md) for what is reachable.
+The combat *simulation* is not implemented, and neither are the base combat
+numbers. `settings` reads the per-hero **tuning multipliers** a custom game
+exposes — 1.0 meaning normal — not damage or cooldowns. See
+[`docs/formats/stu.md`](docs/formats/stu.md) for what is reachable and what is not.
 
 ## Running it
 
@@ -53,6 +61,7 @@ cargo run --release -p ow-probe -- info
 cargo run --release -p ow-probe -- types
 cargo run --release -p ow-probe -- heroes
 cargo run --release -p ow-probe -- hero 2
+cargo run --release -p ow-probe -- settings
 ```
 
 | command | what it does |
@@ -61,6 +70,7 @@ cargo run --release -p ow-probe -- hero 2
 | `types` | asset counts per type, including the combat-relevant ones |
 | `heroes` | every hero, with a resolved asset reference and theme colour |
 | `hero <index>` | one hero: instances, field layout, resolved fields |
+| `settings [n]` | the per-hero tuning multipliers, with bounds resolved |
 | `classmap` | how many STU class names were recovered |
 | `buckets` | diagnosis for the container alone, before anything else runs |
 

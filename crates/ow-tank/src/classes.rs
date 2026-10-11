@@ -23,6 +23,16 @@ pub const LOADOUT: u32 = 0x3229_0C2E;
 pub const WEAPON_DEFINITION: u32 = 0x6138_6B75;
 /// `STUHealthComponent`.
 pub const HEALTH_COMPONENT: u32 = 0xA658_CA1C;
+/// `STUGenericSettings_HeroSettings`, the root of the per-hero tuning set.
+pub const HERO_SETTINGS: u32 = 0x6021_C7EC;
+/// `STUHeroSpecificSettings`, one hero's slice of that set.
+pub const HERO_SPECIFIC_SETTINGS: u32 = 0x24DF_4688;
+/// `STUHeroSettingFloat`, a bounded float a player can tune.
+pub const HERO_SETTING_FLOAT: u32 = 0x76B1_DB1F;
+/// `STUHeroSettingIdentifier`, a choice from a fixed set.
+pub const HERO_SETTING_IDENTIFIER: u32 = 0x90A5_0AC1;
+/// `STUHeroSettingCategory`, a group heading in the tuning UI.
+pub const HERO_SETTING_CATEGORY: u32 = 0xB87D_57AA;
 
 /// Field hashes this project reads.
 pub mod hero {
@@ -38,6 +48,44 @@ pub mod hero {
     pub const HERO_LOADOUT: u32 = 0x77FE_D604;
 }
 
+/// Fields shared by every hero setting.
+///
+/// A setting only stores the fields that differ from its class default, so a
+/// field missing from an instance is not zero — it is the default declared on
+/// the class. [`hero_setting_defaults`] carries those.
+pub mod hero_setting {
+    /// `m_identifier`: a typed token, not an asset. No asset of the identifier
+    /// type is shipped, so this names a setting rather than pointing at one.
+    pub const IDENTIFIER: u32 = 0x4D2D_B658;
+    /// `m_name`: display text.
+    pub const NAME: u32 = 0xB48F_1D22;
+    /// `m_category`.
+    pub const CATEGORY: u32 = 0x2C54_AEAF;
+}
+
+/// Fields specific to a float-valued hero setting.
+pub mod hero_setting_float {
+    /// `m_default`, the value the tuning starts at.
+    pub const DEFAULT: u32 = 0x45A7_A69C;
+    /// `m_min`.
+    pub const MIN: u32 = 0x7594_F80E;
+    /// `m_max`.
+    pub const MAX: u32 = 0x7CEA_65C7;
+    /// The step the UI uses.
+    pub const STEP: u32 = 0x9321_E2B9;
+}
+
+/// Class defaults for float-valued hero settings, which apply when the field is
+/// absent from an instance.
+///
+/// `min` has no declared default, so an absent minimum is zero.
+pub const HERO_SETTING_FLOAT_DEFAULTS: [(u32, f32); 4] = [
+    (hero_setting_float::DEFAULT, 0.0),
+    (hero_setting_float::MIN, 0.0),
+    (hero_setting_float::MAX, 1.0),
+    (hero_setting_float::STEP, 0.01),
+];
+
 /// Type-hash to class-name map.
 #[derive(Debug, Default)]
 pub struct ClassMap {
@@ -48,10 +96,19 @@ impl ClassMap {
     /// The built-in, verified subset.
     pub fn builtin() -> ClassMap {
         let mut names = HashMap::new();
-        names.insert(HERO, "STUHero".to_string());
-        names.insert(LOADOUT, "STULoadout".to_string());
-        names.insert(WEAPON_DEFINITION, "STUWeaponDefinition".to_string());
-        names.insert(HEALTH_COMPONENT, "STUHealthComponent".to_string());
+        for (hash, name) in [
+            (HERO, "STUHero"),
+            (LOADOUT, "STULoadout"),
+            (WEAPON_DEFINITION, "STUWeaponDefinition"),
+            (HEALTH_COMPONENT, "STUHealthComponent"),
+            (HERO_SETTINGS, "STUGenericSettings_HeroSettings"),
+            (HERO_SPECIFIC_SETTINGS, "STUHeroSpecificSettings"),
+            (HERO_SETTING_FLOAT, "STUHeroSettingFloat"),
+            (HERO_SETTING_IDENTIFIER, "STUHeroSettingIdentifier"),
+            (HERO_SETTING_CATEGORY, "STUHeroSettingCategory"),
+        ] {
+            names.insert(hash, name.to_string());
+        }
         ClassMap { names }
     }
 

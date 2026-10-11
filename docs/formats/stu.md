@@ -65,10 +65,18 @@ name is just a number, and its width and offset are still enough to skip it
 safely. That is what makes a generic walk possible without the full type
 database.
 
+**An absent field does not mean zero.** An instance stores only the fields whose
+values differ from the class defaults, so most instances are missing most
+fields. A reader that treats a missing field as zero reports nonsense — for a
+bounded multiplier it reports "0 to 0" instead of "0 to 1". The rule is: a field
+absent from the bag takes the value declared on the class in the generated type
+definitions. `ow-tank` encodes this as
+`classes::HERO_SETTING_FLOAT_DEFAULTS`.
+
 For the reference install, the `STUHero` instance of hero 2 has 50 fields where
-the community type definition lists around 68 attributes — the asset simply
-omits defaulted ones. The field *set* also drifts between builds: two hashes
-appear in this asset that the published type does not describe, and a field the
+the community type definition lists around 68 attributes, and that gap is
+exactly this rule. The field *set* also drifts between builds: two hashes appear
+in this asset that the published type does not describe, and a field the
 published type calls `m_internalName` is absent. Treat any field-name table as a
 hint, not a specification.
 
@@ -139,11 +147,43 @@ partly mapped:
 `LoadoutCategory` distinguishes weapon, ability, passive, ultimate, perk, hero
 stats and subrole, which is the cleanest hook into a combat model.
 
-The hero-settings assets are worth starting with, because a float that declares
-its own minimum and maximum identifies itself: a value with bounds of 0.5 to 2
-defaulting to 1 is plainly a multiplier, whatever its field hash is called. That
-is a cheaper way to learn field meanings than reverse-engineering the state
-graphs, and it exercises the same walking code.
+### What the hero-settings assets actually contain
+
+These were the first target because a float that declares its own minimum and
+maximum identifies itself, whatever its field hash is called. Having read them,
+the honest summary is a correction to what was expected of them.
+
+On the reference install the hero-settings asset is `0x0ca0000000000126`
+(index 294), 61,706 bytes, 992 instances, and it holds **377 float settings**.
+Of those, 42 leave both bounds at the class default and 59 have a default other
+than 1.0. The values are percentages of the normal behaviour:
+
+| default | min | max | step | meaning |
+|---|---|---|---|---|
+| 0.06 | 0.0001 | 1.0 | 0.0001 | a very small adjustable fraction |
+| 0.30 | 0.0 | 1.0 | 0.01 | |
+| 0.80 | 0.0 | 1.0 | 0.01 | |
+
+So these are **not the base combat numbers.** They are the multipliers a player
+can move in a custom game — 1.0 means normal, 0.8 means 80% — which makes them a
+vocabulary of *tunable* quantities per hero rather than a source of damage and
+cooldown figures. That is still useful: it enumerates what the game considers
+adjustable, and it exercises the whole reading path. It is not what a combat
+model needs first.
+
+Two further limits found by reading them:
+
+* **The settings do not nest in an array.** All 992 instances — the root set, one
+  record per hero, and the settings — are listed in the instance table and tagged
+  with what embedded them, so they can be read directly. The embedded-array
+  links do not have to be walked, which is why this works before array support
+  does.
+* **Settings cannot be named from here.** Each carries an `m_identifier`
+  reference, but its target is a type for which **no asset is shipped anywhere in
+  the install** (zero assets of that type exist in the merged registry, out of
+  1.3 million). `STUIdentifier` is also a class with no fields. The identifiers
+  are tokens, not files, so attaching a name to a setting needs the localised
+  text layer, not the settings assets.
 
 A second, independent source of per-match facts is the replay container, if this
 ever needs validating against real play rather than against definitions. The
@@ -152,6 +192,15 @@ map and gamemode GUIDs, and a parameter block with a start and end frame, an
 expected duration, and the heroes in the match, followed by a compressed payload.
 The frame payload itself is not publicly decoded anywhere, so positions and
 damage events are not reachable that way today.
+
+### Still open
+
+The base numbers — damage, health, cooldowns, projectile speeds — live in the
+state-script graphs and in components such as `STUHealthComponent`. Reaching them
+means reading nested and embedded instances' *fields* rather than just their
+records, and deciding which scalar nodes are load-bearing. They have no
+self-declaring bounds to identify them by, so this is the harder problem the
+settings assets were mistaken for.
 
 **None of the scalar values are mapped yet, and no tool in the reference
 ecosystem dumps them either** — the shipped extractors stop at names and icons.

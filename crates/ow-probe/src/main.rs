@@ -67,10 +67,76 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
             );
             Ok(())
         }
+        "settings" => settings(&data, rest),
         other => Err(format!(
-            "unknown command {other:?}; try info, types, heroes, hero <index>, classmap, buckets"
+            "unknown command {other:?}; try info, types, heroes, hero <index>, \
+             settings [n], classmap, buckets"
         )),
     }
+}
+
+/// The per-hero tuning values.
+///
+/// These are the multipliers a player can move in a custom game, not base combat
+/// statistics. They are read here because they exercise the whole path and reveal
+/// the vocabulary of tunable quantities per hero.
+fn settings(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let limit: usize = rest
+        .first()
+        .map(|s| s.parse().unwrap_or(25))
+        .unwrap_or(25);
+
+    let assets = ow_tank::settings::read_all(data).map_err(|e| e.to_string())?;
+    if assets.is_empty() {
+        return Err("no hero-settings asset was readable".into());
+    }
+
+    for (asset, floats) in &assets {
+        println!(
+            "settings asset 0x{asset:016x} (index {}) -- {} float settings",
+            guid::index_of(*asset),
+            floats.len()
+        );
+
+        let defaulted = floats.iter().filter(|f| f.bounds_are_defaulted()).count();
+        println!(
+            "  {defaulted} of {} leave min/max at the class default",
+            floats.len()
+        );
+        let tuned = floats
+            .iter()
+            .filter(|f| (f.default - 1.0).abs() > 1e-6)
+            .count();
+        println!("  {tuned} have a default other than 1.0");
+        println!();
+
+        println!(
+            "{:>5}  {:>9}  {:>9}  {:>9}  {:>8}  {:<18}  bounds",
+            "inst", "default", "min", "max", "step", "identifier"
+        );
+        for f in floats.iter().take(limit) {
+            let bounds = if f.bounds_are_defaulted() {
+                "defaulted"
+            } else if f.explicit[1] && f.explicit[2] {
+                "authored"
+            } else {
+                "partial"
+            };
+            println!(
+                "{:>5}  {:>9.4}  {:>9.4}  {:>9.4}  {:>8.4}  0x{:016x}  {bounds}",
+                f.instance,
+                f.default,
+                f.min,
+                f.max,
+                f.step,
+                f.identifier.unwrap_or(0)
+            );
+        }
+        if floats.len() > limit {
+            println!("... {} more", floats.len() - limit);
+        }
+    }
+    Ok(())
 }
 
 /// Diagnostic: what the bucket index claims, before anything else can fail.
@@ -145,12 +211,17 @@ fn info(data: &GameData) -> Result<(), String> {
         .cloned()
         .unwrap_or_default();
     println!("build name   {build_name}");
+    let _ = data.registry().header.build_version;
     println!("index keys   {}", data.store().key_count());
     println!("keyring keys {}", install.keyring.len());
     println!(
-        "manifest     {} (build {}, {} records)",
-        data.registry().name, data.registry().header.build_version, data.registry().records.len()
+        "registry     {} records from {} manifest(s)",
+        data.registry().records.len(),
+        data.manifests.len()
     );
+    for name in &data.manifests {
+        println!("  {name}");
+    }
     Ok(())
 }
 

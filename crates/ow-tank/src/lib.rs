@@ -18,6 +18,7 @@ pub mod classes;
 pub mod guid;
 pub mod keytable;
 pub mod manifest;
+pub mod settings;
 
 use ow_casc::Store;
 use ow_stu::Stu;
@@ -74,12 +75,17 @@ impl From<ow_stu::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Platform and region tags used to pick the right manifest out of the root
-/// file. The defaults match a retail Windows install on the global region.
+/// Platform, region and locale tags used to pick manifests out of the root file.
+///
+/// The defaults match a retail Windows install on the global region with English
+/// text. A text manifest is loaded alongside the base one because the base does
+/// not cover everything: on the reference install it carries 67 assets of the
+/// settings type and the enUS manifest adds another 52.
 #[derive(Debug, Clone)]
 pub struct ManifestSelector {
     pub platform: String,
     pub region: String,
+    pub text_locale: String,
 }
 
 impl Default for ManifestSelector {
@@ -87,6 +93,7 @@ impl Default for ManifestSelector {
         ManifestSelector {
             platform: "Win".to_string(),
             region: "RDEV".to_string(),
+            text_locale: "enUS".to_string(),
         }
     }
 }
@@ -95,13 +102,15 @@ impl Default for ManifestSelector {
 pub struct GameData {
     store: Store,
     registry: manifest::Registry,
+    /// Names of the manifests whose records the registry holds.
+    pub manifests: Vec<String>,
     pub classes: classes::ClassMap,
 }
 
 impl GameData {
     /// Open an installation and build its asset registry.
     ///
-    /// Key material for the manifest is read from `sources`; see
+    /// Key material for the manifests is read from `sources`; see
     /// [`keytable::Sources`].
     pub fn open(
         install_root: impl AsRef<std::path::Path>,
@@ -112,15 +121,37 @@ impl GameData {
         let store = Store::open(install)?;
 
         let root_file = store.root_file()?;
+
+        // The base manifest is authoritative; the text manifest adds what it
+        // does not carry. Speech is not loaded -- nothing here reads audio.
         let (name, content_key) = manifest::Registry::find_manifest_name(
             &root_file,
             manifest::ManifestKind::Content,
             &selector.platform,
             &selector.region,
+            None,
         )
         .ok_or(Error::NoManifest)?;
 
-        let registry = manifest::Registry::open(&store, &name, &content_key, sources)?;
+        let mut registry = manifest::Registry::open(&store, &name, &content_key, sources)?;
+        let mut manifests = vec![name];
+
+        if let Some((text_name, text_key)) = manifest::Registry::find_manifest_name(
+            &root_file,
+            manifest::ManifestKind::Text,
+            &selector.platform,
+            &selector.region,
+            Some(&selector.text_locale),
+        ) {
+            // A missing text manifest is not fatal: the base data still reads.
+            match manifest::Registry::open(&store, &text_name, &text_key, sources) {
+                Ok(text) => {
+                    registry.merge_missing(&text);
+                    manifests.push(text_name);
+                }
+                Err(e) => eprintln!("warning: could not open text manifest {text_name}: {e}"),
+            }
+        }
 
         let mut classes = classes::ClassMap::builtin();
         classes.load_from_checkouts(sources);
@@ -128,6 +159,7 @@ impl GameData {
         Ok(GameData {
             store,
             registry,
+            manifests,
             classes,
         })
     }
