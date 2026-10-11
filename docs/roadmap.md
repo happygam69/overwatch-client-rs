@@ -141,3 +141,49 @@ Not achievable: pixel-identical rendering. The shaders are proprietary and are
 not shipped as data in a form that can be reimplemented from the install alone.
 
 Worth stating once so it is not discovered late.
+
+## Capturing the running image
+
+The static file is useless for this, so the reference point has to come from the
+process. What that took, and what it found:
+
+**Where the code actually is.** Dumping only the image sections is not enough:
+of the 358 MB of image regions, none contained a single known STU field hash.
+The address space says why — the process holds 10.1 GB of committed private
+memory of which only **21 MB is executable**, alongside **1,684 executable
+mapped regions**. That shape is a client whose real code is generated or mapped
+at runtime rather than left in the image.
+
+Dumping the executable non-image regions — 1,706 regions, 79.3 MB — finds the
+code. Known field hashes appear there as immediates:
+
+| hash | field | occurrences |
+|---|---|---|
+| `0x07DD813E` | `m_value`, the ConfigVar literal | 142 |
+| `0xAF872E86` | `ModifyHealth.m_amount` | 20 |
+| `0x26E68021` | `projectileSpeed` | 3 |
+| `0xBA490EB9` | `projectileLifetime` | 3 |
+| `0x02F3F5D4` | `numShotsPerSecond` | 1 |
+| `0xE25DDDA1` | `m_heroColor` | 1 |
+| `0xC71EA6BC` | `m_graph` | 5 |
+
+That is the reference point: the code that reads the fields the data layer could
+not name is present, and each field's hash can be located at an absolute address.
+
+**Method** (`dev/dump_process.py`, read-only, output gitignored):
+`OpenProcess` with query and read rights, walk the address space with
+`VirtualQueryEx`, keep committed readable regions, read each with
+`ReadProcessMemory`, and write one file per region plus a manifest of
+`base size protect type`. Keeping the addresses is what makes the capture
+usable: a concatenated blob cannot be mapped back to a virtual address, and
+without an address nothing can be loaded into a disassembler.
+
+Also worth recording: the image sections *are* decrypted in memory — the 63 MB
+region that is the executable's text drops from entropy 8.000 on disk to 6.433
+in the process — but that is the loader's image, and it is not where the combat
+code lives. Entropy alone would have suggested success.
+
+**Next**: load the captured regions into Ghidra at their recorded addresses and
+work outward from the hash immediates — find the functions that read
+`numShotsPerSecond` and `m_amount`, and the damage field follows from what they
+touch.
