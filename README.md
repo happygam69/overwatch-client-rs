@@ -10,8 +10,28 @@ never modify it. See [CREDITS.md](CREDITS.md).
 
 ## Status
 
-The data path works end to end against a retail install (Overwatch
-`2.23.0.3.151177`):
+**Working, verified against a retail install (`2.23.0.3.151177`).**
+
+| | |
+|---|---|
+| the container | opens; encrypted chunks decrypt; 1,326,302 assets in the registry |
+| structured data | heroes, entities, weapons and state graphs all read |
+| health pools | **124 of 132 heroes**, health / armour / shields kept separate |
+| weapon ballistics | 56 weapon graphs, **889 named parameters** extracted |
+| the simulation | hitscan, travelling projectiles, spread, falloff, pools, armour |
+| the practice range | select a hero, walk, shoot targets, read damage and TTK |
+
+**Not working, and each is documented rather than papered over:**
+
+| | why |
+|---|---|
+| **per-shot damage** | not in the files. Seven places searched, recorded in `docs/formats/weapons.md`. The range asks for it. |
+| **abilities** | the graphs hold them, but a graph is a program and nothing names which node is a cooldown |
+| **movement physics** | the speed is read but its semantics are unconfirmed, so nothing moves yet |
+| **8 of 132 heroes** | their entities are recorded in the manifest but absent from the install |
+| **damage order, armour rules** | game *rules*, not values; assumed in `ow-sim/src/rules.rs` and changeable at runtime |
+
+The data path in detail:
 
 ```
 $ ow-probe info
