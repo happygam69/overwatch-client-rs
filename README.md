@@ -8,6 +8,13 @@ textures, locale data or decompiled code — only original Rust source and
 documentation. The tools here open an installed copy of Overwatch read-only and
 never modify it. See [CREDITS.md](CREDITS.md).
 
+> **Target, stated properly:** a first-person 3D practice range — Overwatch's
+> geometry, bots, HUD and combat, so the systems can be tested as the game tests
+> them. What exists today is the data layer and a terminal simulator, which is
+> **not** that. [`docs/roadmap.md`](docs/roadmap.md) is the honest accounting of
+> the gap, the staged plan, and what the encrypted executable can and cannot
+> provide.
+
 ## Status
 
 **Working, verified against a retail install (`2.23.0.3.151177`).**
