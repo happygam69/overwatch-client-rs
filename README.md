@@ -62,9 +62,13 @@ a health rebalance, so the numbers belong to build `2.23.0.3.151177` and not to
 live. See [`docs/formats/entity-schema.md`](docs/formats/entity-schema.md).
 
 `weapons` follows each hero to the state-script graph its weapon behaviour lives
-in. Every graph reference resolves, but the numbers *inside* a graph are not read
-yet: a graph is a program, not a record, and nothing identifies which node is the
-fire interval. See [`docs/formats/weapons.md`](docs/formats/weapons.md).
+in, and `weapon-params` reads named parameters out of those graphs by joining
+each literal to the field that owns it — 889 of them across 54 heroes, including
+`projectileSpeed`, `numShotsPerSecond` and `castLength`. **Damage is not among
+them**: no weapon-graph field is named `damage`, and the generic `value`
+parameters cannot be resolved without reading the graph's links, because the
+variable a set-var writes to is a fieldless marker class. See
+[`docs/formats/weapons.md`](docs/formats/weapons.md).
 
 `settings` is a different thing: the per-hero **tuning multipliers** a custom game
 exposes, 1.0 meaning normal.
@@ -89,6 +93,7 @@ cargo run --release -p ow-probe -- hero 2
 cargo run --release -p ow-probe -- settings
 cargo run --release -p ow-probe -- health
 cargo run --release -p ow-probe -- weapons
+cargo run --release -p ow-probe -- weapon-params
 ```
 
 | command | what it does |
@@ -99,6 +104,7 @@ cargo run --release -p ow-probe -- weapons
 | `hero <index>` | one hero: instances, field layout, resolved fields |
 | `health` | per-hero health, armour and shields from the entity schema |
 | `weapons` | each hero's weapons and the state-script graph each uses |
+| `weapon-params [hero]` | named parameters inside those graphs, joined to their owning field |
 | `settings [n]` | the per-hero tuning multipliers, with bounds resolved |
 | `classmap` | how many STU class names were recovered |
 | `buckets` | diagnosis for the container alone, before anything else runs |

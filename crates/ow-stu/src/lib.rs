@@ -305,6 +305,11 @@ impl Stu {
         Some((f.offset, f.size))
     }
 
+    /// Read a `u32` at an absolute offset in the asset.
+    pub fn u32_at(&self, at: usize) -> Option<u32> {
+        rd_u32(&self.blob, at).ok()
+    }
+
     /// Read a `u64` at an absolute offset in the asset.
     pub fn u64_at(&self, at: usize) -> Option<u64> {
         rd_u64(&self.blob, at).ok()

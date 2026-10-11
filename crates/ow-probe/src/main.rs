@@ -70,9 +70,10 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
         "settings" => settings(&data, rest),
         "health" => health(&data),
         "weapons" => weapons(&data),
+        "weapon-params" => weapon_params(&data, rest),
         other => Err(format!(
             "unknown command {other:?}; try info, types, heroes, hero <index>, \
-             health, weapons, settings [n], classmap, buckets"
+             health, weapons, weapon-params [hero], settings [n], classmap, buckets"
         )),
     }
 }
@@ -544,5 +545,95 @@ fn weapons(data: &GameData) -> Result<(), String> {
         "\n{heroes_with_weapons} heroes with weapons, {graphs} graph references \
          ({present} present), {empty_slots} empty slots, {unreadable} heroes unreadable"
     );
+    Ok(())
+}
+
+/// Named parameters inside each hero's weapon graphs.
+///
+/// A literal is only meaningful once the field that owns it is named, so this
+/// joins every embedded literal in a graph to its owning field and keeps only
+/// the ones the reference types name. Anything still unnamed is dropped rather
+/// than printed as a hash, because a hash is not an answer.
+fn weapon_params(data: &GameData, rest: &[String]) -> Result<(), String> {
+    if data.fields.is_empty() {
+        return Err("no field names available; set OW_OWLIB to a checkout of the \
+                    reference types so literals can be named"
+            .into());
+    }
+    let only: Option<u32> = rest.first().and_then(|s| s.parse().ok());
+
+    println!(
+        "{} field names loaded; scanning weapon graphs",
+        data.fields.len()
+    );
+    let mut named_total = 0usize;
+    let mut graphs = 0usize;
+    let mut heroes = 0usize;
+
+    for guid in hero_guids(data) {
+        let index = guid::index_of(guid);
+        if let Some(want) = only {
+            if index != want {
+                continue;
+            }
+        }
+        let entity = {
+            let mut stu = match data.stu_of(guid) {
+                Ok(stu) => stu,
+                Err(_) => continue,
+            };
+            let Some(hero) = stu.instance(classes::HERO) else {
+                continue;
+            };
+            match stu.read_asset_ref(hero, classes::hero::GAMEPLAY_ENTITY) {
+                Some(entity) => entity,
+                None => continue,
+            }
+        };
+        let weapons = match ow_tank::weapons::weapons_of(data, entity) {
+            Ok(weapons) => weapons,
+            Err(_) => continue,
+        };
+
+        let mut hero_printed = false;
+        for weapon in &weapons {
+            let Some(graph) = weapon.graph else {
+                continue;
+            };
+            graphs += 1;
+            let params = match ow_tank::graph::params_for_graph(data, graph) {
+                Ok(params) => params,
+                Err(_) => continue,
+            };
+            if params.is_empty() {
+                continue;
+            }
+            if !hero_printed {
+                println!("\n=== hero {index}");
+                hero_printed = true;
+                heroes += 1;
+            }
+            println!("  slot {} graph 0x{graph:016x}", weapon.slot);
+            let mut seen = std::collections::BTreeSet::new();
+            for param in &params {
+                let rendered = match param.value {
+                    ow_tank::entity::Value::Float(v) => format!("{v}"),
+                    ow_tank::entity::Value::Int(v) => format!("{v}"),
+                    ow_tank::entity::Value::Bool(v) => format!("{v}"),
+                    ow_tank::entity::Value::Unread(_) => continue,
+                };
+                // The same parameter repeats across a graph's states; collapse
+                // identical readings so the output is readable.
+                let key = format!("{} = {}", param.describe(), rendered);
+                if !seen.insert(key.clone()) {
+                    continue;
+                }
+                named_total += 1;
+                println!("      {key}");
+            }
+        }
+    }
+
+    println!("\n{heroes} heroes, {graphs} graphs, {named_total} named parameters");
     Ok(())
 }

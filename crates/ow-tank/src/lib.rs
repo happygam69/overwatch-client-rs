@@ -16,6 +16,8 @@
 
 pub mod classes;
 pub mod entity;
+pub mod fieldnames;
+pub mod graph;
 pub mod guid;
 pub mod keytable;
 pub mod manifest;
@@ -107,6 +109,9 @@ pub struct GameData {
     /// Names of the manifests whose records the registry holds.
     pub manifests: Vec<String>,
     pub classes: classes::ClassMap,
+    /// Field names, read from a reference checkout when one is configured.
+    /// Empty otherwise, in which case a graph's parameters cannot be named.
+    pub fields: fieldnames::FieldNames,
 }
 
 impl GameData {
@@ -157,12 +162,14 @@ impl GameData {
 
         let mut classes = classes::ClassMap::builtin();
         classes.load_from_checkouts(sources);
+        let fields = fieldnames::FieldNames::load_from_checkouts(sources);
 
         Ok(GameData {
             store,
             registry,
             manifests,
             classes,
+            fields,
         })
     }
 

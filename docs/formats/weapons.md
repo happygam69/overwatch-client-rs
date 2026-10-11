@@ -45,6 +45,73 @@ Two shapes had to be handled to get here, and both are traps:
   reference. The generated type for the same class describes a 40-byte shape with
   the reference *first*. The bytes were followed, not the type.
 
+## Named parameters, and the wall behind them
+
+A literal is meaningless until the *field* that owns it is named, and an embedded
+instance records the field hash it arrived through. So joining `(owning class,
+field hash)` to a name turns "there is a float of 250" into "this weapon's
+projectile speed is 250". `ow-probe weapon-params` does that for every hero:
+
+```
+54 heroes, 56 graphs, 889 named parameters
+```
+
+Distinct parameters found:
+
+| count | parameter |
+|---|---|
+| 333 | `value` |
+| 245 | `timeout` |
+| 90 | `destination` |
+| 53 | `projectileLifetime` |
+| 51 | `numProjectilesPerShot` |
+| 38 | `numShotsPerSecond` |
+| 21 | `answer` |
+| 18 | `projectileSpeed` |
+| 16 | `aimID` |
+| 9 | `radius` |
+| 7 | `amount` |
+| 3 | `castLength` |
+| 2 | `animRecoilImpulseFactor` |
+| 1 each | `speed`, `speedScalar`, `castRadius` |
+
+Real readings, with names attached — Widowmaker's graph, for instance:
+
+```
+STUStatescriptStateWeaponVolley.projectileSpeed = 250
+STUStatescriptStateWeaponVolley.projectileLifetime = 10
+STUStatescriptStateRayCast.castLength = 100
+STUStatescriptStateWait.timeout = 0.5
+```
+
+The names are not guesses. They come from the reference tooling's generated
+types, which name the fields of classes it has identified; a field it has not
+identified is called `m_1A2B3C4D` and is **dropped** rather than printed, so
+"named" and "not named yet" stay distinguishable. Adding coverage is adding
+identified classes, not changing code.
+
+### Damage is not a named field
+
+**No parameter in any weapon graph is named `damage`.** That is the wall, and it
+is worth being precise about because two different explanations lead in two
+different directions:
+
+* It is hidden in one of the 333 generic `value` parameters.
+* It is not in the weapon graph at all — the weapon graph may only *fire*, with
+  the damage applied by whatever the projectile or raycast hits.
+
+The generic `value` parameters are generic for a structural reason.
+`STUStatescriptActionSetVar` has `m_value`, `m_key`, `m_index` and `m_out_Var`,
+and `m_out_Var` is of a class, `STU_076E0DBA`, that **declares no fields at
+all**. It is a marker wrapping "the variable being written". So *which* variable
+is set is not written down as a name anywhere — it is expressed by the graph's
+links, which is the same as saying the meaning is in the topology.
+
+Resolving that means following the graph: from a set-var, along its output, to
+the node that consumes the variable, and identifying that node. That is
+interpreting a visual scripting language rather than reading a record, and it is
+the next real problem — the same one flagged above, now with a precise address.
+
 ## Why the numbers are not here yet
 
 A graph is not a record, it is a **program**. A graph asset holds:
@@ -72,12 +139,11 @@ grouping tokens across heroes and checking the values; here there is no
 equivalent shortcut, because the *structure* carries the meaning rather than an
 identifier. Three ways forward, roughly in order of cost:
 
-1. **Per-hero overrides.** `STUStatescriptGraphWithOverrides` can override graph
-   properties through schema entries — the same `(token, value)` pairs that
-   worked for the pools. If a weapon's damage is an override rather than a graph
-   literal, it is directly readable and identifiable by the same
-   group-across-heroes method. This is the cheapest experiment and it has not
-   been run.
+1. ~~Per-hero overrides.~~ **Run, and ruled out.** Across all heroes, weapon
+   definitions come in exactly two shapes: 55 carrying only `m_graph` and 18 only
+   `m_script`. No weapon definition carries the override array `m_1EB5A024`, so
+   there are no per-weapon overrides in this build and the numbers must be in the
+   graphs.
 2. **Node semantics by class.** Enumerate the state classes actually used by
    weapon graphs (`STUStatescriptStateWeaponVolley`,
    `STUStatescriptWeaponVolleyLaunch`, `STUStatescriptWeaponProjectileMotion`,
