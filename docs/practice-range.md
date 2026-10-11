@@ -42,10 +42,11 @@ of 119 heroes and differs for exactly the hero with a speed ability, which is
 consistent with it being movement speed, but whether it is a base or a maximum is
 not established.
 
-**Supplied by the operator.** Per-shot damage, via `damage <n>`. It could not be
-extracted — `docs/formats/weapons.md` records the seven places it was looked for
-— so the range asks rather than inventing a number. Ditto `rate <n>`, for the case
-below.
+**Supplied by the operator.** Per-shot damage via `damage <n>`, because it could
+not be extracted — `docs/formats/weapons.md` records the seven places it was
+looked for. `rate <n>` for the sentinel case below, and `falloff <start> <end>
+<min>` because falloff distances are not in the files either. The range asks
+rather than inventing numbers and calling them data.
 
 **Assumed, in `ow-sim/src/rules.rs`.** The order in which damage comes off the
 three pools, and how armour mitigates it. These are game *rules*, and rules are
@@ -81,6 +82,9 @@ the answer, and the range's job is to say so.
 | `hero <index>` | select a hero and print everything extracted for it |
 | `params` | every distinct named parameter the weapon graph declared |
 | `weapon <slot>` | choose which of the hero's weapons to fire |
+| `walk <m>` / `strafe <m>` | move the shooter; shots then aim at the nearest target |
+| `falloff <start> <end> <min>` | set damage falloff, or `falloff none` |
+| `reset` | back to the origin with no targets |
 | `damage <n>` | per-projectile damage for the current shot |
 | `rate <n>` | shots per second, when the graph declares only the sentinel |
 | `target add <hp> <m>` | spawn a target, optionally armoured |
@@ -103,6 +107,24 @@ Projectile flight is the difference that matters most between the two weapon
 kinds, and it is the reason `fire` on a projectile weapon reports nothing until
 the shots land: a 20 m shot at 50 m/s takes 0.4 s, and the range says so by
 showing no damage then damage.
+
+Position matters, which is what makes it a range rather than a calculator. Shots
+aim at the nearest live target, so walking changes the distance and the distance
+changes the damage:
+
+```
+> falloff 10 20 0.5
+> target add 200 5
+> fire 5
+5 shot(s) in 0.25s at 5.0 m: 5/5 pellets hit, 30.0 damage applied, 120.0 dps
+> walk 10
+> fire 5
+5 shot(s) in 0.25s at 13.0 m: 5/5 pellets hit, 26.1 damage applied, 104.4 dps
+```
+
+30 damage at 5 m against 26.1 at 13 m is the falloff curve doing its job. Without
+the aim-at-target behaviour, walking past a target would make every shot miss,
+which is correct geometry and useless practice.
 
 Not modelled yet, in rough order of how much it would change a fight:
 

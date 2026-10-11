@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use ow_sim::rules::{ArmourMitigation, DamageOrder, Rules};
-use ow_sim::{Combatant, FireMode, PoolSet, Spread, Weapon, World};
+use ow_sim::{Combatant, Falloff, FireMode, PoolSet, Spread, Weapon, World};
 use ow_tank::classes;
 use ow_tank::keytable::Sources;
 use ow_tank::{guid, GameData, ManifestSelector};
@@ -188,6 +188,11 @@ struct Range {
     rate: Option<f32>,
     /// Which weapon slot to fire. A hero may carry more than one.
     slot: usize,
+    /// Where the shooter stands. Moving is how distance, and therefore falloff
+    /// and range, become something to test rather than a constant.
+    player: ow_sim::Vec3,
+    /// Damage falloff, supplied by the operator. The install does not carry it.
+    falloff: Option<Falloff>,
     shots_fired: u32,
     log: Vec<String>,
 }
@@ -206,6 +211,8 @@ impl Range {
             damage: 0.0,
             rate: None,
             slot: 0,
+            player: [0.0, 1.2, 0.0],
+            falloff: None,
             shots_fired: 0,
             log: Vec::new(),
         }
@@ -267,7 +274,9 @@ impl Range {
             .iter()
             .find(|w| w.slot == self.slot)
             .or_else(|| hero.weapons.first())?;
-        Some((facts.to_weapon(self.damage, self.rate), facts.slot))
+        let mut weapon = facts.to_weapon(self.damage, self.rate);
+        weapon.falloff = self.falloff;
+        Some((weapon, facts.slot))
     }
 
     fn weapon_slots(&self) -> Vec<usize> {
@@ -291,8 +300,26 @@ impl Range {
             return Err("no targets; use `target add <health> <distance>`".into());
         }
 
-        let origin = [0.0, 1.2, 0.0];
-        let forward = [0.0, 0.0, 1.0];
+        let origin = self.player;
+        // Aim at the nearest live target, the way a range faces you at one.
+        // Firing straight down +z instead would mean walking past a target made
+        // every shot miss, which is correct geometry and useless practice.
+        let forward = self
+            .world
+            .combatants
+            .iter()
+            .filter(|c| c.alive)
+            .min_by(|a, b| {
+                let da = ow_sim::length(ow_sim::sub(a.pos, origin));
+                let db = ow_sim::length(ow_sim::sub(b.pos, origin));
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|c| {
+                let mut dir = ow_sim::sub(c.pos, origin);
+                dir[1] = 0.0;
+                ow_sim::normalize(dir)
+            })
+            .unwrap_or([0.0, 0.0, 1.0]);
         let mut total = 0.0;
         let mut hits = 0;
         let mut pellets = 0;
@@ -328,8 +355,20 @@ impl Range {
         }
 
         let elapsed = count as f32 * weapon.interval;
+        let nearest = self
+            .world
+            .combatants
+            .iter()
+            .filter(|c| c.alive)
+            .map(|c| (c.pos[2] - origin[2]).abs())
+            .fold(f32::INFINITY, f32::min);
+        let at = if nearest.is_finite() {
+            format!(" at {nearest:.1} m")
+        } else {
+            String::new()
+        };
         let line = format!(
-            "{count} shot(s) in {elapsed:.2}s: {hits}/{pellets} pellets hit, \
+            "{count} shot(s) in {elapsed:.2}s{at}: {hits}/{pellets} pellets hit, \
              {total:.1} damage applied, {:.1} dps",
             if elapsed > 0.0 { total / elapsed } else { 0.0 }
         );
@@ -435,6 +474,56 @@ impl Range {
                 self.damage = value;
                 println!(
                     "per-projectile damage set to {value}, supplied by you and not read from the install"
+                );
+                Ok(true)
+            }
+            "walk" | "strafe" => {
+                let metres: f32 = args
+                    .first()
+                    .ok_or("usage: walk <metres>")?
+                    .parse()
+                    .map_err(|_| "distance must be a number".to_string())?;
+                if command == "walk" {
+                    self.player[2] = (self.player[2] + metres).max(0.0);
+                } else {
+                    self.player[0] += metres;
+                }
+                println!(
+                    "shooter at ({:.1}, {:.1}, {:.1})",
+                    self.player[0], self.player[1], self.player[2]
+                );
+                Ok(true)
+            }
+            "reset" => {
+                self.player = [0.0, 1.2, 0.0];
+                self.world.combatants.clear();
+                self.world.projectiles.clear();
+                println!("shooter back at the origin, targets cleared");
+                Ok(true)
+            }
+            "falloff" => {
+                if args.first() == Some(&"none") {
+                    self.falloff = None;
+                    println!("falloff cleared");
+                    return Ok(true);
+                }
+                if args.len() < 3 {
+                    return Err("usage: falloff <start m> <end m> <min factor> | falloff none".to_string());
+                }
+                let start: f32 = args[0].parse().map_err(|_| "start must be a number".to_string())?;
+                let end: f32 = args[1].parse().map_err(|_| "end must be a number".to_string())?;
+                let min: f32 = args[2].parse().map_err(|_| "min factor must be a number".to_string())?;
+                if end <= start {
+                    return Err("end must be beyond start".to_string());
+                }
+                self.falloff = Some(Falloff {
+                    start,
+                    end,
+                    min_factor: min.clamp(0.0, 1.0),
+                });
+                println!(
+                    "falloff set: full to {start} m, {:.2}x at {end} m (supplied by you)",
+                    min
                 );
                 Ok(true)
             }
@@ -546,6 +635,9 @@ fn print_help() {
          params                 every distinct named parameter the graph declared\n  \
          damage <n>             per-projectile damage (not extracted; you supply it)\n  \
          rate <n>               shots per second, when the graph declares only 999\n  \
+         walk <m> | strafe <m>  move the shooter\n  \
+         reset                  back to the origin, clear targets\n  \
+         falloff <start> <end> <min> | falloff none\n  \
          target add <hp> <m>    spawn a target\n  \
          target [clear]         show or clear targets\n  \
          fire [n]               fire n shots\n  \
