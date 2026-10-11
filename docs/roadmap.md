@@ -187,3 +187,42 @@ code lives. Entropy alone would have suggested success.
 work outward from the hash immediates — find the functions that read
 `numShotsPerSecond` and `m_amount`, and the damage field follows from what they
 touch.
+
+## The update landed, and the reference derivation is wrong
+
+The client updated to `2.25.0.0.154088`. What happened next is the clearest
+evidence yet for why the executable matters.
+
+The provider interpreter evaluates `ProCMF_154088` without error, and its output
+is **provably correct**: it matches a hand-written implementation of the same
+source byte for byte, for both the key and the IV.
+
+And that key does not decrypt the manifest. Four combinations were tried —
+32-byte and 16-byte keys crossed with AES-256 and AES-128 — and all four produce
+a record list that is not GUID-sorted, which is the validity check that caught
+every wrong derivation so far. The header is not the problem either: the magic
+still reads `0x636d661b` at the same offset, so the body still begins at 48.
+
+So the derivation is right and the *reference* is wrong: the tooling's provider
+for the newest build does not match the newest build. That is the failure its own
+error message warns about ("Manifest decryption failed ... can happen due the game
+receiving a new patch that is not supported by this version"), and it means there
+is no trustworthy reference for the newest manifest format. This is precisely the
+situation the executable can settle and nothing else can.
+
+### What the capture gives us instead
+
+From the running process, 1,706 executable regions with addresses, containing
+known field hashes as immediates, and 40 `cmp` sites against them (`cmp edx,
+imm32` 33 times, `cmp ecx, imm32` 7 times). The engine dispatches on field hash,
+which is the thread to pull:
+
+* the set of hashes the combat code compares against is the set of fields that
+  matter, extractable without any name table;
+* each comparison is a labelled case, so the code under each one says what the
+  field *does*;
+* the manifest decryption routine is in the same captured image, so the key
+  derivation can be read rather than sourced from tooling that is wrong.
+
+That is the work now: disassemble around those 40 sites and around the manifest
+crypto, from the captured regions, at the addresses the manifest records.
