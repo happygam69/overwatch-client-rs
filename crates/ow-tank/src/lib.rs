@@ -20,6 +20,7 @@ pub mod guid;
 pub mod keytable;
 pub mod manifest;
 pub mod settings;
+pub mod weapons;
 
 use ow_casc::Store;
 use ow_stu::Stu;

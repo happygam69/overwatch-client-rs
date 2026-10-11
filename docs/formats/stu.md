@@ -270,8 +270,12 @@ asset, which is the same route the interface takes.
 ## Known gaps
 
 * Version 1 STU is not implemented.
-* Inline array fields (`InlineArrayInfo`) are parsed but not read; the hero
-  loadout list and similar arrays need them.
-* Nested and embedded instances are walked for their records but their fields
-  are not read yet, which is what stands between this and the state graphs.
+* **Inline instance arrays are read** (see `ow-stu`'s `inline_elements`): an
+  `i32` count followed by payloads that each carry their own field bag, including
+  the empty `-1` elements that occur in practice.
+* Embedded arrays in the dynamic block are located but their elements' *fields*
+  are not read, which is what the weapon-graph overrides need.
+* Version 2 structures whose inner layout differs from the generated type must be
+  followed by their bytes; the weapon overrides wrapper is one, and it is
+  documented in `docs/formats/weapons.md`.
 * The scalar node types that hold combat numbers are unmapped.

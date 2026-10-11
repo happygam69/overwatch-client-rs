@@ -61,12 +61,18 @@ live figures exactly; health values are lower because this installation predates
 a health rebalance, so the numbers belong to build `2.23.0.3.151177` and not to
 live. See [`docs/formats/entity-schema.md`](docs/formats/entity-schema.md).
 
+`weapons` follows each hero to the state-script graph its weapon behaviour lives
+in. Every graph reference resolves, but the numbers *inside* a graph are not read
+yet: a graph is a program, not a record, and nothing identifies which node is the
+fire interval. See [`docs/formats/weapons.md`](docs/formats/weapons.md).
+
 `settings` is a different thing: the per-hero **tuning multipliers** a custom game
 exposes, 1.0 meaning normal.
 
-The combat *simulation* is not implemented, and the base numbers are only
-partly reached — the pools, not damage or cooldowns. See
-[`docs/formats/stu.md`](docs/formats/stu.md) for what remains.
+The combat *simulation* is not implemented, and the base numbers are only partly
+reached: the health pools are read, damage and cooldowns are not. See
+[`docs/formats/weapons.md`](docs/formats/weapons.md) for exactly what is missing
+and the three cheapest ways to attack it.
 
 ## Running it
 
@@ -82,6 +88,7 @@ cargo run --release -p ow-probe -- heroes
 cargo run --release -p ow-probe -- hero 2
 cargo run --release -p ow-probe -- settings
 cargo run --release -p ow-probe -- health
+cargo run --release -p ow-probe -- weapons
 ```
 
 | command | what it does |
@@ -91,6 +98,7 @@ cargo run --release -p ow-probe -- health
 | `heroes` | every hero, with a resolved asset reference and theme colour |
 | `hero <index>` | one hero: instances, field layout, resolved fields |
 | `health` | per-hero health, armour and shields from the entity schema |
+| `weapons` | each hero's weapons and the state-script graph each uses |
 | `settings [n]` | the per-hero tuning multipliers, with bounds resolved |
 | `classmap` | how many STU class names were recovered |
 | `buckets` | diagnosis for the container alone, before anything else runs |

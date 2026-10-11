@@ -41,6 +41,30 @@ pub const CONFIG_VAR_FLOAT: u32 = 0x7B45_B325;
 pub const CONFIG_VAR_INT: u32 = 0x12E4_34A1;
 /// `STUConfigVarBool`, a literal boolean.
 pub const CONFIG_VAR_BOOL: u32 = 0xB567_AADA;
+/// `STUWeaponComponent`, which lists an entity's weapons.
+pub const WEAPON_COMPONENT: u32 = 0x15CB_6532;
+/// `STUStatescriptGraph`, the node graph a weapon's behaviour lives in.
+pub const STATESCRIPT_GRAPH: u32 = 0x7236_F6E3;
+
+/// Asset type of a statescript graph. Graphs are shipped and addressable, unlike
+/// the token type, so a graph reference can be followed to a real asset.
+pub const STATESCRIPT_GRAPH_ASSET_TYPE: u16 = 0x01B;
+
+/// Fields of a weapon component.
+pub mod weapon_component {
+    /// `m_weapons`, an inline array of weapon definitions.
+    pub const WEAPONS: u32 = 0x3BD1_6B9E;
+    /// `m_managerScript`.
+    pub const MANAGER_SCRIPT: u32 = 0xC63E_11DD;
+}
+
+/// Fields of a weapon definition.
+pub mod weapon_definition {
+    /// `m_graph`: the overrides wrapper, holding the graph reference.
+    pub const GRAPH: u32 = 0xC71E_A6BC;
+    /// `m_script`.
+    pub const SCRIPT: u32 = 0x4D55_97A8;
+}
 
 /// Fields of a statescript schema entry.
 pub mod schema_entry {
@@ -132,6 +156,8 @@ impl ClassMap {
             (CONFIG_VAR_FLOAT, "STUConfigVarFloat"),
             (CONFIG_VAR_INT, "STUConfigVarInt"),
             (CONFIG_VAR_BOOL, "STUConfigVarBool"),
+            (WEAPON_COMPONENT, "STUWeaponComponent"),
+            (STATESCRIPT_GRAPH, "STUStatescriptGraph"),
         ] {
             names.insert(hash, name.to_string());
         }

@@ -69,9 +69,10 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
         }
         "settings" => settings(&data, rest),
         "health" => health(&data),
+        "weapons" => weapons(&data),
         other => Err(format!(
             "unknown command {other:?}; try info, types, heroes, hero <index>, \
-             health, settings [n], classmap, buckets"
+             health, weapons, settings [n], classmap, buckets"
         )),
     }
 }
@@ -464,5 +465,84 @@ fn health(data: &GameData) -> Result<(), String> {
             totals[totals.len() / 2]
         );
     }
+    Ok(())
+}
+
+/// Each hero's weapons, and the state-script graph each one uses.
+///
+/// The graph is where a weapon's numbers live, but a graph is a program rather
+/// than a record, so this prints the graph reference and checks it resolves.
+/// Reading damage and fire rate out of the graph is a separate problem.
+fn weapons(data: &GameData) -> Result<(), String> {
+    println!(
+        "{:>6}  {:>5}  {:<18}  {:>7}  {}",
+        "index", "slot", "graph", "type", "present"
+    );
+
+    let mut heroes_with_weapons = 0usize;
+    let mut graphs = 0usize;
+    let mut present = 0usize;
+    let mut empty_slots = 0usize;
+    let mut unreadable = 0usize;
+
+    for guid in hero_guids(data) {
+        let entity = {
+            let mut stu = match data.stu_of(guid) {
+                Ok(stu) => stu,
+                Err(_) => {
+                    unreadable += 1;
+                    continue;
+                }
+            };
+            let Some(hero) = stu.instance(classes::HERO) else {
+                unreadable += 1;
+                continue;
+            };
+            match stu.read_asset_ref(hero, classes::hero::GAMEPLAY_ENTITY) {
+                Some(entity) => entity,
+                None => {
+                    unreadable += 1;
+                    continue;
+                }
+            }
+        };
+
+        let weapons = match ow_tank::weapons::weapons_of(data, entity) {
+            Ok(weapons) => weapons,
+            Err(_) => {
+                unreadable += 1;
+                continue;
+            }
+        };
+        if weapons.is_empty() {
+            continue;
+        }
+        heroes_with_weapons += 1;
+
+        for weapon in &weapons {
+            if weapon.is_empty() {
+                empty_slots += 1;
+                continue;
+            }
+            if let Some(graph) = weapon.graph {
+                graphs += 1;
+                let ok = ow_tank::weapons::graph_is_present(data, graph);
+                if ok {
+                    present += 1;
+                }
+                println!(
+                    "{:>6}  {:>5}  0x{graph:016x}  {:>7}  {ok}",
+                    guid::index_of(guid),
+                    weapon.slot,
+                    format!("0x{:03X}", guid::type_of(graph))
+                );
+            }
+        }
+    }
+
+    println!(
+        "\n{heroes_with_weapons} heroes with weapons, {graphs} graph references \
+         ({present} present), {empty_slots} empty slots, {unreadable} heroes unreadable"
+    );
     Ok(())
 }
