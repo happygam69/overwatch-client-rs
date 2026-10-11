@@ -256,9 +256,34 @@ impl Registry {
         region: &str,
         locale: Option<&str>,
     ) -> Option<(String, [u8; 16])> {
+        Self::find_manifest_candidates(root_file, kind, platform, region, locale)
+            .into_iter()
+            .next()
+    }
+
+    /// Every manifest that could serve this request, best first.
+    ///
+    /// A build can ship more than one manifest for the same kind, region and
+    /// locale, and they are not interchangeable: one may be encrypted under a
+    /// derivation this program does not have while the other is in the clear.
+    /// Returning the list lets the caller open them in order and keep the first
+    /// that works, instead of betting on a name.
+    ///
+    /// Ordering: the requested platform's own prefix first, then names that
+    /// merely begin with the platform string; within each, an exact region
+    /// match before a relaxed one.
+    pub fn find_manifest_candidates(
+        root_file: &str,
+        kind: ManifestKind,
+        platform: &str,
+        region: &str,
+        locale: Option<&str>,
+    ) -> Vec<(String, [u8; 16])> {
         let extension = kind.extension();
         let marker = kind.marker();
-        let mut fallback: Option<(String, [u8; 16])> = None;
+        let exact_prefix = format!("{platform}_");
+        let mut exact: Vec<(String, [u8; 16])> = Vec::new();
+        let mut loose: Vec<(String, [u8; 16])> = Vec::new();
 
         for line in root_file.lines() {
             let line = line.trim();
@@ -274,7 +299,7 @@ impl Registry {
                 continue;
             }
             let name = path.rsplit('/').next().unwrap_or(path);
-            if !name.starts_with(&format!("{platform}_")) {
+            if !name.starts_with(platform) {
                 continue;
             }
 
@@ -319,12 +344,20 @@ impl Registry {
                 continue;
             };
             let found = (name.to_string(), ckey);
+            let bucket = if name.starts_with(&exact_prefix) {
+                &mut exact
+            } else {
+                &mut loose
+            };
             if name.contains(region) {
-                return Some(found);
+                bucket.insert(0, found);
+            } else {
+                bucket.push(found);
             }
-            fallback.get_or_insert(found);
         }
-        fallback
+
+        exact.extend(loose);
+        exact
     }
 
     /// Open a content manifest from the store.
@@ -346,20 +379,27 @@ impl Registry {
             return Err(Error::Malformed("negative record count"));
         }
 
-        let table = sources.table_for(header.build_version)?;
-
-        // The derivation hashes the file name as ASCII.
-        let digest: [u8; 20] = {
-            use sha1::{Digest, Sha1};
-            let mut hasher = Sha1::new();
-            hasher.update(name.as_bytes());
-            hasher.finalize().into()
-        };
-
-        let (key, iv) = derive_key_iv(&header, &digest, &table, ManifestKind::Content)?;
-
+        // Newer builds ship the manifest in the clear: the magic reads `cmf`
+        // followed by the version, and there is no key to derive. Reading the
+        // magic as anything but little-endian makes such a file look encrypted,
+        // which is exactly the trap this branch exists to avoid.
         let body = &blob[CMF_HEADER_SIZE..];
-        let plain = decrypt(body, &key, &iv)?;
+        let plain = if header.is_encrypted() {
+            let table = sources.table_for(header.build_version)?;
+
+            // The derivation hashes the file name as ASCII.
+            let digest: [u8; 20] = {
+                use sha1::{Digest, Sha1};
+                let mut hasher = Sha1::new();
+                hasher.update(name.as_bytes());
+                hasher.finalize().into()
+            };
+
+            let (key, iv) = derive_key_iv(&header, &digest, &table, ManifestKind::Content)?;
+            decrypt(body, &key, &iv)?
+        } else {
+            body.to_vec()
+        };
 
         let records_at = header.entry_count as usize * CMF_ENTRY_SIZE;
         let needed = records_at + header.data_count as usize * CMF_RECORD_SIZE;
@@ -452,18 +492,38 @@ mod tests {
 
     #[test]
     fn header_reports_encryption_and_version() {
-        // A real retail header: magic 0x636d661b -> encrypted, version 27.
+        // Encrypted shape: the magic field holds version then `fmc`, so reading
+        // it little-endian lands on the marker in the low three bytes.
         let mut data = vec![0u8; CMF_HEADER_SIZE];
         data[0..4].copy_from_slice(&150_851u32.to_le_bytes());
         data[32..36].copy_from_slice(&1_208_956i32.to_le_bytes());
         data[40..44].copy_from_slice(&357i32.to_le_bytes());
-        data[44..48].copy_from_slice(&0x636d661bu32.to_le_bytes());
+        data[44..48].copy_from_slice(&[0x1b, 0x66, 0x6d, 0x63]);
 
         let header = Header::parse(&data).unwrap();
         assert_eq!(header.build_version, 150_851);
         assert_eq!(header.data_count, 1_208_956);
         assert_eq!(header.entry_count, 357);
         assert!(header.is_encrypted());
+        assert_eq!(header.version(), 27);
+    }
+
+    #[test]
+    fn plaintext_header_is_not_taken_for_encrypted() {
+        // Newer builds ship the manifest in the clear: the magic spells `cmf`
+        // then the version. Deriving a key for this would fail for every build
+        // whose derivation is not here, which is how the mistake shows up.
+        let mut data = vec![0u8; CMF_HEADER_SIZE];
+        data[0..4].copy_from_slice(&154_088u32.to_le_bytes());
+        data[32..36].copy_from_slice(&1_395_411i32.to_le_bytes());
+        data[40..44].copy_from_slice(&361i32.to_le_bytes());
+        data[44..48].copy_from_slice(b"cmf\x1b");
+
+        let header = Header::parse(&data).unwrap();
+        assert_eq!(header.build_version, 154_088);
+        assert_eq!(header.data_count, 1_395_411);
+        assert_eq!(header.entry_count, 361);
+        assert!(!header.is_encrypted());
         assert_eq!(header.version(), 27);
     }
 

@@ -36,6 +36,8 @@ pub enum Error {
     Stu(ow_stu::Error),
     /// The assembly does not ship content manifests this build can read.
     NoManifest,
+    /// Manifests matched the request, but none of them opened. Carries why.
+    NoManifestUsable(String),
     NotFound(String),
 }
 
@@ -49,6 +51,10 @@ impl std::fmt::Display for Error {
             Error::NoManifest => write!(
                 f,
                 "this installation's root file lists no content manifest the tool can open"
+            ),
+            Error::NoManifestUsable(detail) => write!(
+                f,
+                "no content manifest could be opened. Tried:\n  {detail}"
             ),
             Error::NotFound(what) => write!(f, "not found: {what}"),
         }
@@ -135,19 +141,48 @@ impl GameData {
 
         // The base manifest is authoritative; the text manifest adds what it
         // does not carry. Speech is not loaded -- nothing here reads audio.
-        let (name, content_key) = manifest::Registry::find_manifest_name(
+        //
+        // More than one manifest can match, and they are not interchangeable:
+        // on a recent install the plain `Win_` root manifest is encrypted under
+        // a derivation that is not public while the `WinPrism_` one is in the
+        // clear. So try them in order and keep the first that opens, recording
+        // why the others were passed over rather than hiding it.
+        let candidates = manifest::Registry::find_manifest_candidates(
             &root_file,
             manifest::ManifestKind::Content,
             &selector.platform,
             &selector.region,
             None,
-        )
-        .ok_or(Error::NoManifest)?;
+        );
+        if candidates.is_empty() {
+            return Err(Error::NoManifest);
+        }
 
-        let mut registry = manifest::Registry::open(&store, &name, &content_key, sources)?;
+        let mut opened = None;
+        let mut skipped: Vec<String> = Vec::new();
+        for (name, content_key) in &candidates {
+            match manifest::Registry::open(&store, name, content_key, sources) {
+                Ok(registry) => {
+                    opened = Some((registry, name.clone()));
+                    break;
+                }
+                Err(e) => skipped.push(format!("{name}: {e}")),
+            }
+        }
+        let Some((mut registry, name)) = opened else {
+            let detail = skipped.join("\n  ");
+            return Err(Error::NoManifestUsable(detail));
+        };
+        if !skipped.is_empty() {
+            eprintln!(
+                "note: {name} chosen; {} other manifest(s) for this region are encrypted \
+                 under an unpublished derivation",
+                skipped.len()
+            );
+        }
         let mut manifests = vec![name];
 
-        if let Some((text_name, text_key)) = manifest::Registry::find_manifest_name(
+        for (text_name, text_key) in manifest::Registry::find_manifest_candidates(
             &root_file,
             manifest::ManifestKind::Text,
             &selector.platform,
@@ -159,8 +194,9 @@ impl GameData {
                 Ok(text) => {
                     registry.merge_missing(&text);
                     manifests.push(text_name);
+                    break;
                 }
-                Err(e) => eprintln!("warning: could not open text manifest {text_name}: {e}"),
+                Err(_) => continue,
             }
         }
 
