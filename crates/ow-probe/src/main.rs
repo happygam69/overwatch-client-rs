@@ -80,14 +80,405 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
             Ok(())
         }
         "settings" => settings(&data, rest),
+        "scan" => scan(&data, rest),
+        "dump" => dump(&data, rest),
+        "grep" => grep(&data, rest),
+        "mapchunk" => map_chunk(&data, rest),
         "health" => health(&data),
         "weapons" => weapons(&data),
         "weapon-params" => weapon_params(&data, rest),
         other => Err(format!(
             "unknown command {other:?}; try info, types, heroes, hero <index>, \
-             health, weapons, weapon-params [hero], settings [n], classmap, buckets"
+             health, weapons, weapon-params [hero], settings [n], scan, classmap, buckets"
         )),
     }
+}
+
+/// Read a map chunk: what it places, and whether those references resolve.
+///
+/// ```text
+/// ow-probe mapchunk <guid> [--limit N]
+/// ow-probe mapchunk --sweep [--count N]
+/// ```
+fn map_chunk(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let resolves = |g: u64| data.registry().get(g).is_some();
+    let limit: usize = rest
+        .iter()
+        .position(|a| a == "--limit")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20);
+
+    if rest.iter().any(|a| a == "--sweep") {
+        // Walk map chunks and report how well each one reads. A chunk whose
+        // references resolve is one this program understands; a sweep shows
+        // whether that is most of them or almost none.
+        let count: usize = rest
+            .iter()
+            .position(|a| a == "--count")
+            .and_then(|i| rest.get(i + 1))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60);
+        let guids = data.guids_of_type(0x0BC);
+        println!("{} map chunk assets", guids.len());
+        let mut model_ok = 0usize;
+        let mut entity_ok = 0usize;
+        let mut failed = 0usize;
+        for guid in guids.iter().take(count) {
+            let Ok(bytes) = data.bytes_of(*guid) else {
+                failed += 1;
+                continue;
+            };
+            match ow_tank::mapchunk::MapChunk::detect(&bytes, &resolves) {
+                Ok((kind, chunk)) => {
+                    let hits = match kind {
+                        ow_tank::mapchunk::Kind::Model => chunk.resolvable_models(&resolves),
+                        ow_tank::mapchunk::Kind::Entity => chunk
+                            .placeables
+                            .iter()
+                            .filter(|p| p.entity.map(|g| resolves(g)).unwrap_or(false))
+                            .count(),
+                        _ => 0,
+                    };
+                    if hits > 0 {
+                        println!(
+                            "  0x{guid:016x}  {}  {}  {hits} refs resolve  {}",
+                            kind.label(),
+                            chunk.header.placeable_count,
+                            chunk.summary()
+                        );
+                        if kind == ow_tank::mapchunk::Kind::Model {
+                            model_ok += 1;
+                        } else {
+                            entity_ok += 1;
+                        }
+                    } else {
+                        failed += 1;
+                    }
+                }
+                Err(_) => failed += 1,
+            }
+        }
+        println!("{model_ok} model chunks, {entity_ok} entity chunks, {failed} unreadable");
+        return Ok(());
+    }
+
+    let guid_arg = rest
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .ok_or("usage: ow-probe mapchunk <guid> [--limit N]")?;
+    let guid = u64::from_str_radix(guid_arg.trim_start_matches("0x"), 16)
+        .map_err(|_| format!("{guid_arg:?} is not a GUID"))?;
+    let bytes = data.bytes_of(guid).map_err(|e| e.to_string())?;
+    println!("0x{guid:016x}: {} bytes", bytes.len());
+
+    let (kind, chunk) = ow_tank::mapchunk::MapChunk::detect(&bytes, &resolves)
+        .map_err(|e| e.to_string())?;
+    println!(
+        "read as {} placeables: {}",
+        kind.label(),
+        chunk.summary()
+    );
+    println!(
+        "  placeable count {} at {:#x}, instance data at {:#x}",
+        chunk.header.placeable_count,
+        chunk.header.placeable_offset,
+        chunk.header.instance_data_offset
+    );
+    if rest.iter().any(|a| a == "--hex") {
+        for p in chunk.placeables.iter().take(limit) {
+            let start = p.offset;
+            let end = (start + 96).min(bytes.len());
+            println!("  --- placeable {} at {start:#x} (size {})", p.index, p.size);
+            for row in bytes[start..end].chunks(16) {
+                let hexs: Vec<String> = row.iter().map(|b| format!("{b:02x}")).collect();
+                let text: String = row
+                    .iter()
+                    .map(|b| if (32..127).contains(b) { *b as char } else { '.' })
+                    .collect();
+                println!("      {:<47}  {text}", hexs.join(" "));
+            }
+        }
+        return Ok(());
+    }
+    for p in chunk.placeables.iter().take(limit) {
+        let target = p
+            .model
+            .or(p.entity)
+            .map(|g| format!("0x{g:016x} type 0x{:03X}", guid::type_of(g)))
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "  [{:>4}] size {:>5}  {target:<28} at ({:.1}, {:.1}, {:.1}) scale ({:.2}, {:.2}, {:.2})",
+            p.index, p.size, p.translation[0], p.translation[1], p.translation[2],
+            p.scale[0], p.scale[1], p.scale[2]
+        );
+    }
+    Ok(())
+}
+
+/// Find assets whose raw bytes contain a string.
+///
+/// Asset names are not shipped, so the only way to locate a thing whose name is
+/// known -- "Practice Range" -- is to look for the name inside the data. This
+/// searches decoded asset bytes, so it sees strings that are not in any field
+/// this program knows how to read.
+///
+/// ```text
+/// ow-probe grep "Practice Range" [--types 0x09F,0x0C5] [--limit 20]
+/// ```
+fn grep(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let needle = rest
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .ok_or("usage: ow-probe grep <text> [--types 0xNNN,...] [--limit N]")?
+        .clone();
+    let mut type_ids: Vec<u16> = Vec::new();
+    let mut limit = 20usize;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--types" => {
+                i += 1;
+                let value = rest.get(i).ok_or("--types needs a value")?;
+                for part in value.split(',') {
+                    type_ids.push(
+                        u16::from_str_radix(part.trim_start_matches("0x"), 16)
+                            .map_err(|_| format!("bad type {part:?}"))?,
+                    );
+                }
+            }
+            "--limit" => {
+                i += 1;
+                limit = rest.get(i).ok_or("--limit needs a value")?.parse().unwrap_or(limit);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let histogram = data.type_histogram();
+    let chosen: Vec<u16> = if type_ids.is_empty() {
+        let mut small: Vec<(u16, usize)> = histogram
+            .iter()
+            .filter(|(_, count)| **count <= 20_000)
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        small.sort_by_key(|(_, count)| *count);
+        small.into_iter().map(|(t, _)| t).collect()
+    } else {
+        type_ids
+    };
+
+    let bytes_needle = needle.as_bytes();
+    println!("searching {} type(s) for {needle:?}", chosen.len());
+    let mut hits = 0usize;
+    let mut scanned = 0usize;
+    for type_id in chosen {
+        for guid in data.guids_of_type(type_id) {
+            let Ok(bytes) = data.bytes_of(guid) else {
+                continue;
+            };
+            scanned += 1;
+            if let Some(at) = bytes
+                .windows(bytes_needle.len())
+                .position(|w| w == bytes_needle)
+            {
+                let from = at.saturating_sub(24);
+                let to = (at + bytes_needle.len() + 40).min(bytes.len());
+                let context = String::from_utf8_lossy(&bytes[from..to]);
+                println!("  0x{guid:016x}  type 0x{type_id:03X}  at {at:#x}: {context:?}");
+                hits += 1;
+                if hits >= limit {
+                    println!("  (stopping at {limit})");
+                    return Ok(());
+                }
+            }
+        }
+    }
+    println!("{hits} hit(s) in {scanned} asset(s)");
+    Ok(())
+}
+
+/// Print one asset's structured data: its instances, their classes, and the
+/// fields each instance actually carries.
+///
+/// Field layouts come from the instance's own field bag, so this shows what the
+/// file holds rather than what a generated class claims. That distinction is the
+/// point: a class layout from another build silently reads the wrong bytes.
+///
+/// ```text
+/// ow-probe dump 0x079000000000005b [--strings] [--refs]
+/// ```
+fn dump(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let guid_arg = rest
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .ok_or("usage: ow-probe dump <guid> [--strings] [--refs]")?;
+    let guid = u64::from_str_radix(guid_arg.trim_start_matches("0x"), 16)
+        .map_err(|_| format!("{guid_arg:?} is not a GUID"))?;
+    let show_strings = rest.iter().any(|a| a == "--strings");
+    let show_refs = rest.iter().any(|a| a == "--refs");
+
+    let bytes = data.bytes_of(guid).map_err(|e| e.to_string())?;
+    println!("0x{guid:016x}: {} bytes", bytes.len());
+    if let Ok(chunks) = ow_tank::chunks::Chunks::parse(&bytes) {
+        println!("chunked: {}", chunks.summary());
+        return Ok(());
+    }
+
+    let mut stu = ow_stu::Stu::parse(bytes).map_err(|e| e.to_string())?;
+    println!("{} instances", stu.instances.len());
+
+    for index in 0..stu.instances.len() {
+        let info = stu.instances[index];
+        let class = data.classes.describe(info.hash);
+        let embedded = if info.embedder_index >= 0 {
+            format!(" in {}(0x{:08X})", info.embedder_index, info.embedder_field)
+        } else {
+            String::new()
+        };
+        println!(
+            "  [{index:>4}] 0x{:08X} {class:<34} {size:>5} bytes{embedded}",
+            info.hash,
+            size = info.size
+        );
+        if !show_strings && !show_refs {
+            continue;
+        }
+        let fields: Vec<ow_stu::FieldInfo> = stu.fields(index).to_vec();
+        for field in fields {
+            if show_strings && field.size == 4 {
+                if let Some(text) = stu.read_string(index, field.hash) {
+                    if !text.is_empty() && text.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+                        println!("          0x{:08X} = {text:?}", field.hash);
+                    }
+                }
+            }
+            if show_refs && field.size == 8 {
+                // A reference is only worth printing if it lands on an asset
+                // that exists; anything else is a number that happens to be
+                // eight bytes wide.
+                let at = stu.payload_start(index) + field.offset;
+                if let Some(target) = stu.asset_ref_at(at, field.hash) {
+                    if data.registry().get(target).is_some() {
+                        println!(
+                            "          0x{:08X} -> 0x{target:016x}  {}",
+                            field.hash,
+                            guid::types::label(guid::type_of(target)).unwrap_or("asset")
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Find assets holding an instance of a STU class, and read a field from it.
+///
+/// Asset names are not in the manifest, so an asset has to be identified by
+/// what it contains. This is the tool for that: give it a class hash and it
+/// reports which assets hold one, optionally reading a `teString` field so the
+/// result can be recognised rather than guessed at.
+///
+/// ```text
+/// ow-probe scan 0x02514B6A --string 0x506FA8D8 --types 0x0C5,0x054
+/// ```
+fn scan(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let mut class_hash: Option<u32> = None;
+    let mut string_field: Option<u32> = None;
+    let mut type_ids: Vec<u16> = Vec::new();
+    let mut limit = 40usize;
+
+    let mut i = 0;
+    while i < rest.len() {
+        let arg = rest[i].as_str();
+        let hex = |s: &str| -> Result<u32, String> {
+            u32::from_str_radix(s.trim_start_matches("0x"), 16)
+                .map_err(|_| format!("{s:?} is not a hexadecimal number"))
+        };
+        match arg {
+            "--string" => {
+                i += 1;
+                string_field = Some(hex(rest.get(i).ok_or("--string needs a value")?)?);
+            }
+            "--types" => {
+                i += 1;
+                let value = rest.get(i).ok_or("--types needs a value")?;
+                for part in value.split(',') {
+                    let raw = hex(part)?;
+                    type_ids.push(
+                        u16::try_from(raw).map_err(|_| format!("type {part} out of range"))?,
+                    );
+                }
+            }
+            "--limit" => {
+                i += 1;
+                limit = rest.get(i).ok_or("--limit needs a value")?.parse().unwrap_or(limit);
+            }
+            other => class_hash = Some(hex(other)?),
+        }
+        i += 1;
+    }
+
+    let class_hash = class_hash.ok_or("usage: ow-probe scan <class-hash> [--string <field>] [--types 0xNNN,...]")?;
+
+    // Without a type list, sweep the types small enough to walk whole.
+    let histogram = data.type_histogram();
+    let chosen: Vec<u16> = if type_ids.is_empty() {
+        let mut small: Vec<(u16, usize)> = histogram
+            .iter()
+            .filter(|(_, count)| **count <= 20_000)
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        small.sort_by_key(|(_, count)| *count);
+        small.into_iter().map(|(t, _)| t).collect()
+    } else {
+        type_ids
+    };
+
+    println!(
+        "scanning {} type(s) for class 0x{class_hash:08X}{}",
+        chosen.len(),
+        string_field
+            .map(|f| format!(", reading string field 0x{f:08X}"))
+            .unwrap_or_default()
+    );
+
+    let mut found = 0usize;
+    let mut assets_scanned = 0usize;
+    for type_id in chosen {
+        let guids = data.guids_of_type(type_id);
+        for guid in guids {
+            let Ok(bytes) = data.bytes_of(guid) else {
+                continue;
+            };
+            let Ok(mut stu) = ow_stu::Stu::parse(bytes) else {
+                continue;
+            };
+            assets_scanned += 1;
+            let instances = stu.instances_of(class_hash);
+            if instances.is_empty() {
+                continue;
+            }
+            for instance in instances {
+                found += 1;
+                let text = string_field
+                    .and_then(|field| stu.read_string(instance, field))
+                    .unwrap_or_default();
+                println!(
+                    "  0x{guid:016x}  type 0x{type_id:03X}  instance {instance:<5} {text}"
+                );
+                if found >= limit {
+                    println!("  (stopping at {limit})");
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    println!("{found} instance(s) in {assets_scanned} readable asset(s)");
+    Ok(())
 }
 
 /// The per-hero tuning values.

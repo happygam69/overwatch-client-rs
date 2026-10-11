@@ -341,7 +341,10 @@ impl Stu {
     ///
     /// The field stores an `i32` offset into the dynamic block; there sits
     /// `i32 length`, `u32 checksum`, `i64 offset`, and the characters begin at
-    /// that final offset.
+    /// that final offset -- **within the dynamic block**, not within the file.
+    /// Treating it as an absolute file offset reads whatever happens to live at
+    /// that address, which is how this was found: it produced plausible-looking
+    /// binary rather than nothing.
     pub fn read_string(&mut self, instance: usize, field_hash: u32) -> Option<String> {
         let (offset, _size) = self.field_bytes(instance, field_hash)?;
         let payload_start = self.data_start + self.instances[instance].data_offset;
@@ -363,8 +366,11 @@ impl Stu {
         if text_at < 0 {
             return None;
         }
-        let start = text_at as usize;
+        let start = self.dyn_start + text_at as usize;
         let end = start.checked_add(len as usize)?;
+        if end > self.dyn_start + self.dyn_len {
+            return None;
+        }
         let bytes = self.blob.get(start..end)?;
         Some(String::from_utf8_lossy(bytes).into_owned())
     }
