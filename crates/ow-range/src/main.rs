@@ -650,10 +650,32 @@ fn print_help() {
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let sources = Sources::from_env();
-    let install_root =
-        std::env::var("OW_INSTALL").unwrap_or_else(|_| String::from("E:\\Overwatch"));
-    println!("install: {install_root}");
+    let Some(install_root) = ow_casc::install::detect_root() else {
+        eprintln!(
+            "error: no Overwatch install found.\n\
+             Set OW_INSTALL to the folder containing .build.info, for example:\n  \
+             OW_INSTALL='C:\\Program Files (x86)\\Overwatch' cargo run --release -p ow-range"
+        );
+        return std::process::ExitCode::FAILURE;
+    };
+    // The reference checkouts are located by their shape, so the range starts on
+    // a machine that has them without any environment setup.
+    let sources = Sources::discover(&[install_root.clone()]);
+    println!("install: {}", install_root.display());
+    // Say something before the slow part. Reading the manifests decrypts tens of
+    // megabytes and indexes well over a million records, which takes a few
+    // seconds on a cold file cache; with no output that silence reads as a hang.
+    for (label, path) in [
+        ("container library", &sources.tactlib_checkout),
+        ("asset library", &sources.owlib_checkout),
+    ] {
+        match path {
+            Some(path) => println!("{label}: {}", path.display()),
+            None => println!("{label}: not found; set OW_TACTLIB / OW_OWLIB if needed"),
+        }
+    }
+    print!("reading the installation (manifests are large)... ");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
 
     let data = match GameData::open(&install_root, &ManifestSelector::default(), &sources) {
         Ok(data) => data,
@@ -664,10 +686,8 @@ fn main() -> std::process::ExitCode {
     };
 
     let mut range = Range::new(data);
-    println!(
-        "{} heroes available. Type `help` for commands.",
-        range.heroes.len()
-    );
+    println!("done
+{} heroes available. Type `help` for commands.", range.heroes.len());
 
     // A script file runs the same commands without a terminal, which is how the
     // range is tested.

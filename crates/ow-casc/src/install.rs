@@ -160,6 +160,18 @@ pub struct Install {
 impl Install {
     /// Open an install, verifying that the expected directories exist.
     pub fn open(root: impl AsRef<Path>) -> Result<Install> {
+        Install::open_with_support_keyring(root, None)
+    }
+
+    /// Open an install, with an extra keyring supplied by the caller.
+    ///
+    /// The build's own keyring omits a few keys; a supplementary one fills the
+    /// gap. `OW_SUPPORT_KEYRING` still wins when set, so an explicit choice is
+    /// never overridden by discovery.
+    pub fn open_with_support_keyring(
+        root: impl AsRef<Path>,
+        discovered: Option<&Path>,
+    ) -> Result<Install> {
         let root = root.as_ref().to_path_buf();
         let build_info_path = root.join(".build.info");
         let casc = root.join("data").join("casc");
@@ -186,10 +198,14 @@ impl Install {
 
         // A few assets are encrypted with keys the build's own keyring does not
         // carry. Those live in the community keyring file the reference
-        // library ships; rather than vendor it, read a copy the user points at.
-        // Keys already present win, so the install stays authoritative.
-        if let Ok(path) = std::env::var("OW_SUPPORT_KEYRING") {
-            let path = PathBuf::from(path);
+        // library ships; rather than vendor it, read the copy on the user's own
+        // machine. Keys already present win, so the install stays authoritative.
+        let support = std::env::var("OW_SUPPORT_KEYRING")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| discovered.map(Path::to_path_buf));
+        if let Some(path) = support {
             if path.is_file() {
                 for (id, key) in read_keyring(&path)? {
                     keyring.entry(id).or_insert(key);
@@ -209,21 +225,16 @@ impl Install {
     /// Default install location, overridable with `OW_INSTALL`.
     ///
     /// Auto-detection is deliberately conservative: an explicit path is far
-    /// more reliable than guessing at drive letters.
+    /// more reliable than guessing at drive letters, so the candidate list is
+    /// short and each one is verified by the presence of `.build.info`.
     pub fn detect() -> Result<Install> {
-        if let Ok(path) = std::env::var("OW_INSTALL") {
-            return Install::open(path);
+        match detect_root() {
+            Some(root) => Install::open(root),
+            None => Err(Error::Parse(
+                "no Overwatch install found; set OW_INSTALL to the folder containing .build.info"
+                    .into(),
+            )),
         }
-        for candidate in DEFAULT_PATHS {
-            let path = Path::new(candidate);
-            if path.join(".build.info").is_file() {
-                return Install::open(path);
-            }
-        }
-        Err(Error::Parse(
-            "no Overwatch install found; set OW_INSTALL to the folder containing .build.info"
-                .into(),
-        ))
     }
 
     pub fn root(&self) -> &Path {
@@ -241,6 +252,22 @@ impl Install {
     pub fn indices_dir(&self) -> PathBuf {
         self.casc_dir().join("indices")
     }
+}
+
+/// The install root to use: `OW_INSTALL`, else the first candidate that exists.
+///
+/// Shared so every binary agrees on which install it is talking about, rather
+/// than each carrying its own idea of the default.
+pub fn detect_root() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("OW_INSTALL") {
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    DEFAULT_PATHS
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.join(".build.info").is_file())
 }
 
 /// Tried only when `OW_INSTALL` is unset.

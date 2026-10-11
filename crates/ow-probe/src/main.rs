@@ -32,11 +32,23 @@ fn main() -> ExitCode {
 }
 
 fn run(command: &str, rest: &[String]) -> Result<(), String> {
-    let sources = Sources::from_env();
     let selector = ManifestSelector::default();
 
-    let install_root = std::env::var("OW_INSTALL").unwrap_or_else(|_| default_install());
-    println!("install: {}", install_root);
+    let Some(root) = ow_casc::install::detect_root() else {
+        return Err(
+            "no Overwatch install found; set OW_INSTALL to the folder containing .build.info"
+                .to_string(),
+        );
+    };
+    let install_root = root.display().to_string();
+    let sources = Sources::discover(&[root]);
+    println!("install: {install_root}");
+    if let Some(path) = &sources.tactlib_checkout {
+        println!("container library: {}", path.display());
+    }
+    if let Some(path) = &sources.owlib_checkout {
+        println!("asset library: {}", path.display());
+    }
 
     // `buckets` diagnoses the container alone, so it must not depend on the
     // manifest layer succeeding.
@@ -184,20 +196,6 @@ fn buckets(install_root: &str) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn default_install() -> String {
-    for candidate in [
-        r"E:\Overwatch",
-        r"C:\Program Files (x86)\Overwatch",
-        r"C:\Program Files\Overwatch",
-        r"D:\Overwatch",
-    ] {
-        if std::path::Path::new(candidate).join(".build.info").is_file() {
-            return candidate.to_string();
-        }
-    }
-    String::new()
 }
 
 fn info(data: &GameData) -> Result<(), String> {

@@ -124,7 +124,10 @@ impl GameData {
         selector: &ManifestSelector,
         sources: &keytable::Sources,
     ) -> Result<GameData> {
-        let install = ow_casc::Install::open(install_root)?;
+        let install = ow_casc::Install::open_with_support_keyring(
+            install_root,
+            sources.support_keyring.as_deref(),
+        )?;
         let store = Store::open(install)?;
 
         let root_file = store.root_file()?;
