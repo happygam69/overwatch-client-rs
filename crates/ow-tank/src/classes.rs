@@ -33,6 +33,28 @@ pub const HERO_SETTING_FLOAT: u32 = 0x76B1_DB1F;
 pub const HERO_SETTING_IDENTIFIER: u32 = 0x90A5_0AC1;
 /// `STUHeroSettingCategory`, a group heading in the tuning UI.
 pub const HERO_SETTING_CATEGORY: u32 = 0xB87D_57AA;
+/// `STUStatescriptSchemaEntry`, one `(token, value)` pair of an entity's schema.
+pub const STATESCRIPT_SCHEMA_ENTRY: u32 = 0x5866_C45E;
+/// `STUConfigVarFloat`, a literal float.
+pub const CONFIG_VAR_FLOAT: u32 = 0x7B45_B325;
+/// `STUConfigVarInt`, a literal integer.
+pub const CONFIG_VAR_INT: u32 = 0x12E4_34A1;
+/// `STUConfigVarBool`, a literal boolean.
+pub const CONFIG_VAR_BOOL: u32 = 0xB567_AADA;
+
+/// Fields of a statescript schema entry.
+pub mod schema_entry {
+    /// The token naming which property the entry sets.
+    pub const TOKEN: u32 = 0x0D09_D2D9;
+}
+
+/// Fields shared by the literal-valued config vars.
+pub mod config_var {
+    /// `m_value`, shared by `STUConfigVarFloat`, `STUConfigVarInt`,
+    /// `STUConfigVarBool` and others, so the value is read the same way and the
+    /// *class* decides how to interpret it.
+    pub const VALUE: u32 = 0x07DD_813E;
+}
 
 /// Field hashes this project reads.
 pub mod hero {
@@ -106,6 +128,10 @@ impl ClassMap {
             (HERO_SETTING_FLOAT, "STUHeroSettingFloat"),
             (HERO_SETTING_IDENTIFIER, "STUHeroSettingIdentifier"),
             (HERO_SETTING_CATEGORY, "STUHeroSettingCategory"),
+            (STATESCRIPT_SCHEMA_ENTRY, "STUStatescriptSchemaEntry"),
+            (CONFIG_VAR_FLOAT, "STUConfigVarFloat"),
+            (CONFIG_VAR_INT, "STUConfigVarInt"),
+            (CONFIG_VAR_BOOL, "STUConfigVarBool"),
         ] {
             names.insert(hash, name.to_string());
         }

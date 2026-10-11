@@ -34,6 +34,8 @@ the ones that mattered:
 | asset-ref deobfuscation | every hero's entity reference must exist in the registry | GUIDs that resolve to nothing |
 | CRC64 polynomial | rebuild the published table from the polynomial | table mismatch |
 | hero colour | four floats in 0..1 with alpha exactly 1, matching known heroes | arbitrary floats |
+| health tokens | three pools split as the game splits them (Zenyatta 50 health / 150 shields, Symmetra 100 / 100) rather than a single total | totals that cannot be split |
+| pool identity | armour and shield values equal the published live figures exactly, while health differs systematically | a token that matched nothing, or one that matched by coincidence |
 
 Two of these were found by *failing* them: the index size endianness and the
 Salsa20 configuration. Both produced plausible-looking output. That is the

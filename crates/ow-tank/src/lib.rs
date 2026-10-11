@@ -15,6 +15,7 @@
 //! user's own installation at runtime.
 
 pub mod classes;
+pub mod entity;
 pub mod guid;
 pub mod keytable;
 pub mod manifest;

@@ -68,9 +68,10 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
             Ok(())
         }
         "settings" => settings(&data, rest),
+        "health" => health(&data),
         other => Err(format!(
             "unknown command {other:?}; try info, types, heroes, hero <index>, \
-             settings [n], classmap, buckets"
+             health, settings [n], classmap, buckets"
         )),
     }
 }
@@ -373,6 +374,95 @@ fn hero_detail(data: &GameData, index: u32) -> Result<(), String> {
     }
     if let Some(gender) = stu.read_u32(hero, classes::hero::GENDER) {
         println!("gender enum     {gender}");
+    }
+    Ok(())
+}
+
+/// Per-hero health pools, read from each hero's gameplay entity schema.
+///
+/// This is the first base combat data: not a tuning multiplier but the pool the
+/// hero actually spawns with. Armour and shields are absent for heroes that have
+/// none, which is a real zero rather than a failed reading.
+fn health(data: &GameData) -> Result<(), String> {
+    use ow_tank::entity::{pool, HealthPools};
+
+    println!(
+        "{:>6}  {:>7}  {:>7}  {:>8}  {:>7}",
+        "index", "health", "armour", "shields", "total"
+    );
+
+    let mut read = 0usize;
+    let mut missing = 0usize;
+    let mut totals: Vec<i32> = Vec::new();
+
+    for guid in hero_guids(data) {
+        let entity = {
+            let mut stu = match data.stu_of(guid) {
+                Ok(stu) => stu,
+                Err(_) => {
+                    missing += 1;
+                    continue;
+                }
+            };
+            let Some(hero) = stu.instance(classes::HERO) else {
+                missing += 1;
+                continue;
+            };
+            match stu.read_asset_ref(hero, classes::hero::GAMEPLAY_ENTITY) {
+                Some(entity) => entity,
+                None => {
+                    missing += 1;
+                    continue;
+                }
+            }
+        };
+
+        let entries = match ow_tank::entity::schema_of(data, entity) {
+            Ok(entries) => entries,
+            Err(_) => {
+                missing += 1;
+                continue;
+            }
+        };
+        let show = |token: u32| {
+            entries
+                .get(&token)
+                .and_then(|v| v.as_i32())
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        };
+        let pools = HealthPools {
+            health: entries.get(&pool::HEALTH).and_then(|v| v.as_i32()),
+            armour: entries.get(&pool::ARMOUR).and_then(|v| v.as_i32()),
+            shields: entries.get(&pool::SHIELDS).and_then(|v| v.as_i32()),
+        };
+        if let Some(total) = pools.total() {
+            totals.push(total);
+        }
+        read += 1;
+
+        println!(
+            "{:>6}  {:>7}  {:>7}  {:>8}  {:>7}",
+            guid::index_of(guid),
+            show(pool::HEALTH),
+            show(pool::ARMOUR),
+            show(pool::SHIELDS),
+            pools
+                .total()
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "-".into())
+        );
+    }
+
+    println!("\n{read} heroes read, {missing} not readable");
+    if !totals.is_empty() {
+        totals.sort_unstable();
+        println!(
+            "totals min {} max {} median {}",
+            totals.first().unwrap(),
+            totals.last().unwrap(),
+            totals[totals.len() / 2]
+        );
     }
     Ok(())
 }

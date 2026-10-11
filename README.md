@@ -33,21 +33,40 @@ $ ow-probe heroes
 ...
 132 of 132 hero references resolve to a registered asset
 
-$ ow-probe settings
-settings asset 0x0ca0000000000126 (index 294) -- 377 float settings
-  42 of 377 leave min/max at the class default
-  59 have a default other than 1.0
+$ ow-probe health
+ index   health   armour   shields    total
+     2      250        -         -      250
+     3      150        -         -      150
+     7      200      250         -      450
+     9      350      200         -      550
+    10      175        -         -      175
+    22      100        -       100      200
+    32       50        -       150      200
+    64      700        -         -      700
+   104      250        -       225      475
+   318      275      275         -      550
+...
+124 heroes read, 8 not readable
+totals min 100 max 3600 median 200
 ```
 
 Concretely, this proves: the container opens, encrypted chunks decrypt, the
-content and text manifests decrypt to a sorted asset registry, and structured-data
-assets parse far enough to resolve obfuscated asset references, read typed fields,
-and honour the rule that a field absent from an instance takes its class default.
+content and text manifests decrypt to a sorted asset registry, structured-data
+assets parse far enough to resolve obfuscated references and read typed fields,
+and an entity's schema can be walked to its literal values.
 
-The combat *simulation* is not implemented, and neither are the base combat
-numbers. `settings` reads the per-hero **tuning multipliers** a custom game
-exposes — 1.0 meaning normal — not damage or cooldowns. See
-[`docs/formats/stu.md`](docs/formats/stu.md) for what is reachable and what is not.
+`health` is the first **base** combat data: the pools a hero spawns with, read
+from the hero's gameplay entity. Armour and shield values match the published
+live figures exactly; health values are lower because this installation predates
+a health rebalance, so the numbers belong to build `2.23.0.3.151177` and not to
+live. See [`docs/formats/entity-schema.md`](docs/formats/entity-schema.md).
+
+`settings` is a different thing: the per-hero **tuning multipliers** a custom game
+exposes, 1.0 meaning normal.
+
+The combat *simulation* is not implemented, and the base numbers are only
+partly reached — the pools, not damage or cooldowns. See
+[`docs/formats/stu.md`](docs/formats/stu.md) for what remains.
 
 ## Running it
 
@@ -62,6 +81,7 @@ cargo run --release -p ow-probe -- types
 cargo run --release -p ow-probe -- heroes
 cargo run --release -p ow-probe -- hero 2
 cargo run --release -p ow-probe -- settings
+cargo run --release -p ow-probe -- health
 ```
 
 | command | what it does |
@@ -70,6 +90,7 @@ cargo run --release -p ow-probe -- settings
 | `types` | asset counts per type, including the combat-relevant ones |
 | `heroes` | every hero, with a resolved asset reference and theme colour |
 | `hero <index>` | one hero: instances, field layout, resolved fields |
+| `health` | per-hero health, armour and shields from the entity schema |
 | `settings [n]` | the per-hero tuning multipliers, with bounds resolved |
 | `classmap` | how many STU class names were recovered |
 | `buckets` | diagnosis for the container alone, before anything else runs |
@@ -96,7 +117,7 @@ crates/ow-stu    structured-data assets, which is where gameplay data lives
 crates/ow-tank   Overwatch semantics: asset GUID typing, content manifest,
                  class map, and the assembled GameData view
 crates/ow-probe  the command line probe
-docs/formats/    the file formats, as verified against a real install
+docs/formats/    the file formats and layers, as verified against a real install
 docs/provenance.md  what was learned from where
 dev/             development scratch: the format probes used to pin things
                  down. Not part of the product, and not tracked.
