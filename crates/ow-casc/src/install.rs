@@ -152,7 +152,13 @@ pub struct Install {
     root: PathBuf,
     pub build_info: BuildInfo,
     pub build_config: Config,
-    pub cdn_config: Config,
+    /// The CDN configuration, when the file is present.
+    ///
+    /// Nothing in a local read needs it — it describes remote downloads — so its
+    /// absence must not be fatal. It is not: during a patch the agent deletes the
+    /// outgoing build's config before rewriting `.build.info`, which leaves the
+    /// install briefly pointing at a file that no longer exists.
+    pub cdn_config: Option<Config>,
     /// Keyring entries: key id -> 16-byte key, for encrypted BLTE chunks.
     pub keyring: BTreeMap<u64, [u8; 16]>,
 }
@@ -190,7 +196,18 @@ impl Install {
             .ok_or_else(|| Error::Parse("no usable branch row".into()))?;
 
         let build_config = read_config(&config_path(&root, &build_info.build_key))?;
-        let cdn_config = read_config(&config_path(&root, &build_info.cdn_key))?;
+        let cdn_config = match read_config(&config_path(&root, &build_info.cdn_key)) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                // Worth saying out loud, because it is the signature of an
+                // install mid-patch rather than of a broken install.
+                eprintln!(
+                    "note: the CDN config for build {} is unreadable ({e});                      a local read does not need it",
+                    build_info.version
+                );
+                None
+            }
+        };
         let mut keyring = match &build_info.keyring_key {
             Some(key) => read_keyring(&config_path(&root, key))?,
             None => BTreeMap::new(),

@@ -15,6 +15,7 @@
 //! user's own installation at runtime.
 
 pub mod classes;
+pub mod chunks;
 pub mod entity;
 pub mod fieldnames;
 pub mod graph;

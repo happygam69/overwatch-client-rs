@@ -72,6 +72,40 @@ Recommended order, therefore: build the range from data first, because it does
 not depend on any of this, and revisit the executable only for the specific
 numbers that turn out to be unreachable any other way — with the risk known.
 
+## Preparing for a game update
+
+The client forces updates, so the build this project was verified against
+(`2.23.0.3.151177`) will be replaced. Two things were done so that the move costs
+little:
+
+**The key derivation no longer has to be hand-written per build.**
+`dev/provider_interp.py` reads a provider's `Key()` and `IV()` source and
+interprets it. Validated against build 150851: it reproduces the key and IV that
+are independently confirmed by decrypting the real manifest, byte for byte. So a
+new build is *evaluated* rather than guessed at.
+
+It currently covers 47 of the 253 providers. The rest use constructs the
+interpreter does not yet handle, and the list is known rather than unknown:
+
+| missing construct | providers | example |
+|---|---|---|
+| declaration-with-initialiser and named constants (`uint kidx = ...`, `const uint increment = 3`) | 111 | `ProCMF_35328` |
+| `switch (SignedMod(kidx, 3))` with small integer cases | 38 | `ProCMF_100672` |
+| `kidx -= ...` and `--kidx` | 38 | `ProCMF_101600` |
+| `buffer[i] = digest[...]` rather than `Keytable[...]` | 8 | `ProCMF_111387` |
+| ternary `cond ? a : b` | 10 | `ProCMF_105760` |
+
+All of them are small additions to the same interpreter; none needs a different
+approach. Whether the new build falls in the covered 47 or needs the extension is
+unknown until its build number is visible, which is why the failure list is
+written down.
+
+**A missing CDN config is no longer fatal.** During a patch the agent deletes the
+outgoing build's CDN config before rewriting `.build.info`, leaving the install
+briefly pointing at a file that no longer exists. Nothing in a local read needs
+that file, so its absence now prints a note and continues. This was a real bug
+that made the tool fail on an install that was merely mid-update.
+
 ## Staged plan
 
 Each stage is meant to be visibly closer to the range.
