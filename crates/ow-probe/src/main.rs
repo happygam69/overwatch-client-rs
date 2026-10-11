@@ -84,6 +84,7 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
         "dump" => dump(&data, rest),
         "grep" => grep(&data, rest),
         "mapchunk" => map_chunk(&data, rest),
+        "model" => model(&data, rest),
         "health" => health(&data),
         "weapons" => weapons(&data),
         "weapon-params" => weapon_params(&data, rest),
@@ -92,6 +93,100 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
              health, weapons, weapon-params [hero], settings [n], scan, classmap, buckets"
         )),
     }
+}
+
+/// Read a model asset and report the geometry it holds.
+///
+/// ```text
+/// ow-probe model <guid>
+/// ow-probe model --sweep [--count N]
+/// ```
+fn model(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let load = |g: u64| data.bytes_of(g).ok();
+    let count: usize = rest
+        .iter()
+        .position(|a| a == "--count")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(40);
+
+    if rest.iter().any(|a| a == "--sweep") {
+        let guids = data.guids_of_type(types::MODEL);
+        println!("{} model assets", guids.len());
+        let mut with_geometry = 0usize;
+        let mut empty = 0usize;
+        let mut unreadable = 0usize;
+        let mut triangles = 0usize;
+        for guid in guids.iter().take(count) {
+            let Ok(bytes) = data.bytes_of(*guid) else {
+                unreadable += 1;
+                continue;
+            };
+            match ow_tank::model::parse(&bytes, &load) {
+                Ok(m) if m.triangle_count() > 0 => {
+                    with_geometry += 1;
+                    triangles += m.triangle_count();
+                    if with_geometry <= 6 {
+                        println!(
+                            "  0x{guid:016x}  {} meshes, {} vertices, {} triangles, {} materials",
+                            m.meshes.len(),
+                            m.vertex_count(),
+                            m.triangle_count(),
+                            m.materials.len()
+                        );
+                    }
+                }
+                Ok(_) => empty += 1,
+                Err(e) => {
+                    empty += 1;
+                    if empty <= 3 {
+                        println!("  0x{guid:016x}  {e}");
+                    }
+                }
+            }
+        }
+        println!(
+            "{with_geometry} with geometry, {empty} without, {unreadable} unreadable; \
+             {triangles} triangles total"
+        );
+        return Ok(());
+    }
+
+    let guid_arg = rest
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .ok_or("usage: ow-probe model <guid>")?;
+    let guid = u64::from_str_radix(guid_arg.trim_start_matches("0x"), 16)
+        .map_err(|_| format!("{guid_arg:?} is not a GUID"))?;
+    let bytes = data.bytes_of(guid).map_err(|e| e.to_string())?;
+    let chunks = ow_tank::chunks::Chunks::parse(&bytes).map_err(|e| e.to_string())?;
+    println!("0x{guid:016x}: {} bytes", bytes.len());
+    println!("chunks: {}", chunks.summary());
+
+    let m = ow_tank::model::parse(&bytes, &load).map_err(|e| e.to_string())?;
+    println!(
+        "{} meshes, {} vertices, {} triangles, {} materials",
+        m.meshes.len(),
+        m.vertex_count(),
+        m.triangle_count(),
+        m.materials.len()
+    );
+    for (i, mesh) in m.meshes.iter().enumerate() {
+        println!(
+            "  [{i:>3}] {} verts, {} tris, material {}, lod {}, radius {:.2}",
+            mesh.vertex_count(),
+            mesh.triangle_count(),
+            mesh.material,
+            mesh.lod,
+            mesh.radius()
+        );
+        if i < 2 {
+            for p in mesh.positions.iter().take(4) {
+                println!("        pos ({:.3}, {:.3}, {:.3})", p[0], p[1], p[2]);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Read a map chunk: what it places, and whether those references resolve.

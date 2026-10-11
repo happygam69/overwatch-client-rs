@@ -22,6 +22,7 @@ pub mod graph;
 pub mod guid;
 pub mod keytable;
 pub mod manifest;
+pub mod model;
 pub mod mapchunk;
 pub mod settings;
 pub mod weapons;

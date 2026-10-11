@@ -271,7 +271,11 @@ mod tests {
     use super::*;
 
     /// Lay out a chunk with one model placeable, the way the file does.
+    ///
+    /// The body is padded to the offsets the real files use, so this test fails
+    /// if those offsets drift rather than quietly agreeing with the parser.
     fn synthetic() -> Vec<u8> {
+        const BODY: usize = 0x68;
         let mut out = Vec::new();
         out.extend_from_slice(&1u32.to_le_bytes()); // placeable count
         out.extend_from_slice(&0u32.to_le_bytes()); // instance data
@@ -281,20 +285,19 @@ mod tests {
         out.extend_from_slice(&[0xAB; 16]);
         out.extend_from_slice(&[0, 0, 0]);
         out.extend_from_slice(&[0]);
-        let size = (COMMON_SIZE + 72) as u32;
-        out.extend_from_slice(&size.to_le_bytes());
-        out.extend_from_slice(&0x0000_00C0_0000_0123u64.to_le_bytes()); // model
-        out.extend_from_slice(&0u64.to_le_bytes()); // look
-        out.extend_from_slice(&1.0f32.to_le_bytes());
-        out.extend_from_slice(&2.0f32.to_le_bytes());
-        out.extend_from_slice(&3.0f32.to_le_bytes());
-        out.extend_from_slice(&1.0f32.to_le_bytes());
-        out.extend_from_slice(&1.0f32.to_le_bytes());
-        out.extend_from_slice(&1.0f32.to_le_bytes());
-        // rotation, then the trailing quaternion the format carries
-        for _ in 0..8 {
-            out.extend_from_slice(&0.0f32.to_le_bytes());
-        }
+        out.extend_from_slice(&((COMMON_SIZE + BODY) as u32).to_le_bytes());
+
+        let mut body = vec![0u8; BODY];
+        body[0..8].copy_from_slice(&0x0000_00C0_0000_0123u64.to_le_bytes()); // model
+        let put = |body: &mut Vec<u8>, at: usize, values: &[f32]| {
+            for (i, v) in values.iter().enumerate() {
+                body[at + i * 4..at + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+        };
+        put(&mut body, 0x30, &[1.0, 2.0, 3.0]); // translation
+        put(&mut body, 0x3C, &[1.0, 1.0, 1.0]); // scale
+        put(&mut body, 0x48, &[0.0, 0.0, 0.0, 1.0]); // rotation
+        out.extend_from_slice(&body);
         out
     }
 

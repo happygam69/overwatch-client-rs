@@ -1,0 +1,19 @@
+[package]
+name = "ow-view"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A first-person view of an Overwatch map, built from the install's own data"
+
+[dependencies]
+ow-tank = { path = "../ow-tank" }
+ow-casc = { path = "../ow-casc" }
+wgpu = "22"
+winit = "0.30"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.29"
+
+[[bin]]
+name = "ow-view"
+path = "src/main.rs"
