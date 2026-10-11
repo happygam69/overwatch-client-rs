@@ -90,6 +90,63 @@ identified is called `m_1A2B3C4D` and is **dropped** rather than printed, so
 "named" and "not named yet" stay distinguishable. Adding coverage is adding
 identified classes, not changing code.
 
+### Damage: a thorough negative result
+
+Per-shot damage was searched for in seven places, and it is not in any of them.
+Recording the search matters as much as recording a find, because it stops the
+next person repeating it:
+
+| where | result |
+|---|---|
+| named fields of weapon graphs | 889 named parameters, **none named damage** |
+| generic `value` parameters in weapon graphs | 333 of them, semantics not resolvable without graph topology |
+| projectile entities reached from `m_entityDef` | 4 to 5 instances each, visual components only |
+| every 4-byte field of all 123 readable hero entities | 72 distinct fields, none a plausible damage value |
+| weapon definitions | two shapes only (`m_graph`, `m_script`); no override arrays |
+| hero loadout lists | `m_heroLoadout` is empty in this build |
+| all 124 manifests in the root file, unioned | the entity references that fail to resolve are in **none** of them |
+
+One thing the search did turn up is real, correctly-read health-modification
+amounts. `STUStatescriptStateModifyHealth` owns a `STUStatescriptModifyHealth`
+whose `m_amount` is a `STUConfigVar`; following that to its literal gives actual
+figures, and only six heroes have any:
+
+| hero | amounts |
+|---|---|
+| 41 | 50, 400 |
+| 121 | 70 |
+| 221 | 5 |
+| 302 | 10 |
+| 810 | 90 |
+| 963 | five readings of 1e-05 |
+
+50 on hero 41 is Swift Strike's damage, and 1e-05 is the classic "tiny damage
+used as a trigger". So these are ability and heal figures, not weapon damage —
+useful, but not the thing being looked for.
+
+**A trap worth recording.** `m_amount` is declared as a `STUConfigVar` with an
+embedded reader, so the bytes at that field are the **index of an instance**, not
+a number. Reading them as a float yields a denormal such as `8.1e-44` — a value
+that looks like data and is not. Every reading in the table above goes through
+the instance table's owner links to the ConfigVar and reads *its* `m_value`, and
+`ow-tank`'s `FieldNames` now carries each field's declared type so the two cases
+cannot be confused.
+
+### So where is it?
+
+Two possibilities remain, and they are distinguishable:
+
+1. **Inside the generic `value` parameters.** Then it is a data problem and needs
+   the graph's links walked, as described below.
+2. **Computed rather than stored** — the graph fires and the simulation derives
+   damage. Then no amount of data reading will find it, and the executable is
+   needed.
+
+The `ow-range` harness therefore treats damage as an explicit input: it reads
+every ballistic parameter from the install and takes damage from a local value or
+file the user supplies, rather than inventing numbers and presenting them as
+extracted.
+
 ### Damage is not a named field
 
 **No parameter in any weapon graph is named `damage`.** That is the wall, and it

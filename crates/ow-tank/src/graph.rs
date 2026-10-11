@@ -30,6 +30,9 @@ pub struct Param {
     pub field_hash: u32,
     /// The field's name, when the reference types name it.
     pub field_name: Option<String>,
+    /// The field's declared type, which says whether the field held a value or
+    /// pointed at another instance.
+    pub field_type: Option<String>,
     pub value: Value,
     /// Class of the literal.
     pub value_hash: u32,
@@ -81,7 +84,8 @@ pub fn params_of(stu: &Stu, class_names: &crate::classes::ClassMap, names: &Fiel
             state_hash: owner_hash,
             state_name: class_names.name(owner_hash).map(str::to_string),
             field_hash: *field_hash,
-            field_name: Some(field_name.trim_start_matches("m_").to_string()),
+            field_name: Some(field_name.short_name().to_string()),
+            field_type: Some(field_name.type_name.clone()),
             value,
             value_hash,
         });
@@ -127,6 +131,7 @@ mod tests {
             state_name: Some("STUStatescriptStateWeaponVolley".into()),
             field_hash: 0x02F3_F5D4,
             field_name: Some("numShotsPerSecond".into()),
+            field_type: Some("STUConfigVar".into()),
             value: Value::Int(20),
             value_hash: 0x12E4_34A1,
         };
@@ -144,6 +149,7 @@ mod tests {
             state_name: None,
             field_hash: 0x02F3_F5D4,
             field_name: None,
+            field_type: None,
             value: Value::Int(1),
             value_hash: 0x12E4_34A1,
         };

@@ -25,7 +25,33 @@ use std::path::PathBuf;
 /// classes.
 #[derive(Debug, Default)]
 pub struct FieldNames {
-    map: HashMap<(u32, u32), String>,
+    map: HashMap<(u32, u32), FieldName>,
+}
+
+/// A field's name and declared type.
+///
+/// The type is not decoration: a field declared as a `STUConfigVar` holds the
+/// *index of an instance* rather than a value, so reading its bytes as a number
+/// yields a denormal float that looks like data and is not. That mistake is easy
+/// to make and hard to notice, so the declared type travels with the name.
+#[derive(Debug, Clone)]
+pub struct FieldName {
+    pub name: String,
+    /// Declared C# type, e.g. `STUConfigVar` or `float`.
+    pub type_name: String,
+}
+
+impl FieldName {
+    /// Whether this field points at another instance rather than holding a
+    /// value.
+    pub fn is_reference(&self) -> bool {
+        self.type_name.starts_with("STUConfigVar") || self.type_name.starts_with("STU_")
+    }
+
+    /// The name without its Hungarian prefix.
+    pub fn short_name(&self) -> &str {
+        self.name.trim_start_matches("m_")
+    }
 }
 
 impl FieldNames {
@@ -46,17 +72,16 @@ impl FieldNames {
                 let Some(class_hash) = parse_class_hash(&text) else {
                     continue;
                 };
-                for (field_hash, name) in parse_named_fields(&text) {
-                    names.map.insert((class_hash, field_hash), name);
+                for (field_hash, field) in parse_named_fields(&text) {
+                    names.map.insert((class_hash, field_hash), field);
                 }
             }
         }
         names
     }
 
-    /// The name of a field on a class, if the reference types name it.
-    pub fn get(&self, class_hash: u32, field_hash: u32) -> Option<&str> {
-        self.map.get(&(class_hash, field_hash)).map(String::as_str)
+    pub fn get(&self, class_hash: u32, field_hash: u32) -> Option<&FieldName> {
+        self.map.get(&(class_hash, field_hash))
     }
 
     pub fn len(&self) -> usize {
@@ -76,9 +101,10 @@ fn parse_class_hash(source: &str) -> Option<u32> {
     u32::from_str_radix(&rest[..end], 16).ok()
 }
 
-/// `(field hash, name)` for every `[STUField(0xHASH, ...)] public <type> <name>;`
-/// whose name is a real name rather than a hash placeholder.
-fn parse_named_fields(source: &str) -> Vec<(u32, String)> {
+/// `(field hash, name and declared type)` for every
+/// `[STUField(0xHASH, ...)] public <type> <name>;` whose name is a real name
+/// rather than a hash placeholder.
+fn parse_named_fields(source: &str) -> Vec<(u32, FieldName)> {
     const MARKER: &str = "[STUField(0x";
     let mut out = Vec::new();
     let mut rest = source;
@@ -98,14 +124,31 @@ fn parse_named_fields(source: &str) -> Vec<(u32, String)> {
         let declaration = &rest[hash_end..semi];
         rest = &rest[semi + 1..];
 
-        let Some(name) = declaration.split_whitespace().last() else {
+        // `public <type> <name>`, with the type possibly carrying generic
+        // arguments or an array suffix that contains spaces is not expected, so
+        // splitting is enough.
+        let words: Vec<&str> = declaration.split_whitespace().collect();
+        let Some(name) = words.last() else {
             continue;
         };
-        let name = name.trim();
+        let name = name.trim().trim_end_matches(';');
         if name.is_empty() || is_placeholder(name) {
             continue;
         }
-        out.push((field_hash, name.to_string()));
+        // The token before the name is the type, minus any `public` keyword.
+        let type_name = words
+            .iter()
+            .rev()
+            .nth(1)
+            .map(|t| t.trim_end_matches(';').to_string())
+            .unwrap_or_default();
+        out.push((
+            field_hash,
+            FieldName {
+                name: name.to_string(),
+                type_name,
+            },
+        ));
     }
     out
 }
@@ -141,7 +184,22 @@ mod tests {
         let fields = parse_named_fields(source);
         assert_eq!(fields.len(), 1, "the placeholder must be dropped");
         assert_eq!(fields[0].0, 0x02F3_F5D4);
-        assert_eq!(fields[0].1, "m_numShotsPerSecond");
+        assert_eq!(fields[0].1.name, "m_numShotsPerSecond");
+        assert_eq!(fields[0].1.type_name, "STUConfigVar");
+        // Declared as a ConfigVar, so the bytes at that field are an instance
+        // index rather than a value.
+        assert!(fields[0].1.is_reference());
+    }
+
+    #[test]
+    fn a_plain_number_field_is_not_a_reference() {
+        let source = "
+            [STU(0x11111111, 8)]
+            public class Thing { [STUField(0x22222222, 0)] public float m_speed; }";
+        let fields = parse_named_fields(source);
+        assert_eq!(fields[0].1.name, "m_speed");
+        assert_eq!(fields[0].1.type_name, "float");
+        assert!(!fields[0].1.is_reference());
     }
 
     #[test]
