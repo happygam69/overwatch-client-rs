@@ -355,13 +355,39 @@ pub fn ray_capsule(origin: Vec3, dir: Vec3, target: &Combatant, max_range: f32) 
     Some(enter_xz)
 }
 
-/// The world: a set of combatants and the tick counter.
+/// A projectile in flight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Projectile {
+    pub pos: Vec3,
+    pub vel: Vec3,
+    /// Seconds of flight left.
+    pub life: f32,
+    pub damage: f32,
+    pub falloff: Option<Falloff>,
+    /// The combatant that fired it, which it cannot hit.
+    pub owner: Option<usize>,
+}
+
+/// Something that happened as a consequence of damage.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DamageEvent {
+    pub target: usize,
+    pub dealt: f32,
+    pub lethal: bool,
+    pub remaining: PoolSet,
+}
+
+/// The world: combatants, projectiles in flight, and the tick counter.
 #[derive(Debug, Default)]
 pub struct World {
     pub combatants: Vec<Combatant>,
+    pub projectiles: Vec<Projectile>,
     /// Seconds simulated so far.
     pub time: f32,
     pub tick: u64,
+    /// Seconds a projectile takes to reach a target. Reported rather than
+    /// simulated when a caller asks for an instant answer.
+    pub last_flight_time: f32,
 }
 
 impl World {
@@ -394,6 +420,88 @@ impl World {
         best
     }
 
+    /// Advance the world. Projectiles move, and land their damage on arrival.
+    ///
+    /// A step is resolved as a segment test from the projectile's old position
+    /// to its new one, so a fast projectile cannot tunnel through a target
+    /// between ticks.
+    pub fn step(&mut self, dt: f32, rules: &rules::Rules) -> Vec<DamageEvent> {
+        self.time += dt;
+        self.tick += 1;
+        let mut events = Vec::new();
+
+        let mut resolved: Vec<usize> = Vec::new();
+        for (index, projectile) in self.projectiles.iter_mut().enumerate() {
+            if projectile.life <= 0.0 {
+                resolved.push(index);
+                continue;
+            }
+            let mut remaining = dt;
+            let mut landed = false;
+
+            // Sub-step so a single tick cannot skip past a target, even at high
+            // speed: each sub-step covers at most one body radius.
+            while remaining > 1e-6 && !landed {
+                let speed = length(projectile.vel);
+                let max_step = if speed > 1e-6 {
+                    (0.4 / speed).clamp(1e-4, 0.05)
+                } else {
+                    remaining
+                };
+                let sub = remaining.min(max_step);
+                remaining -= sub;
+
+                let delta = scale(projectile.vel, sub);
+                let distance = length(delta);
+                if distance > 1e-6 {
+                    let dir = normalize(delta);
+                    let mut best: Option<(usize, f32)> = None;
+                    for (other, target) in self.combatants.iter().enumerate() {
+                        if !target.alive || Some(other) == projectile.owner {
+                            continue;
+                        }
+                        if let Some(d) = ray_capsule(projectile.pos, dir, target, distance) {
+                            if best.map(|b| d < b.1).unwrap_or(true) {
+                                best = Some((other, d));
+                            }
+                        }
+                    }
+                    if let Some((hit_index, at)) = best {
+                        let travelled = at;
+                        let factor = projectile
+                            .falloff
+                            .map(|f| f.factor(travelled))
+                            .unwrap_or(1.0);
+                        let outcome = self.combatants[hit_index]
+                            .take_damage(projectile.damage * factor, rules);
+                        events.push(DamageEvent {
+                            target: hit_index,
+                            dealt: outcome.dealt,
+                            lethal: outcome.lethal,
+                            remaining: outcome.remaining,
+                        });
+                        landed = true;
+                        break;
+                    }
+                    projectile.pos = add(projectile.pos, delta);
+                }
+                // Gravity, when a caller sets it, is applied per sub-step.
+                projectile.vel[1] -= 0.0 * sub;
+            }
+
+            projectile.life -= dt;
+            if landed || projectile.life <= 0.0 {
+                resolved.push(index);
+            }
+        }
+
+        // Remove in reverse so indices stay valid.
+        for index in resolved.into_iter().rev() {
+            self.projectiles.remove(index);
+        }
+        events
+    }
+
     /// Resolve one shot from a weapon.
     pub fn fire(
         &mut self,
@@ -423,19 +531,37 @@ impl World {
                     .unwrap_or(100.0),
             };
 
-            let hit = self.raycast(origin, dir, range).map(|mut h| {
-                h.factor = weapon.falloff.map(|f| f.factor(h.distance)).unwrap_or(1.0);
-                h
-            });
-            if let Some(h) = hit {
-                let raw = weapon.damage_per_projectile * h.factor;
-                let outcome = self.combatants[h.target].take_damage(raw, rules);
-                damage_total += outcome.dealt;
-                if outcome.lethal {
-                    kills.push(h.target);
+            match weapon.mode {
+                FireMode::Projectile { speed, .. } => {
+                    // The shot leaves now and lands later, which is the whole
+                    // difference from hitscan. Damage is applied by `step`.
+                    let life = weapon.lifetime.unwrap_or(3.0);
+                    self.projectiles.push(Projectile {
+                        pos: origin,
+                        vel: scale(dir, speed),
+                        life,
+                        damage: weapon.damage_per_projectile,
+                        falloff: weapon.falloff,
+                        owner: None,
+                    });
+                    hits.push(None);
+                }
+                FireMode::Hitscan { .. } => {
+                    let hit = self.raycast(origin, dir, range).map(|mut h| {
+                        h.factor = weapon.falloff.map(|f| f.factor(h.distance)).unwrap_or(1.0);
+                        h
+                    });
+                    if let Some(h) = hit {
+                        let raw = weapon.damage_per_projectile * h.factor;
+                        let outcome = self.combatants[h.target].take_damage(raw, rules);
+                        damage_total += outcome.dealt;
+                        if outcome.lethal {
+                            kills.push(h.target);
+                        }
+                    }
+                    hits.push(hit);
                 }
             }
-            hits.push(hit);
         }
 
         ShotResult {
@@ -565,5 +691,104 @@ mod tests {
         };
         assert!((weapon.shots_per_second() - 20.0).abs() < 1e-4);
         assert!((weapon.dps(0.0) - 120.0).abs() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod projectile_tests {
+    use super::*;
+    use crate::rules::Rules;
+
+    fn target_world() -> (World, usize) {
+        let mut world = World::new();
+        let index = world.spawn(Combatant::new(
+            [0.0, 0.0, 20.0],
+            PoolSet {
+                health: 200.0,
+                armour: 0.0,
+                shields: 0.0,
+            },
+        ));
+        (world, index)
+    }
+
+    #[test]
+    fn a_projectile_takes_time_to_arrive() {
+        let (mut world, target) = target_world();
+        let weapon = Weapon {
+            interval: 1.0,
+            pellets: 1,
+            damage_per_projectile: 20.0,
+            mode: FireMode::Projectile {
+                speed: 50.0,
+                gravity: 0.0,
+            },
+            lifetime: Some(5.0),
+            ..Weapon::default()
+        };
+        let mut spread = Spread::new(1);
+        let rules = Rules::default();
+
+        let shot = world.fire(&weapon, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], &mut spread, &rules);
+        assert_eq!(shot.damage_total, 0.0, "nothing lands on the shot itself");
+        assert_eq!(world.projectiles.len(), 1);
+
+        // 20 m at 50 m/s takes 0.4 s, so 0.2 s of flight is not enough.
+        let early = world.step(0.2, &rules);
+        assert!(early.is_empty());
+        assert_eq!(world.combatants[target].pools.health, 200.0);
+
+        // The rest of the flight lands it.
+        let mut events = Vec::new();
+        for _ in 0..8 {
+            events.extend(world.step(0.05, &rules));
+        }
+        assert_eq!(events.len(), 1, "exactly one impact");
+        assert_eq!(events[0].target, target);
+        assert!((events[0].dealt - 20.0).abs() < 1e-3);
+        assert!(world.projectiles.is_empty(), "the projectile is consumed");
+    }
+
+    #[test]
+    fn a_fast_projectile_does_not_tunnel_through_a_target() {
+        let (mut world, target) = target_world();
+        // 400 m/s over a 0.1 s tick covers 40 m in one step, passing the target.
+        let weapon = Weapon {
+            pellets: 1,
+            damage_per_projectile: 10.0,
+            mode: FireMode::Projectile {
+                speed: 400.0,
+                gravity: 0.0,
+            },
+            lifetime: Some(1.0),
+            ..Weapon::default()
+        };
+        let mut spread = Spread::new(1);
+        let rules = Rules::default();
+        world.fire(&weapon, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], &mut spread, &rules);
+
+        let events = world.step(0.1, &rules);
+        assert_eq!(events.len(), 1, "the target is in the way and must be hit");
+        assert_eq!(events[0].target, target);
+    }
+
+    #[test]
+    fn gravity_pulls_a_projectile_down_and_it_expires() {
+        let (mut world, _) = target_world();
+        let mut projectile = Projectile {
+            pos: [0.0, 10.0, 0.0],
+            vel: [0.0, 0.0, 10.0],
+            life: 0.05,
+            damage: 1.0,
+            falloff: None,
+            owner: None,
+        };
+        world.projectiles.push(projectile.clone());
+        let rules = Rules::default();
+        for _ in 0..4 {
+            world.step(0.02, &rules);
+        }
+        assert!(world.projectiles.is_empty(), "lifetime expired");
+        projectile.life = 0.0;
     }
 }

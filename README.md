@@ -104,6 +104,7 @@ cargo run --release -p ow-probe -- weapon-params
 | `hero <index>` | one hero: instances, field layout, resolved fields |
 | `health` | per-hero health, armour and shields from the entity schema |
 | `weapons` | each hero's weapons and the state-script graph each uses |
+| `health` | per-hero health, armour and shields from the entity schema |
 | `weapon-params [hero]` | named parameters inside those graphs, joined to their owning field |
 | `health` | per-hero health, armour and shields from the entity schema |
 | `settings [n]` | the per-hero tuning multipliers, with bounds resolved |
@@ -131,8 +132,8 @@ crates/ow-casc   the container: build info, config, keyring, bucket index,
 crates/ow-stu    structured-data assets, which is where gameplay data lives
 crates/ow-tank   Overwatch semantics: asset GUID typing, content manifest,
                  class map, field names, entities, weapons, graphs
-crates/ow-sim    the combat simulation: fixed tick, weapons, hitscan,
-                 projectiles, pools, damage. No IO, unit-tested
+crates/ow-sim    the combat simulation: fixed tick, weapons, hitscan and
+                 travelling projectiles, pools, damage. No IO, unit-tested
 crates/ow-range  the practice range: drop a hero in and shoot targets
 crates/ow-probe  the command line probe
 docs/formats/    the file formats and layers, as verified against a real install

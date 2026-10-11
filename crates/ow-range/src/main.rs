@@ -111,6 +111,8 @@ struct HeroFacts {
     index: u32,
     guid: u64,
     pools: PoolSet,
+    /// Provisional: see `ow_tank::weapons::MOVDER_SPEED_FIELD` documentation.
+    move_speed: Option<f32>,
     weapons: Vec<WeaponFacts>,
 }
 
@@ -159,10 +161,13 @@ fn assemble(data: &GameData, guid: u64) -> Option<HeroFacts> {
         weapons.push(facts);
     }
 
+    let move_speed = ow_tank::weapons::move_speed(data, entity).ok().flatten();
+
     Some(HeroFacts {
         index: guid::index_of(guid),
         guid,
         pools,
+        move_speed,
         weapons,
     })
 }
@@ -181,6 +186,8 @@ struct Range {
     /// A shots-per-second of 999 means "as fast as input allows", not a
     /// rate. Rather than invent one from it, the range asks.
     rate: Option<f32>,
+    /// Which weapon slot to fire. A hero may carry more than one.
+    slot: usize,
     shots_fired: u32,
     log: Vec<String>,
 }
@@ -198,6 +205,7 @@ impl Range {
             spread: Spread::new(0x5EED),
             damage: 0.0,
             rate: None,
+            slot: 0,
             shots_fired: 0,
             log: Vec::new(),
         }
@@ -221,6 +229,12 @@ impl Range {
             facts.pools.shields,
             facts.weapons.len()
         );
+        match facts.move_speed {
+            Some(speed) => println!(
+                "  move speed {speed} m/s (provisional: see docs/formats/entity-schema.md)"
+            ),
+            None => println!("  move speed not declared"),
+        }
         for weapon in &facts.weapons {
             println!("  slot {}: {}", weapon.slot, weapon.summary());
             if weapon.declared_rate().is_none() {
@@ -244,10 +258,23 @@ impl Range {
             .spawn(Combatant::new([0.0, 0.0, distance], pools))
     }
 
+    /// The weapon the range is currently firing: the chosen slot if it holds a
+    /// weapon, otherwise the first one that does.
     fn weapon(&self) -> Option<(Weapon, usize)> {
         let hero = self.selected.as_ref()?;
-        let facts = hero.weapons.first()?;
+        let facts = hero
+            .weapons
+            .iter()
+            .find(|w| w.slot == self.slot)
+            .or_else(|| hero.weapons.first())?;
         Some((facts.to_weapon(self.damage, self.rate), facts.slot))
+    }
+
+    fn weapon_slots(&self) -> Vec<usize> {
+        self.selected
+            .as_ref()
+            .map(|h| h.weapons.iter().map(|w| w.slot).collect())
+            .unwrap_or_default()
     }
 
     /// Fire `count` shots at the nearest target and report.
@@ -269,6 +296,7 @@ impl Range {
         let mut total = 0.0;
         let mut hits = 0;
         let mut pellets = 0;
+        let projectile = matches!(weapon.mode, FireMode::Projectile { .. });
 
         for _ in 0..count {
             let result = self.world.fire(&weapon, origin, forward, spread_rng, &self.rules);
@@ -276,6 +304,27 @@ impl Range {
             hits += result.hits.iter().filter(|h| h.is_some()).count();
             total += result.damage_total;
             self.shots_fired += 1;
+            if projectile {
+                // Let the shots travel, one shot interval at a time.
+                for _ in 0..40 {
+                    let events = self.world.step(weapon.interval.min(0.05), &self.rules);
+                    for event in &events {
+                        total += event.dealt;
+                        hits += 1;
+                    }
+                    if self.world.projectiles.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Anything still in the air is reported rather than silently dropped.
+        if !self.world.projectiles.is_empty() {
+            println!(
+                "  note: {} projectile(s) still in flight",
+                self.world.projectiles.len()
+            );
         }
 
         let elapsed = count as f32 * weapon.interval;
@@ -387,6 +436,20 @@ impl Range {
                 println!(
                     "per-projectile damage set to {value}, supplied by you and not read from the install"
                 );
+                Ok(true)
+            }
+            "weapon" => {
+                let slot: usize = args
+                    .first()
+                    .ok_or("usage: weapon <slot>")?
+                    .parse()
+                    .map_err(|_| "slot must be a number".to_string())?;
+                let slots = self.weapon_slots();
+                if !slots.contains(&slot) {
+                    return Err(format!("hero has weapon slots {slots:?}"));
+                }
+                self.slot = slot;
+                println!("firing weapon slot {slot}");
                 Ok(true)
             }
             "rate" => {

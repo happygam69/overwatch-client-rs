@@ -158,6 +158,8 @@ impl ClassMap {
             (CONFIG_VAR_BOOL, "STUConfigVarBool"),
             (WEAPON_COMPONENT, "STUWeaponComponent"),
             (STATESCRIPT_GRAPH, "STUStatescriptGraph"),
+            (WEAPON_COMPONENT, "STUWeaponComponent"),
+            (0x6EFD_BD73, "STUCharacterMoverComponent"),
         ] {
             names.insert(hash, name.to_string());
         }

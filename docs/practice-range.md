@@ -37,6 +37,10 @@ distinction.
 pools kept separate rather than summed, so a 50 health / 150 shield hero behaves
 differently from a 200 health one. Per weapon: shots per second, projectiles per
 shot, projectile speed, projectile lifetime, and the cast length of a raycast.
+Also a per-hero movement speed, **provisional**: the field reads 5.5 m/s for 117
+of 119 heroes and differs for exactly the hero with a speed ability, which is
+consistent with it being movement speed, but whether it is a base or a maximum is
+not established.
 
 **Supplied by the operator.** Per-shot damage, via `damage <n>`. It could not be
 extracted — `docs/formats/weapons.md` records the seven places it was looked for
@@ -76,6 +80,7 @@ the answer, and the range's job is to say so.
 | `heroes [filter]` | list hero indices |
 | `hero <index>` | select a hero and print everything extracted for it |
 | `params` | every distinct named parameter the weapon graph declared |
+| `weapon <slot>` | choose which of the hero's weapons to fire |
 | `damage <n>` | per-projectile damage for the current shot |
 | `rate <n>` | shots per second, when the graph declares only the sentinel |
 | `target add <hp> <m>` | spawn a target, optionally armoured |
@@ -89,20 +94,26 @@ the answer, and the range's job is to say so.
 
 Modelled: fixed-tick stepping, a deterministic spread cone (seeded, so a shot is
 reproducible and therefore testable), hitscan raycasts against vertical capsules,
-nearest-target selection, per-pellet resolution for multi-projectile weapons,
-distance falloff, the three health pools, and armour mitigation.
+**projectile flight** with travel time and sub-stepped collision so a fast
+projectile cannot tunnel through a target, nearest-target selection, per-pellet
+resolution for multi-projectile weapons, distance falloff, the three health
+pools, and armour mitigation.
+
+Projectile flight is the difference that matters most between the two weapon
+kinds, and it is the reason `fire` on a projectile weapon reports nothing until
+the shots land: a 20 m shot at 50 m/s takes 0.4 s, and the range says so by
+showing no damage then damage.
 
 Not modelled yet, in rough order of how much it would change a fight:
 
-* **Projectile flight.** A projectile weapon is resolved as an instant hit at
-  its maximum range rather than travelling, so lead and travel time are absent.
 * **Abilities.** Nothing reads the state graphs, so no cooldowns, no mobility, no
   ultimates. The graphs are readable (`ow-probe weapon-params`) but interpreting
   them is the open problem described in `docs/formats/weapons.md`.
+* **Movement.** The speed is extracted but nothing moves: no gravity, no
+  acceleration, no strafing. Targets stand still and so does the shooter, which
+  is why the speed is displayed but unused.
 * **Reloads and ammo.** The extracted data does not currently carry magazine
   sizes to the range.
-* **Movement.** No gravity, no acceleration, no hero move speeds. The targets
-  stand still.
 * **Shield regeneration**, and any hero-specific healing.
 
 A fight in the range is therefore a duel of ballistics and geometry, not yet a
