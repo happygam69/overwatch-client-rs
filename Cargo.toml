@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ow-casc",
+    "crates/ow-stu",
+    "crates/ow-tank",
+    "crates/ow-probe",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://example.invalid/ow-combat-rust"
+description = "Clean-room Rust reader for a local Overwatch install's gameplay data"
+
+[workspace.dependencies]
+ow-casc = { path = "crates/ow-casc" }
+ow-stu = { path = "crates/ow-stu" }
+ow-tank = { path = "crates/ow-tank" }
+
+# Cryptography and compression used by the container and manifest layers.
+aes = "0.8"
+cbc = "0.1"
+sha1 = "0.10"
+flate2 = "1"
+
+[profile.release]
+opt-level = 3

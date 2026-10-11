@@ -1,0 +1,6 @@
+# Normalize text files so a Windows checkout and a Linux one agree.
+* text=auto eol=lf
+
+# Keep binary-ish formats out of any text handling we may add later.
+*.png binary
+*.ico binary

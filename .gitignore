@@ -1,0 +1,45 @@
+# Whitelist. Only original source, docs and build files are tracked.
+#
+# This repository contains NO Blizzard content: no art, models, sounds, maps,
+# textures, locale data, extracted tables or decompiled code. Everything under
+# /dev and everything the tools extract stays on the machine that extracted it.
+# Overwatch is read from the user's own install at runtime and is never
+# redistributed. See CREDITS.md.
+
+/*
+!/.gitignore
+!/Cargo.toml
+!/Cargo.lock
+!/README.md
+!/CREDITS.md
+!/LICENSE-MIT
+!/LICENSE-APACHE
+!/rust-toolchain.toml
+!/.gitattributes
+!/overwatch-file-formats.md
+!/crates/
+!/docs/
+
+# Development scratch: format probes, extracted data, notes, RE tooling output.
+# None of it is the product.
+/dev/
+/target/
+**/target/
+
+# Never track anything that came out of the game.
+*.cmf
+*.trg
+*.apm
+*.idx
+*.index
+*.blte
+*.stu
+*.keyring
+*.00c
+*.0bc
+
+# Nor extracted or derived data.
+/extracted/
+/out/
+/artifacts/
+**/tests/fixtures/

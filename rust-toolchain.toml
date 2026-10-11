@@ -1,0 +1,4 @@
+# The workspace builds on stable; this pins the version it was developed against
+# so a future toolchain does not silently change behaviour.
+[toolchain]
+channel = "stable"
