@@ -119,7 +119,7 @@ impl ResourceGraph {
         candidates.sort_by_key(|(name, _)| !name.starts_with("WinPrism"));
 
         let mut last = Error::NoResourceGraph;
-        for (name, ckey) in candidates {
+        for (_name, ckey) in candidates {
             let Ok(blob) = data.open_ckey(&ckey) else {
                 continue;
             };
