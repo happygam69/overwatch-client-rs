@@ -10,33 +10,53 @@ never modify it. See [CREDITS.md](CREDITS.md).
 
 > **Target, stated properly:** a first-person 3D practice range — Overwatch's
 > geometry, bots, HUD and combat, so the systems can be tested as the game tests
-> them. What exists today is the data layer and a terminal simulator, which is
-> **not** that. [`docs/roadmap.md`](docs/roadmap.md) is the honest accounting of
-> the gap, the staged plan, and what the encrypted executable can and cannot
-> provide.
+> them. The geometry half of that now exists: `ow-view` opens a window and draws
+> a map out of the install's own map chunk and model assets, from a first-person
+> camera. Textures, a character controller, and combat wired into the view do
+> not. [`docs/roadmap.md`](docs/roadmap.md) is the honest accounting.
 
 ## Status
 
-**Working, verified against a retail install (`2.23.0.3.151177`).**
+**Working, verified against a retail install (`2.25.0.0.154088`).**
 
 | | |
 |---|---|
-| the container | opens; encrypted chunks decrypt; 1,326,302 assets in the registry |
+| the container | opens; encrypted chunks decrypt; 1,514,319 assets in the registry |
+| content manifest | reads; newer builds ship it in the clear and this one does |
 | structured data | heroes, entities, weapons and state graphs all read |
-| health pools | **124 of 132 heroes**, health / armour / shields kept separate |
-| weapon ballistics | 56 weapon graphs, **889 named parameters** extracted |
-| the simulation | hitscan, travelling projectiles, spread, falloff, pools, armour |
-| the practice range | select a hero, walk, shoot targets, read damage and TTK |
+| health pools | **127 of 135 heroes**, health / armour / shields kept separate |
+| weapon ballistics | 58 weapon graphs, all present |
+| chunked data | models: 38 of 40 read, `MDLC`/`MRNM`/`MSTU` |
+| map chunks | placeables read; every model reference resolves |
+| models | vertices, normals, UVs and indices, LOD 0 only |
+| the view | **`ow-view` draws real map geometry in a window**, instanced |
+| the terminal range | select a hero, walk, shoot targets, read damage and TTK |
 
 **Not working, and each is documented rather than papered over:**
 
 | | why |
 |---|---|
+| **the practice range map** | not identified. No map header is it, and the map-to-chunk link is not in the readable data. `docs/roadmap.md` has the detail and two ways forward. |
+| **textures and materials** | not read. Surfaces are shaded from their normals, so a map is grey. |
+| **character controller** | not started; nothing collides with the geometry yet |
 | **per-shot damage** | not in the files. Seven places searched, recorded in `docs/formats/weapons.md`. The range asks for it. |
 | **abilities** | the graphs hold them, but a graph is a program and nothing names which node is a cooldown |
-| **movement physics** | the speed is read but its semantics are unconfirmed, so nothing moves yet |
-| **8 of 132 heroes** | their entities are recorded in the manifest but absent from the install |
-| **damage order, armour rules** | game *rules*, not values; assumed in `ow-sim/src/rules.rs` and changeable at runtime |
+| **text assets** | the manifests list 124,000 records each and this install has downloaded almost none of them |
+
+### Looking at a map
+
+```text
+ow-view --list                       # map chunks worth trying, with a hint at where each sits
+ow-view --chunks 0x0dd0000100016dc1  # draw one
+ow-view --chunks-from chunks.txt     # draw a set
+ow-view --overview                   # look down at it
+ow-view --tour out/ --count 16       # render many viewpoints to PNGs in one pass
+ow-view --shot out.png --at 10,2,30  # one frame to a file
+```
+
+Right-drag looks, WASD moves, shift hurries, escape quits. Geometry is drawn
+once per model and instanced per placement, so a map of 400,000 placements is
+one draw call per distinct model rather than 400,000 copies of the vertices.
 
 The data path in detail:
 
