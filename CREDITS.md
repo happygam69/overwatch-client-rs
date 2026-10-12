@@ -106,12 +106,17 @@ Cheat-oriented material on the game executable was not consulted at all.
 
 ## Tools used
 
-* **Ghidra** — not used for this work so far. Nothing in this repository was
-  derived from disassembly, and no disassembly output is committed. If combat
-  behaviour that is not data-driven needs to be understood, that will change,
-  and will be recorded here.
+* **Ghidra** — used against the operator's own memory capture of the running
+  client (regions recorded by `dev/dump_process.py`, gitignored). No
+  disassembly or decompilation is committed; only addresses and behavioural
+  conclusions are written down, as coordinates so the reading can be re-derived
+  from the same capture (see `docs/formats/materials.md`). The Ghidra MCP
+  bridge drives the analysis.
 * **overtools/TACTLib** — read as source, and read from at runtime for the
-  per-build key material described above.
+  per-build key material described above. `TankLib/teMaterial`,
+  `teStructuredDataAssetRef` and `teResourceGUID` established the material
+  asset's four-GUID header and the STU reference deobfuscation used to verify
+  the material chain's readable hops (see `docs/formats/materials.md`).
 
 ## Community data
 

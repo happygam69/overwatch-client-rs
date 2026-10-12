@@ -359,3 +359,17 @@ finding it means finding the mask. That is what the Ghidra project is for.
 Recording it as blocked rather than guessing is the point. A mask invented to
 make four values look like GUIDs would produce four plausible assets and a map
 textured with someone else's materials.
+
+### Update: the mask hunt, from the files and from the client
+
+Both routes have now been worked, and the answer is neither a mask nor one of
+the usual hashes. [`docs/formats/materials.md`](formats/materials.md) is the
+full record: every cheap family is ruled out by a *test* (bit-permutation by
+popcount, linear by GCD, thirteen hash families by membership over 99,392
+GUIDs), and the client's own material machinery is mapped from the capture —
+MDLC deserializer (values copied verbatim), the u32-key material table with
+FNV-1a caching, the index-range counts that make models slices of a shared
+table, and the per-material construction loop with its type queries. Two code
+sites remain to be read for the derivation: the global table builder and
+`0x7ff64a44b430`. That document also carries the Ghidra coordinates, so the
+reading is reproducible from the same gitignored capture.
