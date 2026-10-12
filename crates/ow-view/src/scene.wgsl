@@ -1,9 +1,9 @@
 // A surface shaded from its normal, until materials are read.
 //
-// There is no texture or material data here yet, so the lighting is a fixed
-// key light plus a sky gradient. That is enough to read the shape of a room
-// and see whether the geometry and its placements are right, which is the
-// question this exists to answer.
+// There is no texture or material data here yet, so the lighting is a fixed key
+// light plus a sky gradient. That is enough to read the shape of a room and see
+// whether the geometry and its placements are right, which is the question this
+// exists to answer.
 
 struct Uniforms {
     view_projection: mat4x4<f32>,
@@ -22,11 +22,19 @@ struct VertexOut {
 fn vs_main(
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) m0: vec4<f32>,
+    @location(3) m1: vec4<f32>,
+    @location(4) m2: vec4<f32>,
+    @location(5) m3: vec4<f32>,
 ) -> VertexOut {
+    let placement = mat4x4<f32>(m0, m1, m2, m3);
+    let world = placement * vec4<f32>(position, 1.0);
     var out: VertexOut;
-    out.clip = uniforms.view_projection * vec4<f32>(position, 1.0);
-    out.world = position;
-    out.normal = normal;
+    out.clip = uniforms.view_projection * world;
+    out.world = world.xyz;
+    // Scale is left out of the normal on purpose: it only distorts lighting on
+    // squashed props, and doing it properly needs the inverse transpose.
+    out.normal = (placement * vec4<f32>(normal, 0.0)).xyz;
     return out;
 }
 

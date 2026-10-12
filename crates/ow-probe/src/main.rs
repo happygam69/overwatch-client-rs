@@ -413,9 +413,27 @@ fn dump(data: &GameData, rest: &[String]) -> Result<(), String> {
         .map_err(|_| format!("{guid_arg:?} is not a GUID"))?;
     let show_strings = rest.iter().any(|a| a == "--strings");
     let show_refs = rest.iter().any(|a| a == "--refs");
+    // An inline array is not a pointer to a GUID: it is a run of elements
+    // stored inside the instance, and its elements are asset references.
+    let array_field: Option<u32> = rest
+        .iter()
+        .position(|a| a == "--array")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok());
 
     let bytes = data.bytes_of(guid).map_err(|e| e.to_string())?;
     println!("0x{guid:016x}: {} bytes", bytes.len());
+    if rest.iter().any(|a| a == "--raw") {
+        for (i, row) in bytes.chunks(16).enumerate() {
+            let hexs: Vec<String> = row.iter().map(|b| format!("{b:02x}")).collect();
+            let text: String = row
+                .iter()
+                .map(|b| if (32..127).contains(b) { *b as char } else { '.' })
+                .collect();
+            println!("  {:06x}  {:<47}  {text}", i * 16, hexs.join(" "));
+        }
+        return Ok(());
+    }
     if let Ok(chunks) = ow_tank::chunks::Chunks::parse(&bytes) {
         println!("chunked: {}", chunks.summary());
         return Ok(());
@@ -437,8 +455,24 @@ fn dump(data: &GameData, rest: &[String]) -> Result<(), String> {
             info.hash,
             size = info.size
         );
-        if !show_strings && !show_refs {
+        if !show_strings && !show_refs && array_field.is_none() {
             continue;
+        }
+        if let Some(field) = array_field {
+            let elements = stu.inline_elements(index, field);
+            println!("          0x{field:08X} array of {} element(s)", elements.len());
+            for (bag, offset) in elements {
+                let _ = bag;
+                let at = stu.payload_start(index) + offset;
+                if let Some(target) = stu.asset_ref_at(at, field) {
+                    let known = data.registry().get(target).is_some();
+                    println!(
+                        "            0x{target:016x}  type 0x{:03X}  {}",
+                        guid::type_of(target),
+                        if known { "present" } else { "not in this install" }
+                    );
+                }
+            }
         }
         let fields: Vec<ow_stu::FieldInfo> = stu.fields(index).to_vec();
         for field in fields {
