@@ -61,6 +61,7 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
     match command {
         "info" => info(&data),
         "types" => type_histogram(&data),
+        "first" => first_of_type(&data, rest),
         "heroes" => heroes(&data),
         "hero" => {
             let index: u32 = rest
@@ -84,6 +85,9 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
         "dump" => dump(&data, rest),
         "grep" => grep(&data, rest),
         "mapchunk" => map_chunk(&data, rest),
+        "materials" => materials(&data, rest),
+        "mdl-values" => mdl_values(&data, rest),
+        "resolve-material" => resolve_material(&data, rest),
         "size" => by_size(&data, rest),
         "raw" => raw(&data, rest),
         "package" => package(&data, rest),
@@ -98,6 +102,520 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
              health, weapons, weapon-params [hero], settings [n], scan, classmap, buckets"
         )),
     }
+}
+
+/// Test whether MDLC material values are an asset GUID under a transform.
+///
+/// Three families are decided here, and none of them needs a known
+/// (value, GUID) pair:
+///
+/// * **Permutation with a constant inside:** `value = P(guid ^ c)`.
+/// * **Permutation with a constant outside:** `value = P(guid) ^ c`.
+///   For the right `P` there is one `c` that maps *every* material value onto
+///   *some* asset GUID. So for each `P`, `c` is derived from the first value
+///   against every candidate GUID, and the second and third values must land
+///   on real GUIDs under the same `c`. Three values decide: a wrong `P` leaves
+///   each `c` a 64-bit needle in a haystack of 1.5 million.
+/// * **A known hash of the GUID:** `value = H(guid)`. Each candidate `H` runs
+///   over every material GUID and its outputs are intersected with the
+///   observed values.
+///
+/// A hit prints the scheme, the permutation, the constant and a matched GUID
+/// with its type, so the result can be re-derived rather than trusted.
+///
+/// ```text
+/// ow-probe resolve-material 0xe91779d26205ab24
+/// ow-probe resolve-material --values <mdl-values output>
+/// ```
+fn resolve_material(data: &GameData, rest: &[String]) -> Result<(), String> {
+    // Values to explain: a file of mdl-values output, or one on the command
+    // line. Fewer than three distinct values cannot decide anything -- with
+    // one value every permutation "matches" its own invented constant -- so
+    // the shortfall is made up from models in the registry.
+    let mut values: Vec<u64> = Vec::new();
+    if let Some(path) = rest
+        .iter()
+        .position(|a| a == "--values")
+        .and_then(|i| rest.get(i + 1))
+    {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        for line in text.lines() {
+            for token in line.split_whitespace().skip(1) {
+                if let Ok(v) = u64::from_str_radix(token.trim_start_matches("0x"), 16) {
+                    if v != 0 {
+                        values.push(v);
+                    }
+                }
+            }
+        }
+    } else {
+        let wanted = u64::from_str_radix(
+            rest.first()
+                .ok_or("usage: ow-probe resolve-material <value> | --values <file>")?
+                .trim_start_matches("0x"),
+            16,
+        )
+        .map_err(|_| "not a number".to_string())?;
+        values.push(wanted);
+    }
+    values.sort_unstable();
+    values.dedup();
+
+    let mut borrowed = 0usize;
+    if values.len() < 3 {
+        'augment: for guid in data.guids_of_type(types::MODEL) {
+            let Ok(bytes) = data.bytes_of(guid) else { continue };
+            let Ok(chunks) = ow_tank::chunks::Chunks::parse(&bytes) else {
+                continue;
+            };
+            let Some(mdlc) = chunks.payload(&bytes, b"MDLC") else {
+                continue;
+            };
+            if mdlc.len() < 106 {
+                continue;
+            }
+            let offset = i64::from_le_bytes(mdlc[8..16].try_into().unwrap());
+            let count = u16::from_le_bytes(mdlc[104..106].try_into().unwrap());
+            if offset <= 0 || offset as usize + count as usize * 8 > mdlc.len() {
+                continue;
+            }
+            let base = offset as usize;
+            for i in 0..count as usize {
+                let v = u64::from_le_bytes(
+                    mdlc[base + i * 8..base + i * 8 + 8].try_into().unwrap(),
+                );
+                if v != 0 {
+                    values.push(v);
+                }
+            }
+            values.sort_unstable();
+            values.dedup();
+            borrowed += 1;
+            if values.len() >= 24 || (values.len() >= 3 && borrowed >= 32) {
+                break 'augment;
+            }
+        }
+    }
+    if values.len() < 3 {
+        return Err(
+            "fewer than three distinct material values; this test cannot decide".to_string(),
+        );
+    }
+
+    // Every GUID in the registry, as the confirmation set: a transform that
+    // lands on any real asset is interesting even when the type is not the
+    // one expected, and the type of the hit says what the scheme really is.
+    let known: std::collections::HashSet<u64> =
+        data.registry().records().iter().map(|r| r.guid).collect();
+    let probes: Vec<u64> = values.iter().copied().take(3).collect();
+    println!(
+        "{} distinct value(s) ({} borrowed from registry models), {} GUID(s) to confirm against",
+        values.len(),
+        borrowed,
+        known.len()
+    );
+
+    struct Perm {
+        name: &'static str,
+        fwd: Box<dyn Fn(u64) -> u64>,
+        inv: Box<dyn Fn(u64) -> u64>,
+    }
+
+    let mut list: Vec<Perm> = Vec::new();
+    let mut push = |name: &'static str, fwd: fn(u64) -> u64, inv: fn(u64) -> u64| {
+        list.push(Perm {
+            name,
+            fwd: Box::new(fwd),
+            inv: Box::new(inv),
+        })
+    };
+    fn byte_rev(v: u64) -> u64 {
+        v.swap_bytes()
+    }
+    fn bit_rev(v: u64) -> u64 {
+        let mut out = 0u64;
+        for i in 0..64 {
+            if v & (1 << i) != 0 {
+                out |= 1 << (63 - i);
+            }
+        }
+        out
+    }
+    fn half_swap(v: u64) -> u64 {
+        (v << 32) | (v >> 32)
+    }
+    fn word_swap(v: u64) -> u64 {
+        let b = v.to_le_bytes();
+        u64::from_le_bytes([b[4], b[5], b[6], b[7], b[0], b[1], b[2], b[3]])
+    }
+    // The STU reference permutation (TankLib's Deobfuscate, whose swap list is
+    // published), forward and undone. The undo replays the swaps in reverse
+    // order; each individual swap is its own inverse.
+    fn stu_fwd(v: u64) -> u64 {
+        let mut b = v.to_le_bytes();
+        b.swap(0, 3);
+        b.swap(7, 1);
+        b.swap(2, 6);
+        b.swap(4, 5);
+        u64::from_le_bytes(b)
+    }
+    fn stu_inv(v: u64) -> u64 {
+        let mut b = v.to_le_bytes();
+        b.swap(4, 5);
+        b.swap(2, 6);
+        b.swap(7, 1);
+        b.swap(0, 3);
+        u64::from_le_bytes(b)
+    }
+    fn id(v: u64) -> u64 {
+        v
+    }
+    push("identity", id, id);
+    push("byte reverse", byte_rev, byte_rev);
+    push("bit reverse", bit_rev, bit_rev);
+    push("half swap", half_swap, half_swap);
+    push("word swap", word_swap, word_swap);
+    push("stu swap", stu_fwd, stu_inv);
+    for shift in 1..64u32 {
+        list.push(Perm {
+            name: Box::leak(format!("rol {shift}").into_boxed_str()),
+            fwd: Box::new(move |v: u64| v.rotate_left(shift)),
+            inv: Box::new(move |v: u64| v.rotate_right(shift)),
+        });
+    }
+    // Compositions with the STU swap, since the STU scheme is the one
+    // reference this project has actually seen work.
+    list.push(Perm {
+        name: "stu swap then byte reverse",
+        fwd: Box::new(|v| byte_rev(stu_fwd(v))),
+        inv: Box::new(|v| stu_inv(byte_rev(v))),
+    });
+    list.push(Perm {
+        name: "stu swap then half swap",
+        fwd: Box::new(|v| half_swap(stu_fwd(v))),
+        inv: Box::new(|v| stu_inv(half_swap(v))),
+    });
+
+    // Candidate types for what the value is an obfuscated GUID *of*. The
+    // chain in the docs says material (0x008); material data (0x0B3) and the
+    // texture (0x004) sit next to it, and guessing the type costs nothing.
+    let candidate_types = [0x008u16, 0x0B3, 0x004];
+
+    let mut found = false;
+
+    // Family A: value = P(guid ^ c)  <=>  Q(value) ^ c = guid.
+    for type_id in candidate_types {
+        let guids = data.guids_of_type(type_id);
+        if guids.is_empty() {
+            continue;
+        }
+        for p in &list {
+            let q = &p.inv;
+            let q0 = q(probes[0]);
+            for g in &guids {
+                let c = q0 ^ g;
+                if probes[1..].iter().all(|v| known.contains(&(q(*v) ^ c))) {
+                    let guid = q(probes[1]) ^ c;
+                    println!(
+                        "MATCH value = {}(guid ^ {c:#018x})\n\
+                         \x20       type 0x{:03X}: {guid:#018x} explains all {} values",
+                        p.name,
+                        guid::type_of(guid),
+                        probes.len()
+                    );
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        if found {
+            break;
+        }
+    }
+
+    // Family B: value = P(guid) ^ c  <=>  Q(value ^ c) = guid.
+    if !found {
+        for type_id in candidate_types {
+            let guids = data.guids_of_type(type_id);
+            if guids.is_empty() {
+                continue;
+            }
+            for p in &list {
+                for g in &guids {
+                    let c = (p.fwd)(*g) ^ probes[0];
+                    if probes[1..]
+                        .iter()
+                        .all(|v| known.contains(&(p.inv)(*v ^ c)))
+                    {
+                        let guid = (p.inv)(probes[1] ^ c);
+                        println!(
+                            "MATCH value = {}(guid) ^ {c:#018x}\n\
+                             \x20       type 0x{:03X}: {guid:#018x} explains all {} values",
+                            p.name,
+                            guid::type_of(guid),
+                            probes.len()
+                        );
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+    }
+
+    // Family C: value = H(guid) for a known 64-bit hash. Each candidate runs
+    // over every material GUID; landing on every observed value is the test.
+    if !found {
+        fn crc64_forward(data: &[u8], init: u64, invert: bool) -> u64 {
+            // Non-reflected CRC64 (ECMA polynomial), as an independent variant
+            // of the reflected one ow-stu ships.
+            let mut crc = init;
+            for b in data {
+                crc ^= (*b as u64) << 56;
+                for _ in 0..8 {
+                    crc = if crc & (1 << 63) != 0 {
+                        (crc << 1) ^ 0x42F0_E129_2C6E_9ED5
+                    } else {
+                        crc << 1
+                    };
+                }
+            }
+            if invert { !crc } else { crc }
+        }
+        fn crc64_reflected(data: &[u8], init: u64, invert: bool) -> u64 {
+            const POLY: u64 = 0x95AC_9329_AC4B_C9B5;
+            let mut crc = init;
+            for b in data {
+                let mut c = (crc ^ *b as u64) & 0xFF;
+                for _ in 0..8 {
+                    c = if c & 1 != 0 { (c >> 1) ^ POLY } else { c >> 1 };
+                }
+                crc = (crc >> 8) ^ c;
+            }
+            if invert { !crc } else { crc }
+        }
+        fn fnv1a(data: &[u8]) -> u64 {
+            let mut h = 0xcbf2_9ce4_8422_2325u64;
+            for b in data {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100_0000_01b3);
+            }
+            h
+        }
+        fn fnv1(data: &[u8]) -> u64 {
+            let mut h = 0xcbf2_9ce4_8422_2325u64;
+            for b in data {
+                h = h.wrapping_mul(0x100_0000_01b3);
+                h ^= *b as u64;
+            }
+            h
+        }
+        fn djb2(data: &[u8]) -> u64 {
+            let mut h = 5381u64;
+            for b in data {
+                h = h.wrapping_mul(33).wrapping_add(*b as u64);
+            }
+            h
+        }
+        fn sdbm(data: &[u8]) -> u64 {
+            let mut h = 0u64;
+            for b in data {
+                h = (*b as u64)
+                    .wrapping_add(h << 6)
+                    .wrapping_add(h << 16)
+                    .wrapping_sub(h);
+            }
+            h
+        }
+
+        let observed: std::collections::HashSet<u64> = values.iter().copied().collect();
+        let materials = data.guids_of_type(0x008);
+        let hashers: Vec<(&str, Box<dyn Fn(&[u8]) -> u64>)> = vec![
+            ("stucrc64", Box::new(|d: &[u8]| ow_stu::crc::crc64(d))),
+            ("crc64-forward/0", Box::new(|d: &[u8]| crc64_forward(d, 0, false))),
+            ("crc64-forward/~0", Box::new(|d: &[u8]| crc64_forward(d, !0, false))),
+            ("crc64-forward/0/inv", Box::new(|d: &[u8]| crc64_forward(d, 0, true))),
+            ("crc64-forward/~0/inv", Box::new(|d: &[u8]| crc64_forward(d, !0, true))),
+            ("crc64-refl/0", Box::new(|d: &[u8]| crc64_reflected(d, 0, false))),
+            ("crc64-refl/~0", Box::new(|d: &[u8]| crc64_reflected(d, !0, false))),
+            ("crc64-refl/0/inv", Box::new(|d: &[u8]| crc64_reflected(d, 0, true))),
+            ("crc64-refl/~0/inv", Box::new(|d: &[u8]| crc64_reflected(d, !0, true))),
+            ("fnv1a", Box::new(fnv1a)),
+            ("fnv1", Box::new(fnv1)),
+            ("djb2", Box::new(djb2)),
+            ("sdbm", Box::new(sdbm)),
+        ];
+
+        'outer: for (label, h) in &hashers {
+            for order in ["le", "be"] {
+                let mut landed: Vec<u64> = Vec::new();
+                for g in &materials {
+                    let mut bytes = g.to_le_bytes();
+                    if order == "be" {
+                        bytes.reverse();
+                    }
+                    if observed.contains(&h(&bytes)) {
+                        landed.push(*g);
+                    }
+                }
+                if landed.len() == values.len() {
+                    println!(
+                        "MATCH value = {label}({order} guid); first guid {:#018x}",
+                        landed[0]
+                    );
+                    found = true;
+                    break 'outer;
+                } else if !landed.is_empty() {
+                    println!(
+                        "  {label}/{order}: {} of {} values land -- partial, not a match",
+                        landed.len(),
+                        values.len()
+                    );
+                }
+            }
+        }
+    }
+
+    if !found {
+        println!(
+            "no match: {} permutations x {} candidate types, plus {} hash variants",
+            list.len(),
+            candidate_types.len(),
+            13
+        );
+    }
+    Ok(())
+}
+
+/// Collect MDLC material arrays from many models, to see how they are encoded.
+///
+/// Four values on one model can be ruled out or explained, but only one model
+/// can be a coincidence. If the same mask applies to all models the values line
+/// up; if it varies by position or by asset, the pattern shows it.
+///
+/// ```text
+/// ow-probe materials [--count 40] [--type 0x00C]
+/// ```
+fn materials(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let count: usize = rest
+        .iter()
+        .position(|a| a == "--count")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(40);
+    let type_id: u16 = rest
+        .iter()
+        .position(|a| a == "--type")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|v| u16::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+        .unwrap_or(types::MODEL);
+
+    let guids = data.guids_of_type(type_id);
+    let mut shown = 0usize;
+    for guid in &guids {
+        if shown >= count {
+            break;
+        }
+        let Ok(bytes) = data.bytes_of(*guid) else { continue };
+        let Ok(chunks) = ow_tank::chunks::Chunks::parse(&bytes) else {
+            continue;
+        };
+        let Some(mdlc) = chunks.payload(&bytes, b"MDLC") else {
+            continue;
+        };
+        if mdlc.len() < 106 {
+            continue;
+        }
+        let offset = i64::from_le_bytes(mdlc[8..16].try_into().unwrap());
+        let count = u16::from_le_bytes(mdlc[104..106].try_into().unwrap());
+        if offset <= 0 || offset as usize + count as usize * 8 > mdlc.len() {
+            continue;
+        }
+        let base = offset as usize;
+        let mut values = Vec::new();
+        for i in 0..count as usize {
+            values.push(u64::from_le_bytes(mdlc[base + i * 8..base + i * 8 + 8].try_into().unwrap()));
+        }
+        println!(
+            "0x{guid:016x}  {count} material(s) at {offset}: {}",
+            values
+                .iter()
+                .enumerate()
+                .map(|(i, v)| format!("[{i}]{v:#018x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        shown += 1;
+    }
+    println!("{shown} model(s)");
+    Ok(())
+}
+
+/// Print the MDLC material values of every model named in a file.
+///
+/// One process, many models: the values are wanted for cross-referencing
+/// against a memory capture, and reopening the container per model is the
+/// difference between seconds and minutes. The file holds one GUID per line.
+///
+/// ```text
+/// ow-probe mdl-values models.txt
+/// ```
+fn mdl_values(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let path = rest.first().ok_or("usage: ow-probe mdl-values <file>")?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut models = 0usize;
+    let mut values = 0usize;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Ok(guid) = u64::from_str_radix(line.trim_start_matches("0x"), 16) else {
+            continue;
+        };
+        let Ok(bytes) = data.bytes_of(guid) else { continue };
+        let Ok(chunks) = ow_tank::chunks::Chunks::parse(&bytes) else {
+            continue;
+        };
+        let Some(mdlc) = chunks.payload(&bytes, b"MDLC") else {
+            continue;
+        };
+        if mdlc.len() < 106 {
+            continue;
+        }
+        let offset = i64::from_le_bytes(mdlc[8..16].try_into().unwrap());
+        let count = u16::from_le_bytes(mdlc[104..106].try_into().unwrap());
+        if offset <= 0 || offset as usize + count as usize * 8 > mdlc.len() {
+            continue;
+        }
+        let base = offset as usize;
+        let mut row = Vec::with_capacity(count as usize);
+        for i in 0..count as usize {
+            row.push(u64::from_le_bytes(
+                mdlc[base + i * 8..base + i * 8 + 8].try_into().unwrap(),
+            ));
+        }
+        println!(
+            "0x{guid:016x} {}",
+            row.iter()
+                .map(|v| format!("{v:#018x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        models += 1;
+        values += row.len();
+    }
+    println!("{models} model(s), {values} material value(s)");
+    Ok(())
 }
 
 /// Find the map chunks that sit where a known chunk sits.
@@ -796,12 +1314,20 @@ fn dump(data: &GameData, rest: &[String]) -> Result<(), String> {
                             if let Some(target) = stu.asset_ref_at(at, field.hash) {
                                 let kind = guid::type_of(target);
                                 let known = data.registry().get(target).is_some();
+                                // The stored word travels with the decoded one:
+                                // a field declared as a plain `ulong` in the
+                                // reference tooling is *not* obfuscated, so its
+                                // raw value is the thing to compare against the
+                                // MDLC material array, not the deobfuscated one.
+                                let raw = stu.u64_at(at).unwrap_or(0);
                                 // Print the type even when it does not resolve:
-                                // a type that is plausible but absent is a
-                                // different problem from a type that is nonsense.
+                                // a type that is plausible but absent from the
+                                // install is a different problem from a type that
+                                // is nonsense, and the two look the same when
+                                // both are silently dropped.
                                 if kind < 0x400 || known {
                                     println!(
-                                        "        0x{:08X} -> 0x{target:016x}  type 0x{kind:03X}  {}",
+                                        "        0x{:08X} -> 0x{target:016x}  type 0x{kind:03X}  {}  raw 0x{raw:016x}",
                                         field.hash,
                                         if known { "present" } else { "absent" }
                                     );
@@ -1144,6 +1670,58 @@ fn info(data: &GameData) -> Result<(), String> {
     );
     for name in &data.manifests {
         println!("  {name}");
+    }
+    Ok(())
+}
+
+/// The first few GUIDs of an asset type, for feeding `dump`.
+///
+/// With `--readable`, only GUIDs whose bytes are actually installed are
+/// listed: a manifest holds every asset whether or not this install has
+/// downloaded it, and a GUID whose content key is absent fails at `dump`.
+///
+/// ```text
+/// ow-probe first 0x008 [count]
+/// ow-probe first 0x008 [count] --readable
+/// ```
+fn first_of_type(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let readable = rest.iter().any(|a| a == "--readable");
+    let type_arg = rest
+        .iter()
+        .find(|a| !a.starts_with("--") && a.parse::<usize>().is_err())
+        .or_else(|| rest.first())
+        .ok_or("usage: ow-probe first <type> [count] [--readable]")?;
+    let type_id: u16 = type_arg
+        .trim_start_matches("0x")
+        .parse()
+        .map_err(|_| "type must be a number".to_string())?;
+    let count: usize = rest
+        .iter()
+        .find(|a| !a.starts_with("--") && a.parse::<usize>().is_ok())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    let guids = data.guids_of_type(type_id);
+    println!("{} asset(s) of type 0x{type_id:03X}", guids.len());
+    let mut shown = 0usize;
+    let mut probed = 0usize;
+    for guid in &guids {
+        if shown >= count {
+            break;
+        }
+        if readable {
+            probed += 1;
+            if data.bytes_of(*guid).is_err() {
+                continue;
+            }
+            if shown == 0 {
+                println!("(first {probed} probed for readability)");
+            }
+        }
+        println!("0x{guid:016x}");
+        shown += 1;
+    }
+    if readable {
+        println!("{shown} readable of {probed} probed");
     }
     Ok(())
 }
