@@ -330,3 +330,32 @@ curved structure. `ow-view --chunks-from` draws all 31 at once.
 This is a *method*, not a table. The GUIDs are specific to one install and one
 build, and they live in a gitignored file; what belongs in the repository is the
 way of finding them, which needs nothing but the install.
+
+## Textures: blocked at the first hop
+
+The chain to a texture is short and fully documented:
+
+```text
+model          MDLC chunk: a material offset and a material count
+  material     type 008: four GUIDs -- shader group, shader source, one
+               unknown, and the material data
+    data       type 0B3: STUMaterialData, holding a reference to the textures
+      texture  type 004: a header and DXT/BC payload
+```
+
+The first hop is where it stops. `MDLC`'s material array does not hold GUIDs:
+reading it plainly gives values whose type field is nonsense (0x81B, 0xA7E,
+0x962, 0xAA8 on one model), and none resolve to an asset. They are obfuscated
+the way STU asset references are — but not *with* the STU scheme. Five masks
+were tried against one model, including the CRC64 of its first 36 bytes (which
+is what STU uses), of its first 16, of the chunk's first 16, and of the GUID
+itself in both byte orders. None produced a type-008 GUID.
+
+So the encoding is unknown, and it is the one thing standing between a grey map
+and a textured one. It is also the kind of question the captured executable can
+answer directly: the code that reads those eight bytes is a short function, and
+finding it means finding the mask. That is what the Ghidra project is for.
+
+Recording it as blocked rather than guessing is the point. A mask invented to
+make four values look like GUIDs would produce four plausible assets and a map
+textured with someone else's materials.

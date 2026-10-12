@@ -460,6 +460,23 @@ fn model(data: &GameData, rest: &[String]) -> Result<(), String> {
     println!("0x{guid:016x}: {} bytes", bytes.len());
     println!("chunks: {}", chunks.summary());
 
+    if rest.iter().any(|a| a == "--mdlc") {
+        let payload = chunks
+            .payload(&bytes, b"MDLC")
+            .ok_or("no MDLC chunk")?;
+        println!("MDLC: {} bytes", payload.len());
+        for (i, row) in payload.chunks(16).take(10).enumerate() {
+            let hexs: Vec<String> = row.iter().map(|b| format!("{b:02x}")).collect();
+            println!("  {:04x}  {:<47}", i * 16, hexs.join(" "));
+        }
+        println!(
+            "  offset@8 = {}  count@104 = {}",
+            i64::from_le_bytes(payload[8..16].try_into().unwrap()),
+            u16::from_le_bytes(payload[104..106].try_into().unwrap())
+        );
+        return Ok(());
+    }
+
     let m = ow_tank::model::parse(&bytes, &load).map_err(|e| e.to_string())?;
     println!(
         "{} meshes, {} vertices, {} triangles, {} materials",
@@ -468,6 +485,13 @@ fn model(data: &GameData, rest: &[String]) -> Result<(), String> {
         m.triangle_count(),
         m.materials.len()
     );
+    for material in m.materials.iter().take(8) {
+        println!(
+            "  material 0x{material:016x}  type 0x{:03X}  {}",
+            guid::type_of(*material),
+            if data.registry().get(*material).is_some() { "present" } else { "absent" }
+        );
+    }
     for (i, mesh) in m.meshes.iter().enumerate() {
         println!(
             "  [{i:>3}] {} verts, {} tris, material {}, lod {}, radius {:.2}",
