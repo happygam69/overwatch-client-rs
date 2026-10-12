@@ -226,3 +226,73 @@ which is the thread to pull:
 
 That is the work now: disassemble around those 40 sites and around the manifest
 crypto, from the captured regions, at the addresses the manifest records.
+
+## Where this stands now
+
+The section above ends on a diagnosis that turned out to be wrong, and the way it
+was wrong is worth keeping.
+
+### The manifest was never encrypted
+
+The manifest being read was `Win_SPWin_RCN_EExt.cmf`. The install also carries
+`WinPrism_SPWin_RCN_EExt.cmf`, for the same region, same build, same kind — and
+**that one is in the clear**. Read little-endian, its magic spells `cmf`
+followed by the version, so `IsEncrypted()` is false and there is no key to
+derive at all.
+
+So the failure was not "the reference derivation is wrong for this build". It was
+"a plaintext manifest was handed to a key derivation", which fails for every
+build. Both diagnoses fit the same symptom — garbage records — and the wrong one
+was recorded first because only one of the two files was ever opened.
+
+The lesson is in the shape of the fix: the selector now returns *candidates* and
+the caller keeps the first that opens. Nothing in a file name says which of two
+same-named manifests will parse, and a build can ship both an encrypted and a
+clear one.
+
+The 154088 derivation in the reference tooling is still unverified, and the
+keytable it names *is* present in the client's own memory, so the constants are
+right and the derivation is what differs. A search over the plausible seeds and
+strides produced nothing that satisfies the format's own check — `entry[0].m_index
+== 1`. Nothing needs it: the plaintext manifest carries 1,395,411 records.
+
+### What reads now
+
+| layer | state |
+|---|---|
+| container, buckets, BLTE, encoding, root file | works |
+| content manifest | works, plaintext path, 1.5M records |
+| structured data (STU v2) | works, including `teString` and inline arrays |
+| chunked data (MDLC/MRNM/MSTU) | works; 38 of 40 models read geometry |
+| map chunks and placeables | works; every model reference resolves |
+| models to vertices and indices | works; 58 of 60 models produce geometry |
+| rendering | works; wgpu, first-person camera, real map geometry |
+| textures and materials | **not read** — surfaces are shaded from their normals |
+| character controller and collision | **not started** |
+| combat in the range | data side reads; not yet wired to the view |
+
+### The practice range is not identified
+
+This is the honest gap against the stated goal, and it is a *naming* problem, not
+a reading one.
+
+The install ships 42 `STUMapHeader` assets and none of them is the practice
+range. The string "Practice Range" appears exactly once in the whole of the
+readable data — inside a statescript graph that is the mode's UI, not a map. The
+map headers' `m_map` references resolve to an asset type holding nothing but
+empty bounding boxes, and their layer arrays are empty, so **the map-to-chunk
+link is not in the data this program can read**.
+
+What is left is naming: a map's name comes from a text asset, and the text
+manifests — all nine of them, 124,000 records each — point at assets this install
+has not downloaded. The UI strings are in the executable's image instead, which
+is why "Practice Range" and "Training Bot" are findable in a memory capture and
+not in the files.
+
+Two ways forward, and the first is cheaper:
+
+* group chunks by where their contents are and render each group, then recognise
+  the practice range by eye — `ow-view --clusters`, `--tour` and `--shot` exist
+  for exactly this;
+* recover the map-to-chunk link from the executable, where the game itself walks
+  it.
