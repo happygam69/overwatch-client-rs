@@ -757,6 +757,62 @@ fn dump(data: &GameData, rest: &[String]) -> Result<(), String> {
     }
     if let Ok(chunks) = ow_tank::chunks::Chunks::parse(&bytes) {
         println!("chunked: {}", chunks.summary());
+        // A model's own structured data is a chunk of the same file, and its
+        // references are STU references -- readable, unlike the model chunk's
+        // obfuscated material array.
+        if let Some(payload) = chunks.payload(&bytes, b"MSTU") {
+            // The chunk leads with the offset and length of the structured data
+            // inside it; the data is not the whole payload.
+            let (offset, size) = if payload.len() >= 16 {
+                (
+                    i64::from_le_bytes(payload[0..8].try_into().unwrap()),
+                    i64::from_le_bytes(payload[8..16].try_into().unwrap()),
+                )
+            } else {
+                (0, payload.len() as i64)
+            };
+            println!("MSTU: data at {offset} for {size} bytes of {} ", payload.len());
+            let slice = if offset >= 0 && size > 0 && (offset + size) as usize <= payload.len() {
+                payload[offset as usize..(offset + size) as usize].to_vec()
+            } else {
+                payload.to_vec()
+            };
+            match ow_stu::Stu::parse(slice) {
+                Ok(mut stu) => {
+                    println!("MSTU: {} instance(s)", stu.instances.len());
+                    for index in 0..stu.instances.len() {
+                        let info = stu.instances[index];
+                        println!(
+                            "  [{index:>3}] 0x{:08X} {}",
+                            info.hash,
+                            data.classes.describe(info.hash)
+                        );
+                        let fields: Vec<ow_stu::FieldInfo> = stu.fields(index).to_vec();
+                        for field in fields {
+                            if field.size != 8 {
+                                continue;
+                            }
+                            let at = stu.payload_start(index) + field.offset;
+                            if let Some(target) = stu.asset_ref_at(at, field.hash) {
+                                let kind = guid::type_of(target);
+                                let known = data.registry().get(target).is_some();
+                                // Print the type even when it does not resolve:
+                                // a type that is plausible but absent is a
+                                // different problem from a type that is nonsense.
+                                if kind < 0x400 || known {
+                                    println!(
+                                        "        0x{:08X} -> 0x{target:016x}  type 0x{kind:03X}  {}",
+                                        field.hash,
+                                        if known { "present" } else { "absent" }
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => println!("MSTU did not parse as structured data: {e}"),
+            }
+        }
         return Ok(());
     }
 
