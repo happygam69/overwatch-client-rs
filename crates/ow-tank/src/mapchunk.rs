@@ -126,11 +126,6 @@ fn rd_quat(data: &[u8], at: usize) -> Option<[f32; 4]> {
     ])
 }
 
-/// Whether a value looks like an asset reference this install can resolve.
-fn plausible(guid: u64) -> bool {
-    guid != 0 && guid != u64::MAX
-}
-
 impl MapChunk {
     pub fn parse(data: &[u8], kind: Kind) -> Result<MapChunk> {
         if data.len() < HEADER_SIZE {

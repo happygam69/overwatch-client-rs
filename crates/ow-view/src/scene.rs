@@ -29,6 +29,7 @@ pub struct Draw {
     pub instance_start: u32,
     pub instance_count: u32,
     /// The model this came from, for reporting.
+    #[allow(dead_code)]
     pub model: u64,
 }
 

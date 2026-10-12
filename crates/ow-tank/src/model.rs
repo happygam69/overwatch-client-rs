@@ -186,6 +186,7 @@ impl Format {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn components(self) -> usize {
         match self {
             Format::F32 | Format::U32 => 1,
@@ -308,6 +309,9 @@ fn read_elements(d: &[u8], at: usize, count: usize) -> Vec<Element> {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct VertexBuffer {
+    /// Kept because it is what a reader needs to size a stream; the stride is
+    /// what this program walks with.
+    #[allow(dead_code)]
     vertex_count: u32,
     stride1: u8,
     stride2: u8,
