@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn reads_a_package_block() {
         // A synthetic v13 graph: header, then two assets sharing a package key.
-        let mut blob = vec![0u8; 88];
+        let mut blob = vec![0u8; 88 + 2 * PACKAGE_SIZE];
         blob[4..8].copy_from_slice(&154_088u32.to_le_bytes());
         blob[24..28].copy_from_slice(&2i32.to_le_bytes());
         blob[28..32].copy_from_slice(&(2 * PACKAGE_SIZE as i32).to_le_bytes());
