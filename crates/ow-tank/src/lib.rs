@@ -24,7 +24,9 @@ pub mod keytable;
 pub mod manifest;
 pub mod model;
 pub mod mapchunk;
+pub mod packages;
 pub mod settings;
+pub mod trg;
 pub mod weapons;
 
 use ow_casc::Store;
@@ -213,6 +215,16 @@ impl GameData {
             classes,
             fields,
         })
+    }
+
+    /// The root file, as text, for the layers that read it themselves.
+    pub fn root_file(&self) -> Result<String> {
+        self.store.root_file().map_err(Error::Casc)
+    }
+
+    /// Open an asset by content key, for layers above the manifest.
+    pub fn open_ckey(&self, key: &[u8; 16]) -> Result<Vec<u8>> {
+        self.store.open_ckey(key).map_err(Error::Casc)
     }
 
     pub fn store(&self) -> &Store {

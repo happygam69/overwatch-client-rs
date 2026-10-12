@@ -163,6 +163,119 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
                     .map_err(|_| format!("{l:?} is not a GUID"))
             })
             .collect::<Result<Vec<_>, _>>()?
+    } else if let Some(path) = flag("--chunk-file") {
+        // A map chunk read out of a running game's memory rather than out of
+        // the manifest. Its bytes are already decoded, so there is no asset to
+        // look up and no GUID to know.
+        let bytes = std::fs::read(&path).map_err(|e| format!("could not read {path}: {e}"))?;
+        println!("{path}: {} bytes", bytes.len());
+        let mut geometry: HashMap<u64, Loaded> = HashMap::new();
+        let mut order: Vec<u64> = Vec::new();
+        let mut origins: Vec<Vec3> = Vec::new();
+        let mut bounds_min = Vec3::splat(f32::MAX);
+        let mut bounds_max = Vec3::splat(f32::MIN);
+        let mut model_failures = 0usize;
+        let loader = |g: u64| data.bytes_of(g).ok();
+        let (_, chunk) = MapChunk::detect(&bytes, &resolves).map_err(|e| e.to_string())?;
+        println!("{}", chunk.summary());
+        for placeable in &chunk.placeables {
+            let Some(model_guid) = placeable.model.or(placeable.entity) else {
+                continue;
+            };
+            origins.push(Vec3::from_array(placeable.translation));
+            if guid::type_of(model_guid) != guid::types::MODEL {
+                continue;
+            }
+            if !geometry.contains_key(&model_guid) {
+                let Ok(model_bytes) = data.bytes_of(model_guid) else {
+                    model_failures += 1;
+                    continue;
+                };
+                let Ok(model) = ow_tank::model::parse(&model_bytes, &loader) else {
+                    model_failures += 1;
+                    continue;
+                };
+                let vertex_start = scene.vertices.len() as u32;
+                let index_start = scene.indices.len() as u32;
+                let fine: Vec<&ow_tank::model::Mesh> =
+                    model.meshes.iter().filter(|m| m.lod <= 0).collect();
+                let use_meshes: Vec<&ow_tank::model::Mesh> =
+                    if fine.is_empty() { model.meshes.iter().collect() } else { fine };
+                for mesh in use_meshes {
+                    let base = scene.vertices.len() as u32 - vertex_start;
+                    for (i, position) in mesh.positions.iter().enumerate() {
+                        let normal = mesh.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+                        scene.vertices.push(Vertex { position: *position, normal });
+                    }
+                    for index in &mesh.indices {
+                        scene.indices.push(base + index);
+                    }
+                }
+                let index_count = scene.indices.len() as u32 - index_start;
+                if index_count == 0 {
+                    scene.vertices.truncate(vertex_start as usize);
+                    scene.indices.truncate(index_start as usize);
+                    continue;
+                }
+                order.push(model_guid);
+                geometry.insert(
+                    model_guid,
+                    Loaded { vertex_start, index_start, index_count, instances: Vec::new() },
+                );
+            }
+            let matrix = placement_matrix(placeable);
+            if let Some(entry) = geometry.get_mut(&model_guid) {
+                entry.instances.push(Instance { model: matrix.to_cols_array_2d() });
+                scene.placements += 1;
+            }
+            let origin = Vec3::from_array(placeable.translation);
+            bounds_min = bounds_min.min(origin - Vec3::splat(8.0));
+            bounds_max = bounds_max.max(origin + Vec3::splat(8.0));
+        }
+        for model_guid in &order {
+            let Some(entry) = geometry.get(model_guid) else { continue };
+            if entry.index_count == 0 || entry.instances.is_empty() {
+                continue;
+            }
+            let instance_start = scene.instances.len() as u32;
+            scene.instances.extend_from_slice(&entry.instances);
+            scene.draws.push(Draw {
+                first_index: entry.index_start,
+                index_count: entry.index_count,
+                base_vertex: entry.vertex_start as i32,
+                instance_start,
+                instance_count: entry.instances.len() as u32,
+                model: *model_guid,
+            });
+        }
+        scene.models_loaded = order.len();
+        scene.origins = origins;
+        if model_failures > 0 {
+            eprintln!("{model_failures} model(s) could not be read");
+        }
+        if scene.draws.is_empty() {
+            return Err("no geometry in that chunk".into());
+        }
+        let size = bounds_max - bounds_min;
+        let centroid = if scene.origins.is_empty() {
+            (bounds_min + bounds_max) * 0.5
+        } else {
+            let mut xs: Vec<f32> = scene.origins.iter().map(|v| v.x).collect();
+            let mut ys: Vec<f32> = scene.origins.iter().map(|v| v.y).collect();
+            let mut zs: Vec<f32> = scene.origins.iter().map(|v| v.z).collect();
+            xs.sort_by(f32::total_cmp);
+            ys.sort_by(f32::total_cmp);
+            zs.sort_by(f32::total_cmp);
+            let mid = scene.origins.len() / 2;
+            Vec3::new(xs[mid], ys[mid], zs[mid])
+        };
+        scene.eye = flag("--at").and_then(|v| parse_vec3(&v)).unwrap_or(centroid);
+        scene.yaw = if size.x >= size.z { 0.0 } else { std::f32::consts::FRAC_PI_2 };
+        println!(
+            "{} distinct models, {} placements; eye ({:.0}, {:.0}, {:.0})",
+            scene.models_loaded, scene.placements, scene.eye.x, scene.eye.y, scene.eye.z
+        );
+        return Ok(scene);
     } else if let Some(list) = flag("--chunks") {
         list.split(',')
             .map(|s| {

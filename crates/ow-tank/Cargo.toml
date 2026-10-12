@@ -7,6 +7,7 @@ license.workspace = true
 description = "Overwatch asset semantics: GUID typing, content manifest, class map"
 
 [dependencies]
+flate2 = { workspace = true }
 aes.workspace = true
 cbc.workspace = true
 sha1.workspace = true

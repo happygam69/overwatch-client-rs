@@ -432,6 +432,11 @@ impl Registry {
         })
     }
 
+    /// Every record, in GUID order.
+    pub fn records(&self) -> &[Record] {
+        &self.records
+    }
+
     /// The record for an asset GUID.
     pub fn get(&self, guid: u64) -> Option<&Record> {
         // Records are GUID-sorted, which is also how decryption was verified.

@@ -84,6 +84,10 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
         "dump" => dump(&data, rest),
         "grep" => grep(&data, rest),
         "mapchunk" => map_chunk(&data, rest),
+        "size" => by_size(&data, rest),
+        "raw" => raw(&data, rest),
+        "package" => package(&data, rest),
+        "graph" => graph(&data, rest),
         "model" => model(&data, rest),
         "health" => health(&data),
         "weapons" => weapons(&data),
@@ -93,6 +97,198 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
              health, weapons, weapon-params [hero], settings [n], scan, classmap, buckets"
         )),
     }
+}
+
+/// Read the resource graph: what package an asset belongs to, and what else
+/// ships with it.
+///
+/// ```text
+/// ow-probe graph                       # summary
+/// ow-probe graph <guid>                # the package holding that asset
+/// ```
+fn graph(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let graph = ow_tank::trg::open(data).map_err(|e| e.to_string())?;
+    println!(
+        "resource graph: build {}, version {}, {} assets in {} packages",
+        graph.build_version,
+        graph.version,
+        graph.memberships.len(),
+        graph
+            .memberships
+            .iter()
+            .map(|m| m.package_key)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    );
+
+    let Some(guid_arg) = rest.iter().find(|a| !a.starts_with("--")) else {
+        let mut counts: std::collections::BTreeMap<u16, usize> =
+            std::collections::BTreeMap::new();
+        for m in &graph.memberships {
+            *counts.entry(guid::type_of(m.asset)).or_default() += 1;
+        }
+        println!("types in the graph:");
+        for (kind, count) in counts.iter().rev().take(20) {
+            println!("  type 0x{kind:03X}  {count:>6}");
+        }
+        return Ok(());
+    };
+    let wanted = u64::from_str_radix(guid_arg.trim_start_matches("0x"), 16)
+        .map_err(|_| format!("{guid_arg:?} is not a GUID"))?;
+
+    let Some(mine) = graph.membership(wanted) else {
+        println!("0x{wanted:016x} is not in the graph");
+        return Ok(());
+    };
+    let package = graph.package_of(wanted);
+    println!(
+        "0x{wanted:016x} is in package 0x{:016x} with {} asset(s)",
+        mine.package_key,
+        package.len()
+    );
+    println!("  types: {}", ow_tank::trg::ResourceGraph::describe(&package));
+
+    let mut chunks = 0usize;
+    let mut others = 0usize;
+    for asset in &package {
+        match guid::type_of(*asset) {
+            0x0BC => {
+                chunks += 1;
+                if chunks <= 30 {
+                    println!("  0x{asset:016x}  map chunk");
+                }
+            }
+            _ => {
+                others += 1;
+                if others <= 20 {
+                    println!(
+                        "  0x{asset:016x}  type 0x{:03X}  {}",
+                        guid::type_of(*asset),
+                        if data.registry().get(*asset).is_some() { "present" } else { "absent" }
+                    );
+                }
+            }
+        }
+    }
+    println!("  {chunks} map chunk(s), {others} other(s)");
+    Ok(())
+}
+
+/// Find the package holding an asset, and list what else is in it.
+///
+/// ```text
+/// ow-probe package <guid> [--index N]
+/// ```
+fn package(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let packages = ow_tank::packages::open(data).map_err(|e| e.to_string())?;
+    println!("{} packages", packages.len());
+
+    if let Some(at) = rest.iter().position(|a| a == "--index") {
+        let index: usize = rest
+            .get(at + 1)
+            .ok_or("--index needs a value")?
+            .parse()
+            .map_err(|_| "--index must be a number".to_string())?;
+        let p = packages.load(data, index).map_err(|e| e.to_string())?;
+        println!("package {index}: 0x{:016x}, {} records", p.guid, p.records.len());
+        println!("  types: {}", ow_tank::packages::describe(&p));
+        for guid in p.records.iter().take(60) {
+            println!("  0x{guid:016x}  type 0x{:03X}", guid::type_of(*guid));
+        }
+        return Ok(());
+    }
+
+    let guid_arg = rest
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .ok_or("usage: ow-probe package <guid>")?;
+    let wanted = u64::from_str_radix(guid_arg.trim_start_matches("0x"), 16)
+        .map_err(|_| format!("{guid_arg:?} is not a GUID"))?;
+
+    let found = packages.find(data, wanted);
+    if found.is_empty() {
+        println!("0x{wanted:016x} is in no package");
+        return Ok(());
+    }
+    for (index, p) in found {
+        println!(
+            "package {index}: 0x{:016x}, {} records",
+            p.guid,
+            p.records.len()
+        );
+        println!("  types: {}", ow_tank::packages::describe(&p));
+        let mut chunks = 0usize;
+        for guid in &p.records {
+            if guid::type_of(*guid) == 0x0BC {
+                chunks += 1;
+                if chunks <= 40 {
+                    println!("  0x{guid:016x}  map chunk");
+                }
+            }
+        }
+        println!("  {chunks} map chunk(s)");
+    }
+    Ok(())
+}
+
+/// Write an asset's decoded bytes to a file.
+///
+/// ```text
+/// ow-probe raw <guid> <path>
+/// ```
+fn raw(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let guid_arg = rest.first().ok_or("usage: ow-probe raw <guid> <path>")?;
+    let path = rest.get(1).ok_or("usage: ow-probe raw <guid> <path>")?;
+    let guid = u64::from_str_radix(guid_arg.trim_start_matches("0x"), 16)
+        .map_err(|_| format!("{guid_arg:?} is not a GUID"))?;
+    let bytes = data.bytes_of(guid).map_err(|e| e.to_string())?;
+    std::fs::write(path, &bytes).map_err(|e| format!("could not write {path}: {e}"))?;
+    println!("wrote {} bytes to {path}", bytes.len());
+    Ok(())
+}
+
+/// List registry records with a given stored size.
+///
+/// A chunk read out of memory has no GUID, but it does have a length. If the
+/// manifest's size field is the decoded length, that length names the asset --
+/// which is how a chunk lifted from a running game is tied back to its GUID.
+///
+/// ```text
+/// ow-probe size 252808 [--type 0x0BC]
+/// ```
+fn by_size(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let size: u32 = rest
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .ok_or("usage: ow-probe size <bytes> [--type 0xNNN]")?
+        .parse()
+        .map_err(|_| "size must be a number".to_string())?;
+    let type_filter: Option<u16> = rest
+        .iter()
+        .position(|a| a == "--type")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|v| u16::from_str_radix(v.trim_start_matches("0x"), 16).ok());
+
+    let mut hits = 0usize;
+    for record in data.registry().records() {
+        if record.size != size {
+            continue;
+        }
+        let kind = guid::type_of(record.guid);
+        if let Some(want) = type_filter {
+            if kind != want {
+                continue;
+            }
+        }
+        println!("  0x{:016x}  type 0x{kind:03X}  size {}", record.guid, record.size);
+        hits += 1;
+        if hits >= 40 {
+            println!("  (stopping at 40)");
+            break;
+        }
+    }
+    println!("{hits} record(s) of {size} bytes");
+    Ok(())
 }
 
 /// Read a model asset and report the geometry it holds.
@@ -518,6 +714,10 @@ fn scan(data: &GameData, rest: &[String]) -> Result<(), String> {
     let mut string_field: Option<u32> = None;
     let mut type_ids: Vec<u16> = Vec::new();
     let mut limit = 40usize;
+    // With --refs, report every asset reference each instance holds, and what
+    // type each points at. That is how a class's links are found without
+    // knowing its layout: the ones that resolve are the real ones.
+    let show_refs = rest.iter().any(|a| a == "--refs");
 
     let mut i = 0;
     while i < rest.len() {
@@ -545,6 +745,9 @@ fn scan(data: &GameData, rest: &[String]) -> Result<(), String> {
                 i += 1;
                 limit = rest.get(i).ok_or("--limit needs a value")?.parse().unwrap_or(limit);
             }
+            // A flag this command does not consume is ignored rather than
+            // mistaken for the class hash.
+            other if other.starts_with("--") => {}
             other => class_hash = Some(hex(other)?),
         }
         i += 1;
@@ -598,6 +801,24 @@ fn scan(data: &GameData, rest: &[String]) -> Result<(), String> {
                 println!(
                     "  0x{guid:016x}  type 0x{type_id:03X}  instance {instance:<5} {text}"
                 );
+                if show_refs {
+                    let fields: Vec<ow_stu::FieldInfo> = stu.fields(instance).to_vec();
+                    for field in fields {
+                        if field.size != 8 {
+                            continue;
+                        }
+                        let at = stu.payload_start(instance) + field.offset;
+                        if let Some(target) = stu.asset_ref_at(at, field.hash) {
+                            if data.registry().get(target).is_some() {
+                                println!(
+                                    "        0x{:08X} -> 0x{target:016x}  type 0x{:03X}",
+                                    field.hash,
+                                    guid::type_of(target)
+                                );
+                            }
+                        }
+                    }
+                }
                 if found >= limit {
                     println!("  (stopping at {limit})");
                     return Ok(());
