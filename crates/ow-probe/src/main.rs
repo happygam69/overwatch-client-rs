@@ -62,6 +62,7 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
         "info" => info(&data),
         "types" => type_histogram(&data),
         "first" => first_of_type(&data, rest),
+        "guids" => guids_cmd(&data, rest),
         "heroes" => heroes(&data),
         "hero" => {
             let index: u32 = rest
@@ -1670,6 +1671,33 @@ fn info(data: &GameData) -> Result<(), String> {
     );
     for name in &data.manifests {
         println!("  {name}");
+    }
+    Ok(())
+}
+
+/// Every asset GUID in the registry, one per line, optionally one type.
+///
+/// For feeding membership tests against a candidate transform: the answer to
+/// "is this decoded value an asset" needs the whole registry, not one type —
+/// a decode can land on a different type than the caller expected.
+///
+/// ```text
+/// ow-probe guids            every GUID
+/// ow-probe guids 0x008      only that type
+/// ```
+fn guids_cmd(data: &GameData, rest: &[String]) -> Result<(), String> {
+    if let Some(arg) = rest.first() {
+        let type_id: u16 = arg
+            .trim_start_matches("0x")
+            .parse()
+            .map_err(|_| "type must be a number".to_string())?;
+        for guid in data.guids_of_type(type_id) {
+            println!("0x{guid:016x}");
+        }
+        return Ok(());
+    }
+    for record in data.registry().records() {
+        println!("0x{:016x}", record.guid);
     }
     Ok(())
 }

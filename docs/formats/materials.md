@@ -125,19 +125,50 @@ counts u16 at +0x98/+0x9a/+0x9c, self-relative offset at +0x90):
 * after both loops the header counts/bbox are copied into the destination
   (`r14+0x90..`, xmm from `rbp+0x40` to `r14+0xa0`).
 
-`0x7ff64a44b430` (module `7ff64a44b000`, which contains evenly spaced
-per-type template stores ~0xD20 apart) is the next function to read: it is
-called once per material with the destination slot. The type-ids
+`0x7ff64a44b430` turned out to be a growable-array append (capacity math at
++8/+0xc, doubles, returns `&back()` for the caller to store the wrapped object
+pointer into) — infrastructure, not the resolver. The type-ids
 (`0x7ff64dbdb7b0`, `0x7ff64dbd9c20`) are self-referential id-structs in data
 region `7ff64db38000` with no names (the client's RTTI-lite compares by
 pointer identity).
+
+### The pointer-decode idiom (not the material transform)
+
+The first read of `0x7ff64a44b550` opens with
+`ror 41 → xor 0x72fee1aad1a4bf06 → sub 0x675814fad68ae3d5 → ror 58` on a
+loaded qword, which looks like *the* decode. It is not: the canonical copy at
+`0x7ff64a3ab0c0` (region `7ff64a3a6000`) shows the result is used as a
+**pointer** — `mov rax,[rbx]; call [rax+8]` — so this chain is the engine's
+obfuscated-pointer idiom, present at 587/600 K1/K2a constant sites across the
+modules. As a material decode it was tested anyway (both arrangements, both
+directions, against all 1,514,319 registry GUIDs): zero hits. Anyone who finds
+these constants again should read them as pointer protection first.
+
+### Two more consumers, and the low-32 evidence
+
+Region `7ff64abd3000_00012000` holds two more count readers:
+
+* `0x7ff64abd71d1`: takes `word[entry+0x9c]` (material count), scales it to a
+  float index, clamps to `count-1`, computes a flat index
+  `edi * material_index + slot`, bounds-checks against `dword[base+0x38]` and
+  reads a **u32 array with element stride 4** — while an inner loop at
+  `0x7ff64abd71bf` does `cmp r15d, dword[rax + r8*8]`: a **u32 key compared
+  against the low 32 bits of 8-byte entries**. That is the strongest evidence
+  yet for `u32 key == low32(64-bit material value)`, which fits everything
+  else: entity lookups take `*(u32*)(binding+0xe0)` while the binding stores
+  the full template qword, the per-model counts for keys and values are equal,
+  and the scan is linear.
+* `0x7ff64abddc11`: uses the same count for interpolation
+  (`cvtsi2ss(count-1)`), then passes the struct on to `0x7ff64b7f23a0`
+  (region `7ff64b7d8000`) — a consumer still to be read.
 
 ### Notes on the capture
 
 * The asset-core region `7ff64aaeb000_0002f000` is **obfuscated**: its
   functions decompile into hundreds of unreachable blocks around clean
   windows. Read it by disassembling address windows, not by decompiling whole
-  functions.
+  functions. Capstone on the raw region files works when the Ghidra bridge
+  is wedged by one of those decompiles.
 * No decoded MDLC buffer was found in the heap scans (decode-parse-free, same
   as map chunks), and a structural scan for the runtime self-pointer
   (`[x+0x38] == x+0xb8`) produced only a false positive.
@@ -146,18 +177,20 @@ pointer identity).
 
 ## Where the unknown sits
 
-Two questions remain, both localised:
-
 1. **What turns a material GUID into the 64-bit MDLC value** (export-time
-   hash/transform) or **what turns the value back** (load-time). Candidates
-   ruled out are listed above. The code to read next: the global material
-   table builder (the `+0x88` store that `FUN_7ff64ba2e360` reads through the
-   `*( *( *(obj+0x18) + 8 ) + 0x88)` chain) and `0x7ff64a44b430`.
-2. **How the u32 key relates to the u64 value** — the counts say there is one
-   key per material, and both are per-model parallel arrays; the derivation is
-   in the builder that fills source fields +0x6e/+0x72 (candidates: the
-   cluster of writers at `0x7ff64c686447`, `0x7ff64c6a1879`, `0x7ff64c6b445b`,
-   `0x7ff64c6c88af`).
+   hash/transform) or **what turns the value back** (load-time). Families
+   ruled out are listed above, now including the pointer-decode idiom. The
+   code to read next: the global material table builder (the `+0x88` store
+   that `FUN_7ff64ba2e360` reads through the
+   `*( *( *(obj+0x18) + 8 ) + 0x88)` chain), the count-writer cluster
+   (`0x7ff64c686447`, `0x7ff64c6a1879`, `0x7ff64c6b445b`, `0x7ff64c6c88af`),
+   and `0x7ff64b7f23a0`.
+2. **Whether the u32 key is exactly `low32` of the u64 value** — strong
+   evidence in both reader sites; needs one confirmation where both halves are
+   visible at once (the table builder will show it).
+3. **How the model's u64 array reaches textures at all** — the table carries
+   colour/parameter records; the material-asset (008) hop may be resolved
+   elsewhere (global table) rather than per-model.
 
 Once (1) is answered, the rest of the chain is already readable from files:
 material (008) gives shader group/source and material data (0B3), and
