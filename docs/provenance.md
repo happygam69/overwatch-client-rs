@@ -90,12 +90,23 @@ on the latter is cheat-oriented and was not consulted.
 
 ## Development scratch
 
-`dev/` holds the probes used to pin the formats down: a container reader, a
-layout-solver that tests candidate byte interpretations against real payloads, a
-manifest decrypter, and an STU reader. They are exploratory code, they are not
-part of the product, and they are excluded by `.gitignore`. They are kept on disk
-because they are the record of how each ambiguity was resolved, and because
-re-running one is the fastest way to re-check a claim.
+`dev/` holds the decomp/analysis toolchain and the working data: the read-only
+process capture (`dump_process.py`, `regions.py`), the practice-range capture
+helpers (`capture_range.py`, `find_mapchunks.py`, `watch_chunks.py`,
+`live_mapscan.py`), the decomp searches (`disasm_field_sites.py`,
+`find_guid_constants.py`, `find_hash`-style constant scans), per-build manifest
+support (`provider_interp.py`, `cmf_search.py`), capture viewing and Ghidra
+import (`peek.py`, `flatten.py`), and the current question's working files
+(GUID and value lists being tested against candidate transforms). It also holds
+the process captures themselves and the Ghidra project (`ghidra_run/`) built
+on them.
+
+None of it is part of the product; `.gitignore` excludes all of it. The
+one-off format probes that used to live here were deleted once
+`docs/formats/` carried their verified results — the document is the record,
+not the probe. Captures are re-derivable by re-running the capture scripts
+against a running client, which is the operator's decision to make (see the
+roadmap's Warden note).
 
 ## Open questions
 
@@ -107,17 +118,14 @@ Answered by reading, but not fully:
 * The meaning of the index header's first `i32` (16 in the reference files).
 * The 512-byte manifest key table's construction. It is opaque; only its use is
   understood.
-* Whether the `pro/` and `ecache/` directories ever contain data a read needs.
-  They do not for the paths exercised here.
-
-Not started:
-
-* Every combat number. The state graphs are unread and the scalar node types are
-  unmapped; see the end of `docs/formats/stu.md`.
-* The resource graph (`.trg`), beyond its header shape.
-* Version 1 STU.
 * Whether any combat behaviour is *not* data-driven and would need the
   executable read. Blizzard's engineering talks describe a server-authoritative
   simulation with a fixed tick; if the numbers live in files and only the
   integration lives in code, reading the files is enough, and that is the
   assumption to test next rather than an established fact.
+
+Not started:
+
+* Per-shot damage and cooldowns: the graphs are read and their parameters
+  named, but the damage values do not surface; see `docs/formats/weapons.md`.
+* Version 1 STU.

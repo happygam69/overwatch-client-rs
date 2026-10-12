@@ -16,12 +16,11 @@
 !/LICENSE-APACHE
 !/rust-toolchain.toml
 !/.gitattributes
-!/overwatch-file-formats.md
 !/crates/
 !/docs/
 
-# Development scratch: format probes, extracted data, notes, RE tooling output.
-# None of it is the product.
+# Development scratch: process captures, decomp/analysis tooling, active
+# working data. None of it is the product; captures are re-derivable.
 /dev/
 /target/
 **/target/

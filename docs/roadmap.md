@@ -1,39 +1,54 @@
-# Roadmap to a rendered practice range
+# Roadmap: the rewrite
 
-The end goal, stated properly: a **first-person 3D practice range**, playable,
-with Overwatch's geometry, bots, HUD and combat — so the systems can be tested
-the way the game tests them. Not a terminal harness.
+The goal, stated exactly: **a Rust rewrite of Overwatch that reads its data
+from the operator's own installed copy at runtime and matches the original's
+actual behaviour.** The first-person practice range — geometry, bots, HUD,
+combat — is the *test bed* for that claim: systems are matched by running them
+the way the game runs them. A terminal harness is not the target.
 
-This document exists because the project drifted. What was built is a data layer
-and a terminal simulator; the target is a rendered game client. The gap is large
-and this is the honest accounting of it.
+This document exists because the project drifted once already, and it is the
+accounting of what exists, what blocks, and what is next.
+
+## How behaviour gets established
+
+The game is too large for behaviour to be read off the files: a 65 MB binary
+with code generated and protected at runtime, ~1.5 million assets, behaviour
+spread across state graphs, engine code and unnamed data. **Matching the
+original's actual behaviour therefore happens mainly through decompilation —
+Ghidra against the operator's own process capture (`dev/`, gitignored)** —
+while the files establish structure. Record the addresses and the conclusion,
+never the disassembly; re-derive from the same capture rather than trusting a
+note. `docs/formats/materials.md` is the worked example of the rule.
 
 ## What exists
 
 | | state |
 |---|---|
 | CASC container, manifests, STU | working and verified |
-| hero health / armour / shields | 124 of 132 heroes |
-| weapon ballistics (rates, speeds, lifetimes, ranges) | 56 graphs, 889 named parameters |
+| hero health / armour / shields | 127 of 135 heroes |
+| weapon ballistics (rates, speeds, lifetimes, ranges) | 58 graphs with named parameters |
+| map chunks, models, geometry | read; `ow-view` renders them |
+| practice range | map identified: 31 distinct chunk contents |
 | combat simulation (hitscan, projectiles, spread, falloff, pools, armour) | working, unit-tested |
-| per-shot damage | **not in the files** — see `docs/formats/weapons.md` |
+| per-shot damage | **not in the files** — see `docs/formats/weapons.md`; capture search prepared |
 
-## What a rendered range needs, and where each piece stands
+## What the rewrite still needs, and where each piece stands
 
 | layer | state | notes |
 |---|---|---|
-| **map geometry** | available, not read | **45,302 map-chunk assets**, type `0x0BC`. TankLib documents this as "Tank MapChunk, file type 0BC" — which also settles the `.0bc` mystery in the community research doc: it is the map chunk, not an unknown format. |
-| **models** (bots, props, weapon view models) | available, not read | 30,402 assets of type `0x00C`, a chunked container (magic `0xF123456F`) with Model / RenderMesh / Skeleton / Cloth / Hardpoint chunks |
-| **textures** | available, not read | 191,599 assets of type `0x004`, Overwatch's TXTR |
-| **materials and shaders** | **not reproducible** | the game's shader system is proprietary. Geometry and textures can be brought in faithfully; a *pixel-identical* look cannot. Expect a faithful layout with approximated materials. |
-| **renderer** | not started | a `wgpu` window, first-person camera, depth buffer, texture sampling |
+| **map geometry** | read and rendered | **45,302 map-chunk assets**, type `0x0BC`, placeables resolved to models |
+| **models** (bots, props, weapon view models) | partially read | 30,402 assets of type `0x00C`; geometry at LOD 0 works, materials do not |
+| **materials and textures** | **blocked; decomp in progress** | the model→material link is opaque; ruled-out schemes and the client-side map are in `docs/formats/materials.md` |
+| **shaders** | **not reproducible** | the shader system is proprietary. Geometry and textures can be faithful; a pixel-identical look cannot. |
+| **renderer** | exists, untextured | a `wgpu` window, first-person camera, depth buffer; surfaces shaded from normals |
 | **character controller** | not started | movement, gravity, acceleration, collision against map geometry |
 | **combat numbers** | blocked | not in the files; see the Ghidra section |
 | **HUD** | not started | health, ammo, crosshair, damage numbers, the wall panel from the range |
 
-The asset side is the bulk of the work and **none of it needs reverse
-engineering**. The formats are documented in the reference tooling and the
-assets are on disk.
+The asset side is the bulk of the work. Structure needs no reverse engineering
+— the formats are documented and the assets are on disk — but **behaviour does**:
+what the code does with those assets is established by decomp, per the note at
+the top.
 
 ## Ghidra: what it can and cannot give
 
@@ -68,9 +83,13 @@ That is a different kind of step, and two things need saying plainly:
    session risks the account. That is a concrete cost to the person asking, and
    it should be weighed before, not after.
 
-Recommended order, therefore: build the range from data first, because it does
-not depend on any of this, and revisit the executable only for the specific
-numbers that turn out to be unreachable any other way — with the risk known.
+The policy that follows from both: **structure comes from the files; behaviour
+comes from the capture.** The captures already taken (`dev/dumps_range` and
+friends, read-only `ReadProcessMemory` dumps) are the standing reference for
+decomp work and carry no further risk — they are the primary instrument for
+matching the original's behaviour, per the note at the top. *New* captures mean
+attaching to a live session again, and that stays the operator's decision, made
+with the Warden cost stated rather than assumed.
 
 ## Preparing for a game update
 
