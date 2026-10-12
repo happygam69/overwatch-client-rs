@@ -11,6 +11,7 @@ name = "ow-probe"
 path = "src/main.rs"
 
 [dependencies]
+glam = "0.29"
 ow-casc.workspace = true
 ow-stu.workspace = true
 ow-tank.workspace = true

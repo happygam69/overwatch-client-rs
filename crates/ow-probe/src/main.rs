@@ -88,6 +88,7 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
         "raw" => raw(&data, rest),
         "package" => package(&data, rest),
         "graph" => graph(&data, rest),
+        "near" => near(&data, rest),
         "model" => model(&data, rest),
         "health" => health(&data),
         "weapons" => weapons(&data),
@@ -97,6 +98,106 @@ fn run(command: &str, rest: &[String]) -> Result<(), String> {
              health, weapons, weapon-params [hero], settings [n], scan, classmap, buckets"
         )),
     }
+}
+
+/// Find the map chunks that sit where a known chunk sits.
+///
+/// Chunks belonging to one map tile it, so they overlap in space and the map is
+/// recoverable by proximity -- no map-to-chunk link needed. The known chunk
+/// came out of a running game; the rest of its map is whatever is near it.
+///
+/// ```text
+/// ow-probe near <chunk-file> [--radius 600] [--limit 80]
+/// ```
+fn near(data: &GameData, rest: &[String]) -> Result<(), String> {
+    let path = rest
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .ok_or("usage: ow-probe near <chunk-file> [--radius N]")?;
+    let radius: f32 = rest
+        .iter()
+        .position(|a| a == "--radius")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600.0);
+    let limit: usize = rest
+        .iter()
+        .position(|a| a == "--limit")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(80);
+
+    let bytes = std::fs::read(path).map_err(|e| format!("could not read {path}: {e}"))?;
+    let resolves = |g: u64| data.registry().get(g).is_some();
+    let (_, seed) = ow_tank::mapchunk::MapChunk::detect(&bytes, &resolves)
+        .map_err(|e| e.to_string())?;
+    let (min, max) = bounds(&seed);
+    let seed_centre = median(&seed);
+    println!(
+        "seed: {} placeables, median ({:.0}, {:.0}, {:.0}), box ({:.0}, {:.0}, {:.0}) .. ({:.0}, {:.0}, {:.0})",
+        seed.placeables.len(),
+        seed_centre.x, seed_centre.y, seed_centre.z,
+        min.x, min.y, min.z, max.x, max.y, max.z
+    );
+    let centre = seed_centre;
+
+    let guids = data.guids_of_type(0x0BC);
+    println!("{} map chunks to check", guids.len());
+    let mut hits: Vec<(u64, usize, f32, [f32; 3])> = Vec::new();
+    let mut decoded = 0usize;
+    for (i, guid) in guids.iter().enumerate() {
+        if i % 5000 == 0 && i > 0 {
+            eprintln!("  ... {i} checked, {} near", hits.len());
+        }
+        let Ok(raw) = data.bytes_of(*guid) else { continue };
+        let Ok((_, chunk)) = ow_tank::mapchunk::MapChunk::detect(&raw, &resolves) else {
+            continue;
+        };
+        decoded += 1;
+        if chunk.placeables.is_empty() {
+            continue;
+        }
+        // The median, not the box. A chunk carries a handful of far-away
+        // placements -- skybox pieces, distant props -- and their box covers
+        // the whole map, which makes every chunk a neighbour of every other.
+        let c = median(&chunk);
+        let distance = (c - centre).length();
+        if distance <= radius {
+            hits.push((*guid, chunk.placeables.len(), distance, c.to_array()));
+        }
+    }
+    hits.sort_by(|a, b| a.2.total_cmp(&b.2));
+    println!("{decoded} chunks decoded; {} within {radius:.0}", hits.len());
+    for (guid, count, distance, centre) in hits.iter().take(limit) {
+        println!(
+            "  0x{guid:016x}  {count:>5} placeables  {distance:>8.1} away  centre ({:.0}, {:.0}, {:.0})",
+            centre[0], centre[1], centre[2]
+        );
+    }
+    Ok(())
+}
+
+/// Where a chunk's placements mostly are, robust to a few far-away ones.
+fn median(chunk: &ow_tank::mapchunk::MapChunk) -> glam::Vec3 {
+    let mut xs: Vec<f32> = chunk.placeables.iter().map(|p| p.translation[0]).collect();
+    let mut ys: Vec<f32> = chunk.placeables.iter().map(|p| p.translation[1]).collect();
+    let mut zs: Vec<f32> = chunk.placeables.iter().map(|p| p.translation[2]).collect();
+    xs.sort_by(f32::total_cmp);
+    ys.sort_by(f32::total_cmp);
+    zs.sort_by(f32::total_cmp);
+    let mid = chunk.placeables.len() / 2;
+    glam::Vec3::new(xs[mid], ys[mid], zs[mid])
+}
+
+fn bounds(chunk: &ow_tank::mapchunk::MapChunk) -> (glam::Vec3, glam::Vec3) {
+    let mut min = glam::Vec3::splat(f32::MAX);
+    let mut max = glam::Vec3::splat(f32::MIN);
+    for p in &chunk.placeables {
+        let t = glam::Vec3::from_array(p.translation);
+        min = min.min(t);
+        max = max.max(t);
+    }
+    (min, max)
 }
 
 /// Read the resource graph: what package an asset belongs to, and what else

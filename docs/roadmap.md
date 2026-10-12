@@ -296,3 +296,37 @@ Two ways forward, and the first is cheaper:
   for exactly this;
 * recover the map-to-chunk link from the executable, where the game itself walks
   it.
+
+## The practice range is found
+
+The map-to-chunk link is not in any file this program can read. It did not need
+to be: **chunks belonging to one map tile it**, so the map is recoverable from
+where the chunks' contents are.
+
+The seed was one chunk caught in a running game's memory while the practice
+range was loaded. A map chunk is BLTE-compressed on disk, so its bytes are only
+recognisable once decoded -- and the game decodes a chunk, parses it and frees
+the buffer, which is why two whole-capture scans and a four-minute watch found
+nothing and one lucky scan found this. It matched three manifest records
+byte-for-byte, which is how a buffer with no GUID gets tied back to one.
+
+From there, `ow-probe near` walks all 41,811 map chunks, decodes each, and keeps
+the ones whose placements sit in the same place. 400 chunks landed within 60
+units; grouping them by placeable count and centre collapses them to **31
+distinct contents**, each shipped under between one and fifty-four GUIDs.
+
+Two things had to be right for that to work, and both were wrong first:
+
+* **The median, not the bounding box.** A chunk carries a few far-away
+  placements -- skybox pieces -- whose box covers the whole map. By box distance
+  every chunk is a neighbour of every other, and 10,056 chunks came back. By
+  median, 400.
+* **The seed's own centre is not the map's centre.** The first attempt used the
+  seed chunk's box centre and got the same useless answer.
+
+The result renders as interiors: floors, walls, pillars, railings, ceilings, a
+curved structure. `ow-view --chunks-from` draws all 31 at once.
+
+This is a *method*, not a table. The GUIDs are specific to one install and one
+build, and they live in a gitignored file; what belongs in the repository is the
+way of finding them, which needs nothing but the install.

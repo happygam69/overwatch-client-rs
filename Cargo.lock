@@ -1291,6 +1291,7 @@ dependencies = [
 name = "ow-probe"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "ow-casc",
  "ow-stu",
  "ow-tank",
