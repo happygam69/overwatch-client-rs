@@ -26,6 +26,12 @@ use std::fmt;
 
 /// The build whose manifest derivation is implemented.
 pub const SUPPORTED_CMF_BUILD: u32 = 150_851;
+/// The retail build this install is (`2.25.0.0.154088`), whose derivation the
+/// reference publishes as `ProCMF_154088`. Without it the *plain* manifests —
+/// the ones whose content matches what is installed — cannot be opened, and
+/// everything they hold (materials, looks, material data) reads as "not present
+/// in this installation" while the install plainly has it.
+pub const CMF_BUILD_154088: u32 = 154_088;
 /// The resource graph uses the same table with different constants.
 pub const SUPPORTED_TRG_BUILD: u32 = 150_851;
 
@@ -42,7 +48,10 @@ pub enum Error {
     Keytable(keytable::Error),
     Malformed(&'static str),
     /// The manifest was produced by a build whose key derivation is not here.
-    UnsupportedBuild { build: u32, manifest: &'static str },
+    UnsupportedBuild {
+        build: u32,
+        manifest: &'static str,
+    },
     Crypto(String),
 }
 
@@ -138,13 +147,69 @@ pub fn derive_key_iv(
     table: &[u8; keytable::TABLE_SIZE],
     manifest: ManifestKind,
 ) -> Result<([u8; 32], [u8; 16])> {
-    if header.build_version != SUPPORTED_CMF_BUILD {
-        return Err(Error::UnsupportedBuild {
-            build: header.build_version,
+    match header.build_version {
+        SUPPORTED_CMF_BUILD => key_iv_150851(header, digest, table),
+        CMF_BUILD_154088 => key_iv_154088(header, digest, table),
+        build => Err(Error::UnsupportedBuild {
+            build,
             manifest: manifest.name(),
-        });
+        }),
+    }
+}
+
+/// C#'s signed modulo, on the truncated 32-bit value the reference casts to.
+///
+/// The reference walks its tables with `(uint)` cursors and then casts them to
+/// `int` inside `SignedMod`, so a cursor above `2^31` goes *negative* there. A
+/// faithful port has to do the same or the walk diverges from the ciphertext.
+fn signed_mod(value: i64) -> i64 {
+    let a = value as i32 as i64;
+    let b = 512i64;
+    let r = a % b;
+    if r < 0 {
+        r + b
+    } else {
+        r
+    }
+}
+
+/// The derivation for build 154088, as `TACTLib/…/CMF/ProCMF_154088.cs` writes
+/// it: the key walks the table from `length * buildVersion`, stepping by
+/// `(buildVersion * dataCount) % 7`; the IV seeds from `digest[7] * table[0]`,
+/// steps by 3, and mixes the name's SHA-1 in.
+fn key_iv_154088(
+    header: &Header,
+    digest: &[u8; 20],
+    table: &[u8; keytable::TABLE_SIZE],
+) -> Result<([u8; 32], [u8; 16])> {
+    let build = header.build_version;
+    let at = |i: i64| table[signed_mod(i) as usize];
+
+    let mut key = [0u8; 32];
+    let mut cursor = (32u32).wrapping_mul(build);
+    let step = build.wrapping_mul(header.data_count as u32) % 7;
+    for slot in key.iter_mut() {
+        *slot = at(cursor as i64);
+        cursor = cursor.wrapping_add(step);
     }
 
+    let mut iv = [0u8; 16];
+    let mut cursor = u32::from(at(i64::from(digest[7]) * i64::from(table[0]) & 511));
+    for (i, slot) in iv.iter_mut().enumerate() {
+        *slot = at(cursor as i64);
+        cursor = cursor.wrapping_add(3);
+        let mixed = at((cursor as i64 - i as i64) as i32 as i64);
+        *slot ^= digest[mixed as usize % 20];
+    }
+    Ok((key, iv))
+}
+
+/// The derivation for build 150851, verified against that build's manifests.
+fn key_iv_150851(
+    header: &Header,
+    digest: &[u8; 20],
+    table: &[u8; keytable::TABLE_SIZE],
+) -> Result<([u8; 32], [u8; 16])> {
     let index = |i: u32| table[(i % keytable::TABLE_SIZE as u32) as usize];
 
     // Key: seed the walk with the data-record count, then step by it.
@@ -411,9 +476,7 @@ impl Registry {
         for i in 0..header.data_count as usize {
             let at = records_at + i * CMF_RECORD_SIZE;
             let r = &plain[at..at + CMF_RECORD_SIZE];
-            let guid = u64::from_le_bytes([
-                r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
-            ]);
+            let guid = u64::from_le_bytes([r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]]);
             let size = u32::from_le_bytes([r[8], r[9], r[10], r[11]]);
             let mut content_key = [0u8; 16];
             content_key.copy_from_slice(&r[13..29]);
@@ -452,10 +515,14 @@ impl Registry {
     /// manifest mostly adds assets it alone carries. Records arrive sorted, so
     /// the result is re-sorted rather than merged in place.
     pub fn merge_missing(&mut self, other: &Registry) {
-        let known: std::collections::HashSet<u64> =
-            self.records.iter().map(|r| r.guid).collect();
-        self.records
-            .extend(other.records.iter().filter(|r| !known.contains(&r.guid)).copied());
+        let known: std::collections::HashSet<u64> = self.records.iter().map(|r| r.guid).collect();
+        self.records.extend(
+            other
+                .records
+                .iter()
+                .filter(|r| !known.contains(&r.guid))
+                .copied(),
+        );
         self.records.sort_unstable_by_key(|r| r.guid);
     }
 
@@ -576,10 +643,14 @@ Manifest/Win_SPWin_RDEV_EExt.trg|22222222222222222222222222222222|0|0|255|x|
         assert_eq!(name, "Win_SPWin_RCN_LenUS_text_EExt.cmf");
 
         // An unavailable locale finds nothing rather than falling back.
-        assert!(
-            Registry::find_manifest_name(root, ManifestKind::Text, "Win", "RDEV", Some("deDE"))
-                .is_none()
-        );
+        assert!(Registry::find_manifest_name(
+            root,
+            ManifestKind::Text,
+            "Win",
+            "RDEV",
+            Some("deDE")
+        )
+        .is_none());
         // And a base request never returns a localised manifest.
         assert!(Registry::find_manifest_name(
             "Manifest/Win_SPWin_RDEV_LenUS_text_EExt.cmf|C306CF53339CDEB475EC97B3D55289E9|0|0|255|x|\n",
@@ -590,14 +661,9 @@ Manifest/Win_SPWin_RDEV_EExt.trg|22222222222222222222222222222222|0|0|255|x|
         )
         .is_none());
         // The graph kind resolves through its own extension.
-        let (name, _) = Registry::find_manifest_name(
-            root,
-            ManifestKind::ResourceGraph,
-            "Win",
-            "RDEV",
-            None,
-        )
-        .unwrap();
+        let (name, _) =
+            Registry::find_manifest_name(root, ManifestKind::ResourceGraph, "Win", "RDEV", None)
+                .unwrap();
         assert_eq!(name, "Win_SPWin_RDEV_EExt.trg");
     }
 

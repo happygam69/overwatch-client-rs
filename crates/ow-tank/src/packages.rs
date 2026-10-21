@@ -85,7 +85,9 @@ impl Packages {
             .find(|l| l.contains(".apm"))
             .ok_or(Error::NoPackageManifest)?;
         let fields: Vec<&str> = line.split('|').collect();
-        let key = fields.get(1).ok_or(Error::Malformed("no key on the apm line"))?;
+        let key = fields
+            .get(1)
+            .ok_or(Error::Malformed("no key on the apm line"))?;
         let mut ckey = [0u8; 16];
         if key.len() != 32 {
             return Err(Error::Malformed("apm key is not 16 bytes"));
@@ -94,7 +96,9 @@ impl Packages {
             *byte = u8::from_str_radix(&key[i * 2..i * 2 + 2], 16)
                 .map_err(|_| Error::Malformed("apm key is not hex"))?;
         }
-        let blob = data.open_ckey(&ckey).map_err(|_| Error::Malformed("apm unreadable"))?;
+        let blob = data
+            .open_ckey(&ckey)
+            .map_err(|_| Error::Malformed("apm unreadable"))?;
 
         let package_count = i32_at(&blob, 24).ok_or(Error::Malformed("truncated header"))?;
         let entry_count = i32_at(&blob, 32).ok_or(Error::Malformed("truncated header"))?;
@@ -102,14 +106,31 @@ impl Packages {
             return Err(Error::Malformed("negative counts"));
         }
 
-        let package_entries_at = HEADER_SIZE + entry_count as usize * ENTRY_SIZE;
+        let entries_bytes = (entry_count as usize)
+            .checked_mul(ENTRY_SIZE)
+            .ok_or(Error::Malformed("count overflows"))?;
+        let package_entries_at = HEADER_SIZE
+            .checked_add(entries_bytes)
+            .ok_or(Error::Malformed("count overflows"))?;
+        let packages_bytes = (package_count as usize)
+            .checked_mul(PACKAGE_ENTRY_SIZE)
+            .ok_or(Error::Malformed("count overflows"))?;
+        let packages_end = package_entries_at
+            .checked_add(packages_bytes)
+            .ok_or(Error::Malformed("count overflows"))?;
+        if packages_end > blob.len() {
+            return Err(Error::Malformed("truncated package entries"));
+        }
         let mut package_guids = Vec::with_capacity(package_count as usize);
         for i in 0..package_count as usize {
-            let at = package_entries_at + i * PACKAGE_ENTRY_SIZE;
-            match u64_at(&blob, at) {
-                Some(g) => package_guids.push(g),
-                None => break,
-            }
+            let at = package_entries_at
+                .checked_add(
+                    i.checked_mul(PACKAGE_ENTRY_SIZE)
+                        .ok_or(Error::Malformed("count overflows"))?,
+                )
+                .ok_or(Error::Malformed("count overflows"))?;
+            let g = u64_at(&blob, at).ok_or(Error::Malformed("truncated package entries"))?;
+            package_guids.push(g);
         }
         Ok(Packages { package_guids })
     }
@@ -139,26 +160,43 @@ impl Packages {
         let record_count =
             u32_at(&bytes, 48).ok_or(Error::Malformed("truncated package header"))? as usize;
         if records_at <= 0 || record_count == 0 {
-            return Ok(Package { guid, records: Vec::new() });
+            return Ok(Package {
+                guid,
+                records: Vec::new(),
+            });
         }
-        let at = records_at as usize;
+        let at =
+            usize::try_from(records_at).map_err(|_| Error::Malformed("negative record offset"))?;
         if at >= bytes.len() {
             return Err(Error::Malformed("record run starts past the end"));
         }
 
-        let mut decoder = flate2::read::GzDecoder::new(&bytes[at..]);
+        // Bound the gzip expansion: the plain run is `record_count` 12-byte
+        // records plus a little slack, not an unbounded stream.
+        let expected = record_count
+            .checked_mul(RECORD_SIZE)
+            .ok_or(Error::Malformed("count overflows"))?;
+        let limit = expected
+            .checked_add(8192)
+            .ok_or(Error::Malformed("count overflows"))?;
+        let decoder = flate2::read::GzDecoder::new(&bytes[at..]);
         let mut plain = Vec::new();
         use std::io::Read;
         decoder
+            .take(limit as u64)
             .read_to_end(&mut plain)
             .map_err(|e| Error::Decompress(e.to_string()))?;
+        if plain.len() < expected {
+            return Err(Error::Malformed("truncated package records"));
+        }
 
-        let mut records = Vec::with_capacity(record_count);
+        let mut records = Vec::with_capacity(record_count.min(plain.len() / RECORD_SIZE));
         for i in 0..record_count {
-            match u64_at(&plain, i * RECORD_SIZE) {
-                Some(g) => records.push(g),
-                None => break,
-            }
+            let off = i
+                .checked_mul(RECORD_SIZE)
+                .ok_or(Error::Malformed("count overflows"))?;
+            let g = u64_at(&plain, off).ok_or(Error::Malformed("truncated package records"))?;
+            records.push(g);
         }
         Ok(Package { guid, records })
     }
@@ -191,7 +229,8 @@ pub fn describe(package: &Package) -> String {
     parts.join(" ")
 }
 
-/// Public entry point used by the probe.
+/// Convenience entry point: opens the package map, mapping its error into
+/// [`crate::Error`].
 pub fn open(data: &GameData) -> Result<Packages> {
     Packages::open(data).map_err(|e| crate::Error::NotFound(e.to_string()))
 }

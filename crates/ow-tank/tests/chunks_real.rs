@@ -17,7 +17,10 @@ fn real_model_and_map_chunks_parse() {
         Err(e) => {
             eprintln!("note: install not readable here ({e}); nothing to assert");
             eprintln!("  root={:?}", root);
-            eprintln!("  tactlib={:?} owlib={:?}", sources.tactlib_checkout, sources.owlib_checkout);
+            eprintln!(
+                "  tactlib={:?} owlib={:?}",
+                sources.tactlib_checkout, sources.owlib_checkout
+            );
             return;
         }
     };

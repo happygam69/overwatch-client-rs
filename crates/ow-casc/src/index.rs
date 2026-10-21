@@ -75,10 +75,16 @@ pub fn bucket_of(ekey: &[u8; 9]) -> u8 {
 }
 
 /// Parse one bucket file. `expect_bucket` is verified against the header.
-pub fn parse_bucket_file(path: &Path, expect_bucket: Option<u8>) -> Result<Vec<([u8; 9], Location)>> {
+pub fn parse_bucket_file(
+    path: &Path,
+    expect_bucket: Option<u8>,
+) -> Result<Vec<([u8; 9], Location)>> {
     let data = fs::read(path)?;
     if data.len() < ENTRIES_OFFSET {
-        return Err(Error::Malformed(path.to_path_buf(), "file shorter than its header"));
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "file shorter than its header",
+        ));
     }
 
     let version = u16::from_le_bytes([data[8], data[9]]);
@@ -96,23 +102,35 @@ pub fn parse_bucket_file(path: &Path, expect_bucket: Option<u8>) -> Result<Vec<(
         || ekey_bytes != 9
         || offset_bits != 30
     {
-        return Err(Error::Malformed(path.to_path_buf(), "unsupported index header"));
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "unsupported index header",
+        ));
     }
     if let Some(expected) = expect_bucket {
         if bucket != expected {
-            return Err(Error::Malformed(path.to_path_buf(), "bucket number disagrees with filename"));
+            return Err(Error::Malformed(
+                path.to_path_buf(),
+                "bucket number disagrees with filename",
+            ));
         }
     }
 
     let block_size = i32::from_le_bytes([data[32], data[33], data[34], data[35]]);
     if block_size < 0 || block_size as usize % ENTRY_SIZE != 0 {
-        return Err(Error::Malformed(path.to_path_buf(), "entry block size is not a multiple of 18"));
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "entry block size is not a multiple of 18",
+        ));
     }
     let count = block_size as usize / ENTRY_SIZE;
 
     let end = ENTRIES_OFFSET + count * ENTRY_SIZE;
     if data.len() < end {
-        return Err(Error::Malformed(path.to_path_buf(), "entries run past the end of the file"));
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "entries run past the end of the file",
+        ));
     }
 
     let mut out = Vec::with_capacity(count);

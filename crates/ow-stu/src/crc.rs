@@ -20,7 +20,11 @@ fn table() -> &'static [u64; 256] {
         for (i, slot) in table.iter_mut().enumerate() {
             let mut c = i as u64;
             for _ in 0..8 {
-                c = if c & 1 != 0 { (c >> 1) ^ POLY_REFLECTED } else { c >> 1 };
+                c = if c & 1 != 0 {
+                    (c >> 1) ^ POLY_REFLECTED
+                } else {
+                    c >> 1
+                };
             }
             *slot = c;
         }

@@ -3,30 +3,50 @@
 //! `ow-casc` turns keys into bytes; this crate knows what those bytes are.
 //! It provides:
 //!
-//! * [`guid`] — asset identifiers and their type numbers.
-//! * [`manifest`] — the content manifest, which is the GUID to content-key
+//! * [`guid`] ??? asset identifiers and their type numbers.
+//! * [`manifest`] ??? the content manifest, which is the GUID to content-key
 //!   registry, and the encryption wrapped around it.
-//! * [`keytable`] — where the per-build manifest key material is read from.
-//! * [`classes`] — STU instance type hashes for gameplay classes.
-//! * [`GameData`] — the assembled view: an install, its registry, and typed
+//! * [`keytable`] ??? where the per-build manifest key material is read from.
+//! * [`classes`] ??? STU instance type hashes for gameplay classes.
+//! * [`GameData`] ??? the assembled view: an install, its registry, and typed
 //!   access to game assets.
 //!
 //! No game content is carried in this repository: every byte comes from the
 //! user's own installation at runtime.
 
-pub mod classes;
+pub mod assoc;
 pub mod chunks;
+pub mod classes;
+pub mod classreg;
+pub mod blendtree;
+pub mod clip;
+pub mod cloth;
+pub mod effect;
 pub mod entity;
 pub mod fieldnames;
+pub mod firstperson;
 pub mod graph;
 pub mod guid;
+pub mod hardpoint;
 pub mod keytable;
+pub mod lighting;
 pub mod manifest;
-pub mod model;
 pub mod mapchunk;
+pub mod material;
+pub mod model;
+pub mod mstu;
 pub mod packages;
+pub mod replay;
 pub mod settings;
+pub mod shader;
+pub mod skeleton;
+pub mod skin;
+pub mod sound;
+pub mod text;
+pub mod texture;
 pub mod trg;
+pub mod unlocks;
+pub mod volley;
 pub mod weapons;
 
 use ow_casc::Store;
@@ -56,10 +76,9 @@ impl std::fmt::Display for Error {
                 f,
                 "this installation's root file lists no content manifest the tool can open"
             ),
-            Error::NoManifestUsable(detail) => write!(
-                f,
-                "no content manifest could be opened. Tried:\n  {detail}"
-            ),
+            Error::NoManifestUsable(detail) => {
+                write!(f, "no content manifest could be opened. Tried:\n  {detail}")
+            }
             Error::NotFound(what) => write!(f, "not found: {what}"),
         }
     }
@@ -162,9 +181,17 @@ impl GameData {
             return Err(Error::NoManifest);
         }
 
+        // An explicit manifest, for measuring what each variant covers. Names
+        // are matched as substrings so a partial name is enough.
+        let forced = std::env::var("OW_MANIFEST").ok();
         let mut opened = None;
         let mut skipped: Vec<String> = Vec::new();
         for (name, content_key) in &candidates {
+            if let Some(want) = &forced {
+                if !name.contains(want.as_str()) {
+                    continue;
+                }
+            }
             match manifest::Registry::open(&store, name, content_key, sources) {
                 Ok(registry) => {
                     opened = Some((registry, name.clone()));
@@ -178,11 +205,16 @@ impl GameData {
             return Err(Error::NoManifestUsable(detail));
         };
         if !skipped.is_empty() {
+            // Say *why* each candidate was passed over: the reason is the whole
+            // difference between "this install does not ship it" and "our key
+            // derivation does not reach it".
             eprintln!(
-                "note: {name} chosen; {} other manifest(s) for this region are encrypted \
-                 under an unpublished derivation",
+                "note: {name} chosen; {} other manifest(s) for this region did not open:",
                 skipped.len()
             );
+            for line in &skipped {
+                eprintln!("  {line}");
+            }
         }
         let mut manifests = vec![name];
 
@@ -264,3 +296,4 @@ impl GameData {
         Ok(Stu::parse(bytes)?)
     }
 }
+

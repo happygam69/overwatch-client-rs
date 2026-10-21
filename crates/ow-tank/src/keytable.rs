@@ -311,8 +311,19 @@ mod tests {
 
 /// Directory names never worth descending into during a search.
 const SKIP: &[&str] = &[
-    ".git", "target", "node_modules", "bin", "obj", ".vs", ".idea", "packages",
-    "data", "cache", "Cache", "System Volume Information", "$RECYCLE.BIN",
+    ".git",
+    "target",
+    "node_modules",
+    "bin",
+    "obj",
+    ".vs",
+    ".idea",
+    "packages",
+    "data",
+    "cache",
+    "Cache",
+    "System Volume Information",
+    "$RECYCLE.BIN",
 ];
 
 /// Find the two checkouts by looking for what makes each one recognisable.
@@ -341,21 +352,31 @@ fn find_checkouts(roots: &[PathBuf]) -> (Option<PathBuf>, Option<PathBuf>) {
     fn looks_relevant(name: &str) -> bool {
         let name = name.to_ascii_lowercase();
         [
-            "owlib", "tactlib", "tanklib", "casc", "overwatch", "repos", "src",
-            "projects", "code", "dev", "tools", "git", "work", "games",
+            "owlib",
+            "tactlib",
+            "tanklib",
+            "casc",
+            "overwatch",
+            "repos",
+            "src",
+            "projects",
+            "code",
+            "dev",
+            "tools",
+            "git",
+            "work",
+            "games",
         ]
         .iter()
         .any(|needle| name.contains(needle))
     }
 
     let is_owlib = |dir: &std::path::Path| dir.join("TankLib").join("STU").join("Types").is_dir();
-    let is_tactlib =
-        |dir: &std::path::Path| dir.join("Core").join("Product").join("Tank").is_dir();
+    let is_tactlib = |dir: &std::path::Path| dir.join("Core").join("Product").join("Tank").is_dir();
 
     let mut tactlib = None;
     let mut owlib = None;
-    let mut queue: std::collections::VecDeque<(PathBuf, usize)> =
-        std::collections::VecDeque::new();
+    let mut queue: std::collections::VecDeque<(PathBuf, usize)> = std::collections::VecDeque::new();
     let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
     for root in roots {

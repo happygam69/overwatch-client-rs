@@ -100,7 +100,13 @@ impl ChunkEntry {
     pub fn tag_str(&self) -> String {
         self.tag
             .iter()
-            .map(|b| if b.is_ascii_graphic() { *b as char } else { '.' })
+            .map(|b| {
+                if b.is_ascii_graphic() {
+                    *b as char
+                } else {
+                    '.'
+                }
+            })
             .collect()
     }
 
@@ -177,7 +183,12 @@ fn read_entry(data: &[u8], at: usize) -> Result<ChunkEntry> {
         return Err(Error::Malformed("chunk record runs past the end"));
     }
     let rd32 = |o: usize| -> i32 {
-        i32::from_le_bytes([data[at + o], data[at + o + 1], data[at + o + 2], data[at + o + 3]])
+        i32::from_le_bytes([
+            data[at + o],
+            data[at + o + 1],
+            data[at + o + 2],
+            data[at + o + 3],
+        ])
     };
     Ok(ChunkEntry {
         tag: decode_tag(rd32(0) as u32),
@@ -211,7 +222,11 @@ fn walk(
     loop {
         if entry.serialization_tag != SENTINEL {
             // Terminator: skip its payload and hand back the position.
-            return Ok(payload_at + entry.serialized_size.max(0) as usize);
+            let skip = entry.serialized_size.max(0) as usize;
+            let end = payload_at
+                .checked_add(skip)
+                .ok_or(Error::Malformed("chunk payload runs past the end"))?;
+            return Ok(end);
         }
 
         let chunk_size = i32::from_le_bytes([
@@ -220,17 +235,24 @@ fn walk(
             data[entry_at + 10],
             data[entry_at + 11],
         ]);
-        if chunk_size < 0 || payload_at + chunk_size as usize > data.len() {
+        if chunk_size < 0 {
+            return Err(Error::Malformed("chunk payload runs past the end"));
+        }
+        let chunk_usize = chunk_size as usize;
+        let payload_end = payload_at
+            .checked_add(chunk_usize)
+            .ok_or(Error::Malformed("chunk payload runs past the end"))?;
+        if payload_end > data.len() {
             return Err(Error::Malformed("chunk payload runs past the end"));
         }
 
         let mut recorded = entry;
         recorded.offset = payload_at;
-        recorded.size = chunk_size as usize;
+        recorded.size = chunk_usize;
         recorded.depth = depth;
         out.push(recorded);
 
-        let mut cursor = payload_at + chunk_size as usize;
+        let mut cursor = payload_end;
         if entry.serialized_size > chunk_size {
             // Children follow this chunk's own payload.
             while cursor < end {
@@ -239,7 +261,7 @@ fn walk(
                 if cursor <= before {
                     break;
                 }
-                if cursor - run_start >= root_size as usize {
+                if cursor - run_start >= root_size.max(0) as usize {
                     break;
                 }
             }
@@ -297,10 +319,7 @@ mod tests {
 
     #[test]
     fn parses_a_synthetic_container() {
-        let data = synthetic(&[
-            (b"MODL", 4, b"model payload"),
-            (b"SKEL", 2, b"skeleton"),
-        ]);
+        let data = synthetic(&[(b"MODL", 4, b"model payload"), (b"SKEL", 2, b"skeleton")]);
         let chunks = Chunks::parse(&data).expect("parses");
         assert_eq!(chunks.header.id, *b"MAPC");
         assert_eq!(chunks.entries.len(), 2);

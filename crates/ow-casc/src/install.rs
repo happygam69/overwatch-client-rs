@@ -16,6 +16,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::cdn::{self, CdnClient};
+
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
@@ -24,6 +26,8 @@ pub enum Error {
     /// A file the install's own metadata points at is missing.
     Missing(PathBuf),
     Parse(String),
+    /// `OW_CDN` asked for CDN fetching and the client could not be built.
+    Cdn(String),
 }
 
 impl fmt::Display for Error {
@@ -36,8 +40,11 @@ impl fmt::Display for Error {
                  (no .build.info or data/casc)",
                 p.display()
             ),
-            Error::Missing(p) => write!(f, "missing file referenced by the install: {}", p.display()),
+            Error::Missing(p) => {
+                write!(f, "missing file referenced by the install: {}", p.display())
+            }
             Error::Parse(m) => write!(f, "malformed install metadata: {m}"),
+            Error::Cdn(m) => write!(f, "CDN fetch is enabled but unusable: {m}"),
         }
     }
 }
@@ -47,6 +54,12 @@ impl std::error::Error for Error {}
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Error::Io(e)
+    }
+}
+
+impl From<cdn::Error> for Error {
+    fn from(e: cdn::Error) -> Self {
+        Error::Cdn(e.to_string())
     }
 }
 
@@ -103,6 +116,10 @@ pub struct BuildInfo {
     pub keyring_key: Option<String>,
     pub version: String,
     pub product: String,
+    /// `CDN Path`: the URL segment below a host, e.g. `tpr/ovw`.
+    pub cdn_path: String,
+    /// `CDN Hosts`: space-separated, usually bare (`level3.blizzard.com`).
+    pub cdn_hosts: Vec<String>,
 }
 
 impl BuildInfo {
@@ -111,7 +128,9 @@ impl BuildInfo {
     /// Column names carry a `!TYPE:WIDTH` suffix which we strip.
     pub fn parse(text: &str) -> Result<Vec<BuildInfo>> {
         let mut lines = text.lines();
-        let header = lines.next().ok_or_else(|| Error::Parse(".build.info is empty".into()))?;
+        let header = lines
+            .next()
+            .ok_or_else(|| Error::Parse(".build.info is empty".into()))?;
         let names: Vec<&str> = header
             .split('|')
             .map(|h| h.split('!').next().unwrap_or(h).trim())
@@ -138,6 +157,11 @@ impl BuildInfo {
                     .filter(|s| !s.is_empty()),
                 version: row.get("Version").copied().unwrap_or("").to_string(),
                 product: row.get("Product").copied().unwrap_or("").to_string(),
+                cdn_path: row.get("CDN Path").copied().unwrap_or("").to_string(),
+                cdn_hosts: row
+                    .get("CDN Hosts")
+                    .map(|s| s.split_whitespace().map(str::to_string).collect())
+                    .unwrap_or_default(),
             });
         }
         if out.is_empty() {
@@ -161,12 +185,17 @@ pub struct Install {
     pub cdn_config: Option<Config>,
     /// Keyring entries: key id -> 16-byte key, for encrypted BLTE chunks.
     pub keyring: BTreeMap<u64, [u8; 16]>,
+    /// Remote fetching, present only when `OW_CDN` enabled it. See
+    /// [`crate::cdn`] for the environment and the routes.
+    pub cdn: Option<CdnClient>,
 }
 
 impl Install {
     /// Open an install, verifying that the expected directories exist.
     pub fn open(root: impl AsRef<Path>) -> Result<Install> {
-        Install::open_with_support_keyring(root, None)
+        let root = root.as_ref();
+        let discovered = discover_support_keyring(root);
+        Install::open_with_support_keyring(root, discovered.as_deref())
     }
 
     /// Open an install, with an extra keyring supplied by the caller.
@@ -195,8 +224,19 @@ impl Install {
             .cloned()
             .ok_or_else(|| Error::Parse("no usable branch row".into()))?;
 
-        let build_config = read_config(&config_path(&root, &build_info.build_key))?;
-        let cdn_config = match read_config(&config_path(&root, &build_info.cdn_key)) {
+        // Remote fetching is opt-in and decided before any config is read, so
+        // a config that is absent locally can come from the CDN too. With
+        // `OW_CDN` unset this stays `None` and every path below is unchanged.
+        let cdn = if cdn::enabled() {
+            let client = CdnClient::from_env(&build_info.cdn_hosts, &build_info.cdn_path)?;
+            client.announce();
+            Some(client)
+        } else {
+            None
+        };
+
+        let build_config = read_config_or_fetch(&root, &build_info.build_key, &cdn)?;
+        let cdn_config = match read_config_or_fetch(&root, &build_info.cdn_key, &cdn) {
             Ok(config) => Some(config),
             Err(e) => {
                 // Worth saying out loud, because it is the signature of an
@@ -209,7 +249,7 @@ impl Install {
             }
         };
         let mut keyring = match &build_info.keyring_key {
-            Some(key) => read_keyring(&config_path(&root, key))?,
+            Some(key) => read_keyring_or_fetch(&root, key, &cdn)?,
             None => BTreeMap::new(),
         };
 
@@ -236,6 +276,7 @@ impl Install {
             build_config,
             cdn_config,
             keyring,
+            cdn,
         })
     }
 
@@ -295,6 +336,32 @@ const DEFAULT_PATHS: &[&str] = &[
     r"E:\Overwatch",
 ];
 
+fn discover_support_keyring(root: &Path) -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("OW_SUPPORT_KEYRING") {
+        if !p.is_empty() {
+            let path = PathBuf::from(p);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    candidates.push(root.join("Overwatch.keyring"));
+    if let Some(parent) = root.parent() {
+        candidates.push(parent.join("Overwatch.keyring"));
+    }
+    candidates.push(PathBuf::from(
+        r"E:\CASCReader\OWLib\TankLib\Overwatch.keyring",
+    ));
+    candidates.push(PathBuf::from(r"D:\ow-dumps\Overwatch.keyring"));
+    for c in candidates {
+        if c.is_file() {
+            return Some(c);
+        }
+    }
+    None
+}
+
 fn config_path(root: &Path, key: &str) -> PathBuf {
     // config files live two levels deep, named by their own first four hex digits
     if key.len() < 4 {
@@ -316,6 +383,48 @@ pub fn read_config(path: &Path) -> Result<Config> {
     Ok(Config::parse(&text))
 }
 
+/// Read a config from the install; when fetching is enabled and the file is
+/// absent locally, fetch it from the CDN's config route and parse that.
+///
+/// The fetched copy is used in memory only — the installation is never
+/// written to.
+fn read_config_or_fetch(root: &Path, key: &str, cdn: &Option<CdnClient>) -> Result<Config> {
+    match read_config(&config_path(root, key)) {
+        Ok(config) => Ok(config),
+        Err(local) => match cdn {
+            Some(cdn) => {
+                let bytes = cdn.fetch_config(key)?;
+                let text = String::from_utf8(bytes)
+                    .map_err(|e| Error::Parse(format!("CDN config {key} is not utf-8: {e}")))?;
+                eprintln!("note: config {key} came from the CDN (locally: {local})");
+                Ok(Config::parse(&text))
+            }
+            None => Err(local),
+        },
+    }
+}
+
+/// The keyring counterpart of [`read_config_or_fetch`].
+fn read_keyring_or_fetch(
+    root: &Path,
+    key: &str,
+    cdn: &Option<CdnClient>,
+) -> Result<BTreeMap<u64, [u8; 16]>> {
+    match read_keyring(&config_path(root, key)) {
+        Ok(keys) => Ok(keys),
+        Err(local) => match cdn {
+            Some(cdn) => {
+                let bytes = cdn.fetch_config(key)?;
+                let text = String::from_utf8(bytes)
+                    .map_err(|e| Error::Parse(format!("CDN keyring {key} is not utf-8: {e}")))?;
+                eprintln!("note: keyring {key} came from the CDN (locally: {local})");
+                Ok(parse_keyring(&text))
+            }
+            None => Err(local),
+        },
+    }
+}
+
 /// Parse a keyring config.
 ///
 /// Two spellings exist and they disagree about byte order, so both are handled:
@@ -334,10 +443,18 @@ fn read_keyring(path: &Path) -> Result<BTreeMap<u64, [u8; 16]>> {
         io::ErrorKind::NotFound => Error::Missing(path.to_path_buf()),
         _ => Error::Io(e),
     })?;
+    Ok(parse_keyring(&text))
+}
 
-    let config_style = text
-        .lines()
-        .any(|l| l.split('#').next().unwrap_or("").trim_start().starts_with("key-"));
+/// Parse keyring text. The two spellings are described on [`read_keyring`].
+fn parse_keyring(text: &str) -> BTreeMap<u64, [u8; 16]> {
+    let config_style = text.lines().any(|l| {
+        l.split('#')
+            .next()
+            .unwrap_or("")
+            .trim_start()
+            .starts_with("key-")
+    });
 
     let mut keys = BTreeMap::new();
     for line in text.lines() {
@@ -383,7 +500,7 @@ fn read_keyring(path: &Path) -> Result<BTreeMap<u64, [u8; 16]>> {
             }
         }
     }
-    Ok(keys)
+    keys
 }
 
 fn parse_key(hex: &str) -> Option<[u8; 16]> {

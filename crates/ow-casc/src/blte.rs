@@ -173,15 +173,21 @@ fn decrypt_chunk(
     let iv_len = *body.get(p).ok_or(Error::Malformed("truncated iv length"))? as usize;
     p += 1;
     if iv_len != 4 && iv_len != 8 {
-        return Err(Error::Malformed("encrypted chunk iv is neither 4 nor 8 bytes"));
+        return Err(Error::Malformed(
+            "encrypted chunk iv is neither 4 nor 8 bytes",
+        ));
     }
-    let iv_slice = body.get(p..p + iv_len).ok_or(Error::Malformed("truncated iv"))?;
+    let iv_slice = body
+        .get(p..p + iv_len)
+        .ok_or(Error::Malformed("truncated iv"))?;
     // A 4-byte IV is zero-extended to the cipher's 8.
     let mut iv = [0u8; 8];
     iv[..iv_len].copy_from_slice(iv_slice);
     p += iv_len;
 
-    let enc_type = *body.get(p).ok_or(Error::Malformed("truncated encryption type"))?;
+    let enc_type = *body
+        .get(p)
+        .ok_or(Error::Malformed("truncated encryption type"))?;
     p += 1;
     if enc_type != b'S' {
         return Err(Error::Malformed("unsupported BLTE encryption type"));
@@ -198,12 +204,16 @@ fn decrypt_chunk(
 }
 
 fn be_u32(data: &[u8], at: usize) -> Result<u32> {
-    let slice = data.get(at..at + 4).ok_or(Error::Malformed("truncated u32"))?;
+    let slice = data
+        .get(at..at + 4)
+        .ok_or(Error::Malformed("truncated u32"))?;
     Ok(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
 fn u24_be(data: &[u8], at: usize) -> Result<u32> {
-    let slice = data.get(at..at + 3).ok_or(Error::Malformed("truncated u24"))?;
+    let slice = data
+        .get(at..at + 3)
+        .ok_or(Error::Malformed("truncated u24"))?;
     Ok(((slice[0] as u32) << 16) | ((slice[1] as u32) << 8) | slice[2] as u32)
 }
 
@@ -299,8 +309,7 @@ mod tests {
         };
         let nonce = [0u8; 8];
         let stream = salsa20(&key, &nonce, &[0u8; 64]);
-        let expected =
-            "4dfa5e481da23ea09a31022050859936da52fcee218005164f267cb65f5cfd7f\
+        let expected = "4dfa5e481da23ea09a31022050859936da52fcee218005164f267cb65f5cfd7f\
              2b4f97e0ff16924a52df269515110a07f9e460bc65ef95da58f740b7d1dbb0aa";
         let got: String = stream.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(got, expected.replace(['\n', ' '], ""));

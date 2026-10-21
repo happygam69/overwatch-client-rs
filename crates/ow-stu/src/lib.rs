@@ -28,9 +28,11 @@
 //! Asset references are obfuscated with the header checksum and the field hash;
 //! see [`deobfuscate`].
 
+use std::collections::HashMap;
 use std::fmt;
 
 pub mod crc;
+pub mod types;
 
 pub const MAGIC_V1: [u8; 4] = *b"STUD";
 const INSTANCE_INFO_SIZE: usize = 16;
@@ -39,8 +41,6 @@ const INSTANCE_INFO_SIZE: usize = 16;
 pub enum Error {
     Empty,
     Malformed(&'static str),
-    /// Version 1 uses a different, offset-based layout that is not handled yet.
-    UnsupportedV1,
 }
 
 impl fmt::Display for Error {
@@ -48,9 +48,6 @@ impl fmt::Display for Error {
         match self {
             Error::Empty => write!(f, "asset is empty"),
             Error::Malformed(m) => write!(f, "malformed STU: {m}"),
-            Error::UnsupportedV1 => {
-                write!(f, "this is a version 1 STU asset, which is not supported yet")
-            }
         }
     }
 }
@@ -82,11 +79,26 @@ pub struct FieldInfo {
     pub size: usize,
 }
 
+/// One version 1 instance record (`STUInstanceRecordV1`).
+///
+/// A version 1 asset writes no per-instance field bags at all: the record
+/// table says where each instance starts, and the class definitions say what
+/// its fields are and at which offsets. Embedded instance references resolve
+/// through [`Stu::instance_at_v1_offset`], keyed by `offset` as stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V1Record {
+    /// Absolute offset of the instance's `{u32 hash, u32 next}` prefix.
+    pub offset: i32,
+    /// Raw flags word; carried for fidelity, never read.
+    pub flags: u32,
+}
+
 /// A parsed STU asset.
 pub struct Stu {
     blob: Vec<u8>,
     /// CRC64 over the first 36 bytes; mixed into asset references.
     pub header_checksum: u64,
+    pub v1: bool,
     pub instances: Vec<InstanceInfo>,
     field_bags: Vec<Vec<(u32, i32)>>,
     /// Where the instance payloads start in `blob`.
@@ -94,6 +106,10 @@ pub struct Stu {
     /// The dynamic block, where variable-length payloads live.
     dyn_start: usize,
     dyn_len: usize,
+    /// Version 1's record table, one record per instance, in file order.
+    v1_records: Vec<V1Record>,
+    /// Version 1 record offset -> instance index.
+    v1_by_offset: HashMap<i32, usize>,
     /// Per-instance resolved field layouts, computed on first use.
     layouts: Vec<Option<Vec<FieldInfo>>>,
 }
@@ -105,7 +121,7 @@ impl Stu {
             return Err(Error::Empty);
         }
         if blob[0..4] == MAGIC_V1 {
-            return Err(Error::UnsupportedV1);
+            return Self::parse_v1(blob);
         }
         if blob.len() < 36 {
             return Err(Error::Malformed("shorter than its 36-byte v2 header"));
@@ -143,19 +159,120 @@ impl Stu {
                 size,
                 data_offset: cursor,
             });
-            cursor += size.max(0) as usize;
+            let Some(next) = cursor.checked_add(size.max(0) as usize) else {
+                return Err(Error::Malformed("instance payloads overflow address space"));
+            };
+            cursor = next;
         }
 
         let count = instances.len();
         Ok(Stu {
             blob,
             header_checksum,
+            v1: false,
             instances,
             field_bags,
             data_start,
             dyn_start,
             dyn_len,
+            v1_records: Vec::new(),
+            v1_by_offset: HashMap::new(),
             layouts: vec![None; count],
+        })
+    }
+
+    fn parse_v1(blob: Vec<u8>) -> Result<Stu> {
+        if blob.len() < 8 {
+            return Err(Error::Malformed("truncated v1 header"));
+        }
+        let count = u32::from_le_bytes([blob[4], blob[5], blob[6], blob[7]]) as usize;
+        let table_end = 8usize
+            .checked_add(count * 8)
+            .ok_or(Error::Malformed("v1 record count overflows address space"))?;
+        if table_end > blob.len() {
+            return Err(Error::Malformed(
+                "v1 record table runs past the end of the file",
+            ));
+        }
+
+        // One record per instance, in file order, kept exactly as written:
+        // instance indices are positions in this table, and instance
+        // references resolve by record offset, not by index.
+        let mut v1_records = Vec::with_capacity(count);
+        for i in 0..count {
+            let at = 8 + i * 8;
+            v1_records.push(V1Record {
+                offset: rd_i32(&blob, at)?,
+                flags: rd_u32(&blob, at + 4)?,
+            });
+        }
+
+        // Record offsets, sorted and deduplicated, give each instance its
+        // extent: the payload runs to whatever record starts next.
+        let mut starts: Vec<i32> = v1_records
+            .iter()
+            .map(|r| r.offset)
+            .filter(|offset| *offset > 0)
+            .collect();
+        starts.sort_unstable();
+        starts.dedup();
+
+        // Later records overwrite earlier ones at the same offset, matching
+        // the reference's `_instanceOffsets[record.Offset] = instance`.
+        let mut v1_by_offset = HashMap::new();
+        for (index, record) in v1_records.iter().enumerate() {
+            if record.offset > 0 {
+                v1_by_offset.insert(record.offset, index);
+            }
+        }
+
+        let mut instances = Vec::with_capacity(count);
+        for record in &v1_records {
+            // A non-positive offset is not a place in the file any instance
+            // can live; the slot still takes an index so references stay
+            // stable, but it carries nothing.
+            let (hash, size, data_offset) = if record.offset <= 0 {
+                (0, 0, 0)
+            } else {
+                let start = record.offset as usize;
+                let hash = if start + 4 <= blob.len() {
+                    rd_u32(&blob, start)?
+                } else {
+                    0
+                };
+                let payload = record.offset as i64 + 8;
+                let next = starts
+                    .iter()
+                    .find(|s| **s > record.offset)
+                    .map(|s| *s as i64)
+                    .unwrap_or(blob.len() as i64);
+                let size = (next - payload).max(0) as i32;
+                let data_offset = (record.offset as usize).saturating_add(8).min(blob.len());
+                (hash, size, data_offset)
+            };
+            instances.push(InstanceInfo {
+                hash,
+                embedder_field: record.flags,
+                embedder_index: -1,
+                size,
+                data_offset,
+            });
+        }
+
+        let n = instances.len();
+        let blob_len = blob.len();
+        Ok(Stu {
+            blob,
+            header_checksum: 0,
+            v1: true,
+            instances,
+            field_bags: Vec::new(),
+            data_start: 0,
+            dyn_start: 0,
+            dyn_len: blob_len,
+            v1_records,
+            v1_by_offset,
+            layouts: vec![None; n],
         })
     }
 
@@ -174,11 +291,38 @@ impl Stu {
             .collect()
     }
 
+    /// Whether this asset uses the version 1 layout.
+    pub fn is_v1(&self) -> bool {
+        self.v1
+    }
+
+    /// Version 1's record for an instance, where the instance starts in the
+    /// file (its 8-byte `hash, next` prefix included).
+    pub fn v1_record(&self, instance: usize) -> Option<V1Record> {
+        self.v1_records.get(instance).copied()
+    }
+
+    /// The instance whose version 1 record starts at `offset`, for resolving
+    /// embedded references. A later record overwrites an earlier one at the
+    /// same offset, matching the reference.
+    pub fn instance_at_v1_offset(&self, offset: i32) -> Option<usize> {
+        self.v1_by_offset.get(&offset).copied()
+    }
+
     /// The raw payload of an instance.
     pub fn data(&self, instance: usize) -> &[u8] {
-        let info = &self.instances[instance];
-        let start = self.data_start + info.data_offset;
-        let end = (start + info.size.max(0) as usize).min(self.blob.len());
+        let Some(info) = self.instances.get(instance) else {
+            return &[];
+        };
+        let start = self
+            .data_start
+            .checked_add(info.data_offset)
+            .unwrap_or(self.blob.len())
+            .min(self.blob.len());
+        let end = start
+            .checked_add(info.size.max(0) as usize)
+            .unwrap_or(self.blob.len())
+            .min(self.blob.len());
         &self.blob[start..end]
     }
 
@@ -189,12 +333,34 @@ impl Stu {
 
     /// Resolved field layout for an instance, computed once.
     pub fn fields(&mut self, instance: usize) -> &[FieldInfo] {
-        if self.layouts[instance].is_none() {
-            let start = self.data_start + self.instances[instance].data_offset;
-            let bag_index = self.bag_index_at(start);
-            self.layouts[instance] = Some(self.layout_at(start, bag_index));
+        // Version 1 has no per-instance field bag; its fields live at the
+        // class's declared offsets, which is what the typed layer reads.
+        if self.v1 {
+            return &[];
         }
-        self.layouts[instance].as_deref().unwrap_or(&[])
+        let Some(info) = self.instances.get(instance).copied() else {
+            return &[];
+        };
+        // Instances and layouts stay in lockstep; a missing slot means a bad
+        // index, not a layout to compute.
+        if self.layouts.get(instance).is_none() {
+            return &[];
+        }
+        let needs_layout = matches!(self.layouts.get(instance), Some(None));
+        if needs_layout {
+            let Some(start) = self.data_start.checked_add(info.data_offset) else {
+                return &[];
+            };
+            let bag_index = self.bag_index_at(start);
+            let layout = self.layout_at(start, bag_index);
+            if let Some(slot) = self.layouts.get_mut(instance) {
+                *slot = Some(layout);
+            }
+        }
+        self.layouts
+            .get(instance)
+            .and_then(|slot| slot.as_deref())
+            .unwrap_or(&[])
     }
 
     /// The field-bag index at the start of a payload, or -1 for an empty one.
@@ -226,11 +392,17 @@ impl Stu {
             if size == 0 {
                 // The size is carried inline and consumed before the body, so
                 // reading it advances the cursor.
-                match rd_i32(&self.blob, payload_start + p) {
+                let Some(at) = payload_start.checked_add(p) else {
+                    break;
+                };
+                match rd_i32(&self.blob, at) {
                     Ok(inline) => size = inline,
                     Err(_) => break,
                 }
-                p += 4;
+                let Some(next) = p.checked_add(4) else {
+                    break;
+                };
+                p = next;
             }
             if size < 0 {
                 break;
@@ -240,7 +412,10 @@ impl Stu {
                 offset: p,
                 size: size as usize,
             });
-            p += size as usize;
+            let Some(next) = p.checked_add(size as usize) else {
+                break;
+            };
+            p = next;
         }
         out
     }
@@ -265,7 +440,15 @@ impl Stu {
         };
         // Inline arrays are read by value, so `size` here is not a length; the
         // count is the leading i32.
-        let base = self.data_start + self.instances[instance].data_offset + field.offset;
+        let Some(info) = self.instances.get(instance).copied() else {
+            return Vec::new();
+        };
+        let Some(payload) = self.data_start.checked_add(info.data_offset) else {
+            return Vec::new();
+        };
+        let Some(base) = payload.checked_add(field.offset) else {
+            return Vec::new();
+        };
         let Ok(count) = rd_i32(&self.blob, base) else {
             return Vec::new();
         };
@@ -274,8 +457,15 @@ impl Stu {
         }
 
         let mut out = Vec::with_capacity(count as usize);
-        let mut at = base + 4;
+        let Some(mut at) = base.checked_add(4) else {
+            return Vec::new();
+        };
         for _ in 0..count {
+            // Elements live in the data range; a stride that walks out of the
+            // file means a malformed array, not more elements.
+            if at >= self.blob.len() {
+                break;
+            }
             let bag_index = self.bag_index_at(at);
             out.push((bag_index, at));
             // A layout starts counting at 4, past the bag index, and its final
@@ -284,16 +474,24 @@ impl Stu {
             let stride = self
                 .layout_at(at, bag_index)
                 .last()
-                .map(|f| f.offset + f.size)
+                .map(|f| f.offset.checked_add(f.size).unwrap_or(usize::MAX))
                 .unwrap_or(4)
                 .max(4);
-            at += stride;
+            let Some(next) = at.checked_add(stride) else {
+                break;
+            };
+            at = next;
         }
         out
     }
 
     fn fields_of_instance(&self, instance: usize) -> Vec<FieldInfo> {
-        let start = self.data_start + self.instances[instance].data_offset;
+        let Some(info) = self.instances.get(instance).copied() else {
+            return Vec::new();
+        };
+        let Some(start) = self.data_start.checked_add(info.data_offset) else {
+            return Vec::new();
+        };
         let bag_index = self.bag_index_at(start);
         self.layout_at(start, bag_index)
     }
@@ -334,7 +532,13 @@ impl Stu {
 
     /// Absolute offset of an instance's payload.
     pub fn payload_start(&self, instance: usize) -> usize {
-        self.data_start + self.instances[instance].data_offset
+        match self.instances.get(instance) {
+            Some(info) => self
+                .data_start
+                .checked_add(info.data_offset)
+                .unwrap_or(self.blob.len()),
+            None => self.blob.len(),
+        }
     }
 
     /// Read a `teString` field.
@@ -398,6 +602,22 @@ impl Stu {
         Some(deobfuscate(self.header_checksum, field_hash, stored))
     }
 
+    /// The instance's raw record payload, as the file carries it (reference
+    /// fields still obfuscated). For probes and namer passes.
+    pub fn read_raw_record(&self, instance: usize) -> Vec<u8> {
+        let Some(info) = self.instances.get(instance) else {
+            return Vec::new();
+        };
+        let Some(start) = self.data_start.checked_add(info.data_offset) else {
+            return Vec::new();
+        };
+        let end = start.saturating_add(info.size.max(0) as usize);
+        self.blob
+            .get(start..end.min(self.blob.len()))
+            .unwrap_or_default()
+            .to_vec()
+    }
+
     /// Resolve a `teColorRGBA` field: four `f32`.
     pub fn read_rgba(&mut self, instance: usize, field_hash: u32) -> Option<[f32; 4]> {
         let (offset, _) = self.field_bytes(instance, field_hash)?;
@@ -436,8 +656,23 @@ fn parse_instance_bag(data: &[u8], at: usize) -> Result<Vec<(u32, u32, i32, i32)
     if count < 0 || offset < 0 {
         return Err(Error::Malformed("negative instance bag count or offset"));
     }
-    let mut out = Vec::with_capacity(count as usize);
-    let mut p = offset as usize;
+    let count_us = count as usize;
+    let offset_us = offset as usize;
+    // Validate the whole span with checked math before reserving anything, so
+    // a huge count cannot pre-allocate before the bounds check fails.
+    let Some(need) = count_us.checked_mul(INSTANCE_INFO_SIZE) else {
+        return Err(Error::Malformed("instance bag overflows address space"));
+    };
+    let Some(end) = offset_us.checked_add(need) else {
+        return Err(Error::Malformed("instance bag overflows address space"));
+    };
+    if end > data.len() {
+        return Err(Error::Malformed(
+            "instance bag runs past the end of the file",
+        ));
+    }
+    let mut out = Vec::with_capacity(count_us);
+    let mut p = offset_us;
     for _ in 0..count {
         out.push((
             rd_u32(data, p)?,
@@ -445,6 +680,7 @@ fn parse_instance_bag(data: &[u8], at: usize) -> Result<Vec<(u32, u32, i32, i32)
             rd_i32(data, p + 8)?,
             rd_i32(data, p + 12)?,
         ));
+        // `p` stays inside `end <= data.len()`, so this cannot wrap.
         p += INSTANCE_INFO_SIZE;
     }
     Ok(out)
@@ -458,16 +694,44 @@ fn parse_field_bags(data: &[u8], at: usize) -> Result<Vec<Vec<(u32, i32)>>> {
     if count < 0 || offset < 0 {
         return Err(Error::Malformed("negative field-bag count or offset"));
     }
-    let mut out = Vec::with_capacity(count as usize);
-    let mut bag_at = offset as usize;
+    let count_us = count as usize;
+    let offset_us = offset as usize;
+    // Same rule as the instance bag: prove the outer span fits before
+    // reserving for it.
+    let Some(outer_need) = count_us.checked_mul(8) else {
+        return Err(Error::Malformed("field-bag array overflows address space"));
+    };
+    let Some(outer_end) = offset_us.checked_add(outer_need) else {
+        return Err(Error::Malformed("field-bag array overflows address space"));
+    };
+    if outer_end > data.len() {
+        return Err(Error::Malformed(
+            "field-bag array runs past the end of the file",
+        ));
+    }
+    let mut out = Vec::with_capacity(count_us);
+    let mut bag_at = offset_us;
     for _ in 0..count {
         let inner_count = rd_i32(data, bag_at)?;
         let inner_offset = rd_i32(data, bag_at + 4)?;
         if inner_count < 0 || inner_offset < 0 {
             return Err(Error::Malformed("negative inner field bag"));
         }
-        let mut fields = Vec::with_capacity(inner_count as usize);
-        let mut p = inner_offset as usize;
+        let inner_count_us = inner_count as usize;
+        let inner_offset_us = inner_offset as usize;
+        let Some(inner_need) = inner_count_us.checked_mul(8) else {
+            return Err(Error::Malformed("inner field bag overflows address space"));
+        };
+        let Some(inner_end) = inner_offset_us.checked_add(inner_need) else {
+            return Err(Error::Malformed("inner field bag overflows address space"));
+        };
+        if inner_end > data.len() {
+            return Err(Error::Malformed(
+                "inner field bag runs past the end of the file",
+            ));
+        }
+        let mut fields = Vec::with_capacity(inner_count_us);
+        let mut p = inner_offset_us;
         for _ in 0..inner_count {
             fields.push((rd_u32(data, p)?, rd_i32(data, p + 4)?));
             p += 8;
@@ -479,7 +743,9 @@ fn parse_field_bags(data: &[u8], at: usize) -> Result<Vec<Vec<(u32, i32)>>> {
 }
 
 fn rd_u32(data: &[u8], at: usize) -> Result<u32> {
-    let s = data.get(at..at + 4).ok_or(Error::Malformed("read past end"))?;
+    let s = data
+        .get(at..at + 4)
+        .ok_or(Error::Malformed("read past end"))?;
     Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 
@@ -488,7 +754,9 @@ fn rd_i32(data: &[u8], at: usize) -> Result<i32> {
 }
 
 fn rd_u64(data: &[u8], at: usize) -> Result<u64> {
-    let s = data.get(at..at + 8).ok_or(Error::Malformed("read past end"))?;
+    let s = data
+        .get(at..at + 8)
+        .ok_or(Error::Malformed("read past end"))?;
     Ok(u64::from_le_bytes([
         s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
     ]))
@@ -569,7 +837,10 @@ mod tests {
         let layout = stu.layout_at(96, 0);
         assert_eq!(layout.len(), 1, "bag 0 declares one field");
         assert_eq!(layout[0].hash, 0xAAAA_AAAA);
-        assert_eq!(layout[0].offset, 8, "past the bag index and the inline size");
+        assert_eq!(
+            layout[0].offset, 8,
+            "past the bag index and the inline size"
+        );
         assert_eq!(layout[0].size, 20, "the array's byte length, read inline");
 
         let elements = stu.inline_elements(0, 0xAAAA_AAAA);
@@ -586,5 +857,5 @@ mod tests {
             stu.u64_at(start + layout[0].offset),
             Some(0x1234_5678_9abc_def0)
         );
-}
+    }
 }

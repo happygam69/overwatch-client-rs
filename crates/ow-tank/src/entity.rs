@@ -32,6 +32,7 @@
 use std::collections::BTreeMap;
 
 use crate::classes::{self, config_var};
+use crate::graph::literal_of;
 use crate::{guid, GameData, Result};
 use ow_stu::Stu;
 
@@ -160,9 +161,621 @@ pub fn health_of(data: &GameData, entity: u64) -> Result<HealthPools> {
     })
 }
 
+/// The mover component's measured float fields, by STU field hash.
+///
+/// Roles (evidence: `ow-sim/src/movement.rs` header + the install dump, e.g.
+/// hero 1's entity `0x0400000000000001` whose mover instance carries 28 fields:
+/// `0x031FE7EE = 5.5f` speed, `0x19452F15 = 6.0f` forward, `0xCFD3E635 = 6.0f`
+/// side, `0x61D6B4E9 = 5.4f` back, `0x0DDD18C3 = 3.0f` crouch,
+/// `0xB74245E8 = 30.0f` terminal, `0x1972C687 = 2.0f` unnamed scalar).
+/// `0x5C6B4602` is the one integer field (reads `8`) and is skipped here.
+pub mod mover_fields {
+    pub const SPEED: u32 = 0x031F_E7EE;
+    pub const FORWARD: u32 = 0x1945_2F15;
+    pub const SIDE: u32 = 0xCFD3_E635;
+    pub const BACK: u32 = 0x61D6_B4E9;
+    pub const CROUCH: u32 = 0x0DDD_18C3;
+    pub const FALL_TERMINAL: u32 = 0xB742_45E8;
+    pub const UNNAMED_SCALAR: u32 = 0x1972_C687;
+    /// The integer field; not a float, never carried as one.
+    pub const INT_FIELD: u32 = 0x5C6B_4602;
+}
+
+/// A hero entity's mover figures: base speed plus every other float the mover
+/// component declares, keyed by field hash.
+///
+/// The base speed is the `SPEED` field (5.5 fallback, the install-wide common
+/// case); the rest are carried verbatim so the sim's `MoverSpec` keeps its
+/// back/side/crouch/terminal slots instead of defaulting them. Sorted by hash
+/// for deterministic runs.
+pub fn mover_fields_of(data: &GameData, entity: u64) -> Result<(f32, Vec<(u32, f32)>)> {
+    let mut stu = data.stu_of(entity)?;
+    let Some(inst) = stu.instance(classes::CHARACTER_MOVER_COMPONENT) else {
+        return Ok((5.5, Vec::new()));
+    };
+    let speed = stu.read_f32(inst, mover_fields::SPEED).unwrap_or(5.5);
+    let mut out = Vec::new();
+    for f in stu.fields(inst).to_vec() {
+        if f.hash == mover_fields::SPEED || f.hash == mover_fields::INT_FIELD {
+            continue;
+        }
+        if f.size != 4 {
+            continue;
+        }
+        let at = stu.payload_start(inst) + f.offset;
+        let Some(raw) = stu.u32_at(at) else { continue };
+        let v = f32::from_bits(raw);
+        if !v.is_finite() {
+            continue;
+        }
+        out.push((f.hash, v));
+    }
+    out.sort_by_key(|(h, _)| *h);
+    Ok((speed, out))
+}
+
+/// A loadout (ability) asset and the fields this reader uses.
+/// `STULoadout` behaviour, read from the reference types only
+/// (`TankLib/STU/Types/STULoadout.cs` and the `Loadout` data model that walks
+/// it): a hero names an array of loadout assets (`m_heroLoadout`); each one
+/// carries display strings by reference, a category enum, a logical button by
+/// reference, and two `i32` flags — `m_0E679979 >= 1` marks a hidden ability
+/// (weapons, zoom) and `== 2` a secondary weapon. Cooldown and damage are not
+/// among these fields: the cooldown is a marker variable in the ability's
+/// graph node, and per-ability damage has no file-side join (see
+/// [`Ability::cooldown`] and [`Ability::damage`]).
+pub mod loadout {
+    /// `STULoadout`. Note this is *not* [`crate::classes::LOADOUT`]
+    /// (`0x32290C2E`): that hash matches no class in the reference types and
+    /// is unused by every reader, while `0x07A0E32F` is the hash the generated
+    /// `STULoadout` type declares and the one a `0x09E` asset's instance table
+    /// is checked against here.
+    pub const LOADOUT: u32 = 0x07A0_E32F;
+    /// `m_name`: display name, a string-asset reference.
+    pub const NAME: u32 = 0xB48F_1D22;
+    /// `m_description`: description, a string-asset reference.
+    pub const DESCRIPTION: u32 = 0xCA7E_6EDC;
+    /// `m_logicalButton`: which button the UI shows, via a holder asset.
+    pub const LOGICAL_BUTTON: u32 = 0xFC33_191B;
+    /// `m_9290B942`: the second button reference the data model reads.
+    pub const BUTTON_UNK: u32 = 0x9290_B942;
+    /// `m_texture`: the ability icon, a texture-asset reference.
+    pub const TEXTURE: u32 = 0x3CD6_DC1E;
+    /// `m_category`: a `LoadoutCategory` enum value.
+    pub const CATEGORY: u32 = 0x2C54_AEAF;
+    /// `m_0E679979`: hidden (`>= 1`) / secondary-weapon (`== 2`) flags.
+    pub const HIDDEN_FLAG: u32 = 0x0E67_9979;
+    /// The holder class of a logical-button reference (`STU_C5243F93`).
+    pub const BUTTON_HOLDER: u32 = 0xC524_3F93;
+    /// Its name field: the string-asset reference the button label resolves
+    /// through. (A different hash from the loadout's own `m_name` — the two
+    /// fields share a Rust-style name in the reference, not a hash.)
+    pub const BUTTON_NAME: u32 = 0xC08C_4427;
+    /// The loadout's own tuning knobs: ten `STUConfigVar` fields whose values
+    /// read as literals but whose meanings are unassigned. They are reported
+    /// by hash in [`Ability::params`], never guessed at.
+    pub const KNOBS: [u32; 10] = [
+        0x306D_A3DC,
+        0x5929_7A45,
+        0xCE20_C911,
+        0xA0D3_7782,
+        0x33E2_8024,
+        0x4F78_889F,
+        0xE840_8704,
+        0x36D0_3BBB,
+        0x0CAB_E706,
+        0xBED6_A0EE,
+    ];
+}
+
+/// Loadout categories, from the reference `LoadoutCategory` enum.
+pub mod loadout_category {
+    /// A weapon entry.
+    pub const WEAPON: u32 = 0;
+    /// A regular ability.
+    pub const ABILITY: u32 = 1;
+    /// A passive ability.
+    pub const PASSIVE: u32 = 2;
+    /// An ultimate ability.
+    pub const ULTIMATE: u32 = 3;
+    /// A perk entry.
+    pub const PERK: u32 = 4;
+    /// Hero-stats entry.
+    pub const HERO_STATS: u32 = 5;
+    /// Subrole entry.
+    pub const SUBROLE: u32 = 6;
+}
+
+/// One ability (loadout) of a hero: the `ListAbilities` parity row.
+///
+/// Identity and display come from the `0x09E` asset; `params` carries the
+/// loadout's own config-var literals by field hash — the tuning knobs whose
+/// values are unambiguous but whose meanings are not. Cooldown and damage are
+/// `None` by construction: the cooldown lives in the ability graph's node as
+/// a marker variable rather than a literal (see [`crate::graph::ability_nodes_of`]),
+/// and no file-side walk joins a hero to its ability graphs (the reference
+/// walk in `refwalk` reaches exactly one graph per hero — the weapon's — so
+/// the ability graphs resolve at runtime, not through asset references).
+/// Display code must render those columns as [`Ability::cooldown_name`] and
+/// [`Ability::damage_name`] (`cooldown?`, `damage?`), never as zero.
+#[derive(Debug, Clone, Default)]
+pub struct Ability {
+    /// The `0x09E` asset GUID.
+    pub guid: u64,
+    /// Display name, when the string asset resolves and parses.
+    pub name: Option<String>,
+    /// Description, same conditions.
+    pub description: Option<String>,
+    /// The `LoadoutCategory` code, when the field is present.
+    pub category: Option<u32>,
+    /// The UI button label, via the logical-button holder asset.
+    pub button: Option<String>,
+    /// `m_0E679979 >= 1`: hidden from the ability list (weapons, zoom).
+    pub hidden: bool,
+    /// `m_0E679979 == 2`: a secondary weapon (Mercy/Bastion/Torbjörn pattern).
+    pub secondary_weapon: bool,
+    /// Cooldown in seconds. Always `None`: not a file-side literal.
+    pub cooldown: Option<f32>,
+    /// Per-shot damage. Always `None`: no file-side hero→damage join.
+    pub damage: Option<i32>,
+    /// The loadout's own `(field hash, literal)` pairs, sorted by hash.
+    pub params: Vec<(u32, Value)>,
+}
+
+impl Ability {
+    /// The category's display name, from the reference enum.
+    pub fn category_name(&self) -> Option<&'static str> {
+        match self.category {
+            Some(loadout_category::WEAPON) => Some("Weapon"),
+            Some(loadout_category::ABILITY) => Some("Ability"),
+            Some(loadout_category::PASSIVE) => Some("PassiveAbility"),
+            Some(loadout_category::ULTIMATE) => Some("UltimateAbility"),
+            Some(loadout_category::PERK) => Some("Perk"),
+            Some(loadout_category::HERO_STATS) => Some("HeroStats"),
+            Some(loadout_category::SUBROLE) => Some("Subrole"),
+            _ => None,
+        }
+    }
+
+    /// Column label for the cooldown, which has no file-side literal.
+    pub fn cooldown_name() -> &'static str {
+        "cooldown?"
+    }
+
+    /// Column label for the damage, which has no file-side join.
+    pub fn damage_name() -> &'static str {
+        "damage?"
+    }
+}
+
+/// The loadout GUIDs a hero asset names (`m_heroLoadout`, the `0x9E` hop).
+///
+/// The list is an inline array — an `i32` count then that many 16-byte
+/// references, each deobfuscated with the field hash — the same shape the
+/// `refwalk` probe follows. A candidate only counts when it resolves in the
+/// registry to a `0x09E` asset: a wrong stride yields 64-bit values that
+/// resolve to nothing, which is how a wrong layout is caught. An empty list
+/// is reported, not defaulted — several heroes may genuinely declare none.
+pub fn loadout_guids_of_hero(data: &GameData, hero_guid: u64) -> Result<Vec<u64>> {
+    let mut stu = data.stu_of(hero_guid)?;
+    let Some(hero) = stu.instance(classes::HERO) else {
+        return Err(crate::Error::NotFound(
+            "hero asset has no hero instance".into(),
+        ));
+    };
+    let guids = ref_array_field(&mut stu, hero, classes::hero::HERO_LOADOUT);
+    Ok(guids
+        .into_iter()
+        .filter(|g| {
+            *g != 0
+                && data
+                    .registry()
+                    .get(*g)
+                    .is_some_and(|_| guid::type_of(*g) == guid::types::LOADOUT)
+        })
+        .collect())
+}
+
+/// Every loadout/ability asset the manifests carry (`TrackedFiles[0x9E]`
+/// parity with `ListAbilities`): the global ability list, before the
+/// per-hero join.
+pub fn all_loadout_guids(data: &GameData) -> Vec<u64> {
+    let mut guids = data.guids_of_type(guid::types::LOADOUT);
+    guids.sort_unstable();
+    guids
+}
+
+/// One ability row for a `0x09E` asset.
+pub fn ability_of(data: &GameData, ability_guid: u64) -> Result<Ability> {
+    let mut stu = data.stu_of(ability_guid)?;
+    let Some(root) = stu.instance(loadout::LOADOUT) else {
+        return Err(crate::Error::NotFound(format!(
+            "loadout 0x{ability_guid:016x} has no STULoadout instance"
+        )));
+    };
+
+    let string_at = |stu: &mut Stu, instance: usize, field: u32| -> Option<String> {
+        let target = stu.read_asset_ref(instance, field)?;
+        if target == 0 {
+            return None;
+        }
+        let bytes = data.bytes_of(target).ok()?;
+        let text = crate::text::parse_display_text(&bytes).ok()?;
+        (!text.value.is_empty()).then_some(text.value)
+    };
+    let u32_at = |stu: &mut Stu, instance: usize, field: u32| -> Option<u32> {
+        let (offset, _) = stu.field_bytes(instance, field)?;
+        stu.u32_at(stu.payload_start(instance) + offset)
+    };
+
+    let name = string_at(&mut stu, root, loadout::NAME);
+    let description = string_at(&mut stu, root, loadout::DESCRIPTION);
+    let category = u32_at(&mut stu, root, loadout::CATEGORY);
+    let flag = u32_at(&mut stu, root, loadout::HIDDEN_FLAG)
+        .map(|v| v as i32)
+        .unwrap_or(0);
+
+    // The button label is two hops: the loadout's logical-button reference
+    // names a holder asset, whose own name field names the string.
+    let button = stu
+        .read_asset_ref(root, loadout::LOGICAL_BUTTON)
+        .filter(|holder| *holder != 0)
+        .and_then(|holder| {
+            data.stu_of(holder).ok().and_then(|mut holder_stu| {
+                let holder_root = holder_stu.instance(loadout::BUTTON_HOLDER)?;
+                string_at(&mut holder_stu, holder_root, loadout::BUTTON_NAME)
+            })
+        });
+
+    // The loadout's own config-var literals: embedder-linked children decoded
+    // by class, so only literal-valued children appear.
+    let mut owned: BTreeMap<(usize, u32), usize> = BTreeMap::new();
+    for (index, info) in stu.instances.iter().enumerate() {
+        if info.embedder_index >= 0 {
+            owned.insert((info.embedder_index as usize, info.embedder_field), index);
+        }
+    }
+    let mut params = Vec::new();
+    for ((owner, field_hash), value_index) in &owned {
+        if *owner != root {
+            continue;
+        }
+        let class = stu.instances[*value_index].hash;
+        if let Some(value) = literal_of(&stu, *value_index, class) {
+            params.push((*field_hash, value));
+        }
+    }
+    params.sort_by_key(|(hash, _)| *hash);
+
+    Ok(Ability {
+        guid: ability_guid,
+        name,
+        description,
+        category,
+        button,
+        hidden: flag >= 1,
+        secondary_weapon: flag == 2,
+        cooldown: None,
+        damage: None,
+        params,
+    })
+}
+
+/// Every ability of a hero index (`ListHeroes` loadout-list parity): the
+/// hero's `m_heroLoadout` GUIDs, each read as an [`Ability`]. Heroes whose
+/// entity cannot be read contribute no rows rather than an error — the census
+/// counts heroes, and an unreadable hero is a zero, not a failure.
+pub fn loadouts_of(data: &GameData, hero_index: u32) -> Result<Vec<Ability>> {
+    let mut heroes = data.guids_of_type(crate::guid::types::HERO);
+    heroes.sort_unstable();
+    let hero = *heroes
+        .iter()
+        .find(|g| crate::guid::index_of(**g) == hero_index)
+        .ok_or_else(|| crate::Error::NotFound(format!("hero index {hero_index} not found")))?;
+    let mut out = Vec::new();
+    for ability_guid in loadout_guids_of_hero(data, hero)? {
+        if let Ok(ability) = ability_of(data, ability_guid) {
+            out.push(ability);
+        }
+    }
+    Ok(out)
+}
+
+/// An inline `teStructuredDataAssetRef<T>[]` field: an `i32` count then that
+/// many 16-byte references, each deobfuscated with the field hash.
+///
+/// The element layout is the typed layer's (`ow_stu/src/types.rs`): the GUID
+/// sits at `+8` of each 16-byte element. Callers validate the GUIDs against
+/// the registry (`loadout_guids_of_hero` keeps only `0x09E` hits), so a wrong
+/// stride surfaces as an empty list rather than wrong abilities.
+fn ref_array_field(stu: &mut Stu, instance: usize, field_hash: u32) -> Vec<u64> {
+    let Some((offset, _)) = stu.field_bytes(instance, field_hash) else {
+        return Vec::new();
+    };
+    let base = stu.payload_start(instance) + offset;
+    let Some(count) = stu.i32_at(base) else {
+        return Vec::new();
+    };
+    if !(1..=4096).contains(&count) {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(count as usize);
+    for k in 0..count as usize {
+        // Absolute offset: the ref's own bytes, deobfuscated with the
+        // *array's* field hash.
+        if let Some(target) = stu.asset_ref_at(base + 4 + k * 16, field_hash) {
+            out.push(target);
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+/// The parts of a hero a renderer needs: its character model, the colour texture
+/// the hero's entity names directly, the first-person model's own entity, and
+/// that model.
+///
+/// Measured on hero index 2 and 3 (see `docs/formats/animation.md` § "The
+/// component chain"): the hero asset's `STUHero` names the gameplay entity; the
+/// entity carries a `STUModelComponent` (`0x191835f9`) whose field
+/// `0x2d124be2` is the character model, a `STUFirstPersonComponent`
+/// (`0x9d28963f`) whose field `0xa83c2c26` is *another entity* holding the
+/// first-person model under the same field hash, and a pair of instances that
+/// name textures directly (`0x238ef37e`/`0x6f1ecb16` and
+/// `0xfb366254`/`0x3cd6dc1e`) — the route that does not need materials, which
+/// this install cannot decrypt.
+#[derive(Debug, Clone, Default)]
+pub struct HeroParts {
+    pub hero: u64,
+    pub entity: u64,
+    pub model: u64,
+    /// The model component's look: the model's material ids → material assets.
+    pub look: u64,
+    /// The texture the entity's own instance names, if it has one.
+    pub texture: u64,
+    /// A second texture instance (`0xfb366254`), which is a portrait rather
+    /// than a surface texture on the models read so far.
+    pub portrait: u64,
+    pub view_model_entity: u64,
+    pub view_model: u64,
+    /// The view-model's **animation blend-tree set** (`STUModelComponent`'s
+    /// `m_animBlendTreeSet`, field `0x523339C1`): a type-0x021 asset whose
+    /// blend items name the first-person clips per slot (the idle set for
+    /// hero 3 = `0x0040000000000004` with 23 items naming 40+ clips).
+    pub view_model_anim_set: u64,
+    /// The view-model entity's model component look (the same field hash the
+    /// character model component carries). Which textures a view model gets is
+    /// decided by *its* look, not the character's.
+    pub view_model_look: u64,
+    /// The FP entity's weapon child (its model), when it is the known Tracer
+    /// chain. The child entity itself is `0x0400000000000017`; the general
+    /// `STUChildEntityDefinition` decode is still open, so this is filled only
+    /// for the measured FP entity.
+    pub view_model_weapon: u64,
+    pub view_model_weapon_look: u64,
+    /// The hardpoint GUIDs the FP entity's two weapon child definitions name.
+    /// `child_probe`'s typed read gives `0x0dc000000000000a` and
+    /// `0x0dc000000000000b`; they hang off the FP skeleton's two weapon bones
+    /// (ids 44 and 74), not the hand bones.
+    pub view_model_weapon_hardpoints: Vec<u64>,
+}
+
+/// Field hashes of the two texture-naming instances, and of the model
+/// component's model field.
+pub mod hero_part {
+    /// Instance type that carries a directly named texture.
+    pub const TEXTURE_INSTANCE: u32 = 0x238e_f37e;
+    /// Its texture field.
+    pub const TEXTURE: u32 = 0x6f1e_cb16;
+    /// The other texture-naming instance type.
+    pub const PORTRAIT_INSTANCE: u32 = 0xfb36_6254;
+    /// Its texture field.
+    pub const PORTRAIT: u32 = 0x3cd6_dc1e;
+    /// `STUModelComponent`.
+    pub const MODEL_COMPONENT: u32 = 0x1918_35f9;
+    /// The model component's **animation blend-tree set**
+    /// (`STUModelComponent.m_animBlendTreeSet`, `0x523339C1` = a
+    /// `teStructuredDataAssetRef<STUAnimBlendTreeSet>` type-0x021 asset; the
+    /// reference reads it off every model component, `Combo.cs:546`).
+    pub const ANIM_BLEND_TREE_SET: u32 = 0x5233_39c1;
+    /// Its model reference (shared with the first-person entity).
+    pub const MODEL: u32 = 0x2d12_4be2;
+    /// `STUFirstPersonComponent`.
+    pub const FIRST_PERSON_COMPONENT: u32 = 0x9d28_963f;
+    /// Its reference to the view-model entity.
+    pub const FIRST_PERSON_ENTITY: u32 = 0xa83c_2c26;
+    /// The model component's *look* (a `STUModelLook`, type `0x01A`): the same
+    /// chain a map placement uses, read from hero 3's component. A look maps the
+    /// model's material ids to material assets, and that is the route to a
+    /// hero's body textures — where the material assets are readable.
+    pub const MODEL_LOOK: u32 = 0x9297_adb4;
+    /// Tracer's first-person entity and its weapon child, as measured by
+    /// `child_probe` (`docs/formats/animation.md` § the FP entity's child
+    /// entities). The child-definition refs are inline and their raw decode is
+    /// still open, so the join is allowed only for this measured pair.
+    pub const VIEW_MODEL_ENTITY: u64 = 0x0400_0000_0000_0010;
+    pub const VIEW_MODEL_WEAPON_ENTITY: u64 = 0x0400_0000_0000_0017;
+    /// `STUChildEntityDefinition` (`0x1D9159F2`) fields and the entity field
+    /// that holds the inline child array.
+    pub const CHILD_ENTITY_DATA: u32 = 0xf29e_4995;
+    pub const CHILD: u32 = 0x436b_efe6;
+    pub const HARDPOINT: u32 = 0x2d3c_dfa9;
+}
+
+/// Read [`HeroParts`] for a hero index (`ow-tank-hero` prints the same fields).
+pub fn hero_parts(data: &GameData, hero_index: u32) -> Result<HeroParts> {
+    let mut heroes = data.guids_of_type(crate::guid::types::HERO);
+    heroes.sort_unstable();
+    let hero = *heroes
+        .iter()
+        .find(|g| crate::guid::index_of(**g) == hero_index)
+        .ok_or_else(|| crate::Error::NotFound(format!("hero index {hero_index} not found")))?;
+
+    let mut parts = HeroParts {
+        hero,
+        ..HeroParts::default()
+    };
+    let mut stu = data.stu_of(hero)?;
+    let hero_inst = stu
+        .instance(crate::classes::HERO)
+        .ok_or_else(|| crate::Error::NotFound("hero asset has no hero instance".into()))?;
+    parts.entity = stu
+        .read_asset_ref(hero_inst, crate::classes::hero::GAMEPLAY_ENTITY)
+        .ok_or_else(|| crate::Error::NotFound("hero asset names no gameplay entity".into()))?;
+    drop(stu);
+
+    let mut entity_stu = data.stu_of(parts.entity)?;
+    let field_of = |stu: &mut Stu, instance: usize, hash: u32| stu.read_asset_ref(instance, hash);
+    for i in 0..entity_stu.instances.len() {
+        match entity_stu.instances[i].hash {
+            hero_part::MODEL_COMPONENT => {
+                if let Some(m) = field_of(&mut entity_stu, i, hero_part::MODEL) {
+                    parts.model = m;
+                }
+                if let Some(l) = field_of(&mut entity_stu, i, hero_part::MODEL_LOOK) {
+                    parts.look = l;
+                }
+            }
+            hero_part::FIRST_PERSON_COMPONENT => {
+                if let Some(e) = field_of(&mut entity_stu, i, hero_part::FIRST_PERSON_ENTITY) {
+                    parts.view_model_entity = e;
+                }
+            }
+            hero_part::TEXTURE_INSTANCE => {
+                if let Some(t) = field_of(&mut entity_stu, i, hero_part::TEXTURE) {
+                    parts.texture = t;
+                }
+            }
+            hero_part::PORTRAIT_INSTANCE => {
+                if let Some(t) = field_of(&mut entity_stu, i, hero_part::PORTRAIT) {
+                    parts.portrait = t;
+                }
+            }
+            _ => {}
+        }
+    }
+    drop(entity_stu);
+
+    if parts.view_model_entity != 0 {
+        if let Ok(mut view_stu) = data.stu_of(parts.view_model_entity) {
+            for i in 0..view_stu.instances.len() {
+                if view_stu.instances[i].hash != hero_part::MODEL_COMPONENT {
+                    continue;
+                }
+                if let Some(m) = view_stu.read_asset_ref(i, hero_part::MODEL) {
+                    parts.view_model = m;
+                }
+                if let Some(l) = view_stu.read_asset_ref(i, hero_part::MODEL_LOOK) {
+                    parts.view_model_look = l;
+                }
+                if let Some(a) = view_stu.read_asset_ref(i, hero_part::ANIM_BLEND_TREE_SET) {
+                    parts.view_model_anim_set = a;
+                }
+                break;
+            }
+        }
+    }
+    if parts.view_model_entity == hero_part::VIEW_MODEL_ENTITY {
+        if let Ok(mut fp_stu) = data.stu_of(hero_part::VIEW_MODEL_ENTITY) {
+            for (bag, at) in fp_stu.inline_elements(0, hero_part::CHILD_ENTITY_DATA) {
+                let fields = fp_stu.layout_at(at, bag);
+                let mut child = None;
+                let mut hardpoint = None;
+                for f in &fields {
+                    if f.hash == hero_part::CHILD {
+                        child = fp_stu.asset_ref_at(at + f.offset, f.hash);
+                    } else if f.hash == hero_part::HARDPOINT {
+                        hardpoint = fp_stu.asset_ref_at(at + f.offset, f.hash);
+                    }
+                }
+                if child == Some(hero_part::VIEW_MODEL_WEAPON_ENTITY) {
+                    if let Some(hp) = hardpoint {
+                        parts.view_model_weapon_hardpoints.push(hp);
+                    }
+                }
+            }
+        }
+        if let Ok(mut weapon_stu) = data.stu_of(hero_part::VIEW_MODEL_WEAPON_ENTITY) {
+            for i in 0..weapon_stu.instances.len() {
+                if weapon_stu.instances[i].hash != hero_part::MODEL_COMPONENT {
+                    continue;
+                }
+                parts.view_model_weapon =
+                    weapon_stu.read_asset_ref(i, hero_part::MODEL).unwrap_or(0);
+                parts.view_model_weapon_look = weapon_stu
+                    .read_asset_ref(i, hero_part::MODEL_LOOK)
+                    .unwrap_or(0);
+                break;
+            }
+        }
+    }
+    Ok(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The flag rule from the reference `Loadout` data model, as a pure
+    /// function so the census can share it: hidden at `>= 1`, secondary
+    /// weapon at exactly `2`.
+    fn hidden_of(flag: i32) -> (bool, bool) {
+        (flag >= 1, flag == 2)
+    }
+
+    #[test]
+    fn ability_flag_rule_matches_the_reference_model() {
+        assert_eq!(hidden_of(0), (false, false));
+        assert_eq!(hidden_of(1), (true, false));
+        assert_eq!(hidden_of(2), (true, true));
+        assert_eq!(hidden_of(3), (true, false));
+    }
+
+    #[test]
+    fn ability_categories_name_the_reference_enum() {
+        let named = |category: u32| {
+            Ability {
+                category: Some(category),
+                ..Ability::default()
+            }
+            .category_name()
+        };
+        assert_eq!(named(loadout_category::WEAPON), Some("Weapon"));
+        assert_eq!(named(loadout_category::ABILITY), Some("Ability"));
+        assert_eq!(named(loadout_category::PASSIVE), Some("PassiveAbility"));
+        assert_eq!(named(loadout_category::ULTIMATE), Some("UltimateAbility"));
+        assert_eq!(named(loadout_category::PERK), Some("Perk"));
+        assert_eq!(named(0xFFFF), None);
+        assert_eq!(
+            Ability {
+                category: None,
+                ..Ability::default()
+            }
+            .category_name(),
+            None
+        );
+    }
+
+    #[test]
+    fn unmeasured_ability_columns_stay_hedged() {
+        // Cooldown and damage have no file-side reading, so the labels carry
+        // `?` and a fresh row carries no values to mistake for zero.
+        assert_eq!(Ability::cooldown_name(), "cooldown?");
+        assert_eq!(Ability::damage_name(), "damage?");
+        let row = Ability::default();
+        assert_eq!((row.cooldown, row.damage), (None, None));
+    }
+
+    #[test]
+    fn loadout_knobs_list_the_config_var_fields() {
+        // Ten knobs, all distinct — a duplicate hash would attribute one
+        // field's literals to another's name.
+        let mut knobs = loadout::KNOBS.to_vec();
+        knobs.sort_unstable();
+        knobs.dedup();
+        assert_eq!(knobs.len(), 10);
+    }
 
     #[test]
     fn total_sums_the_pools_that_are_declared() {

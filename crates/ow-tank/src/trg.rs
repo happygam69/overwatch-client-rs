@@ -61,9 +61,8 @@ fn i32_at(d: &[u8], at: usize) -> Option<i32> {
     u32_at(d, at).map(|v| v as i32)
 }
 fn u64_at(d: &[u8], at: usize) -> Option<u64> {
-    d.get(at..at + 8).map(|b| {
-        u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
-    })
+    d.get(at..at + 8)
+        .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
 }
 
 /// One asset's package membership.
@@ -221,7 +220,8 @@ impl ResourceGraph {
     }
 }
 
-/// Public entry point used by the probe.
+/// Convenience entry point: opens the resource graph, mapping its error into
+/// [`crate::Error`].
 pub fn open(data: &GameData) -> Result<ResourceGraph> {
     ResourceGraph::open(data).map_err(|e| crate::Error::NotFound(e.to_string()))
 }

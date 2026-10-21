@@ -57,7 +57,11 @@ impl Param {
 /// `names` supplies field names; without them this returns nothing useful, so a
 /// caller that has no naming source should skip the call rather than print
 /// hashes.
-pub fn params_of(stu: &Stu, class_names: &crate::classes::ClassMap, names: &FieldNames) -> Vec<Param> {
+pub fn params_of(
+    stu: &Stu,
+    class_names: &crate::classes::ClassMap,
+    names: &FieldNames,
+) -> Vec<Param> {
     // (owner index, field hash) -> embedded instance index
     let mut owned: HashMap<(usize, u32), usize> = HashMap::new();
     for (index, info) in stu.instances.iter().enumerate() {
@@ -95,7 +99,45 @@ pub fn params_of(stu: &Stu, class_names: &crate::classes::ClassMap, names: &Fiel
     out
 }
 
-fn literal_of(stu: &Stu, instance: usize, class_hash: u32) -> Option<Value> {
+/// `STUStatescriptStateAbility`, the node that gates an ability behind its
+/// cooldown and targeting. Its hash is from the reference types
+/// (`TankLib/STU/Types/STUStatescriptStateAbility.cs`); the cooldown itself is
+/// a marker variable (`m_out_CooldownVar`, `0xBBC9EFFF`, class `0x076E0DBA`),
+/// not a literal, so no field read here yields seconds — the literals are the
+/// ability's other knobs, reported with hashes, and the cooldown column stays
+/// `None` (see [`crate::entity::Ability`]).
+pub const ABILITY_STATE: u32 = 0xC38B_92B4;
+
+/// Every ability state in a graph, with its literals.
+///
+/// This is [`all_params_of`] narrowed to the ability-state class, so the same
+/// owner-link join applies and the unnamed fields stay in: the cooldown is
+/// among the children only as a non-literal marker variable
+/// (`m_out_CooldownVar`), never as a number, which is why no literal here is
+/// seconds and the per-ability cooldown column stays hedged (see
+/// [`crate::entity::Ability`]).
+pub fn ability_nodes_of(stu: &Stu) -> Vec<(usize, Vec<(u32, Value)>)> {
+    let names = crate::classes::ClassMap::default();
+    let mut by_node: std::collections::BTreeMap<usize, Vec<(u32, Value)>> =
+        std::collections::BTreeMap::new();
+    for param in all_params_of(stu, &names) {
+        if param.state_hash == ABILITY_STATE {
+            by_node
+                .entry(param.state)
+                .or_default()
+                .push((param.field_hash, param.value));
+        }
+    }
+    by_node.into_iter().collect()
+}
+
+/// A literal read out of one instance, by its class.
+///
+/// `instance` is the instance's index; `class_hash` is its class, deciding how
+/// the value is decoded. Returns `None` when the instance has no `m_value`
+/// field at all; classes this reader does not decode come back as
+/// [`Value::Unread`] with their class hash.
+pub fn literal_of(stu: &Stu, instance: usize, class_hash: u32) -> Option<Value> {
     let start = stu.payload_start(instance);
     let bag_index = stu.i32_at(start)?;
     let layout = stu.layout_at(start, bag_index);
@@ -110,11 +152,45 @@ fn literal_of(stu: &Stu, instance: usize, class_hash: u32) -> Option<Value> {
     }
 }
 
+/// Literals of every state in a graph, named or not.
+///
+/// [`params_of`] reports only fields the reference types name, which is right
+/// for a display of known parameters and wrong for a hunt: the unnamed fields
+/// carry the same literals, and *which* hash agrees with a value across all
+/// heroes is itself evidence. Field hash joins happen at the caller.
+pub fn all_params_of(stu: &Stu, class_names: &crate::classes::ClassMap) -> Vec<Param> {
+    let mut owned: HashMap<(usize, u32), usize> = HashMap::new();
+    for (index, info) in stu.instances.iter().enumerate() {
+        if info.embedder_index >= 0 {
+            owned.insert((info.embedder_index as usize, info.embedder_field), index);
+        }
+    }
+
+    let mut out = Vec::new();
+    for ((owner, field_hash), value_index) in &owned {
+        let owner_hash = stu.instances[*owner].hash;
+        let value_hash = stu.instances[*value_index].hash;
+        let value = literal_of(stu, *value_index, value_hash);
+        let Some(value) = value else {
+            continue;
+        };
+        out.push(Param {
+            state: *owner,
+            state_hash: owner_hash,
+            state_name: class_names.name(owner_hash).map(str::to_string),
+            field_hash: *field_hash,
+            field_name: None,
+            field_type: None,
+            value,
+            value_hash,
+        });
+    }
+    out.sort_by_key(|p| (p.state, p.field_hash));
+    out
+}
+
 /// Named parameters for a graph asset.
-pub fn params_for_graph(
-    data: &GameData,
-    graph: u64,
-) -> Result<Vec<Param>> {
+pub fn params_for_graph(data: &GameData, graph: u64) -> Result<Vec<Param>> {
     let stu = data.stu_of(graph)?;
     Ok(params_of(&stu, &data.classes, &data.fields))
 }
@@ -122,6 +198,13 @@ pub fn params_for_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ability_state_hash_is_the_reference_one() {
+        // Pinned so an accidental edit fails loudly: the ability-node walk
+        // keys every row off this hash.
+        assert_eq!(ABILITY_STATE, 0xC38B_92B4);
+    }
 
     #[test]
     fn names_are_shown_without_the_m_prefix() {

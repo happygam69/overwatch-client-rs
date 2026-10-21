@@ -87,10 +87,8 @@ impl<'a> EncodingFile<'a> {
 
         let ck_page_kb = u16::from_be_bytes([data[5], data[6]]) as usize;
         let es_page_kb = u16::from_be_bytes([data[7], data[8]]) as usize;
-        let n_ck_pages =
-            u32::from_be_bytes([data[9], data[10], data[11], data[12]]) as usize;
-        let n_es_pages =
-            u32::from_be_bytes([data[13], data[14], data[15], data[16]]) as usize;
+        let n_ck_pages = u32::from_be_bytes([data[9], data[10], data[11], data[12]]) as usize;
+        let n_es_pages = u32::from_be_bytes([data[13], data[14], data[15], data[16]]) as usize;
         let espec_size = u32::from_be_bytes([data[18], data[19], data[20], data[21]]) as usize;
 
         if ck_page_kb == 0 || es_page_kb == 0 {
@@ -198,7 +196,8 @@ impl<'a> EncodingFile<'a> {
         let mut p = 0usize;
         while p + 25 <= body.len() {
             let entry_key = &body[p..p + 16];
-            let espec = u32::from_be_bytes([body[p + 16], body[p + 17], body[p + 18], body[p + 19]]);
+            let espec =
+                u32::from_be_bytes([body[p + 16], body[p + 17], body[p + 18], body[p + 19]]);
             let size = ((body[p + 20] as u64) << 32)
                 | ((body[p + 21] as u64) << 24)
                 | ((body[p + 22] as u64) << 16)

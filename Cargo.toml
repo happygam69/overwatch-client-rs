@@ -4,10 +4,6 @@ members = [
     "crates/ow-casc",
     "crates/ow-stu",
     "crates/ow-tank",
-    "crates/ow-sim",
-    "crates/ow-range",
-    "crates/ow-probe",
-    "crates/ow-view",
 ]
 
 [workspace.package]
@@ -22,8 +18,10 @@ description = "Clean-room Rust reader for a local Overwatch install's gameplay d
 ow-casc = { path = "crates/ow-casc" }
 ow-stu = { path = "crates/ow-stu" }
 ow-tank = { path = "crates/ow-tank" }
+ow-scene = { path = "crates/ow-scene" }
 ow-sim = { path = "crates/ow-sim" }
 ow-view = { path = "crates/ow-view" }
+ow-game = { path = "crates/ow-game" }
 
 # Cryptography and compression used by the container and manifest layers.
 aes = "0.8"

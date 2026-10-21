@@ -25,7 +25,7 @@
 //! necessary to walk the embedded arrays that link them.
 
 use crate::classes::{
-    hero_setting, HERO_SETTING_FLOAT, HERO_SETTING_FLOAT_DEFAULTS, HERO_SETTINGS,
+    hero_setting, HERO_SETTINGS, HERO_SETTING_FLOAT, HERO_SETTING_FLOAT_DEFAULTS,
 };
 use crate::{GameData, Result};
 use ow_stu::Stu;
@@ -142,14 +142,23 @@ mod tests {
     /// two entries would silently report a step of 1.0 and a maximum of 0.01.
     #[test]
     fn defaults_line_up_with_the_read_order() {
-        assert_eq!(HERO_SETTING_FLOAT_DEFAULTS[0].0, hero_setting_float::DEFAULT);
+        assert_eq!(
+            HERO_SETTING_FLOAT_DEFAULTS[0].0,
+            hero_setting_float::DEFAULT
+        );
         assert_eq!(HERO_SETTING_FLOAT_DEFAULTS[1].0, hero_setting_float::MIN);
         assert_eq!(HERO_SETTING_FLOAT_DEFAULTS[2].0, hero_setting_float::MAX);
         assert_eq!(HERO_SETTING_FLOAT_DEFAULTS[3].0, hero_setting_float::STEP);
 
         assert_eq!(HERO_SETTING_FLOAT_DEFAULTS[2].1, 1.0, "max defaults to 1");
-        assert_eq!(HERO_SETTING_FLOAT_DEFAULTS[3].1, 0.01, "step defaults to 0.01");
-        assert_eq!(HERO_SETTING_FLOAT_DEFAULTS[1].1, 0.0, "min has no authored default");
+        assert_eq!(
+            HERO_SETTING_FLOAT_DEFAULTS[3].1, 0.01,
+            "step defaults to 0.01"
+        );
+        assert_eq!(
+            HERO_SETTING_FLOAT_DEFAULTS[1].1, 0.0,
+            "min has no authored default"
+        );
     }
 
     #[test]

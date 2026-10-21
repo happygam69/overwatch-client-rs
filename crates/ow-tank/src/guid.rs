@@ -31,6 +31,18 @@ pub fn type_of(guid: u64) -> u16 {
     reverse_type_bits(mangled) + 1
 }
 
+/// The GUID of a texture's *separate* payload asset (the reference's
+/// `GetPayloadGUID2`): type becomes `0x04D`, the payload index lands in the
+/// locale nibble (bits 32..35), and bit 40 clears (payload index 0 is
+/// embedded, so callers pass 1 or more).
+pub fn payload_of(texture: u64, payload_idx: u32) -> u64 {
+    const PAYLOAD_TYPE: u16 = 0x04D;
+    let mut g = texture & !(0xF_u64 << 32) & !(1_u64 << 40);
+    g |= (payload_idx as u64 & 0xF) << 32;
+    g &= !(0x0FFF_u64 << 48);
+    g | ((reverse_type_bits(PAYLOAD_TYPE - 1) as u64) << 48)
+}
+
 /// The per-type sequence number.
 pub fn index_of(guid: u64) -> u32 {
     (guid & 0xFFFF_FFFF) as u32
@@ -49,6 +61,7 @@ pub mod types {
     pub const GAME_MODE: u16 = 0x0C5;
     pub const LOOTBOX: u16 = 0x0CF;
     pub const TALENT: u16 = 0x134;
+    pub const TEX_PAYLOAD: u16 = 0x04D;
 
     /// Human-readable label, or `None` for types this project has not mapped.
     pub fn label(type_id: u16) -> Option<&'static str> {

@@ -106,7 +106,36 @@ pub fn weapons_in(stu: &mut Stu) -> Vec<Weapon> {
 
 /// Whether a graph reference points at an asset that exists and is a graph.
 pub fn graph_is_present(data: &GameData, graph: u64) -> bool {
-    data.registry().get(graph).is_some() && guid::type_of(graph) == classes::STATESCRIPT_GRAPH_ASSET_TYPE
+    data.registry().get(graph).is_some()
+        && guid::type_of(graph) == classes::STATESCRIPT_GRAPH_ASSET_TYPE
+}
+
+/// The health-modification amounts a weapon graph declares, as `(node, field,
+/// value)` rows.
+///
+/// This is the file-side end of the per-shot damage hunt: a graph's
+/// `STUStatescriptModifyHealth` nodes carry their `m_amount` as a literal, and
+/// those literals are unambiguous *as literals*. Whether one is weapon damage,
+/// a heal, a trigger tick (`1e-05`), or a percentage-scale value (`10000`)
+/// is decided by the operation enum and the graph wiring, which this does not
+/// interpret — so the rows are reported, not labelled, and the per-ability
+/// damage column stays hedged (see [`crate::entity::Ability`]).
+/// Returns an empty list when the graph holds no modify-health node, which is
+/// the common case for pure weapon graphs (their damage lands in ability
+/// graphs the hero only reaches at runtime).
+pub fn modify_health_amounts(
+    data: &GameData,
+    graph: u64,
+) -> Result<Vec<(usize, u32, crate::entity::Value)>> {
+    let stu = data.stu_of(graph)?;
+    Ok(crate::volley::modify_health_of(&stu)
+        .into_iter()
+        .flat_map(|(node, literals)| {
+            literals
+                .into_iter()
+                .map(move |(field, value)| (node, field, value))
+        })
+        .collect())
 }
 
 #[cfg(test)]
