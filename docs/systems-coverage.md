@@ -14,7 +14,7 @@ reimplementation.
 | 4 | Materials and textures | chain read and partly joined; textures decode (BC1-7, BC6H) with an external decoder oracle; the `0x008` keyring wall limits the covered subset | `formats/materials.md` |
 | 5 | Statescript graphs, damage nodes | nodes, literals, runtime graph and vars read; per-class code is metaobject only; node type index source still open | `formats/statescript.md`, `formats/weapons.md` |
 | 6 | Weapons, ballistics, volley | file side and class surface read; volley literals labelled; damage stays supplied | `formats/weapons.md` |
-| 7 | Entity/component system | router mapped and fully paired (descriptors, sizes, fields, parents); TankLib naming only | `systems-plan.md` (Phase 4) |
+| 7 | Entity/component system | router mapped and fully paired (descriptors, sizes, fields, parents); TankLib naming only | `history/systems-plan.md` (Phase 4) |
 | 8 | Character mover (data) | parameters read; horizontal/vertical arithmetic measured from keyed traces and verified | `formats/character-controller.md` |
 | 9 | Mover update path | chain read; concrete class registration path read; the control itself is **tier 3** (obfuscated) | `formats/character-controller.md` |
 | 10 | Domino physics | solver chain, integration order and dt read (1/30 s steps, commanded step count) | `formats/domino.md` |

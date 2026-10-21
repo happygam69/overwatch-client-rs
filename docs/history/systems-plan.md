@@ -271,7 +271,7 @@ Four functions decompile the reflection system itself:
 * The node vtable at `0x7ff64ce43a00` has **non-pointer bytes in its low slots**
   and stubs/traps at +0x48 (aborts with 0xf8) with an obfuscated initializer at
   +0x60 — base-class slots; the real per-kind behaviour lives in subclass
-  overrides (`docs/systems-plan.md` note: read vtable entries defensively).
+  overrides (`docs/history/systems-plan.md` note: read vtable entries defensively).
 
 All four are renamed/bookmarked in the `owmod` project.
 
@@ -671,7 +671,7 @@ it, which also supplies the verification baseline the goal asks for.
 ## Where this feeds the rewrite
 
 Everything this document established is staged into implementation order in
-[`docs/rewrite-plan.md`](rewrite-plan.md): the open items above become
+[`docs/rewrite-plan.md`](../rewrite-plan.md): the open items above become
 questions with evidence needs (its Q1–Q8), the decompile targets and the
 empirical route become two parallel lanes, and the first deliverable is the
 verification harness that turns "matching the original" into a measurable
@@ -681,7 +681,7 @@ claim.
 
 The decompile round this document ended on resolved the opposite way and then
 much better than expected. Full record in
-[`docs/formats/domino.md`](formats/domino.md); the corrections in brief:
+[`docs/formats/domino.md`](../formats/domino.md); the corrections in brief:
 
 * **The `0x7ff7c536xxxx` cluster is not Domino code.** It is narrative-viewer
   UI serialization plus Wwise audio; the "`bcPQTransform` field-type object at

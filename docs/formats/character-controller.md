@@ -32,8 +32,8 @@ the per-hero mover dump and do not move with the build.
 `FUN_7ff64b7ea450` (2892 B; heap twin `0x161b42ea450`) is the component type
 router: given a 32-bit component type hash, it binary-searches a compare chain
 and writes a small component id as `mov byte ptr [rbx], <id>`. The pairing was
-extracted mechanically from the compare leaves
-(`dev/extract_component_table.py`, result in `dev/component_table.txt`): **120
+extracted mechanically from the compare leaves (the result is in
+`dev/component_table.txt`): **120
 component ids**, each bound to one hash. The three that matter here:
 
 | id | type hash | class (from the reference tooling) |
@@ -136,7 +136,7 @@ pool is the anchor for that next read.
 ## The class surface, read out — and why the update is not on it
 
 The third capture (`dumps_exec`, delta `0x1096A0000`, `exec = range + delta`;
-ground truth and coverage in `docs/systems-plan.md`) covers the four mover
+ground truth and coverage in `docs/history/systems-plan.md`) covers the four mover
 statics that were gaps, and all four are introspection: allocator
 (`Alloc(0x130,0)` — the object is the STU size exactly), constructor (writes
 the three vtables below), default comparator and default provider. The volley's
@@ -159,7 +159,7 @@ filtered rankings still surface only reflection walkers, deserializers and
 copiers (the reflection passes enumerate every offset by construction; the
 mover's displacements are not distinctive), this says the consumer must be
 reached **through the physics body the component configures** — the Domino
-route in `docs/systems-plan.md` — not through the component's own surface.
+route in `docs/history/systems-plan.md` — not through the component's own surface.
 
 The 15 router leaves that the mechanical pairing missed are recoverable from
 the compare tree, and are the same missing piece for combat (health 0x3a is
@@ -167,8 +167,8 @@ already anchored).
 
 ## Method provenance
 
-* Component router pairing: capstone replay over `FUN_7ff64b7ea450`, extraction
-  in `dev/extract_component_table.py` (jet, `je`-leaf forward slicing).
+* Component router pairing: capstone replay over `FUN_7ff64b7ea450`
+  (the result is in `dev/component_table.txt`).
 * Registrar slot pairing: capstone walk over `FUN_161b423db83`+' window
   (`dev/volley_slots.txt` for volley; the mover pairing is spot-checked
   inline).
@@ -266,9 +266,10 @@ The mover's full table (offset / field hash / field descriptor):
 ## The mover's jump struct, verified from the client's own defaults
 
 The second capture (different session — module base shifted by ASLR,
-`docs/systems-plan.md` has the translation rule) finally held the mover
+`docs/history/systems-plan.md` has the translation rule) finally held the mover
 component's descriptor functions, and the default provider/comparator pair
-reads out the component's full default table (`dev/mover_defaults.txt`).
+reads out the component's full default table (the values are in this
+document).
 
 The standout: the mover's second inline struct — `m_9947871A`
 (`STU_97288E54`) at STU offset 72 — carries the vertical/jump configuration,
@@ -477,7 +478,7 @@ exactly the live mover object's size (52 fields, parent
 it registers through the lazy TLS-guarded path). So the mover object this
 document follows is the runtime of the mover *component*, and its schema name
 is known even though the engine class itself registers as "Unknown". See
-`docs/systems-plan.md` and `dev/component_router_paired.txt`.
+`docs/history/systems-plan.md` and `dev/component_router_paired.txt`.
 
 ## The mover integrates per frame, and its rates are measured (this round)
 
@@ -1006,7 +1007,7 @@ contiguous slice is equal); the fast version returns identical hits and
   which also refuses an address whose row is not a unit vector).
 
 **Which copy is the feet** is decided by crouch: the stance-following copies
-drop 0.427-0.465 m, the feet copy is bit-stable (`dev/feet_probe.py`). The
+drop 0.427-0.465 m, the feet copy is bit-stable. The
 recorder wants the feet copy: its vertical is the body's, not the stance's.
 
 **Mouse injection does turn the view.** 3000 px of relative `mouse_event`

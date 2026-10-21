@@ -18,7 +18,7 @@ runtime test exists for the client's solver.
 
 The client's physics engine is a Box2D-lineage system called Domino (`dm*`
 classes). This document is the result of a decompile round against the v2b
-capture (build `2.25.0.0.154088`, see `docs/systems-plan.md` for the capture
+capture (build `2.25.0.0.154088`, see `docs/history/systems-plan.md` for the capture
 set and the ASLR deltas) that **recovered the complete runtime schema** — every
 class, every field, every offset: 21 classes, 179 field records. This is the
 Q1 artefact `docs/rewrite-plan.md` was blocked on.
@@ -192,7 +192,7 @@ link to the mover object itself is not a field of `dmBody`.
 
 ## The 1/60 correction
 
-`systems-plan.md` recorded `0x3C888889` (1/60) as a **candidate fixed tick**.
+`history/systems-plan.md` recorded `0x3C888889` (1/60) as a **candidate fixed tick**.
 That candidate is now **closed — falsified**: the function that consumes the
 run (`FUN_7ff7c7a5aee0`, exec-translatable) is a **mass-properties
 computation** — signed-tetrahedron integration over a mesh's triangles
@@ -605,7 +605,6 @@ addresses translate to v2b by `+0x17AEC0000` and to exec by `+0x71820000`;
 the constructor is `0x7ff7c7a47c70` in v2b and `0x7ff64cb87c70` in range.
 
 Artifacts (gitignored): `dev/dump_domino_schema.py` (the registry reader),
-`dev/dump_domino_desc.py`/`dump_domino_fields.py` (single-descriptor probes),
 `dev/domino_schema.txt` (the full 21-class dump), `dev/outline_sites.py`.
 `dev/find_refs.py` now honours `OW_DUMPS` like the rest of the toolchain.
 
@@ -861,7 +860,7 @@ Two more sweeps this round, both recorded as the method's false-friend list:
 * functions combining the **jump struct** with speed slots (10 hits) — the
   same curve families again.
 
-The lesson from `docs/systems-plan.md` holds one level deeper: the mover's
+The lesson from `docs/history/systems-plan.md` holds one level deeper: the mover's
 displacements (`0x50`–`0x64`, `0xac`–`0xf0`) are exactly the displacements
 curve and list code uses, so displacement co-occurrence cannot separate them.
 The mover control needs either the operator's live trace (Lane B) or a

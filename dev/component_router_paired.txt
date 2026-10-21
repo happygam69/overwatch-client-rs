@@ -1,0 +1,119 @@
+0x01	70efce32	?	registry
+0x03	c3abe193	?	registry
+0x04	191835f9	STUModelComponent	registry
+0x05	09cb5a77	?	registry
+0x07	785a6d26	?	registry
+0x08	0386b3a1	?	registry
+0x0a	9b3898c8	STUEffectComponent	registry
+0x0c	e6a832a2	?	registry
+0x0f	4343388f	?	registry
+0x10	133c72e7	?	registry
+0x11	fcd6ba0a	?	registry
+0x12	47278665	?	size=0x18 fields=1 parent=7395d144(STUEntityComponent)
+0x14	08ae6411	?	registry
+0x15	5054972d	STUContactSetComponent	registry
+0x17	e854e1c0	?	registry
+0x19	8745618a	STUVoiceSetComponent	registry
+0x1a	6752c47d	?	registry
+0x1b	1e7f5459	?	registry
+0x1c	fc1ac4f5	?	size=0x8 fields=0 parent=773dc32c(STUMirroredEntityComponent)
+0x22	3aa5cb04	STUMirroredIdleAnimComponent	registry
+0x23	e272a026	?	registry
+0x24	7a36ae06	?	registry
+0x26	6efdbd73	STUCharacterMoverComponent	size=0x130 fields=52 parent=773dc32c(STUMirroredEntityComponent)
+0x27	50ba775c	?	size=0x48 fields=25 parent=7395d144(STUEntityComponent)
+0x28	af1d443b	?	size=0x18 fields=1 parent=773dc32c(STUMirroredEntityComponent)
+0x29	6235cce1	?	registry
+0x2b	b3931c24	?	registry
+0x2c	b70590e4	STUCaptureAreaComponent	registry
+0x2d	9756a276	?	registry
+0x2e	496257b5	?	registry
+0x2f	ee0fb992	?	registry
+0x30	0c29ba28	?	registry
+0x31	9911a927	STULocalIdleAnimComponent	registry
+0x32	db08d4c1	?	registry
+0x35	9d28963f	STUFirstPersonComponent	size=0x70 fields=7 parent=7395d144(STUEntityComponent)
+0x36	fd024f42	STUStatescriptComponent	size=0x28 fields=3 parent=773dc32c(STUMirroredEntityComponent)
+0x38	15cb6532	STUWeaponComponent	registry
+0x39	b1bab531	?	registry
+0x3a	a658ca1c	STUHealthComponent	size=0x68 fields=12 parent=773dc32c(STUMirroredEntityComponent)
+0x3b	f8f70a48	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0x3c	8b86477d	?	registry
+0x3d	a0216ad1	?	size=0x8 fields=0 parent=773dc32c(STUMirroredEntityComponent)
+0x3e	2ba25a03	?	size=0x8 fields=0 parent=773dc32c(STUMirroredEntityComponent)
+0x40	b42d3ef2	?	registry
+0x41	737c5c41	?	size=0x8 fields=0 parent=773dc32c(STUMirroredEntityComponent)
+0x4a	1d82c4a6	?	registry
+0x4b	f492bb50	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0x4e	993b1b10	?	registry
+0x50	2bd49d74	STUPetComponent	registry
+0x51	dae477d5	?	registry
+0x53	4be2011b	?	registry
+0x54	445e7678	STUTargetTagComponent	registry
+0x55	fbbc6291	?	registry
+0x56	95468755	?	registry
+0x57	d34b823d	STUFallingDamageComponent	size=0x30 fields=3 parent=7395d144(STUEntityComponent)
+0x58	959d4e72	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0x59	c261fea5	STUImpactEffectOverrideComponent	size=0x18 fields=1 parent=7395d144(STUEntityComponent)
+0x5a	cdb8def3	?	size=0x10 fields=1 parent=7395d144(STUEntityComponent)
+0x5d	15971773	?	registry
+0x5e	8fe674f9	STUAIBehaviorComponent	size=0xe0 fields=11 parent=773dc32c(STUMirroredEntityComponent)
+0x60	737ff350	?	registry
+0x63	76af64f0	?	size=0x18 fields=6 parent=7395d144(STUEntityComponent)
+0x64	ca1fb0b8	?	size=0x8 fields=0 parent=773dc32c(STUMirroredEntityComponent)
+0x65	88c3e491	?	registry
+0x68	66a032bc	?	registry
+0x69	6b4a005d	?	registry
+0x6a	78bb5aa0	?	registry
+0x6b	a1f52c65	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0x71	70a6a466	STUEscortComponent	size=0x20 fields=4 parent=7395d144(STUEntityComponent)
+0x72	52388213	?	registry
+0x74	0af93768	?	registry
+0x75	be0d85fb	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0x76	d411564e	?	registry
+0x77	789f95b2	?	registry
+0x78	f00e5a06	?	registry
+0x79	eb9564e1	?	size=0x10 fields=1 parent=773dc32c(STUMirroredEntityComponent)
+0x7a	be9a0b3e	?	registry
+0x7b	9021d3ba	?	registry
+0x7c	21c21581	?	size=0x8 fields=0 parent=773dc32c(STUMirroredEntityComponent)
+0x7d	58c06302	?	size=0x8 fields=0 parent=773dc32c(STUMirroredEntityComponent)
+0x7f	dcbe60c9	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0x80	ab1003ef	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0x82	be62fadc	?	registry
+0x84	92584312	?	size=0x30 fields=4 parent=7395d144(STUEntityComponent)
+0x85	9d4ae33c	?	registry
+0x86	abaa30e8	?	registry
+0x8c	e6d6202a	?	registry
+0x8d	f387032e	?	size=0x10 fields=1 parent=7395d144(STUEntityComponent)
+0x8e	ff4a97c3	?	registry
+0x8f	a127f2de	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0x90	8708529c	?	registry
+0x93	6ccb6bb2	?	registry
+0x94	bda5db36	?	size=0x10 fields=2 parent=7395d144(STUEntityComponent)
+0x95	b4ab0482	?	registry
+0x96	49febd70	?	size=0x18 fields=1 parent=7395d144(STUEntityComponent)
+0x97	9f29d880	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0x98	bc089dc0	?	registry
+0x99	6f70925d	?	registry
+0x9a	7a16d1e3	?	registry
+0x9b	3951cb2b	?	registry
+0x9c	1009f915	?	registry
+0x9d	2b55bb8d	?	registry
+0x9e	9549fec3	?	registry
+0x9f	bcf34afb	?	registry
+0xa0	8347818f	?	registry
+0xa1	cd65fb1d	?	size=0x28 fields=2 parent=7395d144(STUEntityComponent)
+0xa2	3668f699	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0xa3	b8617143	?	registry
+0xa4	59b6e963	?	registry
+0xa7	f96ea9e6	?	registry
+0xa8	7d29e3d0	?	size=0x8 fields=0 parent=7395d144(STUEntityComponent)
+0xa9	b5817e21	?	registry
+0xab	238ef37e	?	size=0xa0 fields=13 parent=7395d144(STUEntityComponent)
+0xac	d09f2b18	?	registry
+0xad	8d566bdc	?	size=0x18 fields=1 parent=773dc32c(STUMirroredEntityComponent)
+0xb1	6e92ddd7	?	registry
+0xb2	e7bf8b6f	?	size=0x8 fields=0 parent=773dc32c(STUMirroredEntityComponent)
+0xb3	6a1df55e	?	registry
+0xb4	1fe9a964	?	registry

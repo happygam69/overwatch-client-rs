@@ -21,10 +21,18 @@
 !/.gitattributes
 !/crates/
 !/docs/
+!/dev/
 
-# Development scratch: process captures, decomp/analysis tooling, active
-# working data. None of it is the product; captures are re-derivable.
-/dev/
+# The analysis tools are original work and are tracked, so a re-derivation
+# survives a lost machine. Everything they *produce* is not: captures,
+# merged images, decompiles, hex dumps and the multi-MB text outputs stay on
+# the machine that made them (D:/ow-dumps, gitignored).
+/dev/*
+!/dev/*.py
+!/dev/*.ps1
+!/dev/*.md
+!/dev/*.txt
+!/dev/*.jsonl
 /target/
 **/target/
 
@@ -39,6 +47,9 @@
 *.keyring
 *.00c
 *.0bc
+*.npy
+*.raw
+*.bin
 
 # Nor extracted or derived data.
 /extracted/

@@ -111,19 +111,21 @@ on the latter is cheat-oriented and was not consulted.
 
 ## Development scratch
 
-`dev/` holds the decomp/analysis toolchain and the working data: the read-only
+`dev/` holds the decomp/analysis toolchain: the read-only
 process capture (`dump_process.py`, `regions.py`), the practice-range capture
 helpers (`capture_range.py`, `find_mapchunks.py`, `watch_chunks.py`,
 `live_mapscan.py`), the decomp searches (`disasm_field_sites.py`,
-`find_guid_constants.py`, `find_hash`-style constant scans), per-build manifest
-support (`provider_interp.py`, `cmf_search.py`), capture viewing and Ghidra
+`imm_scan.py`, `xref_rva.py`, `find_refs.py`), capture viewing and Ghidra
 import (`peek.py`, `flatten.py`), and the current question's working files
-(GUID and value lists being tested against candidate transforms). It also holds
-the process captures themselves and the Ghidra project (`ghidra_run/`) built
-on them.
+(GUID and value lists being tested against candidate transforms). Every tool
+is listed in `dev/INDEX.md` with the question it answers.
 
-None of it is part of the product; `.gitignore` excludes all of it. The
-one-off format probes that used to live here were deleted once
+The tools are original work and are tracked; what they produce is not. The
+process captures, the Ghidra project (`dev_ghidra_run/` on `D:/ow-dumps`) and
+the multi-MB outputs stay on the machine that made them, and
+`.gitignore` keeps them out.
+
+The one-off format probes that used to live here were deleted once
 `docs/formats/` carried their verified results — the document is the record,
 not the probe. Captures are re-derivable by re-running the capture scripts
 against a running client, which is the operator's decision to make (see the

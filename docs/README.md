@@ -11,9 +11,11 @@ read-only memory captures. Nothing from the game ships in this repository.
 | know what the pieces are | [`architecture.md`](architecture.md) |
 | look up a term (STU, RVA, tier 3, ...) | [`glossary.md`](glossary.md) |
 | see every client system and its state | [`systems-coverage.md`](systems-coverage.md) |
+| **pick the next thing to work on** | **[`open-questions.md`](open-questions.md)** |
 | know what is fitted, assumed or tier 3 | [`fitted-ledger.md`](fitted-ledger.md) |
 | know how evidence is classified | [`provenance.md`](provenance.md) |
 | find a file on `D:/ow-dumps` | [`artifacts.md`](artifacts.md) |
+| know which tool answers a question | [`../dev/INDEX.md`](../dev/INDEX.md) |
 | know how a subsystem works today | [`formats/`](formats/) (one file per system) |
 | understand a specific decision's history | [`history/`](history/) |
 | see the current state and next steps | [`../STATUS-handoff.md`](../STATUS-handoff.md) |
@@ -23,10 +25,10 @@ Plans and process docs (different scopes, on purpose):
 
 | doc | scope |
 |---|---|
-| [`plan-understanding.md`](plan-understanding.md) | this cleanup/organisation plan |
+| [`open-questions.md`](open-questions.md) | the work queue: every open question, what would settle it |
 | [`roadmap.md`](roadmap.md) | whole-project rewrite goal and accounting |
 | [`rewrite-plan.md`](rewrite-plan.md) | the movement/combat bit-exact plan |
-| [`systems-plan.md`](systems-plan.md) | the systems-extraction sweep (engine index) |
+| [`history/`](history/) | finished plans and research logs (the systems sweep, the cleanup plan) |
 
 Reading orders by task:
 

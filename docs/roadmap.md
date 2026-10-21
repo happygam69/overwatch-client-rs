@@ -105,8 +105,9 @@ The client forces updates, so the build this project was verified against
 little:
 
 **The key derivation no longer has to be hand-written per build.**
-`dev/provider_interp.py` reads a provider's `Key()` and `IV()` source and
-interprets it. Validated against build 150851: it reproduces the key and IV that
+`ow-tank`'s manifest reader (`crates/ow-tank/src/manifest.rs`, key table in
+`keytable.rs`) reads the provider's `Key()` and `IV()` source and interprets
+it. Validated against build 150851: it reproduces the key and IV that
 are independently confirmed by decrypting the real manifest, byte for byte. So a
 new build is *evaluated* rather than guessed at.
 

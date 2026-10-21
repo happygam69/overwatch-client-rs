@@ -796,8 +796,8 @@ those materials (`0x0e000000000000e3`, Tracer's body material, declared 144 B):
 | sharing: does any *other* asset use this content key? | no — it is unique to this asset |
 | a second install on this machine | none |
 
-**In memory it is not the on-disk shape.** `dev/capture_material_scan.py` scans a
-captured heap for the material's on-disk signature (four GUIDs of types
+**In memory it is not the on-disk shape.** A captured heap was scanned for the
+material's on-disk signature (four GUIDs of types
 `0x085`, `0x088`, `0x03A`, `0x0B3`) and finds **0 of 208 MB** in
 `module_heap.bin`: at runtime a material is a structure of pointers, not the
 packed GUID record, so recovering it from a capture means decoding the runtime

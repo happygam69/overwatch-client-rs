@@ -40,7 +40,7 @@ new claims.
   research logs** (`formats/*.md`), **living ledgers** (`STATUS-handoff`,
   `systems-coverage`, `fitted-ledger`), and **code**. The logs are valuable
   but contain retractions inline, so current truth is hard to see.
-- Overlapping plan documents: `systems-plan.md`, `roadmap.md`,
+- Overlapping plan documents: `history/systems-plan.md`, `roadmap.md`,
   `rewrite-plan.md`, `systems-coverage.md`, `STATUS-handoff.md` all carry
   project state with different scopes.
 - `systems-coverage.md` cells are multi-paragraph; it is accurate but not

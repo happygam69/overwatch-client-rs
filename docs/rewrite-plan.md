@@ -8,10 +8,10 @@ taken from the operator's own installed copy.
 
 This document sequences that work. The whole-project accounting (assets,
 renderer, maps) stays in [`roadmap.md`](roadmap.md); the capture-side findings
-that feed this plan are in [`systems-plan.md`](systems-plan.md); the method
+that feed this plan are in [`history/systems-plan.md`](systems-plan.md); the method
 rules are [`provenance.md`](provenance.md)'s. Everything below is against
 build `2.25.0.0.154088`, with the per-capture ASLR deltas already recorded in
-`systems-plan.md` (range→exec `+0x1096A0000`, range→v2b `+0x17AEC0000`,
+`history/systems-plan.md` (range→exec `+0x1096A0000`, range→v2b `+0x17AEC0000`,
 v2b→exec `0x71820000`).
 
 ## What "1 to 1" verifies, concretely
@@ -45,10 +45,10 @@ replace).
 | fact | status | established |
 |---|---|---|
 | mover runtime slot map (`0x50` jump-struct start, `0x58` jump apex 0.98, `0xAC` side, `0xB0` back, `0xB4` forward, `0xC0` crouch, `0xE0` speed, `0xF0` fall terminal; size `0x130`) | decompiled + capture-data | `formats/character-controller.md` |
-| jump-struct defaults bit-exact: 20 / 20 / **0.98** / 0.7 / 0.7 / 0.2 | decompiled (comparator + provider) | `systems-plan.md` § defaults |
+| jump-struct defaults bit-exact: 20 / 20 / **0.98** / 0.7 / 0.7 / 0.2 | decompiled (comparator + provider) | `history/systems-plan.md` § defaults |
 | per-hero speed family (5.5 base, 6.0 trio, back = 90%, crouch ≈ 3, fall terminal 30) | install, shape-checked | `ow-sim/src/movement.rs` header |
-| Domino physics schema: `dmBody` (`linearVelocity`, `gravityScale`, `linearDamping`, `characterMover`, `mass`, `invMass`, …), `dmWorld` (`m_inv_dt0`, `m_gravity`, body/fixture/contact lists, sleep/warm-start/continuous flags), Box2D lineage | capture-data (plaintext pool) | `systems-plan.md` § Domino route |
-| 1/60 as a 4-wide float run in the physics defaults (1/50, 1/100 also present) | capture-data — **candidate, not consumer-read** | `systems-plan.md` |
+| Domino physics schema: `dmBody` (`linearVelocity`, `gravityScale`, `linearDamping`, `characterMover`, `mass`, `invMass`, …), `dmWorld` (`m_inv_dt0`, `m_gravity`, body/fixture/contact lists, sleep/warm-start/continuous flags), Box2D lineage | capture-data (plaintext pool) | `history/systems-plan.md` § Domino route |
+| 1/60 as a 4-wide float run in the physics defaults (1/50, 1/100 also present) | capture-data — **candidate, not consumer-read** | `history/systems-plan.md` |
 | the dt table `{1/365, 1/60, 1/30, 1/24}` at `0x7ff75653d840`; a system tick passes **1/30** into the substep solver; the character-shaped step solves with 8/3 iterations | decompiled | `formats/domino.md` § Q2/Q4 |
 | the solver chain (system tick → substep driver → island builder → island Solve → constraint dispatch) and the dmBody runtime layout verified from code (`m_bodies` +0x288, stride 0x1c0, invMass +0x168, invI +0xf0) | decompiled | `formats/domino.md` § Q2/Q4 |
 | velocity integration op order `v' = ((gScale·mass·g + force) · (invMass·dt)) + v`; linear damping `clamp(1 − d·dt, 0, 1)` (not Box2D's `1/(1+dt·d)`); position `x += dt·v`; quaternion renormalize; 4 m/step displacement clamp | decompiled (assembly) | `formats/domino.md` § Q2/Q4 |
@@ -56,7 +56,7 @@ replace).
 | jump impulse **5.33** m/s, fall accel **17.37** m/s² | **capture-data** (measured): impulse from the traced jump arc's first-frame displacement and discrete ascent sum; gravity from the constant 0.5613 m/s shed per frame ÷ dt. Both replaced the earlier published-figure guesses of 5.72 / 17.5. | `movement.rs`, `STATUS-handoff.md` § crouch/air/reverse |
 | damage pool order + armour mitigation | **assumed** | `ow-sim/src/rules.rs` |
 | hero capsule 0.4 m radius / 1.8 m height | **assumed** | `ow-sim` `Combatant::new` |
-| no gameplay code references a component class/descriptor/vtable; the update must be reached through the physics body | decompiled (identity census, negative result) | `systems-plan.md` |
+| no gameplay code references a component class/descriptor/vtable; the update must be reached through the physics body | decompiled (identity census, negative result) | `history/systems-plan.md` |
 
 The two **assumed** rows above are the debt this plan exists to retire. A third
 was retired on 2026-10-15: `ACCEL` 121.4, `FRICTION` 72.6, `AIR_ACCEL` 18.5 and
@@ -68,7 +68,7 @@ and no rate literal in any region (`formats/character-controller.md` § Q3).
 ## The questions the rewrite still depends on
 
 Each question with the evidence its answer needs — the working checklist, in
-[`systems-plan.md`](systems-plan.md)'s sweep order and REA's evidence
+[`history/systems-plan.md`](systems-plan.md)'s sweep order and REA's evidence
 discipline.
 
 * **Q1 — dmBody/dmWorld field offsets.** Needed to read and write live bodies

@@ -295,9 +295,9 @@ mode field, the 32 two-subset partition shapes with their fix-up pixels, delta
 ("transformed") endpoints, both unquantisation fix-ups, and half-float output.
 
 **The tables are data, not derivable code**, so they are re-derived rather than
-trusted. `dev/bc6h_tables.py` reads three published sources live — Khronos
+trusted. The three published sources - Khronos
 `EXT_texture_compression_bptc` (revision 2), iOrange's `bcdec.h`, and
-Microsoft's "BC6H Format" page — and prints what each says:
+Microsoft's "BC6H Format" page - were read and compared row by row:
 
 * `Table.MF`: all fourteen rows match ours (mode number, transformed flag,
   partition-bit count, endpoint precision, the three delta widths).
@@ -321,8 +321,8 @@ six-bit delta), and Khronos revision 2's `Table.F` prints `b3[5]` too.
 **The arithmetic is checked against an independent decoder, in half floats.**
 `ow-tank-tex --bc6h-selftest` writes, for every one of the fourteen modes, 64
 deterministic pseudo-random blocks and our own decode of them;
-`dev/bc6h_oracle.py` hands the same bytes to `bcdec` (iOrange's reference
-implementation, which follows the specification's steps directly) and compares
+the same bytes were handed to `bcdec` (iOrange's reference
+implementation, which follows the specification's steps directly) and compared
 **16-bit half floats, bit for bit**:
 
 | sweep | blocks | half-float channels | result |

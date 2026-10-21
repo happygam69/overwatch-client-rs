@@ -390,7 +390,8 @@ into the native descriptor.
 
 0. Read the new run's `meta.json` loader base and resolve the watchlist:
    `python dev/faultsync_resolve.py <loader_base_hex>`.
-   Never reuse `dev/faultsync_watchlist_abs_pid6000.txt`.
+   Never reuse an absolute watchlist from another session: those addresses
+   are per-session and only the RVA watchlist travels.
 1. Run the phase-marked capture (90 s, practice range, first-person):
    `python dev/live_page_diff.py --seconds 90 --out D:/ow-dumps/live_page_diff --all-modules --surge-seconds 90 --include-data --focus-file D:/ow-dumps/live_page_diff/run_20261021_033126/gaps.focus`
    Mark menu -> hero select -> in-range with Enter.
@@ -410,11 +411,11 @@ into the native descriptor.
    `powershell -ExecutionPolicy Bypass -File dev/etw_cpu_capture.ps1`
    Start it **before** launching Overwatch, enter the practice range, stop
    after 30-60 s. The ETL lands in `D:\ow-dumps\etw\`. Scan it with
-   `python dev/etw_scan.py <etl>`.
+   `python dev/etw_raw_scan.py <etl> --base <loader_base>`.
    Goal: a sampled leaf PC in `0x14380e0..0x144ee19`, `0x10b72f0..0x10bb000`
    or `0x10c1e20..0x10d06c4`. This is probabilistic (1 kHz sampling); a hit
-   names the applier, a miss proves nothing. **Tool written, not tested** -
-   no ETL has been captured with it yet.
+   names the applier, a miss proves nothing. **Tested**: the 2026-10-21
+   trace named the candidate's dword loop `0x144c839` (see above).
 6. Optional, closes the data side: a read-only private-RW minidump of the
    game while it is in the practice range.
    `python dev/dump_process.py Overwatch.exe D:\ow-dumps\ow_heap_<stamp>.dmp`
@@ -457,7 +458,6 @@ Tools:
 - `dev/ldr_cookie_grab.py` - same-session IAT/stub/TEB/PEB grab (no `--help`).
 - `dev/faultsync_watchlist.txt` - RVA watchlist.
 - `dev/etw_cpu_capture.ps1` - elevated read-only WPR CPU-sample capture.
-- `dev/etw_scan.py` - decode a WPR/ETW trace for loader PCs (not tested).
 - `dev/etw_raw_scan.py` - raw qword scan of an ETL; finds the loader base
   from the UTF-16 name and counts pad-family addresses.
 - `dev/etw_count.py` - exact counts/offsets of known loader addresses.
