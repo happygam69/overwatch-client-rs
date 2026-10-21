@@ -179,6 +179,27 @@ every time.
 
 Do not re-run read-only polls: sessions 18/19/22/26-28 exhausted them.
 
+## Do we have the captures we need?
+
+Yes, with one exception, and it is measured rather than assumed
+(`docs/capture-coverage.md`):
+
+- **Every code address the open questions need is warm** in the standing
+  image - 41 of 41 checked, across animation, camera, movement, combat and
+  physics. The open questions are analysis work.
+- **The standing image was stale.** Re-merging the 17 existing runs (no new
+  capture) takes the client's unread `.text` from 21% to 11% and makes
+  `.pdata` - the function table of the whole client - fully readable. The
+  result is `D:/ow-dumps/module_after_diff_v2.bin`.
+- The two capture gaps the docs recorded (the mover component's four methods,
+  the volley class's region) are **closed**.
+- **One thing needs a new capture:** the page cipher's `w`, which wants
+  runtime state (the faulting rip), not code.
+- **One thing is worth fixing here:** the Ghidra project still holds the
+  12 October image (38% cold pages), so every decompile sees less of the
+  client than the captures hold. Refreshing it to the re-merged image is a
+  single import plus a re-analysis.
+
 ## Open problems
 
 The queue with the full detail is **`docs/open-questions.md`**. In order:
