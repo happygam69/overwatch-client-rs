@@ -1,13 +1,20 @@
 # Roadmap: the rewrite
 
-The goal, stated exactly: **a Rust rewrite of Overwatch that reads its data
-from the operator's own installed copy at runtime and matches the original's
-actual behaviour.** The first-person practice range — geometry, bots, HUD,
-combat — is the *test bed* for that claim: systems are matched by running them
-the way the game runs them. A terminal harness is not the target.
+The goal, stated exactly: **a Rust rewrite of Overwatch, built on Bevy, that
+reads its data from the operator's own installed copy at runtime and matches the
+original's actual behaviour.** The first-person practice range — geometry, bots,
+HUD, combat — is the *test bed* for that claim: systems are matched by running
+them the way the game runs them. A terminal harness is not the target.
 
 This document exists because the project drifted once already, and it is the
 accounting of what exists, what blocks, and what is next.
+
+The concrete plan for the two systems the rewrite is currently racing —
+movement and combat, to bit-level equivalence with the original — is
+[`docs/rewrite-plan.md`](rewrite-plan.md): it sequences the remaining
+reverse-engineering, the `ow-sim` implementation, the Bevy shell, and defines
+exactly what "matching" verifies. This file keeps the whole-project
+accounting.
 
 ## How behaviour gets established
 
@@ -41,7 +48,7 @@ note. `docs/formats/materials.md` is the worked example of the rule.
 | **materials and textures** | **blocked; decomp in progress** | the model→material link is opaque; ruled-out schemes and the client-side map are in `docs/formats/materials.md` |
 | **shaders** | **not reproducible** | the shader system is proprietary. Geometry and textures can be faithful; a pixel-identical look cannot. |
 | **renderer** | exists, untextured | a `wgpu` window, first-person camera, depth buffer; surfaces shaded from normals |
-| **character controller** | not started | movement, gravity, acceleration, collision against map geometry |
+| **character controller** | **implemented and verified** | movement, gravity, acceleration, stand-in collision; behaviour measured from the client's traces and gated per write by `trace_diff` (`docs/formats/character-controller.md`; crouch transition timing and the steep-slope slide remain open) |
 | **combat numbers** | blocked | not in the files; see the Ghidra section |
 | **HUD** | not started | health, ammo, crosshair, damage numbers, the wall panel from the range |
 
@@ -140,7 +147,13 @@ Each stage is meant to be visibly closer to the range.
    material parameters.
 5. **Models.** Skeleton, RenderMesh and Hardpoint chunks, so the training bots
    and the weapon view model appear.
-6. **Character controller.** Movement, gravity, collision against map geometry.
+6. **Character controller.** Movement and gravity: **done** — the arithmetic is
+   measured from the client's own captures, not fitted (see `rewrite-plan.md` §
+   M6 and `STATUS-handoff.md` § movement). **Collision against map geometry is
+   not done**: the meshes are drawn but not solid, and the play harness says so
+   in `ow-view/src/play.rs` rather than pretending. Standing in for it is a
+   ground plane plus four axis-aligned boxes, and the client's real ledge and
+   slope handling is unmodelled (tier 3). Open sub-item.
 7. **Combat and HUD.** The simulation already exists; it needs wiring to the
    rendered world plus health, ammo, crosshair and damage numbers.
 8. **Bots.** The practice-range bots as entities with the health pools already
@@ -206,6 +219,40 @@ code lives. Entropy alone would have suggested success.
 work outward from the hash immediates — find the functions that read
 `numShotsPerSecond` and `m_amount`, and the damage field follows from what they
 touch.
+
+## Reading the capture: the address space, and a second opinion
+
+Two toolchain facts were established by measurement this round, because no
+reading is trustworthy without them.
+
+**One address space per capture.** Every captured region file is named
+`base_size_type`, and the module dumps keep the capture's own addresses: their
+file offset for a byte is `VA - 0x7ff649e60000`, verified by matching whole
+regions byte-for-byte (all 37 pages of one 148 KB region, plus sampled windows
+in two more, including through the Ghidra program's own memory reads). With the
+Ghidra project's program based at `0x7ff7c4d20000` and loaded flat, the
+conversion the docs' capture coordinates need is
+
+```text
+ghidra address = capture address + 0x17AEC0000
+```
+
+The docs keep capture coordinates (`0x7ff64b...`) because those are the
+coordinates the region files and the manifests were taken in. One trap worth
+recording: `module_warm.bin` carries the *same build* with its content shifted
+`-0xC00` in file offset, so the two dumps are interchangeable by address but
+never by offset.
+
+**A second decompiler, on the same bytes.** The REA MCP bridge drives its own
+headless Ghidra, but its Windows profile admits PE targets only, and the
+synthetic module PE will not import (its data directories are junk the loader
+rejects: invalid export/debug/TLS RVAs). The fix is `dev/mkpe.py`: it wraps one
+or more captured regions as a minimal, valid PE — no directories, one section
+per region, `ImageBase = lowest region base - 0x1000` — so every address inside
+the image equals the capture address again. Verified by decompiling the same
+functions through both stacks and by byte comparison; the count-writer sites
+in `docs/formats/materials.md` were read this way, from regions the module dump
+does not carry at all.
 
 ## The update landed, and the reference derivation is wrong
 
@@ -287,7 +334,7 @@ strides produced nothing that satisfies the format's own check — `entry[0].m_i
 | models to vertices and indices | works; 58 of 60 models produce geometry |
 | rendering | works; wgpu, first-person camera, real map geometry |
 | textures and materials | **not read** — surfaces are shaded from their normals |
-| character controller and collision | **not started** |
+| character controller and collision | **implemented and verified** — behaviour measured from the client's traces and gated per write by `trace_diff`; collision is a stand-in (plane + boxes), the map mesh is not solid (`docs/formats/character-controller.md`) |
 | combat in the range | data side reads; not yet wired to the view |
 
 ### The practice range is not identified
@@ -329,7 +376,7 @@ the buffer, which is why two whole-capture scans and a four-minute watch found
 nothing and one lucky scan found this. It matched three manifest records
 byte-for-byte, which is how a buffer with no GUID gets tied back to one.
 
-From there, `ow-probe near` walks all 41,811 map chunks, decodes each, and keeps
+From there, a proximity walk over all 41,811 map chunks decodes each and keeps
 the ones whose placements sit in the same place. 400 chunks landed within 60
 units; grouping them by placeable count and centre collapses them to **31
 distinct contents**, each shipped under between one and fifty-four GUIDs.

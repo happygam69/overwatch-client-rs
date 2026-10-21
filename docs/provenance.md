@@ -2,17 +2,22 @@
 
 How the facts in `docs/formats/` were established, what is verified as opposed to
 believed, and what is still open. The point is that a reader can tell the
-difference without re-doing the work.
+difference without re-doing the work. The inverse index — every fitted,
+assumed, tier-3 or stand-in behaviour in the simulation — is
+[`fitted-ledger.md`](fitted-ledger.md).
 
 ## Rules
 
 1. **Nothing from the install is committed.** The `.gitignore` is a whitelist.
    Art, models, sounds, maps, locale data, extracted tables, keyring contents and
    per-build key tables all stay on the machine.
-2. **No decompiled code.** None has been used so far, and no disassembly output
-   is committed. If binary analysis becomes necessary for combat behaviour that
-   turns out not to be data-driven, it will be recorded in `CREDITS.md` the same
-   way the source reading is.
+2. **No decompiled code is committed.** Decompilation *is* used, and has been
+   since the Domino physics work — but only its *conclusions* are written down,
+   never its output. A finding is recorded as "function at `<address>` does X,
+   because Y", naming the capture and the translation, so it can be re-derived.
+   That is the rule `AGENTS.md` rule 6 sets, and it is what the rest of this
+   document means by evidence class *decompiled*. No disassembly, no
+   pseudocode, and no decompiler output is committed or quoted into `docs/`.
 3. **Read the real files rather than guessing.** A format claim is only written
    down once something byte-level agrees with it.
 
@@ -43,6 +48,16 @@ argument for having the checks rather than eyeballing results.
 
 ## What came from where
 
+* **Behaviour — the client itself.** Where a question was about *behaviour*
+  rather than data, the answer came from decompiling the operator's own
+  memory capture, read-only, through the REA/Ghidra tooling over
+  `D:/ow-dumps` (outside the repo). This covers the Domino integration order
+  and its damping formula, the fixed 1/30 s step and its "commanded, not
+  accumulated" counter, the mover's runtime slot map, and the negative results
+  that justify declaring a stage tier 3. Each is recorded as an address plus a
+  conclusion; the working captures and the Ghidra project stay untracked. See
+  `docs/formats/domino.md` and `docs/formats/character-controller.md` for the
+  address algebra.
 * **The container, BLTE, the encoding file, the manifest and STU** — worked out
   by reading a real installation, then cross-checked against
   overtools/OWLib and TACTLib. Where the two disagreed, the files won: the
@@ -77,10 +92,16 @@ how usable their licence is for a project like this:
 For architecture rather than data, the primary source is Blizzard's own GDC 2017
 talk, *Overwatch Gameplay Architecture and Netcode* (Timothy Ford), available
 free on YouTube. It describes the entity-component model and rollback netcode,
-which is the shape a combat model here would need to match. Tick rate: community
-measurements put launch Overwatch at roughly 21 server updates a second and later
-builds at 63; there is no Blizzard statement and no measurement for the current
-OW2 build, so treat any figure as unverified.
+which is the shape a combat model here would need to match. Tick rate: this is
+where "tick rate" is ambiguous and the ambiguity caused a stale row in
+`rewrite-plan.md`, so be precise. The **network/server** update rate is a
+different quantity and is *not* established here — community measurements put
+launch Overwatch at roughly 21 server updates a second and later builds at 63,
+with no Blizzard statement and no measurement for the current build. The
+**client physics step** is a separate number and *is* established: 1/30 s,
+decompiled from the module dt table (`DAT_7ff7c7d5d84c` = 0.0333333351, the
+table's `+0x0c` entry), with one step per frame. `ow-sim`'s `TICK_RATE_HZ` is
+that physics step, not a network rate.
 
 Two things were searched for and **not found**, which is itself useful to know:
 no public parser decodes replay frame payloads into positions or damage events
@@ -128,4 +149,10 @@ Not started:
 
 * Per-shot damage and cooldowns: the graphs are read and their parameters
   named, but the damage values do not surface; see `docs/formats/weapons.md`.
-* Version 1 STU.
+
+Closed since first written:
+
+* **Version 1 STU.** The reader is implemented (`ow-stu`'s `parse_v1`, reached
+  from `parse` when the blob opens with the `STUD` magic). It is covered only by
+  synthetic tests — there is no v1 asset on this install to check it against,
+  so treat it as **not tested against real data**. See `docs/formats/stu.md`.

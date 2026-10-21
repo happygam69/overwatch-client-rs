@@ -12,6 +12,9 @@
 !/Cargo.lock
 !/README.md
 !/CREDITS.md
+!/AGENTS.md
+!/STATUS-handoff.md
+!/MODLOG.md
 !/LICENSE-MIT
 !/LICENSE-APACHE
 !/rust-toolchain.toml

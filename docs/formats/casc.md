@@ -13,7 +13,8 @@ be re-run.
 <install>/data/casc/data/<bucket:02X>*.idx     the bucket index
 <install>/data/casc/data/data.NNN              the stored records
 <install>/data/casc/indices/<archive-hash>.index
-<install>/data/casc/ecache/, pro/              agent-managed, not needed to read
+<install>/data/casc/ecache/<bucket:02X>*.idx   bucket tables the client cached; merged
+<install>/data/casc/pro/                    agent-managed, not read
 ```
 
 `config/` files are addressed by their own key, two directory levels deep:
@@ -301,11 +302,128 @@ are absent from the encoding file, which is the signature of content that was
 never downloaded. Not verified further, and worth knowing before concluding a
 parser is broken.
 
+Still true of the current install (`2.25.0.0.154088`), measured 2026-10-17:
+sampling 40 of the 332 `0x0D4` assets, 5 fail and all 5 are encoding-table
+misses — `abbc8b151b5ba20316210057d17fe7a5`, `1e51043c7cd1693cf1cc39e312784158`,
+`c225acc8efcc462b5531bfe12337224e`, `f1ab44ff546950ae502e0e0c01f8e3b7`,
+`fd5cb4dcbb13e2cd853d112642734d4f`. No CDN route can help those: with no
+encoding entry there is no ekey, and without an ekey no index names an
+artifact (`ow-casc/src/container.rs` `cdn_route_of` reports "in no local
+index" — measured for all five).
+
+## Remote fetching (opt-in, live-verified 2026-10-17)
+
+*(This section was measured against the current install, `2.25.0.0.154088`,
+product `pro`, branch `eu`; the sections above carry their own build.)*
+
+The client can stream content its install does not have locally; `ow-casc` can
+now do the same, **off by default**. `OW_CDN=1|on|true` enables it;
+`OW_CDN_CACHE` (default `target/cdn-cache`) and `OW_CDN_TIMEOUT` seconds
+(default 60) tune it. The client is `ow-casc/src/cdn.rs`; the fallback hook is
+`Store::open_ekey`, and it fires **only when the local store has no answer** —
+`KeyNotFound`, or an index entry whose archive file is not on disk. Decoding
+of locally present bytes never falls back: a keyring problem is not a CDN
+problem. With `OW_CDN` unset every path is byte-for-byte the old behaviour.
+
+### Routes and naming
+
+From the reference's `HttpCDNClient`/`ICDNClient`; every shape below was then
+exercised against the live CDN:
+
+* `data/<k[0..2]>/<k[2..4]>/<k>` — a whole file by key (loose files).
+* `data/…/<archive-hash>` + `Range: bytes=off-(off+len-1)` — one archive
+  slice, the group-entry route.
+* `data/…/<hash>.index` — the suffix is raw concatenation; the reference's
+  `FetchIndexFile` passes `".index"` *with* the dot.
+* `config/<k[0..2]>/<k[2..4]>/<k>` — config files are plain text; no BLTE
+  decode (the reference's `FetchConfig` returns raw).
+* Bare hosts (`level3.blizzard.com`) get `http://`; https is refused — the
+  client has no TLS. Hosts are tried in order and **any** failure falls
+  through to the next host, matching `HttpCDNClient`; the last error surfaces
+  only when every host failed. (Observed live: level3 answering 403 for a
+  nonexistent name, eu.cdn then answering 404 for it.)
+
+Lookup order for a key the local store misses mirrors `ClientHandler`:
+archive-group first (Range on the archive the entry names), then the loose
+file index (whole GET). This crate additionally consults the
+**patch archive group** in between — a deliberate extension: the pinned
+reference's `CDNIndexHandler` reads only `archives` + `archive-group`, but the
+patch group's index is present locally and patch entries are otherwise
+unreachable.
+
+### Index geometry, measured from the install's own files
+
+The `indices/*.index` files (archive group, patch group, loose file index)
+share one footer scheme:
+
+* footer at `len - checksumSize - 12`, self-identifying
+  (`f[0]=1, f[1]=0, f[2]=0, f[7]=checksumSize`; `checksumSize = 8` everywhere
+  in the current install);
+* `pageCount = (length - (12 + 2·checksumSize)) / (pageSize + keySize +
+  checksumSize)` — the reference's `GetTableParameters`; all pages are full
+  `pageSize` bytes;
+* then the per-page last-key array (`pageCount × 16`), the page checksums,
+  8 pad bytes, the footer, 8 trailing bytes.
+
+Entries are `key[16] | size u32 BE | …` with three measured flavours:
+
+| index | after `size` | entry size |
+|---|---|---|
+| `archive-group` | archive ordinal **u16 BE**, then offset u32 BE | 26 |
+| `patch-archive-group` | archive ordinal **u8**, then offset u32 BE | 25 |
+| `file-index` (loose) | — (size is the whole entry payload) | 20 |
+
+The footer's `offsetBytes` field (6 or 5) is the discriminator between the two
+group flavours; the patch width was pinned by parsing the first entries of
+`6d4cc37a…index`: ordinals 3–81 against a 96-entry `patch-archives` list, and
+offsets under 0x1000_0000 — read as one u48 offset they would instead be
+≥ 34 GiB. A key is found by binary search over the last-key array (first page
+whose last key is `>= key`), then a linear scan of that page, capped by the
+footer's element count.
+
+**Known bug, recorded not fixed:** the shared full-file parser
+(`container.rs`, `parse_archive_index`) computes
+`(footerAt − (12 + 2·checksumSize)) / perPage`. Because `footerAt` already
+sits inside the file's tail, the correct numerator is `footerAt −
+checksumSize` (= `length − (12 + 2·checksumSize)`); the parser instead
+subtracts the whole 12 + 2·checksumSize from `footerAt` and is **one page
+short in every file** (`perPage` always exceeds `12 + checksumSize`).
+Measured: `indices/e8fa0643…index` (the loose file index) 138 reported vs 139
+true; the 4,148-byte smallest archive index 0 vs 1; `2f46d225…index`
+(archive group) 63,147 vs 63,148; `6d4cc37a…index` (patch group) 11,920 vs
+11,921. The CDN layer reads its own `PageIndex` with the correct arithmetic;
+fixing the shared parser changes existing lookup results and is a separate
+decision (see `STATUS-handoff.md`).
+
+### Live evidence (2026-10-17)
+
+* `data/bc/3f/bc3f31c89d64d2bf7f372690079fd211.index` fetched (4,148 B) and
+  **byte-for-byte equal** to the local file; same for
+  `data/10/64/1064c91150b26f5531ef0402e2635e38.index`. Both are patch/main
+  archive indexes, so index files are served under the plain `data` route.
+* A **dropped-page key** (`08633eb2b3d351eacf9a4576a14c53c2`: present in the
+  archive group, absent from bucket tables and from this crate's parse of its
+  own archive's index) was found via the group route — archive
+  `1064c911…` at `0x34e86a1`, 608 B — fetched as a Range GET and **decoded to
+  2,480 B** end to end (`look --cdn-fetch --cdn-key …`). This is also the
+  practical demonstration of the off-by-one above: the same bytes were on the
+  local disk, but the parser's dropped page hid them.
+* Loose route: `2f7161c0815b4287c18a2b57a637502b` (the install manifest's
+  ekey) fetched whole, 4,569 B, `BLTE` magic — matching the file index's
+  recorded size exactly. Re-running serves the same bytes from
+  `target/cdn-cache` with no network call (verified).
+* `5c98ebc39c4ced65486935cb85968b58` (the `encoding` line's first key) is in
+  no CDN index and is **not fetchable**: level3 answers 403, eu.cdn 404 for
+  `data/5c/98/…`. It is the content key of the same file whose second key
+  (`169fff…`, the artifact) opens fine — the pair is ckey/ekey of one file,
+  not two files, and only the ekey names an artifact.
+
 ## Known gaps
 
 * The 62 trailing bytes of the encoding file, and the 10 bytes after the data
   header's size field, are unidentified. Neither is needed to read data.
-* The `ecache/` and `pro/` directories are untouched; a normal read never
-  visits them.
+* `ecache/` **is** read — the container merges bucket `.idx` tables from both
+  `data/` and `ecache/`, so a key the client has cached locally resolves
+  without the network. `pro/` is untouched; a normal read never visits it.
 * `A` (ARC4) chunks and `F` (frame) chunks are not implemented. Neither appears
   in the reference install's gameplay assets.

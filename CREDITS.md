@@ -23,52 +23,40 @@ alongside a real installation. Their licences are reproduced in spirit below;
 none of their code is compiled into, generated from, or distributed with this
 repository, and no files were copied from them.
 
-### overtools/OWLib and TACTLib — MIT
+### overtools/OWLib and TACTLib - MIT
 
 <https://github.com/overtools/OWLib>, <https://github.com/overtools/TACTLib>
 
 The primary reference for Overwatch's container and asset layer. Used to
-cross-check:
+cross-check the bucket index and encoding layouts, BLTE chunk modes and the
+Salsa20 encrypted-chunk layout, the content manifest and per-build key
+derivation, GUID typing and the `types.txt` permutation, STU bags and instance
+records, asset-reference deobfuscation, and the CRC64 used for STU checksums.
+The generated STU class definitions are the source of the class and field
+hashes in `ow-tank/src/classes.rs`.
 
-* the bucket-index header and entry layout (`ContainerHandler`),
-* the encoding file's header, page ordering and entry shapes
-  (`EncodingHandler`),
-* BLTE chunk modes and the encrypted-chunk layout, including the fact that the
-  full 20-round Salsa20 is used with the 16-byte-key constants
-  (`BLTEDecoder`, `Salsa20`),
-* the content manifest's header, record layout and per-build key derivation
-  (`Core/Product/Tank/CMF`, `Core/Product/Tank/TRG`),
-* asset GUID typing (`teResourceGUID.FlipTypeBits`) and the `types.txt`
-  permutation table,
-* STU bags, instance records, field bags, asset-reference deobfuscation and the
-  string indirection (`TankLib/STU`),
-* the CRC64 used for STU header checksums (`Helpers/Hash/CRC.cs`), from which
-  the polynomial in `ow-stu/src/crc.rs` was derived and verified,
-* the shape of the generated STU class definitions, which is where the class
-  type hashes and field hashes in `ow-tank/src/classes.rs` come from.
+Two things are read from that checkout at runtime rather than copied here: the
+per-build manifest key table, and optionally the generated STU class list used
+for diagnostic names (`ow-tank/src/keytable.rs`).
 
-Two things are read *from* that checkout at runtime rather than copied here:
-the per-build 512-byte manifest key table, and (optionally) the generated STU
-class list used for diagnostic names. See `ow-tank/src/keytable.rs`.
-
-### CascLib — MIT
+### CascLib - MIT
 
 <https://github.com/ladislav-zezula/CascLib>
 
 Consulted indirectly, through the references TACTLib cites, for the CASC index
 header and data-header layouts.
 
-### vladtrc/iw4L — Apache-2.0
+### vladtrc/iw4L - Apache-2.0
 
 <https://github.com/vladtrc/iw4L>
 
-Not a source of Overwatch formats. Studied for project structure: how to
-separate an engine-agnostic asset layer from per-title gameplay crates, how to
-document provenance per module, and how to resolve a user's install without
-shipping any of it. Its `NOTICE` file's approach to naming every project read
-during development is followed here.
+Not a source of Overwatch formats. Studied for project structure: separating an
+engine-agnostic asset layer from per-title gameplay crates, documenting
+provenance per module, and resolving a user's install without shipping any of
+it. Its `NOTICE` approach to naming every project read during development is
+followed here.
 
-### muffinmxn/gang-beasts-rust — MIT
+### muffinmxn/gang-beasts-rust - MIT
 
 <https://github.com/muffinmxn/gang-beasts-rust>
 
@@ -76,13 +64,13 @@ Studied for the whitelist `.gitignore` pattern and for the explicit statement
 that gameplay constants may be derived from observed behaviour while no game
 content is redistributed.
 
-### samwhosung/benilla — MIT OR Apache-2.0
+### samwhosung/benilla - MIT OR Apache-2.0
 
 <https://github.com/samwhosung/benilla>
 
-Studied for structure (one crate per format, none of them carrying Bevy or game
-semantics), for `docs/METHOD.md`-style hard rules on never committing anything
-from the install, and for the dual MIT/Apache-2.0 licence choice.
+Studied for structure (one crate per format, none carrying Bevy or game
+semantics), for hard rules on never committing anything from the install, and
+for the dual MIT/Apache-2.0 licence choice.
 
 ## Examined and deliberately not used
 
@@ -90,33 +78,38 @@ Projects relevant to this work whose terms do not permit reuse. They are named s
 that no one has to rediscover the boundary, and so it is on the record that
 nothing from them is in this repository:
 
-* **[JnCrMx/overwatch-highlights](https://github.com/JnCrMx/overwatch-highlights)**
-  — highlight-file reverse engineering, including a hero-ID list. **No licence**,
-  so all rights reserved. The hero ordering it documents is also independently
-  corroborated by the theme colours this project reads directly from the install
-  (see `docs/formats/stu.md`), so nothing is lost by leaving it aside.
-* **[lunasorcery/overwatch-highlights](https://github.com/lunasorcery/overwatch-highlights)**
-  — the deepest public reverse engineering of the highlight and replay container.
-  **No licence.** Not consulted for code.
-* **Overwatch Wiki (Fandom)** — CC BY-NC-SA 3.0. Non-commercial, and share-alike,
-  so it can be used to *check* a value but no table is derived from it here.
-* **OSTW / Deltinteger** — no licence file, so all rights reserved.
+* **JnCrMx/overwatch-highlights** - highlight-file reverse engineering,
+  including a hero-ID list. **No licence**, so all rights reserved. The hero
+  ordering is independently corroborated by the theme colours read from the
+  install, so nothing is lost by leaving it aside.
+* **lunasorcery/overwatch-highlights** - the deepest public reverse engineering
+  of the highlight and replay container. **No licence.** Not consulted for code.
+* **Overwatch Wiki (Fandom)** - CC BY-NC-SA 3.0. Non-commercial and
+  share-alike, so it can be used to *check* a value but no table is derived from
+  it here.
+* **OSTW / Deltinteger** - no licence file, so all rights reserved.
 
 Cheat-oriented material on the game executable was not consulted at all.
 
 ## Tools used
 
-* **Ghidra** — used against the operator's own memory capture of the running
-  client (regions recorded by `dev/dump_process.py`, gitignored). No
-  disassembly or decompilation is committed; only addresses and behavioural
-  conclusions are written down, as coordinates so the reading can be re-derived
-  from the same capture (see `docs/formats/materials.md`). The Ghidra MCP
-  bridge drives the analysis.
-* **overtools/TACTLib** — read as source, and read from at runtime for the
+* **Ghidra** and the Ghidra MCP bridge - used against the operator's own
+  read-only memory captures of the running client. No disassembly or
+  decompilation is committed; only addresses and behavioural conclusions are
+  written down, as coordinates so the reading can be re-derived from the same
+  capture.
+* **`dev/live_page_diff.py` and `dev/warm_poll.py`** - read-only live capture
+  tools. They open the client with `OpenProcess(VM_READ | VM_QUERY)` and use
+  `ReadProcessMemory` only; captures stay outside the repository.
+* **overtools/TACTLib** - read as source, and read from at runtime for the
   per-build key material described above. `TankLib/teMaterial`,
   `teStructuredDataAssetRef` and `teResourceGUID` established the material
   asset's four-GUID header and the STU reference deobfuscation used to verify
-  the material chain's readable hops (see `docs/formats/materials.md`).
+  the material chain's readable hops.
+* **REA** (Reverse Engineering Agents, with its Ghidra provider) - an optional
+  second bridge over the same captures, used where its artifact digest and
+  confidence class help. Its read-only, ephemeral-import model matches this
+  project's rule that nothing from the client is written down as code.
 
 ## Community data
 
