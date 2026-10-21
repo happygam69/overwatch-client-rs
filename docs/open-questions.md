@@ -9,6 +9,13 @@ Rules for an entry: a question is *settled* when it has a recorded address or
 a measured number, not when it has a plausible guess. A guess becomes a row in
 [`fitted-ledger.md`](fitted-ledger.md) and stays a guess.
 
+**Do we have the captures for these?** Yes, with one exception. Every code
+address the open questions need is warm in the standing image - measured, not
+assumed: [`capture-coverage.md`](capture-coverage.md) lists the address of
+each question and whether we hold it. Only question 1 needs a new capture
+(it wants runtime state, not code), and questions 2-11 are analysis or
+measurement work over code we already have.
+
 ---
 
 ## 1. The page-key (`w`) derivation - tier 3, declared

@@ -1,0 +1,150 @@
+# Capture coverage: do we have what the project needs?
+
+*Measured, not assumed. Every number here comes from the captures on this
+machine: `dev/capture_coverage.py` (per address), `dev/coverage_gap.py` (per
+section and per function range), and the runs' own `warm.csv` /
+`encrypted.csv`.*
+
+**The short answer:** yes, for the systems that are open. Every code address
+the project still needs is warm in the standing image - 41 of 41 checked,
+across animation, camera, movement, combat and physics. What was missing was
+not a capture but a **re-merge**: the standing image was three days stale, and
+re-merging the runs we already have takes the client's unread `.text` from
+**21% to 11%**. The one thing that genuinely needs a new capture is the page
+cipher's fault-synchronous run.
+
+## What we have
+
+| capture | what it is |
+|---|---|
+| `D:/ow-dumps/live_page_diff/run_*` | 17 page-diff runs, 19-21 October, 8k-22k pages each, with `warm.csv`, `encrypted.csv`, `events.csv` and a phase marker |
+| `D:/ow-dumps/warm_poll/run_*` | 2 warm-poll runs (19 October) |
+| `D:/ow-dumps/module_after_diff.bin` | the **standing image** the docs are written against (v2b base `0x7ff7c4d20000`, 20 October) |
+| `D:/ow-dumps/module_after_diff_v2.bin` | the same image re-merged from all 17 runs (built during this check) |
+| `D:/ow-dumps/module_v2full.bin` | the 12 October image **the Ghidra project still holds** |
+| `D:/ow-dumps/loader_after_diff.bin` | the loader with its decrypted pages (flat; a file offset is an RVA) |
+| `D:/ow-dumps/ow_heap_full.dmp` | the 13.5 GB full heap dump (21 October) |
+| `D:/ow-dumps/dev_ghidra_run`-derived images | the region wraps and the merged images |
+| the Ghidra project `dev/ghidra_run/owmod` | 11 programs: the analysed module, the standing capture's mapped and heap images, the live image, the camera region, the loader, the loader's XOR regions, three region wraps |
+
+## The standing image is stale, and re-merging is free
+
+`dev/warm_merge.py` over the 17 existing runs - **no new capture** - produces
+`module_after_diff_v2.bin`:
+
+| section | before | after re-merge |
+|---|---|---|
+| `.text` | 2,648 cold pages (21%) | **1,404 cold pages (11%)** |
+| `.rdata` | 66 cold | 2 cold |
+| `.data` | 462 cold | 428 cold |
+| `.pdata` | 298 cold (50%) | **0 cold** |
+
+The `.pdata` result matters: the function table of the *whole* client is now
+readable, so every function's extent is known - the "the disk `.pdata` is
+encrypted" problem is solved by the capture we already had.
+
+The pages that stay cold after the re-merge were never seen as code by any
+run: they are pages of uniform filler (readable memory, not code) and
+regions of `.text` that never became resident in any captured session. A
+re-merge cannot recover them, and neither can more of the same kind of
+session.
+
+## The systems, one by one
+
+Each row: the behaviour that is still open, and whether we hold the code it
+lives in. "warm" is measured on the standing image.
+
+### Animation and the first-person path - **warm**
+
+| what is still open | the code | state |
+|---|---|---|
+| the FP camera consumer (type `0x35`) | `FpViewmodelConsumer` v2b `0x7ff7c4ff0060` | warm |
+| its per-frame slots (`+0xe0`, `+0xe8`) | v2b `0x7ff7c5011bf0`, `0x7ff7c50122f0` | warm |
+| the Pose2d dataflow VM (x/y, category, weights) | the animation runtime: v2b `0x7ff7c6d92691`, `0x7ff7c6dac1b4`, `0x7ff7c6e0fc70`, `0x7ff7c6e0fb50`, `0x7ff7c6e08510`, `0x7ff7c6e028ec` | warm |
+| the blend-tree evaluation | `AnimSamplerRule` v2b `0x7ff7c6e84610`, `AnimKind2_Eval` `0x7ff7c58ea110`, the lerp chain `0x7ff7c58dfbe0`, `0x7ff7c58df9b0` | warm |
+| the clip object update | the region wrap `regions/clipobj.exe` | present |
+
+**Verdict: an analysis problem, not a capture problem.** The VM that produces
+the Pose2d drivers is in the image; the work is to find it.
+
+### Camera - **warm**
+
+| what is still open | the code | state |
+|---|---|---|
+| the FP camera consumer's per-frame application | the type-`0x35` system; the vtable slots above | warm |
+| the world camera near/far | the camera code around the var block (v2b `0x7ff7c86957cc`) and the renderer's projection path | warm |
+| the input handler chain | v2b `0x7ff7c688efc9`, the var block `0x7ff7c86957cc` | warm |
+
+**Verdict: analysis.**
+
+### Movement - **warm, and the control is obfuscated rather than missing**
+
+| what is still open | the code | state |
+|---|---|---|
+| the mover's control law (declared tier 3) | the mover class's band v2b `0x7ff7c55405d0..`, the constructor `0x7ff7c5540750`, the interface tables `0x7ff7c7f03030` | warm |
+| the four mover-component methods (a recorded capture gap) | range `0x7ff64afc2160..0x7ff64afc24b0` | **warm - the gap is closed** |
+| the steep-slide rule | the same band, plus a keyed trace | warm |
+
+**Verdict: the control code is present and VM-obfuscated.** That is why it is
+tier 3, not why it is unread. The rates were measured from traces instead.
+
+### Combat - **warm**
+
+| what is still open | the code | state |
+|---|---|---|
+| the per-shot damage (not in the files) | the statescript runtime: v2b `0x7ff7c6eda1c0` (the var pool), `0x7ff7c570c740` (the read site), `0x7ff7c56b4719` (the dataflow update) | warm |
+| the damage order and armour mitigation | the same runtime; the `ModifyHealth` node is a data class (`0x826613B7`) | warm |
+| the volley class (a recorded capture gap) | range `0x7ff64b735xxx` and the fire method `0x7ff64b75d000..` | **warm - the gap is closed** |
+
+**Verdict: the damage is a graph-reading problem.** The docs' two
+possibilities stand (it is hidden in a generic `value` parameter, or it is
+computed when the graph fires); either way the code that would settle it is
+in the image, and the graph data is on disk.
+
+### Physics (Domino) - **read, and warm**
+
+The solver chain (v2b `0x7ff7c7a47c70`, `0x7ff7c7a4c150`, `0x7ff7c7a4c730`,
+`0x7ff7c7a46d60`, `0x7ff7c7a4cce0`) is warm and already read.
+
+### The renderer - **warm** (the docs' own 2026-10-19 update)
+
+The RHI is in the warm captures: 43 RIP-relative references to the renderer
+strings at v2b `0x7ff7c73b7xxx`, the D3D12/DXGI functions around
+`0x7ff7c73b7e30` and `0x7ff7c82ca310` are all warm. The older "no capture
+holds the renderer's code pages" paragraph describes the *old* standing dump.
+
+## The one thing that needs a new capture
+
+**The page cipher's `w` derivation.** The code is available (the loader's
+warm image and the four XOR regions in the wrap are readable), and the
+*derivation* is inside the Denuvo VM. What is missing is not code but
+**runtime state**: the faulting rip and the first handler, in the same session
+as the `w` value. That needs a fault-synchronous capture, which is the
+operator's run (`docs/formats/page-crypt.md`, the runbook).
+
+Everything else on the list is either warm or is a *live measurement* (a
+trace of the client doing the thing), which is also the operator's run.
+
+## The one thing worth fixing on this machine
+
+**The Ghidra project holds a 12 October image** (`module_v2full.bin`, 38.2%
+cold pages) while the re-merged standing image has 9.8% cold. Every
+decompile the operator does is therefore against an image that is missing
+**38%** of the client's code, where the captures we already have would show
+**10%**. Refreshing the project's image to `module_after_diff_v2.bin` is a
+single import plus a re-analysis; the function names come back with one
+command (`python dev/gh_apply_names.py`).
+
+## How to reproduce this check
+
+```sh
+python dev/capture_coverage.py dev/needed-code.txt   # per address: warm or not
+python dev/capture_coverage.py --map                 # the image, block by block
+python dev/capture_coverage.py --gaps                # what a re-merge would recover
+python dev/capture_coverage.py --merge-gain          # what each run would add
+python dev/coverage_gap.py D:/ow-dumps/module_after_diff_v2.bin \
+  --exe "E:/Overwatch/_retail_/Overwatch.exe"        # per section and per function range
+```
+
+`dev/needed-code.txt` is the list of addresses the project still needs, one
+per system, with the reason.

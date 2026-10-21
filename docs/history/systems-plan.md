@@ -354,6 +354,12 @@ pointer; a zero-decompilation means a capture gap, not a cipher. These four
 methods need a fresh capture covering `0x7ff64afc2000`+, exactly like the
 volley's `0x7ff64b75d0a0` gap.
 
+> **Closed (2026-10-21).** Both gaps are closed: the four methods
+> (`0x7ff64afc2160..0x7ff64afc24b0`) and the volley region are warm in the
+> current standing image. `docs/capture-coverage.md` measures it. The lesson
+> stands: read the bytes before decompiling a pointer; a zero-decompilation
+> means a capture gap, not a cipher.
+
 ### Phase 4f — the descriptor static-slot roles are now all known
 
 Decompiling the shared and per-class method pointers completed the picture of

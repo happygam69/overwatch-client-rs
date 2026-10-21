@@ -16,6 +16,7 @@ read-only memory captures. Nothing from the game ships in this repository.
 | know how evidence is classified | [`provenance.md`](provenance.md) |
 | work in the decompiler | [`ghidra-project.md`](ghidra-project.md) - the project, its programs, the addresses |
 | find a file on `D:/ow-dumps` | [`artifacts.md`](artifacts.md) |
+| know what the captures cover | [`capture-coverage.md`](capture-coverage.md) - measured, per system |
 | know which tool answers a question | [`../dev/INDEX.md`](../dev/INDEX.md) |
 | know how a subsystem works today | [`formats/`](formats/) (one file per system) |
 | understand a specific decision's history | [`history/`](history/) |

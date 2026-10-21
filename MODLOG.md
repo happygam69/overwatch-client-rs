@@ -4,6 +4,31 @@ Newest first. Milestones only; details and addresses live in `docs/formats/`,
 current state in `STATUS-handoff.md`, fits in `docs/fitted-ledger.md`, the
 work queue in `docs/open-questions.md`.
 
+## 2026-10-21 - the captures are checked, per system
+
+- `docs/capture-coverage.md` answers "do we have the captures we need?"
+  with measurements: **every code address the open questions need is warm in
+  the standing image** (41 of 41 checked, across animation, camera, movement,
+  combat and physics). The open questions are analysis work, not capture work.
+- **The standing image was stale.** Re-merging the 17 runs we already have
+  (`dev/warm_merge.py`, no new capture) takes the client's unread `.text`
+  from 21% to 11%, and makes `.pdata` - the function table of the whole
+  client - fully readable. The merged image is
+  `D:/ow-dumps/module_after_diff_v2.bin`.
+- The two capture gaps the docs recorded are **closed**: the mover
+  component's four methods and the volley class's region are warm now, and
+  the renderer's code was warm already (the docs' own 2026-10-19 update).
+- What is left cold (11% of `.text`) is code no run ever saw decrypted; the
+  pages no run captured are `.pdata`/`.reloc` metadata and uniform filler,
+  not code.
+- The **Ghidra project holds a 12 October image** (38% cold), so every
+  decompile sees less of the client than the captures hold. Refreshing it to
+  the re-merged image is the one follow-up worth doing.
+- The only question that genuinely needs a new capture is the page cipher's
+  `w`: it wants runtime state (the faulting rip), not code.
+- `dev/capture_coverage.py` makes the check repeatable: per address, per
+  block, per gap, and what each run would add to the image.
+
 ## 2026-10-21 - the Ghidra project is tidied and explained
 
 - The project stays in the repo folder (`dev/ghidra_run/`, on the SSD because

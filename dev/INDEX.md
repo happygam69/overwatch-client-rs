@@ -12,6 +12,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `anim_chain_args.py` | Collect the animation-chain function list (main module) for headless. | 79 |
 | `anim_input.py` | Send the animation-driving keys to a running client, on a schedule. | 115 |
 | `build_loader_wrap.py` | Build the loader's XOR regions as one PE, in the client's address frame. | 64 |
+| `capture_coverage.py` | Do we have the code for this address? | 322 |
 | `capture_range.py` | Capture a running game and look for the map it has loaded. | 90 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
 | `clip_fp.py` | Byte-level orientation probes for the first-person clip family 0x00020400. | 100 |

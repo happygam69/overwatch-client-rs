@@ -412,10 +412,12 @@ string; names still need the OWLib hash join).
 **2. The live vtable is fully readable and its class-specific slots are
 infrastructure.** The volley vtable at live `0x7ff711888c30` (range
 `0x7ff64d1cac30`) reads completely, and its 8 class-specific slots point into
-`range 0x7ff64b735xxx` — a region that is **zero in every standing capture**
-and was **captured live this round** to
+`range 0x7ff64b735xxx` — a region that was **zero in every standing capture**
+back then and was **captured live this round** to
 `D:/ow-dumps/live_warm3/volley_slots/region_0x7ff70fdf5000_0x2000.bin`
-(the registrar-adjacent 0x3000-region dump came with it). Disassembly of the
+(the registrar-adjacent 0x3000-region dump came with it). It is warm in the
+current standing image now (`docs/capture-coverage.md` measures it), so the
+region is no longer a gap. Disassembly of the
 four unique targets shows reflection and bookkeeping only — two
 `lea rax,[static]; ret` descriptor getters, two RTTI equality checks
 (`mov rax,[rdx+0x88]; cmp [global],rax; sete al`), and two registered-object

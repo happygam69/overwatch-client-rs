@@ -10,10 +10,11 @@ All are flattened images at the v2b base `0x7ff7c4d20000` unless noted.
 
 | file | what it is |
 |---|---|
-| `module_after_diff.bin` | **the standing image**: union of 2026-10-20 sessions, base `0x7ff7c4d20000`, 76,947,456 B |
+| `module_after_diff_v2.bin` (+ `.json`) | **the standing image, re-merged from all 17 `live_page_diff` runs**: the client's unread `.text` drops from 21% to 11% and `.pdata` becomes fully readable. Base `0x7ff7c4d20000` (`docs/capture-coverage.md`) |
+| `module_after_diff.bin` | the previous standing image: union of the 2026-10-20 sessions, base `0x7ff7c4d20000`, 76,947,456 B |
 | `module_after_diff_20261020a.bin`, `_20261020b.bin` | backups taken before the 2026-10-20 refreshes |
 | `module_after_diff_20261019.bin` | older standing image, 70,123,520 B |
-| `module_v2full.bin` | older short flatten (`0x42ea000`), imported by the GUI Ghidra project; pages beyond its end are missing |
+| `module_v2full.bin` | the 12 October flatten (`0x42ea000`) that the GUI Ghidra project holds; 38% of its pages are cold, so the project sees less code than the captures hold (`docs/capture-coverage.md`) |
 | `module_warm.bin`, `warm_best.bin` | older cumulative warm captures |
 | `module_mapped.bin`, `module_v2.bin` | older full-size captures (100 MB images) |
 | `module_all_20261020_fixed.bin` | all-module merge from the 2026-10-20 sessions |
@@ -139,6 +140,14 @@ Referenced dumps intentionally stay in dev/ because docs cite them:
 class_registry.txt, class_descriptors.txt, class_inheritance.txt,
 physics_funcs.txt, mover_body_funcs.txt, domino_schema.txt,
 component_router_paired.txt.
+
+## The standing image
+
+| file | what it is |
+|---|---|
+| `D:/ow-dumps/module_after_diff.bin` | the standing image the docs are written against (v2b base `0x7ff7c4d20000`, 20 October) |
+| `D:/ow-dumps/module_after_diff_v2.bin` | the same image re-merged from all 17 `live_page_diff` runs: the client's unread `.text` drops from 21% to 11% and `.pdata` becomes fully readable (`docs/capture-coverage.md`) |
+| `D:/ow-dumps/module_v2full.bin` | the 12 October image the Ghidra project still holds (38% cold) |
 
 ## Where the dumps live now
 
