@@ -137,9 +137,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {
@@ -255,7 +255,7 @@ fn main() -> std::process::ExitCode {
                 Err(e) => {
                     failed += 1;
                     *families.entry(format!("FAILED: {e}")).or_insert(0) += 1;
-                    if shown < 4 && format!("{e}").contains("block data") {
+                    if shown < 4 && e.to_string().contains("block data") {
                         shown += 1;
                         if let Ok(b) = data.bytes_of(g) {
                             let u16a = |at: usize| {
@@ -274,7 +274,7 @@ fn main() -> std::process::ExitCode {
         }
         println!("census over {n} texture assets: {decoded} decoded, {failed} failed");
         let mut rows: Vec<(String, usize)> = families.into_iter().collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.sort_by_key(|a| std::cmp::Reverse(a.1));
         for (k, c) in rows {
             println!("  {c:5}  {k}");
         }
@@ -296,7 +296,7 @@ fn main() -> std::process::ExitCode {
         let mut blocks: Vec<u8> = Vec::new();
         let mut half: Vec<u16> = Vec::new();
         // A 4 x (4 * count) image of stacked blocks, one group per mode.
-        let height = 4 * per_mode * texture::BC6H_MODE_NUMBERS.len() as usize;
+        let height = 4 * per_mode * texture::BC6H_MODE_NUMBERS.len();
         for mode in texture::BC6H_MODE_NUMBERS {
             for block in texture::bc6h_random_blocks(mode, per_mode, 0x5EED) {
                 blocks.extend_from_slice(&block);
@@ -492,7 +492,7 @@ fn main() -> std::process::ExitCode {
             let valid = (0..n)
                 .filter(|i| {
                     let b = bytes[start + i * 16];
-                    b & 0x07 != 0 && b & 0x07 != 0x08
+                    b & 0x07 != 0
                 })
                 .count();
             if valid * 10 >= n * 9 {

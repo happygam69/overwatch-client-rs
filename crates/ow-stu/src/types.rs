@@ -563,17 +563,11 @@ impl Stu {
         let start = self.payload_start(instance);
         let bag = self.bag_index_at(start);
         if bag < 0 {
-            return match reg.field(info.hash, field_hash) {
-                Some(_) => Some(Value::Missing),
-                None => None,
-            };
+            return reg.field(info.hash, field_hash).map(|_| Value::Missing);
         }
         let layout = self.layout_at(start, bag);
         let Some(field) = layout.iter().find(|f| f.hash == field_hash).copied() else {
-            return match reg.field(info.hash, field_hash) {
-                Some(_) => Some(Value::Missing),
-                None => None,
-            };
+            return reg.field(info.hash, field_hash).map(|_| Value::Missing);
         };
         let declared_zero = self.declared_size(bag, field_hash) == Some(0);
         let value = match reg.field(info.hash, field_hash) {
@@ -981,8 +975,7 @@ impl Stu {
         // is still up to 1M entries: reserve only a small prefix so a
         // malformed count cannot ask for a huge allocation up front. The
         // vector grows incrementally if the elements really are there.
-        let mut out = Vec::new();
-        out.reserve(count.min(1024));
+        let mut out = Vec::with_capacity(count.min(1024));
         let mut at = start;
         for _ in 0..count {
             let (value, step) = self.read_element(inner, reader, field_hash, at, reg);
@@ -1179,8 +1172,7 @@ impl Stu {
         // Same rule as read_elements: reserve a prefix, not the whole
         // attacker-sized count, and fail cleanly on address overflow.
         let entry_count_us = entry_count as usize;
-        let mut out = Vec::new();
-        out.reserve(entry_count_us.min(1024));
+        let mut out = Vec::with_capacity(entry_count_us.min(1024));
         for i in 0..entry_count_us {
             let Some(stride) = i.checked_mul(16) else {
                 return Value::Unreadable;
@@ -1429,7 +1421,7 @@ mod tests {
         reg
     }
 
-    fn put(b: &mut Vec<u8>, at: usize, bytes: &[u8]) {
+    fn put(b: &mut [u8], at: usize, bytes: &[u8]) {
         b[at..at + bytes.len()].copy_from_slice(bytes);
     }
 

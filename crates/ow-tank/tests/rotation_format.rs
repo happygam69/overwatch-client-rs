@@ -35,7 +35,7 @@ fn the_axis_bits_pick_which_component_is_w() {
         let a = u16::from_le_bytes([SAMPLE[0], SAMPLE[1]]) & 0x7FFF;
         let b = u16::from_le_bytes([SAMPLE[2], SAMPLE[3]]) & 0x7FFF;
         let c = u16::from_le_bytes([SAMPLE[4], SAMPLE[5]]);
-        const SQRT2: f32 = 1.414_21;
+        const SQRT2: f32 = std::f32::consts::SQRT_2;
         const HALF: f32 = 0x4000 as f32;
         const FULL: f32 = 0x8000 as f32;
         let x = SQRT2 * (a as f32 - HALF) / FULL;

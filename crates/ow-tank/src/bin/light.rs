@@ -31,9 +31,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {

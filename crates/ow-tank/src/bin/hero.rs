@@ -98,9 +98,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {
@@ -120,8 +120,8 @@ fn main() -> std::process::ExitCode {
         let mut heroes = data.guids_of_type(guid::types::HERO);
         heroes.sort_unstable();
         println!(
-            "{:>5}  {:>9}  {:>9}  {:>7}  {:>8}  {}",
-            "hero", "materials", "readable", "colour", "submesh", "what it is"
+            "{:>5}  {:>9}  {:>9}  {:>7}  {:>8}  what it is",
+            "hero", "materials", "readable", "colour", "submesh"
         );
         for g in heroes {
             let index = guid::index_of(g);

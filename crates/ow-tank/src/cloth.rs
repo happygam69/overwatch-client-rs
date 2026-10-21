@@ -180,7 +180,7 @@ fn effective_bone(
         // greater", which never displaces the first entry.
         let mut best: Option<&VertexDriverWeight> = None;
         for w in &v.driver_weights {
-            if best.map_or(true, |b| w.weight > b.weight) {
+            if best.is_none_or(|b| w.weight > b.weight) {
                 best = Some(w);
             }
         }

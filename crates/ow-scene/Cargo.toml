@@ -1,3 +1,4 @@
+lints.workspace = true
 [package]
 name = "ow-scene"
 version.workspace = true
@@ -11,3 +12,4 @@ ow-tank = { path = "../ow-tank" }
 ow-casc = { path = "../ow-casc" }
 glam = "0.29"
 bytemuck = { version = "1", features = ["derive"] }
+

@@ -63,9 +63,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {
@@ -251,6 +251,8 @@ fn analyze_group(bytes: &[u8]) -> Report {
     let d0 = u64_at(bytes, 0x70).unwrap_or(u64::MAX) as usize;
     let e0 = u64_at(bytes, 0x78).unwrap_or(u64::MAX) as usize;
     let f0 = u64_at(bytes, 0x80).unwrap_or(u64::MAX) as usize;
+    let g0 = u64_at(bytes, 0x88).unwrap_or(u64::MAX) as usize;
+    let h0 = u64_at(bytes, 0x90).unwrap_or(u64::MAX) as usize;
     let num = u32_at(bytes, 0x64).unwrap_or(u32::MAX) as usize;
     let x0 = u64_at(bytes, 0x00).unwrap_or(u64::MAX);
     let null18 = u64_at(bytes, 0x18).unwrap_or(0);
@@ -268,7 +270,9 @@ fn analyze_group(bytes: &[u8]) -> Report {
         ("C != 8*N", d0.checked_sub(c0) != Some(8 * num)),
         ("D != 8*N", e0.checked_sub(d0) != Some(8 * num)),
         ("E != 8*N", f0.checked_sub(e0) != Some(8 * num)),
-        ("F != EOF-8*N", f0 > len || len - f0 != 8 * num),
+        ("F != 8*N", g0.checked_sub(f0) != Some(8 * num)),
+        ("G != 8*N", h0.checked_sub(g0) != Some(8 * num)),
+        ("H != EOF-8*N", h0 > len || len - h0 != 8 * num),
     ];
     for (what, bad) in &checks {
         if *bad {
@@ -288,7 +292,7 @@ fn analyze_group(bytes: &[u8]) -> Report {
         }
     }
     lines.push(format!(
-        "N={num}, offsets X@{h8} A@{a0} B@{b0} C@{c0} D@{d0} E@{e0} F@{f0}, len {len}"
+        "N={num}, offsets X@{h8} A@{a0} B@{b0} C@{c0} D@{d0} E@{e0} F@{f0} G@{g0} H@{h0}, len {len}"
     ));
     lines.push(format!(
         "unknown0 0x{x0:016x} (type 0x{:03x}), null18 0x{null18:016x}, u60 0x{u60:08x}, \

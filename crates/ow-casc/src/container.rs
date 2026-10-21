@@ -122,8 +122,8 @@ impl Store {
             .data_dir()
             .join(format!("data.{:03}", location.archive));
         let mut archives = self.archives.borrow_mut();
-        if !archives.contains_key(&location.archive) {
-            archives.insert(location.archive, fs::File::open(&path)?);
+        if let std::collections::hash_map::Entry::Vacant(e) = archives.entry(location.archive) {
+            e.insert(fs::File::open(&path)?);
         }
         let file = archives.get_mut(&location.archive).expect("just inserted");
         file.seek(SeekFrom::Start(location.offset))?;
@@ -1040,11 +1040,7 @@ fn load_bucket_index(install: &Install) -> Result<HashMap<[u8; 9], Location>> {
     let from_shmem = load_shmem(install, &mut buckets).unwrap_or(0);
     let _ = from_shmem;
     INDEX_STATS.with(|s| {
-        *s.borrow_mut() = (
-            before,
-            from_archives,
-            buckets.len() - before.max(0).min(before),
-        );
+        *s.borrow_mut() = (before, from_archives, buckets.len() - before.min(before));
     });
     Ok(buckets)
 }
@@ -1116,12 +1112,12 @@ mod tests {
                 .iter()
                 .skip(p * epp)
                 .take(epp)
-                .last()
+                .next_back()
                 .map(|e| e.0)
                 .unwrap_or([0u8; 16]);
             out.extend_from_slice(&last);
         }
-        out.extend(std::iter::repeat(0u8).take(pages * 8));
+        out.extend(std::iter::repeat_n(0u8, pages * 8));
         out.extend([0u8; 8]);
         let mut footer = [0u8; 12];
         footer[0] = 1;

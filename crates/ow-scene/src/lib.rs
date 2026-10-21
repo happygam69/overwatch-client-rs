@@ -460,7 +460,7 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
 
     let root = ow_casc::install::detect_root()
         .ok_or("no Overwatch install found; set OW_INSTALL to the folder containing .build.info")?;
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let install_root = root.display().to_string();
     let data = GameData::open(&install_root, &ManifestSelector::default(), &sources)
         .map_err(|e| e.to_string())?;
@@ -621,7 +621,7 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
             if guid::type_of(model_guid) != guid::types::MODEL {
                 continue;
             }
-            if !geometry.contains_key(&model_guid) {
+            if let std::collections::hash_map::Entry::Vacant(e) = geometry.entry(model_guid) {
                 let Ok(model_bytes) = data.bytes_of(model_guid) else {
                     model_failures += 1;
                     continue;
@@ -689,15 +689,12 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
                     continue;
                 }
                 order.push(model_guid);
-                geometry.insert(
-                    model_guid,
-                    Loaded {
-                        vertex_start,
-                        index_start,
-                        index_count,
-                        instances: Vec::new(),
-                    },
-                );
+                e.insert(Loaded {
+                    vertex_start,
+                    index_start,
+                    index_count,
+                    instances: Vec::new(),
+                });
             }
             let matrix = placement_matrix(placeable);
             if let Some(entry) = geometry.get_mut(&model_guid) {
@@ -1315,10 +1312,10 @@ fn push_box(scene: &mut Scene, min: [f32; 3], max: [f32; 3], texture: u32) {
                 ..Vertex::default()
             });
         }
-        scene.indices.push(fbase + 0);
+        scene.indices.push(fbase);
         scene.indices.push(fbase + 1);
         scene.indices.push(fbase + 2);
-        scene.indices.push(fbase + 0);
+        scene.indices.push(fbase);
         scene.indices.push(fbase + 2);
         scene.indices.push(fbase + 3);
     }
@@ -1450,10 +1447,8 @@ fn add_model(
                 None => {
                     seen.insert(m.id, m.material);
                 }
-                Some(&prev) if prev != m.material => {
-                    if !ambiguous_ids.contains(&m.id) {
-                        ambiguous_ids.push(m.id);
-                    }
+                Some(&prev) if prev != m.material && !ambiguous_ids.contains(&m.id) => {
+                    ambiguous_ids.push(m.id);
                 }
                 _ => {}
             }
@@ -1760,7 +1755,7 @@ fn place_hero(
     // appended, so their base-1 indices keep working.
     let mut joint_base = 1u32;
     if let Some(skin) = &skin {
-        let pose = parse_pose(&args_vec, report);
+        let pose = parse_pose(args_vec, report);
         let overrides: std::collections::HashMap<usize, glam::Quat> = pose
             .iter()
             .map(|(bone, axis, deg)| {
@@ -2007,7 +2002,7 @@ fn cluster_chunks(data: &GameData, guids: &[u64], resolves: &dyn Fn(u64) -> bool
 
     let n = kept.len();
     let mut parent: Vec<usize> = (0..n).collect();
-    fn find(parent: &mut Vec<usize>, mut i: usize) -> usize {
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
         while parent[i] != i {
             parent[i] = parent[parent[i]];
             i = parent[i];

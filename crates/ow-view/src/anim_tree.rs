@@ -108,11 +108,7 @@ fn compose(a: (Quat, Vec3), b: (Quat, Vec3)) -> (Quat, Vec3) {
 }
 
 /// Sample one bone's chain at `t`, composing parent to child.
-pub fn sample_chain(
-    source: &BlendPose,
-    links: &[ChainLink],
-    t: f32,
-) -> Option<(Quat, Vec3)> {
+pub fn sample_chain(source: &BlendPose, links: &[ChainLink], t: f32) -> Option<(Quat, Vec3)> {
     if links.is_empty() || !links.iter().any(|l| l.record.is_some()) {
         return None;
     }
@@ -233,7 +229,9 @@ impl TreeAnim {
             let wx = x.weight.resolved(&self.slots) * self.x.abs();
             let wy = y.weight.resolved(&self.slots) * self.y.abs();
             let w = (wx + wy).clamp(0.0, 1.0);
-            let base = self.layer_weight.unwrap_or_else(|| weight.resolved(&self.slots));
+            let base = self
+                .layer_weight
+                .unwrap_or_else(|| weight.resolved(&self.slots));
             let applied = base * self.layer_gain * w;
             out.push((*clip, applied));
         }
@@ -293,9 +291,7 @@ impl TreeAnim {
                 detail.push_str(&format!("; branch {b} layers {layers:?}"));
                 for &c in children {
                     if let Some(Node::BranchChild { category, child }) = self.tree.nodes.get(c) {
-                        detail.push_str(&format!(
-                            "; child {c} cat {category:#x} -> {child}"
-                        ));
+                        detail.push_str(&format!("; child {c} cat {category:#x} -> {child}"));
                         if let Some(Node::Animation { clip }) = self.tree.nodes.get(*child) {
                             detail.push_str(&format!(
                                 "; animation clip{} decode {}",

@@ -27,9 +27,9 @@ fn main() -> std::process::ExitCode {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3);
     let root = ow_casc::install::detect_root().expect("no install");
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     )
@@ -39,9 +39,10 @@ fn main() -> std::process::ExitCode {
         "hero {hero}: character model {:#018x}, view model {:#018x}",
         parts.model, parts.view_model
     );
-    let (Some((char_skel, char_skin)), Some((vm_skel, vm_skin))) =
-        (skin_of(&data, parts.model), skin_of(&data, parts.view_model))
-    else {
+    let (Some((char_skel, char_skin)), Some((vm_skel, vm_skin))) = (
+        skin_of(&data, parts.model),
+        skin_of(&data, parts.view_model),
+    ) else {
         eprintln!("retarget_probe: no skeleton on one of the models");
         return std::process::ExitCode::SUCCESS;
     };
@@ -66,7 +67,10 @@ fn main() -> std::process::ExitCode {
             worst = (vm_i, d);
         }
     }
-    println!("common bone ids: {common}; worst bind translation delta {:.4} m at vm bone {}", worst.1, worst.0);
+    println!(
+        "common bone ids: {common}; worst bind translation delta {:.4} m at vm bone {}",
+        worst.1, worst.0
+    );
     // The arm chain ids from docs/formats/animation.md: shoulder rows 13/54,
     // hand/weapon parents 44/74. Print the local bind frames for those ids.
     for id in [13u32, 54, 44, 74] {
@@ -158,7 +162,11 @@ fn main() -> std::process::ExitCode {
         let dr = pq.dot(vq).abs().min(1.0).acos() * 2.0 * 180.0 / std::f32::consts::PI;
         println!(
             "fold check {missing_id}*{child_id}: |t| delta {dt:.5} m, rot delta {dr:.2} deg -> {}",
-            if dt < 0.001 && dr < 0.5 { "MATCH" } else { "differs" }
+            if dt < 0.001 && dr < 0.5 {
+                "MATCH"
+            } else {
+                "differs"
+            }
         );
     }
     // What the fold does to the guns: play c71 on the character rig and
@@ -179,10 +187,7 @@ fn main() -> std::process::ExitCode {
                     Some(&r) => {
                         let (q, p) = source.sample_record(r, t).unwrap_or((None, None));
                         let (_, bq, bt) = bind.to_scale_rotation_translation();
-                        glam::Mat4::from_rotation_translation(
-                            q.unwrap_or(bq),
-                            p.unwrap_or(bt),
-                        )
+                        glam::Mat4::from_rotation_translation(q.unwrap_or(bq), p.unwrap_or(bt))
                     }
                     None => bind,
                 }

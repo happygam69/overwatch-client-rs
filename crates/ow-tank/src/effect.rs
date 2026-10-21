@@ -77,14 +77,18 @@ pub fn parse_ecss(payload: &[u8]) -> Option<EffectShaderSetup> {
     })
 }
 pub fn parse_ecmp(payload: &[u8]) -> Option<EffectTiming> {
-    let mut out = EffectTiming::default();
-    out.start_time_offset = i64_at(payload, 0)?;
-    out.duration_offset = i64_at(payload, 8)?;
-    out.hardpoint = u64_at(payload, 16)?;
-    out.float_one_a = f32_at(payload, 24)?;
-    out.float_one_b = f32_at(payload, 28)?;
-    out.unk = i64_at(payload, 32)?;
-    out.index = i16_at(payload, 40)?;
+    let start_time_offset = i64_at(payload, 0)?;
+    let duration_offset = i64_at(payload, 8)?;
+    let mut out = EffectTiming {
+        start_time_offset,
+        duration_offset,
+        hardpoint: u64_at(payload, 16)?,
+        float_one_a: f32_at(payload, 24)?,
+        float_one_b: f32_at(payload, 28)?,
+        unk: i64_at(payload, 32)?,
+        index: i16_at(payload, 40)?,
+        ..EffectTiming::default()
+    };
     if out.start_time_offset != 0 {
         let off = out.start_time_offset as usize;
         if off + 4 <= payload.len() {

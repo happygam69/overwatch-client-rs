@@ -16,9 +16,9 @@ fn main() -> std::process::ExitCode {
         .map(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap())
         .unwrap_or(0x0a00_0000_0000_0071);
     let root = ow_casc::install::detect_root().expect("no install");
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     )

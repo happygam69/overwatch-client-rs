@@ -24,9 +24,9 @@ fn main() -> std::process::ExitCode {
         .unwrap_or(3);
 
     let root = ow_casc::install::detect_root().expect("no install");
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     )
@@ -45,9 +45,7 @@ fn main() -> std::process::ExitCode {
         .expect("no FP blend set");
 
     // Root set fields: the node/param arrays and the updater.
-    let root_items_type = reg
-        .field(0xfc47_a2ed, 0x6afc_d1a5)
-        .map(|d| d.ty.clone());
+    let root_items_type = reg.field(0xfc47_a2ed, 0x6afc_d1a5).map(|d| d.ty.clone());
     println!("root blendTreeItems field type: {root_items_type:?}");
     for i in 0..stu.instances.len() {
         if stu.instances[i].hash != 0xfc47_a2ed {
@@ -89,18 +87,28 @@ fn main() -> std::process::ExitCode {
                                                     .collect::<Vec<_>>()
                                                     .join(" ")
                                             ),
-                                            other => println!("      {:08x} {}", f.hash, other.describe()),
+                                            other => println!(
+                                                "      {:08x} {}",
+                                                f.hash,
+                                                other.describe()
+                                            ),
                                         }
                                         match (f.hash, &f.value) {
                                             (0x384d_e14f, Value::Inline { start, bag }) => {
                                                 retarget = Some((*start, *bag));
                                             }
-                                            (0xf6e6_d4b1, Value::Instance(i)) => item_data = Some(*i),
-                                            (0x274f_833f, Value::Instance(i)) => play_data = Some(*i),
+                                            (0xf6e6_d4b1, Value::Instance(i)) => {
+                                                item_data = Some(*i)
+                                            }
+                                            (0x274f_833f, Value::Instance(i)) => {
+                                                play_data = Some(*i)
+                                            }
                                             (0x5609_40dc, Value::Inline { start, bag }) => {
                                                 on_finished = Some((*start, *bag));
                                             }
-                                            (0xe54b_9419, Value::Prim(_, bits)) => unique = Some(*bits as u32),
+                                            (0xe54b_9419, Value::Prim(_, bits)) => {
+                                                unique = Some(*bits as u32)
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -108,7 +116,9 @@ fn main() -> std::process::ExitCode {
                                         let rf = stu.typed_fields_at(0x99ea_3f94, start, bag, reg);
                                         let mut vals = Vec::new();
                                         for f in rf {
-                                            if let Value::Prim(ow_stu::types::Prim::F32, bits) = f.value {
+                                            if let Value::Prim(ow_stu::types::Prim::F32, bits) =
+                                                f.value
+                                            {
                                                 vals.push(f32::from_bits(bits as u32));
                                             }
                                         }
@@ -144,7 +154,9 @@ fn main() -> std::process::ExitCode {
                                                                 Value::Prim(
                                                                     ow_stu::types::Prim::F32,
                                                                     bits,
-                                                                ) => Some(f32::from_bits(*bits as u32)),
+                                                                ) => Some(f32::from_bits(
+                                                                    *bits as u32,
+                                                                )),
                                                                 _ => None,
                                                             })
                                                             .collect();
@@ -211,24 +223,42 @@ fn main() -> std::process::ExitCode {
                                                 0x0f88_291f => {
                                                     if let Value::Inline { start, bag } = &f.value {
                                                         let wd = stu.typed_fields_at(
-                                                            0x2bb5_472b, *start, *bag, reg,
+                                                            0x2bb5_472b,
+                                                            *start,
+                                                            *bag,
+                                                            reg,
                                                         );
                                                         let mut weight = None;
                                                         let mut time = None;
                                                         let mut asset = None;
                                                         for w in wd {
                                                             match (w.hash, w.value) {
-                                                                (0x3b68_ca1f,
-                                                                 Value::Prim(ow_stu::types::Prim::F32, bits)) => {
-                                                                    weight = Some(f32::from_bits(bits as u32))
+                                                                (
+                                                                    0x3b68_ca1f,
+                                                                    Value::Prim(
+                                                                        ow_stu::types::Prim::F32,
+                                                                        bits,
+                                                                    ),
+                                                                ) => {
+                                                                    weight = Some(f32::from_bits(
+                                                                        bits as u32,
+                                                                    ))
                                                                 }
-                                                                (0xbd63_1144,
-                                                                 Value::Prim(ow_stu::types::Prim::F32, bits)) => {
-                                                                    time = Some(f32::from_bits(bits as u32))
+                                                                (
+                                                                    0xbd63_1144,
+                                                                    Value::Prim(
+                                                                        ow_stu::types::Prim::F32,
+                                                                        bits,
+                                                                    ),
+                                                                ) => {
+                                                                    time = Some(f32::from_bits(
+                                                                        bits as u32,
+                                                                    ))
                                                                 }
-                                                                (0x3260_05a3, Value::AssetRef(g)) => {
-                                                                    asset = Some(g)
-                                                                }
+                                                                (
+                                                                    0x3260_05a3,
+                                                                    Value::AssetRef(g),
+                                                                ) => asset = Some(g),
                                                                 _ => {}
                                                             }
                                                         }
@@ -240,7 +270,9 @@ fn main() -> std::process::ExitCode {
                                                 0x6cb7_9d25 => {
                                                     if let Value::Array(vals) = &f.value {
                                                         for v in vals {
-                                                            let Value::Instance(i) = v else { continue };
+                                                            let Value::Instance(i) = v else {
+                                                                continue;
+                                                            };
                                                             let sf = stu.typed_fields(*i, reg);
                                                             let mut slot = None;
                                                             let mut anim = None;
@@ -282,8 +314,13 @@ fn main() -> std::process::ExitCode {
 
     if let Ok(blob) = data.bytes_of(parts.view_model_anim_set) {
         println!("set blob {} bytes; clip GUID offsets:", blob.len());
-        for guid in [0x0a00000000000071u64, 0x0a00000000000050, 0x0a000000000000d4,
-                     0x0a000000000000bc, 0x0a00000000000680] {
+        for guid in [
+            0x0a00000000000071u64,
+            0x0a00000000000050,
+            0x0a000000000000d4,
+            0x0a000000000000bc,
+            0x0a00000000000680,
+        ] {
             let pat = guid.to_le_bytes();
             let mut offs = Vec::new();
             let mut i = 0;
@@ -310,7 +347,13 @@ fn main() -> std::process::ExitCode {
             let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
             let txt: String = bytes
                 .iter()
-                .map(|b| if (32..127).contains(b) { *b as char } else { '.' })
+                .map(|b| {
+                    if (32..127).contains(b) {
+                        *b as char
+                    } else {
+                        '.'
+                    }
+                })
                 .collect();
             println!("  {row:04x}: {:<47} {txt}", hex.join(" "));
         }
@@ -340,7 +383,12 @@ fn main() -> std::process::ExitCode {
                     }
                 }
             }
-            println!("item {:>2}: {} clip(s) {:016x?}", item_clips.len(), clips.len(), clips);
+            println!(
+                "item {:>2}: {} clip(s) {:016x?}",
+                item_clips.len(),
+                clips.len(),
+                clips
+            );
             item_clips.push(clips);
             last_item = Some(item_clips.len() - 1);
         } else if hash == 0x89f8_dbb3 {
@@ -350,7 +398,10 @@ fn main() -> std::process::ExitCode {
                 match field.hash {
                     0xb2e3_4614 => {
                         if let Value::Enum { raw, member } = field.value {
-                            slot = Some(format!("{raw}{}", member.map(|m| format!("({m})")).unwrap_or_default()));
+                            slot = Some(format!(
+                                "{raw}{}",
+                                member.map(|m| format!("({m})")).unwrap_or_default()
+                            ));
                         }
                     }
                     0x9efa_9957 => {
@@ -410,10 +461,7 @@ fn main() -> std::process::ExitCode {
             );
             for hp_guid in &parts.view_model_weapon_hardpoints {
                 if let Some(hp) = mhrp.hardpoints.iter().find(|h| h.guid == *hp_guid) {
-                    println!(
-                        "MHRP hardpoint {hp_guid:#x}: parent 0x{:x}",
-                        hp.parent_bone
-                    );
+                    println!("MHRP hardpoint {hp_guid:#x}: parent 0x{:x}", hp.parent_bone);
                     for row in hp.matrix.0 {
                         println!("  {:?}", row);
                     }
@@ -442,19 +490,29 @@ fn main() -> std::process::ExitCode {
     println!("\nposed bone positions (id: x y z), mid-clip, rig-root space:");
     for clips in &item_clips {
         for &guid in clips {
-            let Ok(bytes) = data.bytes_of(guid) else { continue };
-            let Ok(clip) = ow_tank::clip::Clip::parse(&bytes) else { continue };
-            let Some(source) = BlendPose::decode(&bytes) else { continue };
+            let Ok(bytes) = data.bytes_of(guid) else {
+                continue;
+            };
+            let Ok(clip) = ow_tank::clip::Clip::parse(&bytes) else {
+                continue;
+            };
+            let Some(source) = BlendPose::decode(&bytes) else {
+                continue;
+            };
             let mid = source.frames() as f32 * 0.5 / source.fps();
             let mut bones: Vec<Option<(glam::Quat, Vec3)>> = vec![None; skin.local.len()];
             let mut paired = 0usize;
             for r in 0..source.records() {
-                let Some(id) = source.bone_id(r) else { continue };
+                let Some(id) = source.bone_id(r) else {
+                    continue;
+                };
                 let Some(bone) = bone_of(id) else { continue };
                 if bone >= skin.local.len() {
                     continue;
                 }
-                let Some((rot, t)) = source.sample_record(r, mid) else { continue };
+                let Some((rot, t)) = source.sample_record(r, mid) else {
+                    continue;
+                };
                 let (_, bind_r, bind_t) = skin.local[bone].to_scale_rotation_translation();
                 bones[bone] = Some((rot.unwrap_or(bind_r), t.unwrap_or(bind_t)));
                 paired += 1;
@@ -486,7 +544,9 @@ fn main() -> std::process::ExitCode {
             if guid == 0x0a00000000000071 {
                 let mut skip = vec![None; skin.local.len()];
                 for r in 0..source.records() {
-                    let Some(id) = source.bone_id(r) else { continue };
+                    let Some(id) = source.bone_id(r) else {
+                        continue;
+                    };
                     if id == 44 || id == 74 {
                         continue;
                     }
@@ -494,7 +554,9 @@ fn main() -> std::process::ExitCode {
                     if bone >= skin.local.len() {
                         continue;
                     }
-                    let Some((rot, t)) = source.sample_record(r, mid) else { continue };
+                    let Some((rot, t)) = source.sample_record(r, mid) else {
+                        continue;
+                    };
                     let (_, bind_r, bind_t) = skin.local[bone].to_scale_rotation_translation();
                     skip[bone] = Some((rot.unwrap_or(bind_r), t.unwrap_or(bind_t)));
                 }

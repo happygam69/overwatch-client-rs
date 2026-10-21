@@ -15,10 +15,10 @@
 //! user's own installation at runtime.
 
 pub mod assoc;
+pub mod blendtree;
 pub mod chunks;
 pub mod classes;
 pub mod classreg;
-pub mod blendtree;
 pub mod clip;
 pub mod cloth;
 pub mod effect;
@@ -296,4 +296,3 @@ impl GameData {
         Ok(Stu::parse(bytes)?)
     }
 }
-

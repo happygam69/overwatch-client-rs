@@ -18,9 +18,9 @@ fn main() -> std::process::ExitCode {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3);
     let root = ow_casc::install::detect_root().expect("no install");
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     )
@@ -59,7 +59,10 @@ fn main() -> std::process::ExitCode {
                     if let Some(ow_stu::types::FieldType::Instance(child)) =
                         reg.field(inst.hash, f.hash).map(|d| &d.ty)
                     {
-                        println!("     (inline class {child:#010x} {})", data.classes.describe(*child));
+                        println!(
+                            "     (inline class {child:#010x} {})",
+                            data.classes.describe(*child)
+                        );
                         for g in stu.typed_fields_at(*child, start, bag, reg) {
                             let gname = reg
                                 .field(*child, g.hash)

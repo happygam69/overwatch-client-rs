@@ -86,9 +86,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {
@@ -520,7 +520,7 @@ fn main() -> std::process::ExitCode {
                     let pref = &run[..len];
                     let max = pref.iter().copied().max().unwrap_or(-1);
                     let roots = pref.iter().filter(|v| **v == -1).count();
-                    if roots >= 1 && roots <= 8 && max < len as i32 {
+                    if (1..=8).contains(&roots) && max < len as i32 {
                         println!(
                             "  [{i}] {tag}: possible bone parent array: {len} entries at +{:#x}, {roots} root(s), max index {max}",
                             start * 4

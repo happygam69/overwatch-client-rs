@@ -93,7 +93,7 @@ impl Skin {
         let from_file: Vec<Mat4> = s
             .inverse_bind
             .iter()
-            .map(|m| Mat4::from_cols_array_2d(m))
+            .map(Mat4::from_cols_array_2d)
             .collect();
         let composed = skin
             .absolute

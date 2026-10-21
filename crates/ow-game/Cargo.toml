@@ -1,3 +1,4 @@
+lints.workspace = true
 [package]
 name = "ow-game"
 version.workspace = true
@@ -36,3 +37,4 @@ bevy = { version = "0.14", default-features = false, features = [
     "tonemapping_luts",
     "zstd",
 ] }
+

@@ -138,6 +138,26 @@ pub fn modify_health_amounts(
         .collect())
 }
 
+/// A per-hero movement speed, in metres per second.
+///
+/// **Provisional.** The field is on `STUCharacterMoverComponent` and reads 5.5
+/// for 117 of 119 heroes, 11.0 for one and 5.0 for another; the hero that
+/// differs is the one with a speed ability, which is consistent with this being
+/// movement speed. What is *not* established is whether it is a base speed, a
+/// maximum, or something else, so treat it as a hint rather than a fact.
+pub const MOVER_COMPONENT: u32 = 0x6EFD_BD73;
+/// The field that reads as a speed.
+pub const MOVER_SPEED_FIELD: u32 = 0x031F_E7EE;
+
+/// Read a hero entity's movement speed, if the component is present.
+pub fn move_speed(data: &GameData, entity: u64) -> Result<Option<f32>> {
+    let mut stu = data.stu_of(entity)?;
+    let Some(instance) = stu.instance(MOVER_COMPONENT) else {
+        return Ok(None);
+    };
+    Ok(stu.read_f32(instance, MOVER_SPEED_FIELD))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,24 +178,4 @@ mod tests {
         };
         assert!(!weapon.is_empty());
     }
-}
-
-/// A per-hero movement speed, in metres per second.
-///
-/// **Provisional.** The field is on `STUCharacterMoverComponent` and reads 5.5
-/// for 117 of 119 heroes, 11.0 for one and 5.0 for another; the hero that
-/// differs is the one with a speed ability, which is consistent with this being
-/// movement speed. What is *not* established is whether it is a base speed, a
-/// maximum, or something else, so treat it as a hint rather than a fact.
-pub const MOVER_COMPONENT: u32 = 0x6EFD_BD73;
-/// The field that reads as a speed.
-pub const MOVER_SPEED_FIELD: u32 = 0x031F_E7EE;
-
-/// Read a hero entity's movement speed, if the component is present.
-pub fn move_speed(data: &GameData, entity: u64) -> Result<Option<f32>> {
-    let mut stu = data.stu_of(entity)?;
-    let Some(instance) = stu.instance(MOVER_COMPONENT) else {
-        return Ok(None);
-    };
-    Ok(stu.read_f32(instance, MOVER_SPEED_FIELD))
 }

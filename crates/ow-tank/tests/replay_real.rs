@@ -368,7 +368,7 @@ fn real_replays() {
 
     assert!(blocks > 0, "no highlight file contained a prp block");
     assert_eq!(frames, blocks, "every block must carry a Zstd payload");
-    assert!(
+    const _: () = assert!(
         CONTAINER_PREFIX_LEN == 108,
         "the declared container prefix length is a contract with this test"
     );

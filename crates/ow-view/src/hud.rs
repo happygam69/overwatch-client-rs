@@ -107,6 +107,12 @@ pub struct HudCanvas {
     data: Vec<u8>,
 }
 
+impl Default for HudCanvas {
+    fn default() -> Self {
+        HudCanvas::new()
+    }
+}
+
 impl HudCanvas {
     /// The full text block: [`COLS`] columns by [`ROWS`] rows, blank.
     pub fn new() -> HudCanvas {

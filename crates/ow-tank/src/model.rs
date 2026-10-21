@@ -1095,7 +1095,7 @@ mod tests {
         assert!(m.uv_sets.is_empty(), "no texcoord element => no sets");
         assert!(m.colors.is_empty(), "no colour element => no colours");
         // The old single-set behaviour survives through `uv_sets.first()`.
-        assert!(m.uv_sets.first().is_none());
+        assert!(m.uv_sets.is_empty());
         assert_eq!(m.normals[0], [0.0, 1.0, 0.0]);
     }
 }

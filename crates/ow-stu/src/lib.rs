@@ -365,10 +365,7 @@ impl Stu {
 
     /// The field-bag index at the start of a payload, or -1 for an empty one.
     fn bag_index_at(&self, payload_start: usize) -> i32 {
-        match rd_i32(&self.blob, payload_start) {
-            Ok(index) => index,
-            Err(_) => -1,
-        }
+        rd_i32(&self.blob, payload_start).unwrap_or(-1)
     }
 
     /// Field layout of a payload that begins at `payload_start` and uses the
@@ -474,7 +471,7 @@ impl Stu {
             let stride = self
                 .layout_at(at, bag_index)
                 .last()
-                .map(|f| f.offset.checked_add(f.size).unwrap_or(usize::MAX))
+                .map(|f| f.offset.saturating_add(f.size))
                 .unwrap_or(4)
                 .max(4);
             let Some(next) = at.checked_add(stride) else {

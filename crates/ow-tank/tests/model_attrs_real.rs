@@ -19,7 +19,7 @@ fn real_models_carry_their_attributes_and_cloth_reparents() {
     let Some(root) = ow_casc::install::detect_root() else {
         return;
     };
-    let sources = Sources::discover(&[root.clone()]);
+    let sources = Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(&root, &ManifestSelector::default(), &sources) {
         Ok(data) => data,
         Err(e) => {

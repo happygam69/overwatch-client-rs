@@ -776,7 +776,7 @@ fn stock_bots(data: &GameData, count: usize) -> Result<Vec<(PoolSet, String)>, S
 pub fn open_data() -> Result<GameData, String> {
     let root = ow_casc::install::detect_root()
         .ok_or("no Overwatch install found; set OW_INSTALL to the folder containing .build.info")?;
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let install_root = root.display().to_string();
     GameData::open(
         &install_root,
@@ -807,7 +807,7 @@ fn read_blend_set(
     let registry = {
         let root = ow_casc::install::detect_root()
             .ok_or("no Overwatch install found while reading the blend set")?;
-        let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+        let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
         ow_tank::classreg::ClassRegistry::load_from_sources(&sources)
     };
     if registry.is_empty() {
@@ -820,12 +820,12 @@ fn read_blend_set(
         match stu.instances[i].hash {
             0x3b150012 => {
                 let mut clips = Vec::new();
-                if let Some(v) = stu.typed_field(i, 0x5ad927d3, reg) {
-                    if let ow_stu::types::Value::Array(items) = v {
-                        for it in items {
-                            if let ow_stu::types::Value::AssetRef(g) = it {
-                                clips.push(g);
-                            }
+                if let Some(ow_stu::types::Value::Array(items)) =
+                    stu.typed_field(i, 0x5ad927d3, reg)
+                {
+                    for it in items {
+                        if let ow_stu::types::Value::AssetRef(g) = it {
+                            clips.push(g);
                         }
                     }
                 }
@@ -925,7 +925,7 @@ fn build_tree_anim(
             return None;
         }
     };
-    let skel_ids: Vec<u32> = scene
+    let _skel_ids: Vec<u32> = scene
         .hero_model_guid
         .and_then(|m| data.bytes_of(m).ok())
         .and_then(|mb| ow_tank::skeleton::parse_model(&mb).ok())
@@ -1679,8 +1679,7 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                 self.scene.instances.len(),
                 self.scene.vertices.len()
             );
-            let mut renderer =
-                crate::Renderer::new_posed(window, &self.scene, self.pose());
+            let mut renderer = crate::Renderer::new_posed(window, &self.scene, self.pose());
             renderer.fp_fov = self.fp_fov;
             self.renderer = Some(renderer);
         }
@@ -1957,8 +1956,7 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                                         bones[bone] = Some(s);
                                     }
                                 }
-                                let mut palette =
-                                    Vec::with_capacity(skin.parents.len() + 1);
+                                let mut palette = Vec::with_capacity(skin.parents.len() + 1);
                                 palette.push(glam::Mat4::IDENTITY);
                                 palette.extend(
                                     skin.palette_full(&|b| bones.get(b).copied().flatten()),
@@ -1990,10 +1988,8 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                         // but the animated FP local crosses them. Pose the two
                         // weapon roots from the character c71 rig, then apply
                         // the hardpoint local and the camera placement.
-                        let mut char_weapon_world: std::collections::HashMap<
-                            u32,
-                            glam::Mat4,
-                        > = std::collections::HashMap::new();
+                        let mut char_weapon_world: std::collections::HashMap<u32, glam::Mat4> =
+                            std::collections::HashMap::new();
                         if let (Some(cskin), Some(cpose)) = (
                             &self.scene.character_skin,
                             &self.scene.character_weapon_pose,
@@ -2007,39 +2003,26 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                                     }
                                 }
                                 let dur = cpose.frames() as f32 / cpose.fps().max(1.0);
-                                let t = if dur > 0.0 {
-                                    self.anim_time % dur
-                                } else {
-                                    0.0
-                                };
+                                let t = if dur > 0.0 { self.anim_time % dur } else { 0.0 };
                                 let char_palette = cskin.palette_full(&|b| {
                                     let id = *ids.get(b)?;
                                     let r = *rec.get(&id)?;
-                                    let (q, p) = cpose
-                                        .sample_record(r, t)
-                                        .unwrap_or((None, None));
-                                    let (_, bq, bt) = cskin.local[b]
-                                        .to_scale_rotation_translation();
+                                    let (q, p) = cpose.sample_record(r, t).unwrap_or((None, None));
+                                    let (_, bq, bt) =
+                                        cskin.local[b].to_scale_rotation_translation();
                                     Some((q.unwrap_or(bq), p.unwrap_or(bt)))
                                 });
                                 let bind = cskin.bind_world();
                                 for &(_, bone, local) in &self.scene.weapon_attachments {
-                                    let Some(fp_id) = self
-                                        .scene
-                                        .view_model_ids
-                                        .get(bone)
-                                        .copied()
+                                    let Some(fp_id) = self.scene.view_model_ids.get(bone).copied()
                                     else {
                                         continue;
                                     };
-                                    let Some(ci) =
-                                        ids.iter().position(|id| *id == fp_id)
-                                    else {
+                                    let Some(ci) = ids.iter().position(|id| *id == fp_id) else {
                                         continue;
                                     };
                                     if let Some(m) = char_palette.get(1 + ci) {
-                                        char_weapon_world
-                                            .insert(fp_id, *m * bind[ci] * local);
+                                        char_weapon_world.insert(fp_id, *m * bind[ci] * local);
                                     }
                                 }
                             }
@@ -2054,17 +2037,13 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                             let eye = glam::Vec3::from_array(p.pos);
                             let camera = scene::Scene::view_model_matrix(eye, vm_yaw, vm_pitch);
                             for &(weapon, bone, local) in &self.scene.weapon_attachments {
-                                let fp_id = self
-                                    .scene
-                                    .view_model_ids
-                                    .get(bone)
-                                    .copied();
+                                let fp_id = self.scene.view_model_ids.get(bone).copied();
                                 let world = fp_id
                                     .and_then(|id| char_weapon_world.get(&id).copied())
                                     .or_else(|| {
-                                        palette.get(1 + bone).map(|m| {
-                                            *m * skin.bind_world()[bone] * local
-                                        })
+                                        palette
+                                            .get(1 + bone)
+                                            .map(|m| *m * skin.bind_world()[bone] * local)
                                     });
                                 if let Some(world) = world {
                                     renderer.set_instance(weapon, camera * world);
@@ -2073,7 +2052,7 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                         }
                     }
                     renderer.render();
-                    if self.frame_no % 10 == 0 {
+                    if self.frame_no.is_multiple_of(10) {
                         // Exponential average: one frame's dt is one jittery
                         // sample, the average is the number worth comparing
                         // across settings changes.

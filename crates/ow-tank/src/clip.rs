@@ -1134,8 +1134,11 @@ mod tests {
         // zero-filled region otherwise reads as a long quaternion run вЂ” 599
         // false positives on the first-person clip), and no installed clip
         // leads a value array with it.
-        let samples: [(f32, f32, f32); 3] =
-            [(0.0, 0.2, 0.0), (0.0, 0.7071068, 0.0), (0.6, 0.0, 0.0)];
+        let samples: [(f32, f32, f32); 3] = [
+            (0.0, 0.2, 0.0),
+            (0.0, std::f32::consts::FRAC_1_SQRT_2, 0.0),
+            (0.6, 0.0, 0.0),
+        ];
         for (i, (x, y, z)) in samples.iter().enumerate() {
             let o = p + i * 16;
             body[o..o + 4].copy_from_slice(&x.to_le_bytes());
@@ -1171,8 +1174,11 @@ mod tests {
         // recovered rotations would differ from these.
         let (body, _) = synthetic_channel();
         let c = &decode_channels(&body, 21)[0];
-        let expected: [(f32, f32, f32); 3] =
-            [(0.0, 0.2, 0.0), (0.0, 0.7071068, 0.0), (0.6, 0.0, 0.0)];
+        let expected: [(f32, f32, f32); 3] = [
+            (0.0, 0.2, 0.0),
+            (0.0, std::f32::consts::FRAC_1_SQRT_2, 0.0),
+            (0.6, 0.0, 0.0),
+        ];
         assert_eq!(c.rotations.len(), expected.len());
         for (got, (x, y, z)) in c.rotations.iter().zip(expected) {
             assert!((got.x - x).abs() < 1e-6, "x: {} vs {x}", got.x);
@@ -1187,14 +1193,18 @@ mod tests {
         let c = &decode_channels(&body, 21)[0];
         // exactly on a key
         let on_key = c.rotation_at(3.0).unwrap();
-        assert!((on_key.y - 0.7071068).abs() < 1e-5);
+        assert!((on_key.y - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5);
         // halfway between key 1 (y=0.2) and key 3 (y=0.7071): slerp, so the
         // midpoint is unit-length and lies strictly between the endpoints
         // (never asserted equal to the linear blend вЂ” see `slerp_quat`).
         let mid = c.rotation_at(2.0).unwrap();
         let (x, y, z, w) = mid.quat();
         assert!((x * x + y * y + z * z + w * w - 1.0).abs() < 1e-5);
-        assert!(mid.y > 0.2 && mid.y < 0.7071068, "mid.y = {}", mid.y);
+        assert!(
+            mid.y > 0.2 && mid.y < std::f32::consts::FRAC_1_SQRT_2,
+            "mid.y = {}",
+            mid.y
+        );
         // clamped outside the keyed range
         assert!((c.rotation_at(0.0).unwrap().y - 0.2).abs() < 1e-6);
         assert!((c.rotation_at(99.0).unwrap().x - 0.6).abs() < 1e-5);
@@ -1258,7 +1268,7 @@ pub fn decode_packed_rotation(bytes: &[u8], off: usize) -> Option<[f32; 4]> {
     let axis = ((b >> 15) << 1) | (a >> 15);
     let a = a & 0x7FFF;
     let b = b & 0x7FFF;
-    const SQRT2: f32 = 1.414_21;
+    const SQRT2: f32 = std::f32::consts::SQRT_2;
     const HALF_BITS: f32 = 0x4000 as f32;
     const FULL_BITS: f32 = 0x8000 as f32;
     let (af, bf, cf) = (a as f32, b as f32, c as f32);
@@ -1454,7 +1464,7 @@ pub fn decode_packed_rotation_new(bytes: &[u8], off: usize) -> Option<[f32; 4]> 
     let c_pre = ((c as u32) << 5) | (((d as u32) >> 9) & 0x1F);
     let axis = d >> 14;
 
-    const SQRT2: f32 = 1.414_21;
+    const SQRT2: f32 = std::f32::consts::SQRT_2;
     const HALF: f32 = 0.5;
     const CENTRE_21: f32 = 0x10_0000 as f32;
     const SPAN_21: f32 = 0x10_0000 as f32;
@@ -2267,7 +2277,7 @@ pub fn normalize_frame_index(raw: i32, info_table_size: usize) -> Option<u16> {
     if info_table_size == 0 {
         return None;
     }
-    Some((raw.abs() as usize % info_table_size) as u16)
+    Some((raw.unsigned_abs() as usize % info_table_size) as u16)
 }
 
 /// Read `count` stored frame indices at `off`, returning the keys and the
@@ -2936,7 +2946,7 @@ pub fn decode_general_records(bytes: &[u8]) -> Option<Vec<BlendRecordLane>> {
         // every land must point inside the file at the row-relative basis
         let land_in = |v: u32| {
             at.checked_add(v as usize * 4)
-                .map_or(false, |p| p < bytes.len())
+                .is_some_and(|p| p < bytes.len())
         };
         if !(land_in(s)
             && land_in(p)
@@ -3042,9 +3052,7 @@ impl BlendPose {
             // Non-card families ride the general row reader (published
             // reference: row-relative lands, samples at the row's own data
             // lands). The card path stays the one verified sample-exact.
-            let Some(lanes) = decode_general_records(file) else {
-                return None;
-            };
+            let lanes = decode_general_records(file)?;
             let regs: Vec<Vec<KeyedTrack>> = lanes.into_iter().map(|l| l.tracks).collect();
             let ids: Vec<u32> = (0..regs.len())
                 .map(|i| u32::from_le_bytes(file[0x80 + i * 4..0x84 + i * 4].try_into().unwrap()))
@@ -3907,7 +3915,8 @@ mod kind_dispatch_tests {
         body[5] = 3;
         body[6] = 0; // key-list terminator
         let at = 7 + 300;
-        let quats: [(f32, f32, f32); 2] = [(0.0, 0.2, 0.0), (0.0, 0.7071068, 0.0)];
+        let quats: [(f32, f32, f32); 2] =
+            [(0.0, 0.2, 0.0), (0.0, std::f32::consts::FRAC_1_SQRT_2, 0.0)];
         for (i, (x, y, z)) in quats.iter().copied().enumerate() {
             let o = at + i * 16;
             body[o..o + 4].copy_from_slice(&x.to_le_bytes());
@@ -3941,7 +3950,12 @@ mod kind_dispatch_tests {
         // 90В° about Y: identity to (0, sin45В°, 0, cos45В°); the midpoint is
         // exactly 45В° about Y, i.e. (0, sin22.5В°, 0, cos22.5В°).
         let a = [0.0f32, 0.0, 0.0, 1.0];
-        let b = [0.0f32, 0.7071068, 0.0, 0.7071068];
+        let b = [
+            0.0f32,
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+        ];
         let ends0 = slerp_quat(a, b, 0.0);
         let ends1 = slerp_quat(a, b, 1.0);
         for (got, want) in ends0.iter().zip(a) {

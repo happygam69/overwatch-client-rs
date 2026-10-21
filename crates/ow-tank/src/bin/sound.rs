@@ -104,9 +104,9 @@ fn open_with_sources() -> Option<(GameData, ow_tank::keytable::Sources)> {
             return None;
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {
@@ -904,9 +904,9 @@ fn cmd_speech(args: &[String]) -> std::process::ExitCode {
         eprintln!("no Overwatch install found; set OW_INSTALL to point at one");
         return std::process::ExitCode::from(2);
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {

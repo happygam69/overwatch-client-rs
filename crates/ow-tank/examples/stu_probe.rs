@@ -15,14 +15,14 @@ fn main() -> std::process::ExitCode {
     let want: Vec<usize> = args[1..].iter().map(|s| s.parse().unwrap()).collect();
 
     let root = ow_casc::install::detect_root().expect("no install");
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     )
     .expect("open failed");
-    let mut stu = data.stu_of(graph).expect("no stu");
+    let stu = data.stu_of(graph).expect("no stu");
 
     for w in want {
         let info = &stu.instances[w];

@@ -47,7 +47,7 @@ const FAILURE_PREFIX: usize = 32;
 
 fn open() -> Option<(GameData, ow_tank::keytable::Sources)> {
     let root = ow_casc::install::detect_root()?;
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(&root, &ManifestSelector::default(), &sources) {
         Ok(data) => data,
         Err(e) => {
@@ -447,7 +447,7 @@ fn the_speech_manifest_holds_the_voice_payloads() {
         "walking type 0x{payload_type:03X} ({} asset(s)) in the speech manifest",
         guids.len()
     );
-    let step = (guids.len() / 25usize.max(1)).max(1);
+    let step = (guids.len() / 25usize).max(1);
 
     for guid in guids.iter().copied().step_by(step).take(25) {
         match index.bytes_of(&data, guid) {
@@ -548,7 +548,7 @@ fn voice_sets_name_their_payloads() {
     let mut with_payloads = 0usize;
     let mut payload_refs = 0usize;
     let mut payload_refs_in_speech = 0usize;
-    let step = (guids.len() / 20usize.max(1)).max(1);
+    let step = (guids.len() / 20usize).max(1);
 
     for guid in guids.iter().copied().step_by(step).take(20) {
         let bytes = match index.bytes_of(&data, guid) {
@@ -647,7 +647,7 @@ fn voice_line_sets_name_lines_that_are_not_assets() {
         return;
     }
 
-    let step = (guids.len() / 20usize.max(1)).max(1);
+    let step = (guids.len() / 20usize).max(1);
     let mut read = 0usize;
     let mut refs = 0usize;
     let mut refs_resolving = 0usize;
@@ -721,7 +721,7 @@ fn sound_bank_assets_are_raw_wwise_banks() {
         return;
     }
 
-    let step = (guids.len() / 25usize.max(1)).max(1);
+    let step = (guids.len() / 25usize).max(1);
     let mut opened = 0usize;
     let mut bkhd = 0usize;
     let mut riff = 0usize;

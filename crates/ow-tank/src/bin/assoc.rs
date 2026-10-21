@@ -44,9 +44,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {
@@ -203,12 +203,16 @@ fn export(
     // Create every per-type directory up front. The workers write files by
     // path and none of them creates directories, so a missing directory here
     // turns every write for that type into a failure.
-    for t in types.iter().copied() {
+    for t in types.iter() {
         let dir = out_path.join(format!("{t:03x}")).join("assets");
         if let Err(e) = std::fs::create_dir_all(&dir) {
             eprintln!("could not create {}: {e}", dir.display());
             problems += 1;
         }
+    }
+    if problems > 0 {
+        eprintln!("{problems} output directories could not be created");
+        return std::process::ExitCode::from(2);
     }
 
     // One membership set per worker rather than one per asset: it has over a
@@ -253,9 +257,9 @@ fn export(
             .map(|_| {
                 let root = root.clone();
                 scope.spawn(move || {
-                    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+                    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
                     let data = match GameData::open(
-                        &root.display().to_string(),
+                        root.display().to_string(),
                         &ManifestSelector::default(),
                         &sources,
                     ) {

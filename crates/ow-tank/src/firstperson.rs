@@ -52,7 +52,7 @@ pub struct Params {
     pub view_model_entity: u64,
 }
 
-fn field<'a>(fields: &'a [TypedField], hash: u32) -> Option<&'a Value> {
+fn field(fields: &[TypedField], hash: u32) -> Option<&Value> {
     fields.iter().find(|f| f.hash == hash).map(|f| &f.value)
 }
 
@@ -77,11 +77,7 @@ fn as_asset(v: &Value) -> Option<u64> {
     }
 }
 
-fn inline_child<'a>(
-    reg: &'a ClassRegistry,
-    class: u32,
-    hash: u32,
-) -> Option<&'a u32> {
+fn inline_child(reg: &ClassRegistry, class: u32, hash: u32) -> Option<&u32> {
     match reg.field(class, hash).map(|d| &d.ty) {
         Some(ow_stu::types::FieldType::Instance(child)) => Some(child),
         _ => None,
@@ -89,12 +85,7 @@ fn inline_child<'a>(
 }
 
 /// A field's value in the instance, else the class default, else 0.
-fn scalar(
-    reg: &ClassRegistry,
-    class: u32,
-    fields: &[TypedField],
-    hash: u32,
-) -> f32 {
+fn scalar(reg: &ClassRegistry, class: u32, fields: &[TypedField], hash: u32) -> f32 {
     if let Some(v) = field(fields, hash).and_then(as_f32) {
         return v;
     }
@@ -106,32 +97,27 @@ fn scalar(
 }
 
 /// Read the component from the hero's gameplay entity.
-pub fn read(
-    data: &GameData,
-    reg: &ClassRegistry,
-    entity: u64,
-) -> Option<Params> {
+pub fn read(data: &GameData, reg: &ClassRegistry, entity: u64) -> Option<Params> {
     let mut stu = data.stu_of(entity).ok()?;
     let index = stu.instances.iter().position(|i| i.hash == COMPONENT)?;
     let fields = stu.typed_fields(index, reg);
-    let mut params = Params::default();
-    params.fov = scalar(reg, COMPONENT, &fields, FOV_CANDIDATE);
-    params.eye_height = scalar(reg, COMPONENT, &fields, EYE_HEIGHT_CANDIDATE);
-    params.scale_a = scalar(reg, COMPONENT, &fields, SCALE_A);
-    params.scale_b = scalar(reg, COMPONENT, &fields, SCALE_B);
-    params.view_model_entity = field(&fields, VIEW_MODEL_ENTITY)
-        .and_then(as_asset)
-        .unwrap_or(0);
+    let mut params = Params {
+        fov: scalar(reg, COMPONENT, &fields, FOV_CANDIDATE),
+        eye_height: scalar(reg, COMPONENT, &fields, EYE_HEIGHT_CANDIDATE),
+        scale_a: scalar(reg, COMPONENT, &fields, SCALE_A),
+        scale_b: scalar(reg, COMPONENT, &fields, SCALE_B),
+        view_model_entity: field(&fields, VIEW_MODEL_ENTITY)
+            .and_then(as_asset)
+            .unwrap_or(0),
+        ..Params::default()
+    };
 
     if let Some(Value::Inline { start, bag }) = field(&fields, OFFSET).map(undefault) {
         if let Some(child) = inline_child(reg, COMPONENT, OFFSET) {
             let inner = stu.typed_fields_at(*child, *start, *bag, reg);
-            if let Some(Value::Struct(v)) =
-                field(&inner, OFFSET_POSITION).map(undefault)
-            {
-                for i in 0..3.min(v.len()) {
-                    params.offset[i] = v[i];
-                }
+            if let Some(Value::Struct(v)) = field(&inner, OFFSET_POSITION).map(undefault) {
+                let n = 3.min(v.len());
+                params.offset[..n].copy_from_slice(&v[..n]);
             }
         }
     }

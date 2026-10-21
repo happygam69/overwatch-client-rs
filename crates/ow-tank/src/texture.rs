@@ -108,12 +108,12 @@ impl Format {
     pub fn from_header(byte: u8) -> (Format, u8) {
         let id = if byte >= 0x1a { byte - 1 } else { byte };
         let family = match id {
-            70 | 71 | 72 => Format::Bc1,
-            73 | 74 | 75 => Format::Bc2,
-            76 | 77 | 78 => Format::Bc3,
-            79 | 80 | 81 => Format::Bc4,
-            82 | 83 | 84 => Format::Bc5,
-            97 | 98 | 99 => Format::Bc7,
+            70..=72 => Format::Bc1,
+            73..=75 => Format::Bc2,
+            76..=78 => Format::Bc3,
+            79..=81 => Format::Bc4,
+            82..=84 => Format::Bc5,
+            97..=99 => Format::Bc7,
             // The two ids BC6H owns in the standard enum are 95 (`BC6H_UF16`,
             // unsigned) and 96 (`BC6H_SF16`, signed); 94 is `BC6H_TYPELESS`,
             // which the header alone cannot resolve to one of the two variants,
@@ -140,7 +140,7 @@ impl Format {
             // `docs/formats/rendering.md` § "BC6H".
             94 | 95 => Format::Bc6h { signed: false },
             96 => Format::Bc6h { signed: true },
-            27 | 28 | 29 => Format::Rgba8,
+            27..=29 => Format::Rgba8,
             10 => Format::Rgba16Float,
             // DXGI 48 is the typeless-free `R16_FLOAT`; 54 is `R16_FLOAT` one
             // block later (the ids the standard enum puts it at, and the one
@@ -244,8 +244,8 @@ impl Texture {
                 _ => 0,
             };
             dxgi = None;
-            let bw = (self.width as usize + 3) / 4;
-            let bh = (self.height as usize + 3) / 4;
+            let bw = (self.width as usize).div_ceil(4);
+            let bh = (self.height as usize).div_ceil(4);
             pitch = (bw * bh * self.format.block_bytes()) as u32;
         } else if matches!(self.format, Format::Bc7 | Format::Bc6h { .. }) {
             // A DX10 header, because the DXGI number is what names BC6H and
@@ -270,8 +270,8 @@ impl Texture {
                 Format::Bc6h { .. } => Format::from_header(self.format_byte).1 as u32,
                 _ => 0,
             });
-            let bw = (self.width as usize + 3) / 4;
-            let bh = (self.height as usize + 3) / 4;
+            let bw = (self.width as usize).div_ceil(4);
+            let bh = (self.height as usize).div_ceil(4);
             pitch = (bw * bh * 16) as u32;
         } else {
             flags |= 0x8;
@@ -286,10 +286,7 @@ impl Texture {
         hdr[28..32].copy_from_slice(&1u32.to_le_bytes());
         let pf_off = 76usize;
         hdr[pf_off..pf_off + 4].copy_from_slice(&32u32.to_le_bytes());
-        if is_bc && !matches!(self.format, Format::Bc7 | Format::Bc6h { .. }) {
-            hdr[pf_off + 4..pf_off + 8].copy_from_slice(&0x4u32.to_le_bytes());
-            hdr[pf_off + 8..pf_off + 12].copy_from_slice(&fourcc.to_le_bytes());
-        } else if matches!(self.format, Format::Bc7 | Format::Bc6h { .. }) {
+        if is_bc || matches!(self.format, Format::Bc7 | Format::Bc6h { .. }) {
             hdr[pf_off + 4..pf_off + 8].copy_from_slice(&0x4u32.to_le_bytes());
             hdr[pf_off + 8..pf_off + 12].copy_from_slice(&fourcc.to_le_bytes());
         } else {
@@ -358,8 +355,8 @@ fn pixel_bytes(w: usize, h: usize, bpp: usize) -> Result<usize> {
 }
 
 fn block_bytes_needed(w: usize, h: usize, per_block: usize) -> Result<usize> {
-    let bw = (w + 3) / 4;
-    let bh = (h + 3) / 4;
+    let bw = w.div_ceil(4);
+    let bh = h.div_ceil(4);
     bw.checked_mul(bh)
         .and_then(|v| v.checked_mul(per_block))
         .ok_or(Error::Truncated("dimensions"))
@@ -552,7 +549,7 @@ pub fn decode(asset: &[u8], blocks_in: &[u8]) -> Result<Texture> {
 
 /// Bytes of one level's block grid, or 0 for an unknown family.
 pub fn level0_bytes(format: Format, w: usize, h: usize) -> usize {
-    let (bw, bh) = ((w + 3) / 4, (h + 3) / 4);
+    let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
     match format {
         Format::Bc1 | Format::Bc4 => bw * bh * 8,
         Format::Bc2 | Format::Bc3 | Format::Bc5 | Format::Bc7 | Format::Bc6h { .. } => bw * bh * 16,
@@ -703,7 +700,7 @@ fn decode_bc_colour(blocks: &[u8], w: usize, h: usize, at: usize) -> Result<Vec<
 
 fn decode_bc1(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     check_dims(w, h)?;
-    let (bw, bh) = ((w + 3) / 4, (h + 3) / 4);
+    let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
     // A shipped asset can carry fewer bytes than its dimensions imply (a mip
     // chain whose level 0 is what we read, or a texture whose payload the
     // manifest truncated); refuse rather than read out of bounds.
@@ -763,7 +760,7 @@ fn decode_bc4_channel(blocks: &[u8], at: usize) -> [u8; 16] {
 
 fn decode_bc4(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     check_dims(w, h)?;
-    let (bw, bh) = ((w + 3) / 4, (h + 3) / 4);
+    let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
     // A shipped asset can carry fewer bytes than its dimensions imply (a mip
     // chain whose level 0 is what we read, or a texture whose payload the
     // manifest truncated); refuse rather than read out of bounds.
@@ -793,7 +790,7 @@ fn decode_bc4(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
 
 fn decode_bc5(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     check_dims(w, h)?;
-    let (bw, bh) = ((w + 3) / 4, (h + 3) / 4);
+    let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
     // A shipped asset can carry fewer bytes than its dimensions imply (a mip
     // chain whose level 0 is what we read, or a texture whose payload the
     // manifest truncated); refuse rather than read out of bounds.
@@ -827,7 +824,7 @@ fn decode_bc5(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
 
 fn decode_bc2(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     check_dims(w, h)?;
-    let (bw, bh) = ((w + 3) / 4, (h + 3) / 4);
+    let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
     // A shipped asset can carry fewer bytes than its dimensions imply (a mip
     // chain whose level 0 is what we read, or a texture whose payload the
     // manifest truncated); refuse rather than read out of bounds.
@@ -861,7 +858,7 @@ fn decode_bc2(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
 
 fn decode_bc3(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     check_dims(w, h)?;
-    let (bw, bh) = ((w + 3) / 4, (h + 3) / 4);
+    let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
     // A shipped asset can carry fewer bytes than its dimensions imply (a mip
     // chain whose level 0 is what we read, or a texture whose payload the
     // manifest truncated); refuse rather than read out of bounds.
@@ -893,7 +890,7 @@ fn decode_bc3(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
 
 fn decode_bc7(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     check_dims(w, h)?;
-    let (bw, bh) = ((w + 3) / 4, (h + 3) / 4);
+    let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
     // A shipped asset can carry fewer bytes than its dimensions imply (a mip
     // chain whose level 0 is what we read, or a texture whose payload the
     // manifest truncated); refuse rather than read out of bounds.
@@ -1351,7 +1348,6 @@ fn bc7_block(block: &[u8], out: &mut [u8; 64]) {
 /// layout transcribed below, field for field, including its reversed fields).
 /// The partition table is the first 32 rows of BC7's — see
 /// [`BC6H_PARTITION_NOTE`].
-
 /// Endpoint slots, named as the specification names them: `RW` is
 /// `endpt[0].A` in red, `RX` is `endpt[0].B`, `RY` is `endpt[1].A` and `RZ` is
 /// `endpt[1].B` — and then the same four for green and for blue. So `W` is
@@ -1925,7 +1921,6 @@ fn bc6h_mode(number: u8) -> Option<&'static Bc6hMode> {
 /// `bc6h_shares_the_first_half_of_the_bc7_partition_table` pins the shared rows
 /// against a transcribed listing, so the sharing cannot drift silently; a note
 /// here rather than a second copy of the table.
-
 /// Sign-extend a value of `bits` bits (the specification's `SIGN_EXTEND`).
 fn extend_sign(v: i32, bits: u8) -> i32 {
     (v << (32 - bits)) >> (32 - bits)
@@ -2149,7 +2144,7 @@ fn bc6h_block(block: &[u8], signed: bool, out: &mut [u16; 64]) {
 /// so anything above 1.0 pins at 255 and anything below 0.0 at 0).
 fn decode_bc6h(blocks: &[u8], w: usize, h: usize, signed: bool) -> Result<(Vec<u8>, Vec<u16>)> {
     check_dims(w, h)?;
-    let (bw, bh) = ((w + 3) / 4, (h + 3) / 4);
+    let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
     // A shipped asset can carry fewer bytes than its dimensions imply (a mip
     // chain whose level 0 is what we read, or a texture whose payload the
     // manifest truncated); refuse rather than read out of bounds.

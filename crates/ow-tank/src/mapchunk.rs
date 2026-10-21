@@ -608,7 +608,7 @@ impl MapChunk {
             let hits = chunk
                 .placeables
                 .iter()
-                .filter(|p| p.model.or(p.entity).map(|g| resolves(g)).unwrap_or(false))
+                .filter(|p| p.model.or(p.entity).map(resolves).unwrap_or(false))
                 .count();
             if best.as_ref().map(|(_, _, b)| hits > *b).unwrap_or(true) {
                 best = Some((kind, chunk, hits));
@@ -624,7 +624,7 @@ impl MapChunk {
     pub fn resolvable_models(&self, resolves: &dyn Fn(u64) -> bool) -> usize {
         self.placeables
             .iter()
-            .filter(|p| p.model.map(|g| resolves(g)).unwrap_or(false))
+            .filter(|p| p.model.map(resolves).unwrap_or(false))
             .count()
     }
 

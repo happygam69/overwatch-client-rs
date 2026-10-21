@@ -39,7 +39,7 @@ const FAILURE_PREFIX: usize = 48;
 
 fn open() -> Option<(GameData, Option<TankRegistry>)> {
     let root = ow_casc::install::detect_root()?;
-    let sources = Sources::discover(&[root.clone()]);
+    let sources = Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(&root, &ManifestSelector::default(), &sources) {
         Ok(data) => data,
         Err(e) => {

@@ -16,7 +16,7 @@ use ow_tank::{guid, GameData};
 pub fn open_data() -> Result<GameData, String> {
     let root = ow_casc::install::detect_root()
         .ok_or("no Overwatch install found; set OW_INSTALL to the folder containing .build.info")?;
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let install_root = root.display().to_string();
     GameData::open(
         &install_root,

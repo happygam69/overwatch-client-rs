@@ -29,7 +29,7 @@ const V1_SCAN_CAP: usize = 1024;
 
 fn open() -> Option<(GameData, TankRegistry)> {
     let root = ow_casc::install::detect_root()?;
-    let sources = Sources::discover(&[root.clone()]);
+    let sources = Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(&root, &ManifestSelector::default(), &sources) {
         Ok(data) => data,
         Err(e) => {

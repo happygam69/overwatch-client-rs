@@ -125,7 +125,7 @@ pub struct TreeItem {
     pub tree: u64,
 }
 
-fn field<'a>(fields: &'a [TypedField], hash: u32) -> Option<&'a Value> {
+fn field(fields: &[TypedField], hash: u32) -> Option<&Value> {
     fields.iter().find(|f| f.hash == hash).map(|f| &f.value)
 }
 
@@ -185,7 +185,9 @@ fn param_at(
     // the slot id is still present and is what the runtime uses.
     Some(Param {
         value: field(&fields, F_VALUE).and_then(as_f32).unwrap_or(0.0),
-        slot: field(&fields, F_PARAM_ID).and_then(as_i32).map(|v| v as u32),
+        slot: field(&fields, F_PARAM_ID)
+            .and_then(as_i32)
+            .map(|v| v as u32),
     })
 }
 
@@ -283,7 +285,9 @@ pub fn read_tree(
                 Node::LayerChild {
                     parent: field(&fields, F_PARENT).and_then(as_instance).unwrap_or(0),
                     child: field(&fields, F_CHILD).and_then(as_instance).unwrap_or(0),
-                    additive: field(&fields, F_ADDITIVE).and_then(as_instance).unwrap_or(0),
+                    additive: field(&fields, F_ADDITIVE)
+                        .and_then(as_instance)
+                        .unwrap_or(0),
                     weight,
                 }
             }
@@ -369,4 +373,3 @@ pub fn read_set_item(
         .unwrap_or_default();
     Ok(TreeItem { clips, slots, tree })
 }
-

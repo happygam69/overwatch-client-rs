@@ -1,3 +1,4 @@
+lints.workspace = true
 [package]
 name = "ow-tank"
 version.workspace = true
@@ -14,3 +15,4 @@ sha1.workspace = true
 ow-casc.workspace = true
 ow-stu.workspace = true
 glam = "0.29"
+

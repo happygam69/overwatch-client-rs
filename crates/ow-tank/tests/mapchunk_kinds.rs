@@ -666,7 +666,7 @@ fn real_map_chunks_match_their_declared_kinds() {
     let Some(root) = ow_casc::install::detect_root() else {
         return;
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(&root, &ManifestSelector::default(), &sources) {
         Ok(data) => data,
         Err(e) => {

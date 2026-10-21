@@ -13,10 +13,19 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.83"
 license = "MIT OR Apache-2.0"
 repository = "https://example.invalid/ow-combat-rust"
 description = "Clean-room Rust reader for a local Overwatch install's gameplay data"
+
+[workspace.lints.clippy]
+# The readers mirror the shapes the client itself uses: wide argument lists,
+# deeply nested option types and index loops over parallel arrays. The
+# rewrites clippy suggests make those shapes harder to match against the
+# capture, so the lint is off rather than the code.
+too_many_arguments = "allow"
+type_complexity = "allow"
+needless_range_loop = "allow"
 
 [workspace.dependencies]
 ow-casc = { path = "crates/ow-casc" }

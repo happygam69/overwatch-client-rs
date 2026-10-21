@@ -2811,7 +2811,7 @@ impl SpeechIndex {
                 self.manifest
             ))
         })?;
-        Ok(data.open_ckey(&record.content_key)?)
+        data.open_ckey(&record.content_key)
     }
 
     /// Parse a WEM payload held by this manifest.
@@ -3606,7 +3606,7 @@ mod tests {
         match parse_wem(&bytes[..20]) {
             Err(Error::Truncated { at, need, have, .. }) => {
                 assert_eq!(at, 0, "the shortfall is the container itself");
-                assert_eq!(need, bytes.len() as usize);
+                assert_eq!(need, bytes.len());
                 assert_eq!(have, 20);
             }
             other => panic!("expected a truncation error, got {other:?}"),

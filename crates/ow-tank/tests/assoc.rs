@@ -526,7 +526,7 @@ fn type_0x051_is_structured_data_not_an_opaque_payload() {
 
 fn open() -> Option<GameData> {
     let root = ow_casc::install::detect_root()?;
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     match GameData::open(&root, &ManifestSelector::default(), &sources) {
         Ok(data) => Some(data),
         Err(e) => {

@@ -20,7 +20,6 @@ fn dump_fields(
     bag: i32,
     depth: usize,
     ident: &str,
-    field_names: &ow_tank::fieldnames::FieldNames,
 ) {
     if depth > 4 {
         return;
@@ -34,15 +33,17 @@ fn dump_fields(
         let ty = def
             .map(|d| format!("{:?}", d.ty))
             .unwrap_or_else(|| "?".into());
-        println!("{ident}{fname} [0x{:08X}] [{ty}] = {}", f.hash, f.value.describe());
+        println!(
+            "{ident}{fname} [0x{:08X}] [{ty}] = {}",
+            f.hash,
+            f.value.describe()
+        );
         match (&f.value, def.map(|d| &d.ty)) {
             (Value::Array(vals), Some(FieldType::Array(inner))) => {
                 let inner = &**inner;
                 for (k, v) in vals.iter().enumerate().take(32) {
                     println!("{ident}  [{k}] {}", v.describe());
-                    if let (Value::Inline { start, bag }, FieldType::Instance(child)) =
-                        (v, inner)
-                    {
+                    if let (Value::Inline { start, bag }, FieldType::Instance(child)) = (v, inner) {
                         dump_fields(
                             stu,
                             reg,
@@ -51,7 +52,6 @@ fn dump_fields(
                             *bag,
                             depth + 1,
                             &format!("{ident}    "),
-                            field_names,
                         );
                     }
                 }
@@ -65,7 +65,6 @@ fn dump_fields(
                     *bag,
                     depth + 1,
                     &format!("{ident}  "),
-                    field_names,
                 );
             }
             _ => {}
@@ -82,9 +81,9 @@ fn main() -> std::process::ExitCode {
         .map(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap());
 
     let root = ow_casc::install::detect_root().expect("no install");
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     )
@@ -108,9 +107,15 @@ fn main() -> std::process::ExitCode {
             if f.hash != 0x6afc_d1a5 {
                 continue;
             }
-            let Value::Array(items) = &f.value else { continue };
-            let Some(it) = items.get(item_want) else { continue };
-            let Value::Inline { start, bag } = it else { continue };
+            let Value::Array(items) = &f.value else {
+                continue;
+            };
+            let Some(it) = items.get(item_want) else {
+                continue;
+            };
+            let Value::Inline { start, bag } = it else {
+                continue;
+            };
             println!("== blend-set item {item_want} (hero {hero})");
             let item_fields = set.typed_fields_at(0xddd1_8945, *start, *bag, reg);
             let mut clips: Vec<u64> = Vec::new();
@@ -197,7 +202,11 @@ fn main() -> std::process::ExitCode {
             let ty = def
                 .map(|d| format!("{:?}", d.ty))
                 .unwrap_or_else(|| "?".into());
-            println!("   {fname} [0x{:08X}] [{ty}] = {}", f.hash, f.value.describe());
+            println!(
+                "   {fname} [0x{:08X}] [{ty}] = {}",
+                f.hash,
+                f.value.describe()
+            );
             match (&f.value, def.map(|d| &d.ty)) {
                 (Value::Array(vals), Some(FieldType::Array(inner))) => {
                     let inner = &**inner;
@@ -206,39 +215,18 @@ fn main() -> std::process::ExitCode {
                         if let (Value::Inline { start, bag }, FieldType::Instance(child)) =
                             (v, inner)
                         {
-                            dump_fields(
-                                &mut stu,
-                                reg,
-                                *child,
-                                *start,
-                                *bag,
-                                1,
-                                "       ",
-                                &field_names,
-                            );
+                            dump_fields(&mut stu, reg, *child, *start, *bag, 1, "       ");
                         }
                         if let (Value::Instance(id), _) = (v, inner) {
                             if *id < stu.instances.len() {
                                 let ch = stu.instances[*id].hash;
-                                println!(
-                                    "       -> instance #{id} {}",
-                                    data.classes.describe(ch)
-                                );
+                                println!("       -> instance #{id} {}", data.classes.describe(ch));
                             }
                         }
                     }
                 }
                 (Value::Inline { start, bag }, Some(FieldType::Instance(child))) => {
-                    dump_fields(
-                        &mut stu,
-                        reg,
-                        *child,
-                        *start,
-                        *bag,
-                        1,
-                        "     ",
-                        &field_names,
-                    );
+                    dump_fields(&mut stu, reg, *child, *start, *bag, 1, "     ");
                 }
                 _ => {}
             }
@@ -246,4 +234,3 @@ fn main() -> std::process::ExitCode {
     }
     std::process::ExitCode::SUCCESS
 }
-

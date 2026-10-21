@@ -354,12 +354,7 @@ fn discover_support_keyring(root: &Path) -> Option<PathBuf> {
         r"E:\CASCReader\OWLib\TankLib\Overwatch.keyring",
     ));
     candidates.push(PathBuf::from(r"D:\ow-dumps\Overwatch.keyring"));
-    for c in candidates {
-        if c.is_file() {
-            return Some(c);
-        }
-    }
-    None
+    candidates.into_iter().find(|c| c.is_file())
 }
 
 fn config_path(root: &Path, key: &str) -> PathBuf {

@@ -200,6 +200,8 @@ const GROUP_C_OFFSET: usize = 0x68;
 const GROUP_D_OFFSET: usize = 0x70;
 const GROUP_E_OFFSET: usize = 0x78;
 const GROUP_F_OFFSET: usize = 0x80;
+const GROUP_G_OFFSET: usize = 0x88;
+const GROUP_H_OFFSET: usize = 0x90;
 const GROUP_SOURCE_GUID: usize = 0x98;
 
 /// One shader of a group: its code blob and its source.
@@ -210,6 +212,10 @@ pub struct GroupEntry {
     /// Source GUID, type [`SOURCE_TYPE`] on 2882 of the 2933 entries across
     /// the first 100 openable groups (type 0x001 on the rest).
     pub source: u64,
+    /// The G array's `u64` for this record (one per record by size). Its
+    /// meaning is unknown: in the groups inspected it is a single value for
+    /// most records with a block of another value in the middle.
+    pub hash: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -247,8 +253,10 @@ pub fn parse_group(data: &[u8]) -> Result<ShaderGroup> {
     let d = rd_u64(data, GROUP_D_OFFSET)?;
     let e = rd_u64(data, GROUP_E_OFFSET)?;
     let f = rd_u64(data, GROUP_F_OFFSET)?;
+    let g = rd_u64(data, GROUP_G_OFFSET)?;
+    let h = rd_u64(data, GROUP_H_OFFSET)?;
 
-    // X | A | B (padded to 8) | C | D | E | F | end
+    // X | A | B (padded to 8) | C | D | E | F | G | H | end
     let head = GROUP_HEADER_SIZE as u64;
     let want_a = head + 24 * n;
     let want_b = want_a + 8 * n;
@@ -262,8 +270,16 @@ pub fn parse_group(data: &[u8]) -> Result<ShaderGroup> {
     let want_d = c + 8 * n;
     let want_e = want_d + 8 * n;
     let want_f = want_e + 8 * n;
-    let want_end = want_f + 8 * n;
-    if d != want_d || e != want_e || f != want_f || data.len() as u64 != want_end {
+    let want_g = want_f + 8 * n;
+    let want_h = want_g + 8 * n;
+    let want_end = want_h + 8 * n;
+    if d != want_d
+        || e != want_e
+        || f != want_f
+        || g != want_g
+        || h != want_h
+        || data.len() as u64 != want_end
+    {
         return Err(Error::Malformed(
             "array offsets do not match the record count",
         ));
@@ -275,6 +291,7 @@ pub fn parse_group(data: &[u8]) -> Result<ShaderGroup> {
         entries.push(GroupEntry {
             code: rd_u64(data, c as usize + i * 8)?,
             source: rd_u64(data, e as usize + i * 8)?,
+            hash: rd_u64(data, g as usize + i * 8)?,
         });
     }
 
@@ -422,7 +439,7 @@ fn relative(data: &[u8], start: usize, offset: u64, len: usize) -> Result<usize>
         .ok()
         .and_then(|o| start.checked_add(o))
         .ok_or(Error::Malformed("offset out of range"))?;
-    if at.checked_add(len).map_or(true, |end| end > data.len()) {
+    if at.checked_add(len).is_none_or(|end| end > data.len()) {
         return Err(Error::Malformed("read past the end"));
     }
     Ok(at)
@@ -684,7 +701,9 @@ mod tests {
         let d = c + 8 * n;
         let e = d + 8 * n;
         let f = e + 8 * n;
-        let len = f + 8 * n;
+        let g = f + 8 * n;
+        let h = g + 8 * n;
+        let len = h + 8 * n;
 
         let mut out = vec![0u8; len];
         out[GROUP_UNKNOWN0..GROUP_UNKNOWN0 + 8]
@@ -699,12 +718,17 @@ mod tests {
         out[GROUP_D_OFFSET..GROUP_D_OFFSET + 8].copy_from_slice(&(d as u64).to_le_bytes());
         out[GROUP_E_OFFSET..GROUP_E_OFFSET + 8].copy_from_slice(&(e as u64).to_le_bytes());
         out[GROUP_F_OFFSET..GROUP_F_OFFSET + 8].copy_from_slice(&(f as u64).to_le_bytes());
+        out[GROUP_G_OFFSET..GROUP_G_OFFSET + 8].copy_from_slice(&(g as u64).to_le_bytes());
+        out[GROUP_H_OFFSET..GROUP_H_OFFSET + 8].copy_from_slice(&(h as u64).to_le_bytes());
         out[GROUP_SOURCE_GUID..GROUP_SOURCE_GUID + 8]
             .copy_from_slice(&0x0E10_0000_0000_0032u64.to_le_bytes());
         out[0xB0..0xB8].copy_from_slice(&0x0000_00FF_FFFF_FFFFu64.to_le_bytes());
         for i in 0..n {
             out[c + i * 8..c + i * 8 + 8].copy_from_slice(&codes[i].to_le_bytes());
             out[e + i * 8..e + i * 8 + 8].copy_from_slice(&sources[i].to_le_bytes());
+            out[g + i * 8..g + i * 8 + 8]
+                .copy_from_slice(&(0x0D08_8000_EC22_C503u64).to_le_bytes());
+            out[h + i * 8..h + i * 8 + 8].copy_from_slice(&u64::MAX.to_le_bytes());
         }
         out
     }
@@ -722,7 +746,8 @@ mod tests {
             group.entries[0],
             GroupEntry {
                 code: REAL_CODE,
-                source: REAL_SOURCE
+                source: REAL_SOURCE,
+                hash: 0x0D08_8000_EC22_C503,
             }
         );
         assert_eq!(group.entries[1].code, REAL_CODE + 1);
@@ -756,6 +781,8 @@ mod tests {
             GROUP_D_OFFSET,
             GROUP_E_OFFSET,
             GROUP_F_OFFSET,
+            GROUP_G_OFFSET,
+            GROUP_H_OFFSET,
         ] {
             let mut data = base.clone();
             let mut v = u64::from_le_bytes(data[at..at + 8].try_into().unwrap());

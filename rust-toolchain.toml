@@ -1,4 +1,5 @@
-# The workspace builds on stable; this pins the version it was developed against
-# so a future toolchain does not silently change behaviour.
+# The workspace builds on the stable channel. `rust-version` in Cargo.toml is
+# the real floor (1.83, for const float bit patterns); the channel itself is
+# not pinned, so a newer stable is used when it is installed.
 [toolchain]
 channel = "stable"

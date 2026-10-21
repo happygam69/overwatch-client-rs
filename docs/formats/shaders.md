@@ -17,10 +17,11 @@ type-`0x086` assets.
 
 ## Group (`0x085`)
 
-Header 184 bytes; `N = u32` at `0x64`; six arrays follow it, each starting
-exactly where the previous ended. Verified on the 100 openable groups (of the
-first 400 sampled; 48,573 in the registry — the rest are the streamed-content
-wall), with the probe sample (30/30) agreeing:
+Header 184 bytes; `N = u32` at `0x64`; eight arrays follow it, each starting
+exactly where the previous ended. Verified on the 200 groups of the first 400
+sampled that this install carries (the other 200 are not in it: the
+streamed-content wall; 48,553 in the registry), with the probe sample (30/30)
+agreeing:
 
 ```text
 0x00  u64 unknown0          a type-0x040 GUID; likely the group's source
@@ -36,25 +37,30 @@ wall), with the probe sample (30/30) agreeing:
 0x68  u64 c_offset          C = u64 x N, code GUIDs (type 0x087)
 0x70  u64 d_offset          D = u64 x N, all 0xFF observed
 0x78  u64 e_offset          E = u64 x N, source GUIDs (type 0x040)
-0x80  u64 f_offset          F = u64 x N, all 0xFF observed; ends at EOF
-0x88  u64 zero
-0x90  u64 zero
+0x80  u64 f_offset          F = u64 x N, all 0xFF observed
+0x88  u64 g_offset          G = u64 x N, one hash-like value per record
+0x90  u64 h_offset          H = u64 x N, all 0xFF observed; ends at EOF
 0x98  u64 source_guid       type 0x088
 0xA0  u64 zero
 0xA8  u64 zero
 0xB0  u64 0x000000FFFFFFFFFF
 ```
 
-The C entries were type `0x087` on **2,933 of 2,933** entries across those 100
-groups. The E entries were type `0x040` on 2,882 of 2,933 — the other **51 are
-type `0x001`** (unexplained; possibly an inline/empty shader). The parser
-checks every array offset against `N` before reading anything, so a group
-whose layout differs fails instead of yielding garbage.
+The C entries were type `0x087` on **5,844 of 5,844** entries across the 200
+parsed groups. The E entries were type `0x040` on 1,662 of 1,734 — the other
+**72 are type `0x001`** (unexplained; possibly an inline/empty shader). The
+parser checks every array offset against `N` before reading anything, so a
+group whose layout differs fails instead of yielding garbage.
+
+The G array carries one `u64` per record: in the groups inspected it is a
+single value for most records, with a block of another value in the middle.
+The pairing with the C and E records follows from the size (8 bytes each);
+the meaning is unknown.
 
 ## Code (`0x087`)
 
 Header at least 140 bytes; the payload is a **gzip stream**. Verified on the
-144 code assets the install test could open (of the first 200 sampled; 147,881
+200 code assets the install test could open (of the first 200 sampled; 216,830
 in the registry) with the probe's 30/30 sample agreeing:
 
 ```text
@@ -80,10 +86,10 @@ the module's synthetic tests pin the reference's read order and gating.
 
 ## Open
 
-* the semantics of the group's unnamed arrays (A/B/D/F contents, `unknown60`,
-  `unknown0` vs `source_guid`) — offsets and types are pinned, meanings are
-  fitted or blank;
-* the 51 type-`0x001` source refs in E;
+* the semantics of the group's unnamed arrays (A/B/D/F/G/H contents,
+  `unknown60`, `unknown0` vs `source_guid`) — offsets and types are pinned,
+  meanings are fitted or blank;
+* the 72 type-`0x001` source refs in E;
 * the instance layout against real data (none installed here);
 * what consumes a group (the renderer's tier/instance selection) — client
   side, no capture holds the renderer's code pages (see

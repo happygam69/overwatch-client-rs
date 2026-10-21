@@ -73,9 +73,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {
@@ -120,7 +120,7 @@ fn main() -> std::process::ExitCode {
                 if t != 1 && t != 0x801 && t != 0x201 {
                     kinds.push(format!(
                         "+{:#x}: type 0x{t:03x} idx {}",
-                        i + j as usize,
+                        i + j,
                         ow_tank::guid::index_of(v)
                     ));
                 }

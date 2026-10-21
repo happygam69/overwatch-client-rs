@@ -13,7 +13,7 @@ const C50: u64 = 0x0a00000000000050; // the rest pose clip
 
 fn open() -> Option<(GameData, Sources)> {
     let root = ow_casc::install::detect_root()?;
-    let sources = Sources::discover(&[root.clone()]);
+    let sources = Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(&root, &ManifestSelector::default(), &sources) {
         Ok(d) => d,
         Err(e) => {
@@ -87,8 +87,8 @@ fn c50_positions_reproduce_the_bind_skeleton() {
     // matches' offsets expose which 4 of the 83 records are surplus (clothing
     // or scaling-only bones the FP skin does not name).
     let mut matched = 0usize;
-    let mut worst_near = 0.0f32;
-    let mut worst_near_at = 0usize;
+    let mut worst_exact = 0.0f32;
+    let mut worst_exact_at = 0usize;
     for (bone, t_bone) in skin.local.iter().take(bones).enumerate() {
         let cp = clip_pos.get(bone).copied().flatten();
         let local_t = t_bone.to_scale_rotation_translation().2;
@@ -104,9 +104,9 @@ fn c50_positions_reproduce_the_bind_skeleton() {
             Some(p) if (p - local_t).length() < 1e-3 => matched += 1,
             Some(p) => {
                 let d = (p - local_t).length();
-                if d > worst_near {
-                    worst_near = d;
-                    worst_near_at = bone;
+                if d > worst_exact {
+                    worst_exact = d;
+                    worst_exact_at = bone;
                 }
                 println!("  bone {bone}: local {local_t:.4} clip {p:.4}");
             }
@@ -114,12 +114,13 @@ fn c50_positions_reproduce_the_bind_skeleton() {
         }
     }
     println!("  exact positional matches (clip i == local i): {matched} of {bones}");
+    println!("  worst non-matching bone: {worst_exact:.4} at bone {worst_exact_at}");
 
     // 2: nearest-neighbour pairing: every position record should land near
     // *some* skin-local translation (the surplus records map to a duplicate).
     let mut near_total = 0usize;
-    worst_near = 0.0;
-    worst_near_at = 0;
+    let mut worst_near = 0.0f32;
+    let mut worst_near_at = 0usize;
     let locals: Vec<Vec3> = skin
         .local
         .iter()

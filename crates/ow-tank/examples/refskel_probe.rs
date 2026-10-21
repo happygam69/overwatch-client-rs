@@ -21,9 +21,9 @@ fn main() -> std::process::ExitCode {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.25);
     let root = ow_casc::install::detect_root().expect("no install");
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     )
@@ -39,7 +39,9 @@ fn main() -> std::process::ExitCode {
     println!("model assets: {}", models.len());
     let mut hits = 0;
     for m in models {
-        let Ok(bytes) = data.bytes_of(m) else { continue };
+        let Ok(bytes) = data.bytes_of(m) else {
+            continue;
+        };
         let Ok(skel) = ow_tank::skeleton::parse_model(&bytes) else {
             continue;
         };

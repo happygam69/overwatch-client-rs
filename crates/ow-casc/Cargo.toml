@@ -1,3 +1,4 @@
+lints.workspace = true
 [package]
 name = "ow-casc"
 version.workspace = true
@@ -8,3 +9,4 @@ description = "Read-only access to an Overwatch CASC installation"
 
 [dependencies]
 flate2.workspace = true
+

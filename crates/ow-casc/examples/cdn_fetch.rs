@@ -109,7 +109,7 @@ fn run(mode: &str, args: &[String], root: &Path, install: &Install) -> Result<()
     }
 }
 
-fn arg<'a>(args: &'a [String], i: usize) -> Result<&'a str, String> {
+fn arg(args: &[String], i: usize) -> Result<&str, String> {
     args.get(i)
         .map(String::as_str)
         .ok_or_else(|| format!("missing argument {i}"))

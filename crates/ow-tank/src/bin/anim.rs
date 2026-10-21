@@ -130,9 +130,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {
@@ -148,7 +148,7 @@ fn main() -> std::process::ExitCode {
         let total: usize = hist.values().sum();
         println!("{total} installed asset(s) across {} type(s)", hist.len());
         let mut rows: Vec<(u16, usize)> = hist.into_iter().collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.sort_by_key(|a| std::cmp::Reverse(a.1));
         for (t, n) in rows.iter().take(40) {
             println!("  0x{t:03x}  {n}");
         }
@@ -823,7 +823,7 @@ fn walk(data: &GameData, start: u64, depth: usize, hashes: &[u32], fields: bool,
             }
         }
         for g in refs {
-            if d + 1 <= depth {
+            if d < depth {
                 queue.push_back((g, d + 1));
             } else if depth > 0 {
                 println!("{}  (ref 0x{g:016x} beyond depth)", "  ".repeat(d));

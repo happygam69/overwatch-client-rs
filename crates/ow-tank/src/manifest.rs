@@ -194,7 +194,7 @@ fn key_iv_154088(
     }
 
     let mut iv = [0u8; 16];
-    let mut cursor = u32::from(at(i64::from(digest[7]) * i64::from(table[0]) & 511));
+    let mut cursor = u32::from(at((i64::from(digest[7]) * i64::from(table[0])) & 511));
     for (i, slot) in iv.iter_mut().enumerate() {
         *slot = at(cursor as i64);
         cursor = cursor.wrapping_add(3);

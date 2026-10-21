@@ -30,7 +30,6 @@ const ANIM_ALIAS: u32 = 0x865f_bb7e;
 const ANIM_IDENTIFIER: u32 = 0x7a6f_6dc0;
 const STU_ANIMATION: u32 = 0x9238_9e46;
 const ANIM_CATEGORY: u32 = 0xcb5a_89d2;
-const CATEGORY_FIELD: u32 = 0x0e5a_577a;
 const GAMEDATA_ANIMATION: u32 = 0xe932_36bc;
 const HARD_CODED_REFS: u32 = 0xc870_4ad4;
 
@@ -233,9 +232,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     )

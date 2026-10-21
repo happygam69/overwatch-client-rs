@@ -288,27 +288,6 @@ pub fn parse_keytable_literal(source: &str) -> Vec<u8> {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_a_keytable_literal() {
-        let source = r#"
-            public byte[] Key(Header h, int length) { return Keytable[h.x]; }
-            private static readonly byte[] Keytable =
-            {
-                0xBC, 0x63, 0x89, 0x14, 0x11, 0x19, 0x93, 0x89,
-                0x51, 0xFB, 0x72, 0xCB, 0x04, 0x5C, 0x49, 0xA3,
-            };
-        "#;
-        let table = parse_keytable_literal(source);
-        assert_eq!(table.len(), 16);
-        assert_eq!(table[0], 0xBC);
-        assert_eq!(table[15], 0xA3);
-    }
-}
-
 /// Directory names never worth descending into during a search.
 const SKIP: &[&str] = &[
     ".git",
@@ -434,4 +413,25 @@ fn find_checkouts(roots: &[PathBuf]) -> (Option<PathBuf>, Option<PathBuf>) {
     }
 
     (tactlib, owlib)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_keytable_literal() {
+        let source = r#"
+            public byte[] Key(Header h, int length) { return Keytable[h.x]; }
+            private static readonly byte[] Keytable =
+            {
+                0xBC, 0x63, 0x89, 0x14, 0x11, 0x19, 0x93, 0x89,
+                0x51, 0xFB, 0x72, 0xCB, 0x04, 0x5C, 0x49, 0xA3,
+            };
+        "#;
+        let table = parse_keytable_literal(source);
+        assert_eq!(table.len(), 16);
+        assert_eq!(table[0], 0xBC);
+        assert_eq!(table[15], 0xA3);
+    }
 }

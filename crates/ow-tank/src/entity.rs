@@ -677,7 +677,7 @@ pub fn hero_parts(data: &GameData, hero_index: u32) -> Result<HeroParts> {
         }
     }
     if parts.view_model_entity == hero_part::VIEW_MODEL_ENTITY {
-        if let Ok(mut fp_stu) = data.stu_of(hero_part::VIEW_MODEL_ENTITY) {
+        if let Ok(fp_stu) = data.stu_of(hero_part::VIEW_MODEL_ENTITY) {
             for (bag, at) in fp_stu.inline_elements(0, hero_part::CHILD_ENTITY_DATA) {
                 let fields = fp_stu.layout_at(at, bag);
                 let mut child = None;

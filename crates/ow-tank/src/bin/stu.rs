@@ -180,7 +180,7 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::from(2);
     };
     let data = match GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     ) {

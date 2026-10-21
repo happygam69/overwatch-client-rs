@@ -13,9 +13,9 @@ fn main() -> std::process::ExitCode {
         .map(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap())
         .unwrap_or(c15a);
     let root = ow_casc::install::detect_root().expect("no install");
-    let sources = ow_tank::keytable::Sources::discover(&[root.clone()]);
+    let sources = ow_tank::keytable::Sources::discover(std::slice::from_ref(&root));
     let data = GameData::open(
-        &root.display().to_string(),
+        root.display().to_string(),
         &ManifestSelector::default(),
         &sources,
     )
@@ -53,7 +53,11 @@ fn main() -> std::process::ExitCode {
             (o + 4 <= bytes.len()).then(|| u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap()))
         })
         .collect();
-    println!("id-list head: {:?} ({} words)", &ids[..ids.len().min(12)], ids.len());
+    println!(
+        "id-list head: {:?} ({} words)",
+        &ids[..ids.len().min(12)],
+        ids.len()
+    );
     let tables = ow_tank::clip::decode_reference_tables(&bytes);
     match &tables {
         Some(t) => {
@@ -85,7 +89,9 @@ fn main() -> std::process::ExitCode {
     }
     println!(
         "clip id type word: {:?}",
-        ids.iter().map(|v| v >> 24).collect::<std::collections::HashSet<_>>()
+        ids.iter()
+            .map(|v| v >> 24)
+            .collect::<std::collections::HashSet<_>>()
     );
     let _ = guid::type_of(guid_arg);
     std::process::ExitCode::SUCCESS

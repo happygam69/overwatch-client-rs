@@ -646,10 +646,7 @@ impl Renderer {
         // projection matrix takes.
         let fov = vertical_fov(aspect);
         let projection = Mat4::perspective_rh(fov, aspect, 0.01, 8000.0);
-        let fp_fov = self
-            .fp_fov
-            .map(f32::to_radians)
-            .unwrap_or(fov);
+        let fp_fov = self.fp_fov.map(f32::to_radians).unwrap_or(fov);
         let fp_projection = Mat4::perspective_rh(fp_fov, aspect, 0.01, 1638.4);
         let uniforms = Uniforms {
             view_projection: (projection * self.camera.view()).to_cols_array_2d(),
@@ -1354,4 +1351,3 @@ mod camera_tests {
         }
     }
 }
-
