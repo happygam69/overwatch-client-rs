@@ -21,6 +21,8 @@ The table below is the same set by task, with the Rust probes.
 | `dev/warm_merge.py` | union many runs' pages into one image, with a per-page report |
 | `dev/session_merge.py` | one run -> one base-coherent image (+ base sidecar), for pointer chasing |
 | `dev/coverage_gap.py` | per-run gap audit: cold pages by section, `.text` ranges attributed to `.pdata` functions |
+| `dev/capture_coverage.py` | do we have the code for this address? per address, per block, per gap, and what each run would add to the image |
+| `dev/pointer_check.py` | do the pointers in an image belong to one session? how much the data differs between two captures |
 | `dev/warm_poll.py` | older continuous warm-page sweep (fallback capture) |
 | `dev/dump_process.py` | read-only minidump of the running client (`--normal`, `--full`) |
 | `dev/etw_cpu_capture.ps1` | elevated read-only WPR CPU-sample capture |

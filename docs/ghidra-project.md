@@ -16,13 +16,16 @@ names the program (or the capture) it was read from.
 
 ## The programs
 
+## The programs
+
 | program | base | what it is | what it answers |
 |---|---|---|---|
-| `module_v2full.bin` | `0x7ff7c4d20000` (v2b) | the standing main-module image with the warm pages patched in; 70 MB, ~107k functions | **the default.** Every `v2b` address in the docs resolves here: the camera, the animation runtime, the entity and component system, the weapons and statescript code |
-| `live_main_flat.bin` | the newest session's flat main image | the live main module from the newest capture | what the newest session's code looks like when the pages are warm |
-| `camera_warm.exe` | a wrapped region | the first-person camera region, warm | the FP camera setup and its consumers |
-| `module_mapped.bin` | `0x7ff649000000` | the older range capture's mapped code regions | pages the v2b image does not have (v2b is ~52% zero bytes) |
-| `module_heap.bin` | `0x161b0000000` | the same capture's heap regions | runtime structures: the material chain, the FP component, class descriptors |
+| `module_after_diff_v2.bin` | `0x7ff7c4d20000` (v2b) | **the code image**: the standing image re-merged from all 17 runs (20-21 October), 73 MB, ~117k functions | **the default.** Every `v2b` address in the docs resolves here: the camera, the animation runtime, the entity and component system, the weapons and statescript code. Read its **code**; its data pointers belong to no single session (see below) |
+| `module_v2full.bin` | `0x7ff7c4d20000` (v2b) | the 12 October flatten, the older code image (38% cold pages) | what the project held until the re-merge; the function names were applied here first |
+| `module_mapped.bin` | `0x7ff649000000` | **the pointer image**: the range capture's mapped code regions, at that session's base | chasing pointers in the range session: a pointer read here resolves inside this program |
+| `module_heap.bin` | `0x161b0000000` | the same capture's heap regions | runtime structures: the material chain, the FP component, class descriptors - and the heap side of the pointers |
+| `live_main_flat.bin` | `0x7ff736e60000` | the newest session's flat main image, at that session's base | the newest session's code **and** its pointers |
+| `camera_warm.exe` | `0x7ff7c860e000` | the first-person camera region, warm | the FP camera setup and its consumers |
 | `ldr/Overwatch_loader.dll` | `0x180000000` (disk) | the loader **as shipped** - its `.text` is encrypted, so only the headers and `.pdata` are readable | the loader's own structure; the code needs the warm image |
 | `ldr-warm/loader_after_diff.bin` | the session's loader | the loader with its decrypted pages, flat (base 0, so a file offset is an RVA) | the loader code that is cold on disk |
 | `ldr/loader_xor_regions.exe` | the client's own addresses | four regions of the warm loader (the applier, its caller, the two pad families) wrapped in one PE by `dev/build_loader_wrap.py` | **the page cipher**, in readable code, at the addresses the docs use |
@@ -41,6 +44,40 @@ readable copy of its code is the warm flat image, and a function created in a
 23 MB "function" that the decompiler then chokes on). Wrapping the four
 regions that matter keeps every function small. Rebuild the wrap with
 `python dev/build_loader_wrap.py` after a new capture.
+
+## Code is session-independent; data is not
+
+**The rule:** the merged image is for **code**; the session images are for
+**pointers**. Both halves are measured (`dev/pointer_check.py`):
+
+- **Code is identical in every session.** Of the `.text` pages that are warm
+  in two sessions of the same build, **7,491 of 7,491 are byte-identical**.
+  That is why merging code pages across sessions is exactly safe.
+- **Data is not.** Between two sessions of the same build, **289,733** of the
+  `.rdata` words and **155,807** of the `.data` words differ, and they are
+  pointer-shaped: a global holds the address that was current in whichever
+  session captured that page. In a merged image those pointers are a mix, and
+  a module pointer from session A does not even land in the v2b frame (the
+  session's base differs).
+
+So in the merged program, trust the **code** - the disassembly, the
+decompilation, the xrefs *within* the code - and treat every data pointer as
+meaningless. When the work needs a pointer:
+
+1. open the **session** program (`module_mapped.bin` with `module_heap.bin`,
+   or `live_main_flat.bin`), where the pointer is the one that session had;
+2. translate the doc's v2b address into that session's frame - the delta is
+   in the run's `meta.json`, and `docs/architecture.md` gives the rule;
+3. cross-reference the result back into the merged program for the code.
+
+The session programs are rebased to their own session's base
+(`0x7ff649000000` and `0x161b0000000` for the range capture,
+`0x7ff736e60000` for the newest session) so that their pointers land
+inside them.
+
+```sh
+python dev/pointer_check.py <image-a> <image-b>   # how much the data differs
+```
 
 ## Named functions
 

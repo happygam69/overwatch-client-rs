@@ -84,23 +84,18 @@ def main() -> int:
     named = 0
     missing = 0
     for row in rows():
-        program = row["program"].split("/")[-1]
+        programs = [p.split("/")[-1] for p in row["program"].split(";")]
         address = row["address"]
         name = row["name"]
-        body = {
-            "function": address,
-            "new_name": name,
-            "program": program,
-            "strict_mode": "warn",
-        }
-        out = make_and_name(program, address, name)
-        if ok(out):
-            named += 1
-            print(f"named {name:<28} {address} in {program}")
-        else:
-            missing += 1
-            why = out.get("message") or out.get("error") or str(out)[:120]
-            print(f"MISS  {name:<28} {address} in {program}: {why}")
+        for program in programs:
+            out = make_and_name(program, address, name)
+            if ok(out):
+                named += 1
+                print(f"named {name:<28} {address} in {program}")
+            else:
+                missing += 1
+                why = out.get("message") or out.get("error") or str(out)[:120]
+                print(f"MISS  {name:<28} {address} in {program}: {why}")
     print(f"\n{named} named, {missing} not found")
     if check and missing:
         return 1

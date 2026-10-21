@@ -67,9 +67,15 @@ Binary/example entry points live in `crates/ow-tank/src/bin` (`hero`,
 2. **Coherent images** (`dev/session_merge.py`): one run at one base, for
    pointer chasing. Merged images (`dev/warm_merge.py`) union pages across
    sessions and must **not** be used for pointer values (mixed bases).
-3. **Standing image**: `D:/ow-dumps/module_after_diff.bin` (base
-   `0x7ff7c4d20000`), `module_after_stripped.bin` for Ghidra (rebased
-   `-0x10000`).
+   Measured: every `.text` page warm in two sessions of the same build is
+   byte-identical (7,491 of 7,491), so the *code* merges exactly, while
+   **445,540** pointer words in `.rdata`/`.data` differ between the same two
+   sessions. `dev/pointer_check.py` reproduces the count.
+3. **Standing image**: `D:/ow-dumps/module_after_diff_v2.bin` (base
+   `0x7ff7c4d20000`), the union of all 17 runs - the client's unread `.text`
+   is 11% of it, and `.pdata` (the function table of the whole client) is
+   fully readable. `module_after_stripped.bin` is the same image rebased
+   `-0x10000` for the headless import.
 4. **Ghidra headless** (`E:/ghidra/hproj*`, script
    `McpDecompile.java`): import the stripped image, decompile function
    ranges listed in an args file, export `.c` into `D:/ow-dumps`.

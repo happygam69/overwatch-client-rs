@@ -59,7 +59,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `focus_window.py` | Bring a process's main window to the foreground (un-minimise + focus). | 88 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
 | `gh.py` | Call the Ghidra bridge over HTTP. | 66 |
-| `gh_apply_names.py` | Name the client's functions in the Ghidra project. | 112 |
+| `gh_apply_names.py` | Name the client's functions in the Ghidra project. | 107 |
 | `graph_scan.py` | Find graph-container objects in a heap capture by the deserializer's shape. | 171 |
 | `hunt_actor.py` | Watch every mover, its owner, and one pointer level out, during a real walk. | 351 |
 | `hunt_node.py` | Hunt the player transform node by behaviour, not by shape. | 309 |
@@ -105,6 +105,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `pdata_lookup.py` | Lookup .pdata function ranges containing given rvas. | 65 |
 | `pe_probe.py` | Identify a module dump: PE sections, entropy, and where known capture code lands. | 82 |
 | `peek.py` | Dump memory around an address from the captured regions. | 49 |
+| `pointer_check.py` | Do the pointers in an image belong to one session? | 134 |
 | `refs_image.py` | Find RIP-relative references to addresses inside the flattened module image. | 65 |
 | `regions.py` | Load captured process regions and resolve virtual addresses. | 236 |
 | `relaxed_scan.py` | Find transform-shaped records with any orientation (not just yaw). | 93 |
