@@ -35,7 +35,8 @@ Verified against the retail install `2.25.0.0.154088`.
 
 * **Container and data:** CASC/encoding/BLTE, manifests and the content
   registry; both STU versions (v1 synthetic-tested only) and the typed class
-  registry (classes, fields, defaults, arrays, maps, assets).
+  registry (classes, fields, defaults, arrays, maps, assets); the shader
+  groups (`0x085`), code blobs (`0x087`) and the material chain.
 * **Movement:** the mover is trace-measured and gated by `trace_diff` - speeds,
   acceleration, friction, gravity, jump, crouch, air control and slope
   following. The control *code* is tier 3; the arithmetic is the measured
