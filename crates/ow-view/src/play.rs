@@ -26,6 +26,7 @@ use ow_tank::GameData;
 use ow_scene as scene;
 
 /// Parameters the caller supplies because the install does not hold them.
+// FIT-COM-04: per-shot damage: supplied by the caller, not a fit
 pub struct Supplied {
     /// Per-shot damage.
     pub damage: f32,
@@ -43,6 +44,7 @@ pub struct Supplied {
 /// (ledge and slope handling) is not read yet. So the harness stops pretending
 /// the geometry is solid and uses this instead: one plane at the height the
 /// spawn floor reports, four boxes to walk into, step onto and jump onto.
+// FIT-MOV-04: player collision: stand-in (ground plane plus boxes)
 pub struct Sandbox {
     /// Ground plane height.
     pub ground: f32,
@@ -136,6 +138,7 @@ pub struct PlayState {
     pub pitch: f32,
     /// The stand-in collision (plane + boxes), not the map mesh.
     pub sandbox: Sandbox,
+    // FIT-PRE-03: bots and projectiles: drawn as boxes and markers
     pub bots: Vec<Combatant>,
     pub labels: Vec<String>,
     pub log: Vec<String>,
@@ -507,6 +510,7 @@ fn weapon_interval_of(data: &GameData, entity: u64) -> Option<f32> {
 /// hero 810 speed 70 with gravity 9.8 (`D:/ow-dumps/wfigs.txt`). Without a
 /// speed, a cast length is hitscan with that range; without either, the
 /// harness's 200 m hitscan default stands.
+// FIT-COM-06: cast-length interpretation: assumed
 fn volley_mode(cast: Option<f32>, speed: Option<f32>, gravity: f32) -> FireMode {
     if let Some(speed) = speed {
         return FireMode::Projectile { speed, gravity };
@@ -524,6 +528,7 @@ fn volley_mode(cast: Option<f32>, speed: Option<f32>, gravity: f32) -> FireMode 
 /// the files declare them; spread/falloff/ammo stay at defaults (unread).
 /// Damage stays supplied (`--damage`): the modify-health literals are
 /// candidates, reported in the note, never labelled.
+// FIT-COM-05: spread, falloff and ammo: left unread
 pub fn hero_weapon(
     damage: f32,
     hero_index: u32,
@@ -800,6 +805,7 @@ pub fn open_data() -> Result<GameData, String> {
 /// weight)>)`, with the `head` count named (how many items precede the first
 /// gamedata). No slot is named; the enum's member names are hashes wherever
 /// they have been read.
+// FIT-ANI-06: blend-item order: read mapping, fitted driver math
 fn read_blend_set(
     data: &GameData,
     set: u64,
@@ -999,6 +1005,7 @@ fn build_tree_anim(
 /// among the unmarked items** (a sway loop is longer than a rest pose; c71 on
 /// hero 3), so the resolver is not tied to one item index. Fallbacks: the
 /// last unmarked item's first clip, then the old first-marked item.
+// FIT-ANI-01: playback fallback: single clip when there is no tree
 fn resolve_idle_clip(data: &GameData, hero: u32) -> Option<u64> {
     let parts = ow_tank::entity::hero_parts(data, hero).ok()?;
     let set = parts.view_model_anim_set;
@@ -1521,6 +1528,7 @@ fn wrap_pi(a: f32) -> f32 {
 /// first two are stiffness and damping, the third the drive scale. The rest
 /// position is zero, so a constant turn settles at `gain·drive/stiffness`
 /// behind the camera and stopping returns the offset to zero.
+// FIT-CAM-01: view-model drag spring: form fitted, constants read
 fn vm_spring_step(
     offset: &mut f32,
     vel: &mut f32,
@@ -1588,6 +1596,7 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
         vm_damping: f32,
         /// Drive scale on the camera's angular velocity (`--vm-g`, default -1).
         vm_gain: f32,
+        // FIT-CAM-02: camera look filter: time constant read, follower form fitted
         /// The camera's own yaw/pitch. With `look_inverse` 0 these are the
         /// mover's exact output; with the client's 0.1 they are a fitted
         /// exponential follow of it.
@@ -1604,6 +1613,7 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
         fp_cam_drop: f32,
         fp_cam_back: f32,
         /// First-person pass vertical FOV (`--fp-fov`), None = world FOV.
+        // FIT-ANI-03: FP camera/view-model parameters: values read, the mapping is fitted
         fp_fov: Option<f32>,
         /// Camera yaw/pitch at the previous frame, for the angular velocity.
         prev_cam_yaw: f32,

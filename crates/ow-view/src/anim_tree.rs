@@ -39,6 +39,7 @@ pub struct ChainLink {
 /// chain is `[dropped ancestor ..., own bone]`, composed parent to child;
 /// for ordinary bones it is just `[own bone]` and the behaviour is the same
 /// as before.
+// FIT-ANI-05: blend tree: read graph, fitted driver math
 pub fn build_chains(
     source: &BlendPose,
     fp_ids: &[u32],

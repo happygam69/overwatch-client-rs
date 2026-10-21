@@ -58,6 +58,7 @@ use ow_tank::{guid, GameData, ManifestSelector};
 /// It is the *viewer's* constant, not a client reading — the traced node is the
 /// feet, so the client's own eye height is not measured here. Both the harness
 /// and a view model's anchor use this one number so they cannot drift.
+// FIT-CAM-05: eye height: assumed (the client's own was not measured)
 pub const EYE_HEIGHT: f32 = 1.75;
 
 /// A model's slice of the shared vertex and index buffers.
@@ -141,6 +142,7 @@ pub struct Scene {
     /// The placeholder bound where a draw has no readable material: white by
     /// default, a UV checker under `--uv-check` so an untextured surface cannot
     /// be mistaken for a textured one.
+    // FIT-PRE-01: materials: white placeholder where the key is missing
     pub placeholder: SceneTexture,
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
@@ -181,6 +183,7 @@ pub struct Scene {
     /// parent chain differs at 44/74.
     pub character_skin: Option<ow_tank::skin::Skin>,
     pub character_ids: Vec<u32>,
+    // FIT-ANI-04: weapon attachment: read structure, chosen frame (c71 idle)
     pub character_weapon_pose: Option<ow_tank::clip::BlendPose>,
     /// The hero model and texture that were placed, for the HUD.
     pub hero_model: u64,
@@ -277,6 +280,7 @@ impl Scene {
     ///   model's: its weapon bone is at `(0, 1.7104, +0.40)` in the model's own
     ///   space. An earlier version of this function added π (from a note that the
     ///   *mesh* extends to −z), which is what pointed the arms backwards.
+    // FIT-CAM-06: first-person pitch: whole-rig rotation fitted
     pub fn view_model_matrix(eye: Vec3, yaw: f32, pitch: f32) -> Mat4 {
         let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch);
         let camera = Mat4::from_rotation_translation(rotation, eye);

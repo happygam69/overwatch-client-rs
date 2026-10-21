@@ -113,6 +113,7 @@ struct Renderer {
     /// level eye camera puts them under the screen. Lowering and backing the
     /// FP camera brings the hands and guns into the lower view without moving
     /// the world camera.
+    // FIT-ANI-02: first-person camera framing: drop/back fitted
     pub(crate) fp_camera_drop: f32,
     pub(crate) fp_camera_back: f32,
     /// First-person pass vertical FOV in degrees, when the caller supplies
@@ -638,6 +639,7 @@ impl Renderer {
 
     fn render(&mut self) {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
+        // FIT-CAM-04: world camera near/far: stand-in (only the FP pair is read)
         // World projection. The client's **world** near/far are not read, so
         // this remains the viewer's stand-in; the first-person pair below is
         // the client's own (`camera.FirstPersonNearZ`/`FarZ`, v2b
@@ -647,6 +649,7 @@ impl Renderer {
         let fov = vertical_fov(aspect);
         let projection = Mat4::perspective_rh(fov, aspect, 0.01, 8000.0);
         let fp_fov = self.fp_fov.map(f32::to_radians).unwrap_or(fov);
+        // FIT-CAM-03: FP pass: near/far read, the depth clear is fitted
         let fp_projection = Mat4::perspective_rh(fp_fov, aspect, 0.01, 1638.4);
         let uniforms = Uniforms {
             view_projection: (projection * self.camera.view()).to_cols_array_2d(),

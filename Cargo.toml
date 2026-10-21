@@ -8,6 +8,7 @@ members = [
     "crates/ow-scene",
     "crates/ow-view",
     "crates/ow-game",
+    "crates/xtask",
 ]
 
 [workspace.package]

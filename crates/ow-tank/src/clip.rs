@@ -654,6 +654,7 @@ pub fn find_float_regions(body: &[u8]) -> Vec<FloatRegion> {
 
 /// Pair bone tables with their corresponding float data regions. Each bone
 /// table is paired with the next float region that follows it.
+// FIT-ANI-07: animation-to-skin join: id join measured, surplus ids dropped
 pub fn pair_bone_tables_with_floats(
     body: &[u8],
     bone_tables: &[BoneTable],

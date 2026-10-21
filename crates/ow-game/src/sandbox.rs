@@ -112,6 +112,7 @@ pub fn test_range_meshes() -> (Mesh, Mesh) {
 
 /// A 0.8 x 1.8 x 0.8 box, the bot stand-in until hit shapes are extracted
 /// (docs/rewrite-plan.md Q8).
+// FIT-COM-07: bots: stand-in boxes, no client AI
 pub fn bot_box() -> Mesh {
     let (hx, hy, hz) = (0.4f32, 0.9f32, 0.4f32);
     let positions = vec![

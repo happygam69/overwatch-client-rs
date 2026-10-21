@@ -73,6 +73,7 @@ fn vs_main(
 }
 
 @fragment
+// FIT-PRE-02: shading: stand-in key/fill/sky model
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     // Two lights from opposite sides so nothing reads as pure black, and a

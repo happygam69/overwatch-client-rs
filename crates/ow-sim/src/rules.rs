@@ -27,6 +27,7 @@ use crate::{PoolSet, Vec3};
 
 /// Which pool absorbs damage first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+// FIT-COM-01: damage order: assumed
 pub enum DamageOrder {
     /// Shields, then armour, then health.
     #[default]
@@ -39,6 +40,7 @@ pub enum DamageOrder {
 
 /// How armour reduces a hit.
 #[derive(Debug, Clone, Copy, PartialEq)]
+// FIT-COM-02: armour mitigation: assumed
 pub enum ArmourMitigation {
     /// No reduction: armour only absorbs.
     None,
@@ -54,6 +56,7 @@ pub enum ArmourMitigation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+// FIT-COM-03: combat defaults: assumed (shield regen, spread, falloff)
 pub struct Rules {
     pub damage_order: DamageOrder,
     pub armour_mitigation: ArmourMitigation,

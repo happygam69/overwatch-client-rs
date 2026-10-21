@@ -156,6 +156,7 @@ impl Combatant {
 pub enum FireMode {
     /// Instant hit along the aim direction, up to `range` metres.
     Hitscan { range: f32 },
+    // FIT-MOV-05: projectiles and shots: no map collision, the harness treats the map as visual
     /// A travelling projectile.
     Projectile { speed: f32, gravity: f32 },
 }

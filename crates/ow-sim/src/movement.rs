@@ -63,6 +63,7 @@
 //!   horizontal share `speed * cos(slope)`, the vertical `speed * sin(slope)`,
 //!   the heading the wish's) — measured on a 17.9° climb: 4.940 m/s = the 4.95
 //!   slot to 0.2%, and its heading is the forward run's reversed to 0.2°. The
+// FIT-MOV-02: steep slide: not modelled, tier 3
 //!   *steep*-slide case (|v| = 4.6895 m/s, not a slot) stays unmodelled, tier 3.
 //!
 //! The mover control's *code* (plan question Q3) is **closed as tier 3**: the
@@ -82,6 +83,7 @@ pub const FIELD_SIDE: u32 = 0xCFD3_E635;
 /// Backpedal base field (90% of forward, per published figure and dump).
 pub const FIELD_BACK: u32 = 0x61D6_B4E9;
 /// Crouch speed field (3.0 mostly; a few heroes disagree so it is provisional).
+// FIT-MOV-03: crouch speed field: read value, label provisional
 pub const FIELD_CROUCH: u32 = 0x0DDD_18C3;
 /// Terminal fall speed field (30 m/s, both sources agree).
 pub const FIELD_FALL_TERMINAL: u32 = 0xB742_45E8;
@@ -122,6 +124,7 @@ pub const GRAVITY: f32 = 17.37;
 /// frame (0.1267069 m of extra displacement over a partial first frame at
 /// dt = 0.032309), so the rate is 121.4. The measurement is one frame pair
 /// (+/-0.7); 121.4 is 1.2% above 120, which is within that band.
+// FIT-MOV-01: mover rates: fitted to keyed traces (the control code is tier 3)
 pub const ACCEL: f32 = 121.4;
 /// Horizontal friction toward zero when no direction is held, in metres per
 /// second squared. **Measured**: the decrement is a *constant* 2.345 m/s per

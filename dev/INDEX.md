@@ -50,6 +50,9 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `find_script_instances.py` | Find live statescript runtime objects by their vtables and chase the dispatch. | 166 |
 | `find_tables.py` | Find large arrays of code pointers (jump/dispatch tables) in the module image. | 79 |
 | `find_tick.py` | Find the physics tick object in a captured heap set. | 121 |
+| `fit_check.py` | Check that the fitted ledger and the code agree. | 75 |
+| `fit_ledger_ids.py` | Put the fit ids into the ledger's feature cells. | 72 |
+| `fit_marks.py` | Mark the fitted, assumed and stand-in implementations in the code. | 90 |
 | `flatten.py` | Flatten captured code regions into one image Ghidra can import. | 49 |
 | `focus_window.py` | Bring a process's main window to the foreground (un-minimise + focus). | 88 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
@@ -102,6 +105,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `refs_image.py` | Find RIP-relative references to addresses inside the flattened module image. | 65 |
 | `regions.py` | Load captured process regions and resolve virtual addresses. | 236 |
 | `relaxed_scan.py` | Find transform-shaped records with any orientation (not just yaw). | 93 |
+| `remove_fns.py` | Remove a named set of functions from Rust files. | 68 |
 | `rx_diff.py` | Differential code-coverage: which module pages execute when a key is held. | 100 |
 | `scan_dump.py` | Scan a Windows minidump for the page-window table or the pad. | 235 |
 | `scan_name_pools.py` | Sweep the capture for plaintext identifier pools. | 97 |
