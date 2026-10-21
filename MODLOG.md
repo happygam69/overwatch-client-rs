@@ -22,6 +22,19 @@ work queue in `docs/open-questions.md`.
   images.
 - A snapshot of the project as it was before the cleanup is at
   `D:/ow-dumps/owmod_snapshot_20261021_preprune`.
+- **The decompiler now speaks the docs' language.** `docs/function-names.csv`
+  ties a function's address to the name the docs already use for it, and
+  `dev/gh_apply_names.py` applies the names through the MCP bridge: 13
+  functions are named (the FP view-model consumer, the animation sampler
+  rule, the Domino physics chain, and the loader's page-XOR applier with its
+  caller and the two pad families). A row is added when a function's role is
+  understood, never before.
+- The loader's code is only readable in the warm image, and a function
+  created in that 37 MB flat image makes Ghidra follow the flow across all of
+  it (a 23 MB "function" that killed the decompiler). The four regions that
+  matter are now wrapped into one small PE at the client's own addresses
+  (`dev/build_loader_wrap.py`), so the page cipher can be read and named
+  without the decompiler choking.
 
 ## 2026-10-21 - the project gets a gate, a toolbox and a ledger
 

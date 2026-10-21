@@ -23,16 +23,50 @@ names the program (or the capture) it was read from.
 | `camera_warm.exe` | a wrapped region | the first-person camera region, warm | the FP camera setup and its consumers |
 | `module_mapped.bin` | `0x7ff649000000` | the older range capture's mapped code regions | pages the v2b image does not have (v2b is ~52% zero bytes) |
 | `module_heap.bin` | `0x161b0000000` | the same capture's heap regions | runtime structures: the material chain, the FP component, class descriptors |
-| `ldr/Overwatch_loader.dll` | `0x180000000` (disk) | the loader **as shipped** - it is plaintext on disk | the page cipher, the loader's own code |
-| `ldr-warm/loader_after_diff.bin` | the session's loader | the loader with its decrypted pages | the loader code that is cold on disk |
+| `ldr/Overwatch_loader.dll` | `0x180000000` (disk) | the loader **as shipped** - its `.text` is encrypted, so only the headers and `.pdata` are readable | the loader's own structure; the code needs the warm image |
+| `ldr-warm/loader_after_diff.bin` | the session's loader | the loader with its decrypted pages, flat (base 0, so a file offset is an RVA) | the loader code that is cold on disk |
+| `ldr/loader_xor_regions.exe` | the client's own addresses | four regions of the warm loader (the applier, its caller, the two pad families) wrapped in one PE by `dev/build_loader_wrap.py` | **the page cipher**, in readable code, at the addresses the docs use |
 | `regions/mover_ctl.exe` | a wrapped region | the mover's control code | the mover control (declared tier 3; the rates were measured instead) |
 | `regions/speed_readers.exe` | a wrapped region | the four speed-reader bands | where the mover's speeds are read |
 | `regions/clipobj.exe` | a wrapped region | the clip object | the per-bone animation update |
 
 A **region wrap** is a small PE built around a slice of the client's code, so
 that Ghidra can analyse it as code rather than as a raw dump
-(`dev/mkpe.py` builds one). The wrap is a convenience: the address in the
-docs is the client's, not the wrap's.
+(`dev/mkpe.py` builds one). The wrap keeps the client's addresses: the
+address in the docs is the client's, and it is the same in the wrap.
+
+The loader needs a wrap because its `.text` is encrypted on disk: the only
+readable copy of its code is the warm flat image, and a function created in a
+37 MB flat image makes Ghidra follow the flow across the whole image (a
+23 MB "function" that the decompiler then chokes on). Wrapping the four
+regions that matter keeps every function small. Rebuild the wrap with
+`python dev/build_loader_wrap.py` after a new capture.
+
+## Named functions
+
+The decompiler shows `FUN_7ff7c4ff0060`; the docs call the same function
+`FpViewmodelConsumer`. The table that ties the two together is
+**`docs/function-names.csv`**: program, address, the address the docs use,
+the name, and what the function does.
+
+```sh
+python dev/gh_apply_names.py          # apply every name
+python dev/gh_apply_names.py --check  # report what is named and what is not
+```
+
+A row is added **when a function's role is understood**, never before, and
+the name is the one the docs already use. A function the project has not
+analysed yet is created first - in a deliberately small window (64 bytes), so
+its body stays small and the decompiler can read it.
+
+Two wrinkles worth knowing:
+
+- The naming tool talks to the operator's Ghidra over the MCP bridge
+  (`dev/gh.py`); it saves the program itself, and a save can take a while on
+  the big images.
+- `create_function` on a *flat* image (not a wrap) follows the flow across
+  the whole image. Do not create functions in `loader_after_diff.bin`; use
+  the wrap.
 
 ## Address conventions
 
@@ -83,6 +117,8 @@ same for callers, with the call-site context.
 3. Record the program in the table above, with its base and what it answers.
 4. The image itself stays outside the repository (it is the client's code);
    only the project database is kept here, and it is git-ignored.
+5. If the new capture answers a question about a function, add its name to
+   `docs/function-names.csv` and run `python dev/gh_apply_names.py`.
 
 ## Housekeeping
 

@@ -91,6 +91,10 @@ the behaviour. A fitted implementation is always labelled as fitted.
   behaviour, the install wins for data.
 - **Record failures.** A dead end that is written down is worth more than one
   that has to be rediscovered.
+- **Name what you understand.** When a function's role is settled, add a row
+  to `docs/function-names.csv` and run `python dev/gh_apply_names.py`, so the
+  decompiler and the docs say the same thing. A name is only for a function
+  whose role is known.
 
 ## Verification and honesty
 
