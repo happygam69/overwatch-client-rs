@@ -1,8 +1,10 @@
-//! A fixed-tick combat simulation driven by data read from an install.
+//! A simulation of the client's movement and combat, driven by data read from
+//! an install.
 //!
-//! This crate holds no IO and no Overwatch-specific knowledge: it takes
-//! [`HeroSpec`] values assembled elsewhere and simulates them. `ow-range` is what
-//! joins it to the install.
+//! This crate holds no IO and no Overwatch-specific knowledge: it takes hero
+//! specs ([`movement::MoverSpec`] and [`PoolSet`] values) assembled elsewhere
+//! and simulates them. `ow-view` is what supplies those values from the
+//! install.
 //!
 //! # What is extracted and what is assumed
 //!
@@ -11,6 +13,13 @@
 //! **Extracted from the installation** (see `docs/formats/`): health pools,
 //! armour and shields per hero; and per weapon, the fire interval, projectiles
 //! per shot, projectile speed and lifetime.
+//!
+//! **Measured from the client's own traces**: the character mover's arithmetic
+//! ([`movement`]) — per-frame integration with the trace's own frame dt, the
+//! ramp, friction, gravity, jump impulse, airborne and slope rules — verified
+//! by the gate differ in [`trace`] (`trace_diff keys --by-state`), which also
+//! holds the recorded trace format. The mover control as *code* is closed as
+//! tier 3 (obfuscated; `docs/formats/character-controller.md`).
 //!
 //! **Assumed, and marked as such in the code**: the order in which damage is
 //! taken from the three pools, and how armour mitigates it. Both are game rules
@@ -22,7 +31,10 @@
 //! `docs/formats/weapons.md` records the seven places it was looked for — so it
 //! is an explicit input rather than a guess dressed up as data.
 
+pub mod body;
+pub mod movement;
 pub mod rules;
+pub mod trace;
 
 use std::f32::consts::PI;
 
@@ -262,9 +274,7 @@ pub struct Spread {
 
 impl Spread {
     pub fn new(seed: u64) -> Spread {
-        Spread {
-            state: seed | 1,
-        }
+        Spread { state: seed | 1 }
     }
 
     /// A uniform value in `[0, 1)`.
@@ -302,7 +312,10 @@ impl Spread {
 
         normalize(add(
             forward,
-            add(scale(right, r * theta.cos()), scale(real_up, r * theta.sin())),
+            add(
+                scale(right, r * theta.cos()),
+                scale(real_up, r * theta.sin()),
+            ),
         ))
     }
 }
@@ -349,7 +362,7 @@ pub fn ray_capsule(origin: Vec3, dir: Vec3, target: &Combatant, max_range: f32) 
         if enter_xz < lo || enter_xz > hi {
             return None;
         }
-    } else if origin[1] < target.pos[1] || origin[1] > target.pos[1] + target.height {
+    } else if origin[1] < target.pos[1] || origin[1] >= target.pos[1] + target.height {
         return None;
     }
     Some(enter_xz)
@@ -364,6 +377,11 @@ pub struct Projectile {
     pub life: f32,
     pub damage: f32,
     pub falloff: Option<Falloff>,
+    /// Downward acceleration in m/s², from the volley's projectile-motion
+    /// gravity term where the files declare one (`m_599AB8D7 = gravity?`,
+    /// measured `9.8` on heroes 5/6/810 — `docs/formats/weapons.md`).
+    /// Zero means straight flight.
+    pub gravity: f32,
     /// The combatant that fired it, which it cannot hit.
     pub owner: Option<usize>,
 }
@@ -485,8 +503,9 @@ impl World {
                     }
                     projectile.pos = add(projectile.pos, delta);
                 }
-                // Gravity, when a caller sets it, is applied per sub-step.
-                projectile.vel[1] -= 0.0 * sub;
+                // Gravity, when the volley declares it, is applied per
+                // sub-step so a fast arc cannot tunnel past its apex.
+                projectile.vel[1] -= projectile.gravity * sub;
             }
 
             projectile.life -= dt;
@@ -524,15 +543,17 @@ impl World {
                 // at the same instant, until projectile flight is simulated.
                 FireMode::Projectile { .. } => weapon
                     .lifetime
-                    .map(|t| t * match weapon.mode {
-                        FireMode::Projectile { speed, .. } => speed,
-                        _ => 0.0,
+                    .map(|t| {
+                        t * match weapon.mode {
+                            FireMode::Projectile { speed, .. } => speed,
+                            _ => 0.0,
+                        }
                     })
                     .unwrap_or(100.0),
             };
 
             match weapon.mode {
-                FireMode::Projectile { speed, .. } => {
+                FireMode::Projectile { speed, gravity } => {
                     // The shot leaves now and lands later, which is the whole
                     // difference from hitscan. Damage is applied by `step`.
                     let life = weapon.lifetime.unwrap_or(3.0);
@@ -542,6 +563,7 @@ impl World {
                         life,
                         damage: weapon.damage_per_projectile,
                         falloff: weapon.falloff,
+                        gravity,
                         owner: None,
                     });
                     hits.push(None);
@@ -729,7 +751,13 @@ mod projectile_tests {
         let mut spread = Spread::new(1);
         let rules = Rules::default();
 
-        let shot = world.fire(&weapon, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], &mut spread, &rules);
+        let shot = world.fire(
+            &weapon,
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            &mut spread,
+            &rules,
+        );
         assert_eq!(shot.damage_total, 0.0, "nothing lands on the shot itself");
         assert_eq!(world.projectiles.len(), 1);
 
@@ -765,7 +793,13 @@ mod projectile_tests {
         };
         let mut spread = Spread::new(1);
         let rules = Rules::default();
-        world.fire(&weapon, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], &mut spread, &rules);
+        world.fire(
+            &weapon,
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            &mut spread,
+            &rules,
+        );
 
         let events = world.step(0.1, &rules);
         assert_eq!(events.len(), 1, "the target is in the way and must be hit");
@@ -775,20 +809,26 @@ mod projectile_tests {
     #[test]
     fn gravity_pulls_a_projectile_down_and_it_expires() {
         let (mut world, _) = target_world();
-        let mut projectile = Projectile {
+        let projectile = Projectile {
             pos: [0.0, 10.0, 0.0],
             vel: [0.0, 0.0, 10.0],
             life: 0.05,
             damage: 1.0,
             falloff: None,
+            gravity: 9.8,
             owner: None,
         };
-        world.projectiles.push(projectile.clone());
+        world.projectiles.push(projectile);
         let rules = Rules::default();
-        for _ in 0..4 {
+        world.step(0.02, &rules);
+        let vy = world.projectiles.first().map(|p| p.vel[1]).unwrap_or(0.0);
+        assert!(
+            (vy + 9.8 * 0.02).abs() < 1e-4,
+            "one step sheds g*dt of vertical velocity, got {vy}"
+        );
+        for _ in 0..3 {
             world.step(0.02, &rules);
         }
         assert!(world.projectiles.is_empty(), "lifetime expired");
-        projectile.life = 0.0;
     }
 }

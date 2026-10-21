@@ -11,7 +11,11 @@ fn crc32(data: &[u8]) -> u32 {
     for (i, entry) in table.iter_mut().enumerate() {
         let mut c = i as u32;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         *entry = c;
     }
@@ -43,8 +47,7 @@ pub fn write_rgba(path: &str, width: u32, height: u32, pixels: &[u8]) -> std::io
 
     let mut zlib = Vec::new();
     {
-        let mut encoder =
-            flate2::write::ZlibEncoder::new(&mut zlib, flate2::Compression::fast());
+        let mut encoder = flate2::write::ZlibEncoder::new(&mut zlib, flate2::Compression::fast());
         encoder.write_all(&raw)?;
         encoder.finish()?;
     }

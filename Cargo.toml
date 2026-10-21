@@ -4,6 +4,10 @@ members = [
     "crates/ow-casc",
     "crates/ow-stu",
     "crates/ow-tank",
+    "crates/ow-sim",
+    "crates/ow-scene",
+    "crates/ow-view",
+    "crates/ow-game",
 ]
 
 [workspace.package]

@@ -7,12 +7,15 @@ description = "A first-person view of an Overwatch map, built from the install's
 
 [dependencies]
 ow-tank = { path = "../ow-tank" }
+ow-scene = { path = "../ow-scene" }
+ow-sim = { path = "../ow-sim" }
 ow-casc = { path = "../ow-casc" }
 wgpu = "22"
 winit = "0.30"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.29"
+ow-stu = { path = "../ow-stu" }
 flate2 = { workspace = true }
 
 [[bin]]

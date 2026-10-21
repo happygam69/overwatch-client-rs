@@ -46,7 +46,11 @@ pub enum ArmourMitigation {
     Flat(f32),
     /// Reduce by a fraction, but only for hits below `threshold`; larger hits
     /// take the flat reduction instead.
-    FractionBelow { threshold: f32, fraction: f32, flat: f32 },
+    FractionBelow {
+        threshold: f32,
+        fraction: f32,
+        flat: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

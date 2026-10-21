@@ -1,0 +1,13 @@
+[package]
+name = "ow-scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Map geometry from the install's own chunks and models, renderer-agnostic"
+
+[dependencies]
+ow-tank = { path = "../ow-tank" }
+ow-casc = { path = "../ow-casc" }
+glam = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
