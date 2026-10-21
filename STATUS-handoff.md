@@ -1,24 +1,75 @@
 # STATUS
 
-Living handoff. `MODLOG.md` is the milestone history; `docs/formats/` carries
-the findings and addresses; `docs/fitted-ledger.md` carries every fit.
+The living state: what works, what is open, what is next. `MODLOG.md` is the
+milestone history, `docs/formats/` carries the findings and addresses,
+`docs/fitted-ledger.md` carries every fit, and **`docs/open-questions.md` is
+the work queue** - the next thing to work on is at the top of it.
 
-## Page-decrypt applier: live-verified; `w` source open
+## The one gate
 
-**Goal:** the verified address of the loader routine that applies the page
-keystream. The applier is now `0x14380e0` (dword loop `0x144c839`, caller
-`0x1015a94`), sampled as a leaf in `cpu_20261021_124450.etl`. The **`w`
-source** and the **faulting rip/first handler** remain open.
+```sh
+cargo xtask verify            # fmt, clippy, the tests, the tool index, the ledger
+cargo xtask verify --fast     # the same, without the tests that read the install
+```
 
-**Data half is solved.** Each on-disk `.text` page is XORed with a 4 KB window
-drawn uniformly from one static 16 KiB cycle in the loader's `.rdata`
+That is what "done" means here. The eye-check is still the operator's:
+`cargo run --release -p ow-view -- --play --hero 3 --anim auto`.
+
+## Where we are
+
+- Retail install: `2.25.0.0.154088` (current build; older warm images describe
+  the previous build and are not valid as current-build oracles).
+- Newest live runs: page-diff `run_20261021_105102` (phase-marked, gate passes)
+  and cookie `run_20261021_105145` (same pid, loader base `0x7ffc52d50000`). The
+  full-coverage oracle run remains `run_20261021_033126` (15,636 pages, 443
+  flips) with cookie `run_20261021_094721`.
+- Page-decrypt data artifact: `D:/ow-dumps/pagepak/keystream_current.npy`
+  (2,285 current-build rows). The older `keystream.npy` (9,449 rows) is the
+  previous build; the `ks_*` probes read the current one.
+- Merged images (outside the repo): `D:/ow-dumps/module_after_diff.bin` (v2b
+  base `0x7ff7c4d20000`) and `loader_after_diff.bin`; the current-build
+  plaintext loader is `D:/ow-dumps/loader_disk_rva.bin`.
+- The Ghidra project moved out of the repo to `D:/ow-dumps/dev_ghidra_run`.
+- The view model, FP camera and animation retarget are the active area.
+  Movement, combat, scene and most data systems are usable.
+
+## What works
+
+- **Container/data:** CASC, BLTE, manifests, content registry, both STU
+  versions, typed class registry and field readers, shader groups and code
+  blobs.
+- **Movement:** trace-measured mover arithmetic, verified by `trace_diff`;
+  crouch/air/slope rules measured. The mover control code is tier 3.
+- **Combat:** pools, fire intervals, volley figures, projectile motion,
+  hitscan. Damage is supplied; damage order/armour mitigation are assumed.
+- **Scene/view:** real map geometry, hero models, skeletons, skinning, texture
+  decoding; `ow-view` and the `--play` harness.
+- **Camera:** client `HorizontalFOV` 103 deg, first-person near/far
+  `0.01/1638.4 m`, separate first-person pass, zero-rest drag spring
+  (`64/16/-1`), opt-in look filter (`--cam-look-inverse 0.1`).
+- **View model:** camera-relative placement, animation feed (single clip or
+  `--anim auto` with the blend tree), weapon hooks at bind orientation,
+  dual-pistol hardpoints.
+- **Animation format:** clip header and packed-u16 rotation/position/scale
+  tracks, the general family-agnostic row reader, the FP blend-tree item/tree
+  decode and evaluation.
+- **Capture:** protection-aware `dev/live_page_diff.py`; `dev/warm_poll.py`
+  fallback; phase marking and encrypted-page logging. The tool list is
+  `dev/INDEX.md`.
+- **Page-decrypt data:** the 16 KiB cycle, window/draw model and oracle are
+  fully characterised.
+
+## The page-decrypt hunt (the top open problem)
+
+**The data half is solved.** Each on-disk `.text` page is XORed with a 4 KB
+window drawn uniformly from one static 16 KiB cycle in the loader's `.rdata`
 (`0x1d77f80..0x1d7bf80`, shipped rotated by 19 bytes). All 2,285 current-build
 oracle rows verify; a 16-zero splice at `0x53a000` is part of the stream. The
 window start is not derived from the RVA, page content, hash, region or a
 modular counter; it is a build-time i.i.d. uniform draw, stable across runs
 (1,676/1,676 pages match with zero conflicts).
 
-**Code half is live-verified.** The ETW raw qword scan found the candidate's
+**The code half is live-verified.** The ETW raw qword scan found the candidate's
 dword XOR loop `0x144c839` as a leaf PC (6 samples) with `0x1015a99`, the
 return from the `call 0x14380e0` at `0x1015a94`, directly above it in the
 stack. The chain is `0x144c839 -> 0x1015a99 -> 0x163f6b1 -> 0x1a29511`.
@@ -33,14 +84,14 @@ mask `0x144bfc6`. Rival `0x442110` shares the VP slot but has no pad arms,
 window mask or load-xor-store leaves. Full watchlist and per-site caveats:
 `docs/formats/page-crypt.md`.
 
-**Static refinement (2026-10-21).** The pad-base census is ten refs, not
-three: eight in the candidate region, one in `0x10b72f0`, one in `0x10c1e20`.
-All three regions take three small keys plus a data pointer, so the family may
-be data/string decoders. The **live** `.pdata` is intact: `0x14380e0..0x144ee19`
-is one function, and its page path is the state at `0x14388e7` -> `0x144968f`
-using a descriptor whose `w` field is `edx` at `0x14481c1`. The **disk**
-`.pdata` is encrypted; parsing it raw gives garbage, so function extents must
-come from the live image. `0x10c1e20` is the only region with the 4-byte-granular
+**Static refinement.** The pad-base census is ten refs, not three: eight in the
+candidate region, one in `0x10b72f0`, one in `0x10c1e20`. All three regions
+take three small keys plus a data pointer, so the family may be data/string
+decoders. The **live** `.pdata` is intact: `0x14380e0..0x144ee19` is one
+function, and its page path is the state at `0x14388e7` -> `0x144968f` using a
+descriptor whose `w` field is `edx` at `0x14481c1`. The **disk** `.pdata` is
+encrypted; parsing it raw gives garbage, so function extents must come from the
+live image. `0x10c1e20` is the only region with the 4-byte-granular
 `and 0x3ffc` pad mask, which fits the measured 4-byte window alignment better
 than the candidate's `0x3fff`. No stored or hashed `w` table was found in the
 disk loader, the live loader image, the live main-module image, the private
@@ -76,18 +127,17 @@ fresh oracle; this is declared, not fitted.
 
 **Live evidence.** The newest phase-marked run
 `D:/ow-dumps/live_page_diff/run_20261021_105102` (pid 4100, 90 s, 1,597 flips;
-phases `{0:1449, 1:51, 2:97}`) passes the gate as
-`ATTRIBUTABLE-CANDIDATE`. That is necessary, not sufficient: `events.csv`
-records protection flips only - there is still no faulting-rip, handler or
-VP-argument source. The earlier run `run_20261021_104439` was unmarked
-(120 flips, all phase 0).
+phases `{0:1449, 1:51, 2:97}`) passes the gate as `ATTRIBUTABLE-CANDIDATE`.
+That is necessary, not sufficient: `events.csv` records protection flips only -
+there is still no faulting-rip, handler or VP-argument source. The earlier run
+`run_20261021_104439` was unmarked (120 flips, all phase 0).
 
 **Levers:** an operator-approved, phase-marked, fault-synchronous run remains
 the definitive source for the faulting rip/first handler and the `w` value.
 The ETW CPU trace is now tested and hit: `dev/etw_cpu_capture.ps1` produced
-`cpu_20261021_124450.etl`, and `dev/etw_raw_scan.py` / `dev/etw_count.py` found
-the live candidate leaves. The minidump path is tested too: on the game the
-private-RW default returns `E_INVALIDARG`; `--normal` (446 KB) and `--full`
+`cpu_20261021_124450.etl`, and `dev/etw_raw_scan.py` / `dev/etw_count.py`
+found the live candidate leaves. The minidump path is tested too: on the game
+the private-RW default returns `E_INVALIDARG`; `--normal` (446 KB) and `--full`
 (13.5 GB) work. Per AGENTS.md a new live capture is the operator's decision
 every time.
 
@@ -95,7 +145,8 @@ every time.
 
 0. Read the fresh loader base from the new run's `meta.json` and resolve the
    watchlist with `python dev/faultsync_resolve.py <loader_base_hex>`.
-   Do **not** reuse `dev/faultsync_watchlist_abs_pid6000.txt`.
+   Never reuse an absolute watchlist from another session: those addresses are
+   per-session, and only the RVA watchlist travels.
 1. Confirm the run is phase-marked and passes the gate:
    `python dev/faultsync_correlate.py <new-run>/events.csv`
    must print `ATTRIBUTABLE-CANDIDATE`, not `UNATTRIBUTABLE`.
@@ -113,105 +164,53 @@ every time.
    `UNATTRIBUTABLE`. Record a same-session heap/module map for the
    `0x1BB72DCxxxx`-style thunk band; the band is per-session.
 5. Combined ETW + heap session (operator choice, 2026-10-21):
-   - elevated: `powershell -ExecutionPolicy Bypass -File dev\etw_cpu_capture.ps1`
+   - elevated: `powershell -ExecutionPolicy Bypass -File dev/etw_cpu_capture.ps1`
      **before** launching Overwatch; play 30-60 s in the range; Enter to stop;
-   - normal shell: `python dev\dump_process.py Overwatch.exe
+   - normal shell: `python dev/dump_process.py Overwatch.exe
      D:\ow-dumps\ow_heap_full.dmp --full` while the game is still in the range
      (the full dump freezes the game for ~20 s; the private-RW default fails on
      the retail process);
-   - scan: `python dev\etw_raw_scan.py <etl> --base <loader_base>` and
-     `python dev\scan_dump.py <dmp> --pattern w` (then `pad`, `eid`).
+   - scan: `python dev/etw_raw_scan.py <etl> --base <loader_base>` and
+     `python dev/scan_dump.py <dmp> --pattern w` (then `pad`, `eid`).
    The ETL names a sampled applier PC if caught; the dump can close the
    build-stable `w` storage.
 
 Do not re-run read-only polls: sessions 18/19/22/26-28 exhausted them.
 
-## Where we are
+## Open problems
 
-- Retail install: `2.25.0.0.154088` (current build; older warm images describe
-  the previous build and are not valid as current-build oracles).
-- Newest live runs: page-diff `run_20261021_105102` (phase-marked, gate passes)
-  and cookie `run_20261021_105145` (same pid, loader base
-  `0x7ffc52d50000`). The full-coverage oracle run remains
-  `run_20261021_033126` (15,636 pages, 443 flips) with cookie
-  `run_20261021_094721`.
-- Page-decrypt data artifact: `D:/ow-dumps/pagepak/keystream_current.npy`
-  (2,285 current-build rows). The older `keystream.npy` (9,449 rows) is the
-  previous build.
-- Merged images (outside the repo): `D:/ow-dumps/module_after_diff.bin` (v2b
-  base `0x7ff7c4d20000`) and `loader_after_diff.bin`; the current-build
-  plaintext loader is `D:/ow-dumps/loader_disk_rva.bin`.
-- The view model, FP camera and animation retarget are the active area.
-  Movement, combat, scene and most data systems are usable.
-
-## What works
-
-- **Container/data:** CASC, BLTE, manifests, content registry, both STU
-  versions, typed class registry and field readers.
-- **Movement:** trace-measured mover arithmetic, verified by `trace_diff`;
-  crouch/air/slope rules measured. The mover control code is tier 3.
-- **Combat:** pools, fire intervals, volley figures, projectile motion,
-  hitscan. Damage is supplied; damage order/armour mitigation are assumed.
-- **Scene/view:** real map geometry, hero models, skeletons, skinning, texture
-  decoding; `ow-view` and the `--play` harness.
-- **Camera:** client `HorizontalFOV` 103 deg, first-person near/far
-  `0.01/1638.4 m`, separate first-person pass, zero-rest drag spring
-  (`64/16/-1`), opt-in look filter (`--cam-look-inverse 0.1`).
-- **View model:** camera-relative placement, animation feed (single clip or
-  `--anim auto` with the blend tree), weapon hooks at bind orientation,
-  dual-pistol hardpoints.
-- **Animation format:** clip header and packed-u16 rotation/position/scale
-  tracks, the general family-agnostic row reader, the FP blend-tree item/tree
-  decode and evaluation.
-- **Capture:** protection-aware `dev/live_page_diff.py`; `dev/warm_poll.py`
-  fallback; phase marking and encrypted-page logging.
-- **Page-decrypt data:** the 16 KiB cycle, window/draw model and oracle are
-  fully characterised.
-
-## Open problems, in order
+The queue with the full detail is **`docs/open-questions.md`**. In order:
 
 1. **Page-decrypt applier.** Live-verified as `0x14380e0` (loop `0x144c839`,
    caller `0x1015a94`); the faulting rip/first handler and the `w` derivation
    remain open, and the derivation is declared tier 3 (Denuvo VM).
-2. **FP pose / reference-skeleton retarget.** `retarget_probe 3` now settles
-   the bind question: character rig **200**, FP rig **79**, **64 common ids**,
+2. **FP pose / reference-skeleton retarget.** `retarget_probe 3` settles the
+   bind question: character rig **200**, FP rig **79**, **64 common ids**,
    and the binds are **identical** (worst translation delta 0.0059 m at vm
-   bone 25). Shoulder 13/54 and hand 44/74 are bind-identical. Weapon 44/74
-   differ locally only because their parents differ (char 284/285 vs vm 28/58),
-   and the fold matches. So no per-bone rest matrix is needed for the shared
-   bones; the earlier "direct clip-local is wrong by construction" is
-   retracted for them. The Pose2d dataflow VM remains unread.
-3. **Gun attachment.** Hooks are identity/zero on bones 44/74. The `c71`
-   fold gives weapon world 44 `(0.11, 1.44, 0.35)` forward `(0.98, 0.14, 0.16)`
+   bone 25). The Pose2d dataflow VM remains unread.
+3. **Gun attachment.** Hooks are identity/zero on bones 44/74. The `c71` fold
+   gives weapon world 44 `(0.11, 1.44, 0.35)` forward `(0.98, 0.14, 0.16)`
    and 74 forward `(-0.87, 0.40, -0.29)`; the FP rig folds to the character
    world. The convergence is the hook bind, not a missing retarget.
 4. **FP camera transform / component consumer.** The runtime
-   `STUFirstPersonComponent` objects are now found in the full dump
+   `STUFirstPersonComponent` objects are found in the full dump
    (`64/16/-1` then `50/1.25/0.875/0.8` at heap VA `0x1bb9614d97c`; other
    heroes show `65/...` and `47/...`). The class hash `0x9d28963f` maps to
    **type index `0x35`**; the shared vtable `0x7ff7c7ef5f30` is generic, so
    the consumer is a system keyed by type `0x35`/entity offset, still unread.
-   The STU schema (`0x70`, 7 fields) gives `m_position =
-   (0.1375, 0.23375, 0.20625)`, `m_entity` -> the view-model entity, and the
-   four scalars 50 / 0.875 / 0.8 / 1.25. The **consumer path is found**:
-   `FpViewmodelConsumer` (RVA `0xd2f060`) gets type `0x35`, resolves the
-   view-model entity/model, and calls the bind `FUN_00d2faa0` (RVA `0xd2faa0`).
-   The bind stores the refs but does not read `m_position`/the scalars. The
-   view-model object's class vtable is RVA `0x3115ef0`; slots `+0xe0`
-   (`0xd31bf0`) and `+0xe8` (`0xd322f0`) are the per-frame updates and walk six
-   `0x110`-stride animation slots (`FUN_00d29c60` / `FUN_00d3a020`). Those are
-   an **animation event/state player** (event masks/lists, 0x50-byte priority
-   records), not the pose or camera. The pose remains the clip/blend/retarget
-   path; the FP camera/FOV consumer is still unread. `retarget_probe` c71
-   worlds: hands 14 `(0.155,1.367,0.091)`, 55 `(-0.210,1.364,0.092)`; weapons
-   44 `(0.113,1.441,0.348)` fwd `+x`, 74 `(-0.143,1.506,0.350)` fwd `-x`; the
-   bind hardpoints are `+/-0.44,0.93`. At eye `1.75` / FOV `29.4` the grips
-   are outside the view (only tips); the component's `1.25` eye height with
-   FOV `50` brings hands and guns in. Test `--fp-eye 1.25 --fp-fov 50`. The
-   viewer now poses the two weapon instances from the character c71 rig at
-   44/74 (character skin + c71), then applies the hardpoint local and camera;
-   the FP arms keep the selected animation. This replaces the bind/FP-parent
-   gun path that crossed the pistols.
+   The consumer path *is* found: `FpViewmodelConsumer` (RVA `0xd2f060`) gets
+   type `0x35`, resolves the view-model entity/model, and calls the bind
+   `FUN_00d2faa0` (RVA `0xd2faa0`). The bind stores the refs but does not read
+   `m_position`/the scalars. The view-model class vtable is RVA `0x3115ef0`;
+   slots `+0xe0` (`0xd31bf0`) and `+0xe8` (`0xd322f0`) are the per-frame
+   updates and walk six `0x110`-stride animation slots (`FUN_00d29c60` /
+   `FUN_00d3a020`) - an animation event/state player, not the pose or camera.
+   The FP camera/FOV consumer is still unread. `retarget_probe` c71 worlds:
+   hands 14 `(0.155,1.367,0.091)`, 55 `(-0.210,1.364,0.092)`; weapons 44
+   `(0.113,1.441,0.348)` fwd `+x`, 74 `(-0.143,1.506,0.350)` fwd `-x`; the bind
+   hardpoints are `+/-0.44,0.93`. At eye `1.75` / FOV `29.4` the grips are
+   outside the view (only tips); the component's `1.25` eye height with FOV
+   `50` brings hands and guns in. Test `--fp-eye 1.25 --fp-fov 50`.
 5. **World camera near/far.** Not read; the world pass still uses the viewer's
    `0.01/8000` stand-in.
 6. **Encrypted pages.** `encrypted.csv` lists pages never read as plain; a
@@ -221,30 +220,20 @@ Do not re-run read-only polls: sessions 18/19/22/26-28 exhausted them.
    steep-slide rule, v1 STU (synthetic only), replay Zstd payload, Wwise audio
    decode, bot AI/abilities.
 
-## Commands
-
-```sh
-cargo test --release -p ow-casc -p ow-tank
-cargo test -p ow-view
-cargo run --release -p ow-view -- --play --hero 3 --anim auto
-cargo run -p ow-tank --example blendset_probe -- 3
-python dev/live_page_diff.py --wait --out D:/ow-dumps/live_page_diff --all-modules
-```
-
-Windowed eye-checks are the operator's: after a camera/animation change, give
-the exact command and what should be seen.
-
 ## Evidence boundary
 
 Read values cite their capture and address in `docs/formats/`. Fitted,
-assumed, tier-3 and stand-in behaviour is listed in `docs/fitted-ledger.md`;
-current entries include the drag-spring form, the FP camera drop/back, the
-weapon-hook skip, the single-clip playback heuristic, eye height, world
-near/far, the sandbox collision, damage rules and combat defaults. Do not move
-one of these into "read" without an address or a capture that settles it.
+assumed, tier-3 and stand-in behaviour is listed in `docs/fitted-ledger.md`,
+each with an id that also stands next to the code. Current entries include the
+drag-spring form, the FP camera drop/back, the weapon-hook skip, the
+single-clip playback heuristic, eye height, world near/far, the sandbox
+collision, damage rules and combat defaults. Do not move one of these into
+"read" without an address or a capture that settles it.
 
 ## Key files
 
+- `docs/open-questions.md` - the work queue: what is open and what would
+  settle it.
 - `docs/formats/page-crypt.md` - page-keystream data, candidate applier,
   watchlist and runbook.
 - `docs/formats/animation.md` - skeleton, clips, evaluator, FP blend tree,
@@ -254,6 +243,7 @@ one of these into "read" without an address or a capture that settles it.
 - `docs/formats/character-controller.md` - mover pipeline and measured rules.
 - `docs/fitted-ledger.md` - every fit, assumption and stand-in.
 - `docs/systems-coverage.md` - every client system and next anchor.
+- `dev/INDEX.md` - every analysis tool and the question it answers.
 - `crates/ow-view/src/play.rs` - camera, drag spring, animation feed.
 - `crates/ow-view/src/main.rs` - renderer and first-person pass.
 - `crates/ow-tank/examples/blendset_probe.rs` - FP item/curve probe.

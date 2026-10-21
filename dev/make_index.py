@@ -37,11 +37,12 @@ def summary(path: pathlib.Path) -> str:
 
 def rows() -> list[tuple[str, str, int]]:
     out = []
-    for path in sorted(DEV.glob("*.py")):
+    for path in sorted(DEV.rglob("*.py")):
         if path.name in SKIP:
             continue
+        rel = path.relative_to(DEV).as_posix()
         lines = path.read_text(encoding="utf-8", errors="replace").count("\n") + 1
-        out.append((path.name, summary(path), lines))
+        out.append((rel, summary(path), lines))
     return out
 
 

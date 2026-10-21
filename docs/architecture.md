@@ -100,7 +100,12 @@ source, world near/far. The inverse index with reasons is
 
 ## Tests and verification
 
-- `cargo test --release -p ow-casc -p ow-tank` - data layer.
+`cargo xtask verify` is the gate: fmt, clippy (warnings are errors), the
+tests, the tool index and the fitted-ledger check. `--fast` leaves out the
+tests that read the install. Behind it:
+
+- `cargo test --release -p ow-casc -p ow-tank` - data layer (the `*_real`
+  tests read the install and skip themselves when there is none).
 - `cargo test -p ow-view` - harness camera/spring math.
 - `cargo test -p ow-scene` - skin/pose gates.
 - Movement/combat: `trace_diff` over golden traces (see
@@ -112,6 +117,6 @@ source, world near/far. The inverse index with reasons is
 ```text
 crates/     the workspace (see table)
 docs/       current state, history, plan, artifacts (this tree)
-dev/        analysis tools and capture scripts (gitignored)
+dev/        the analysis tools (tracked); their output is not
 D:/E: dumps captures, images, decompiles (outside the repo)
 ```

@@ -33,6 +33,10 @@
 !/dev/*.md
 !/dev/*.txt
 !/dev/*.jsonl
+/dev/*/
+!/dev/work/
+/dev/work/*
+!/dev/work/*.py
 /target/
 **/target/
 

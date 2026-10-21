@@ -35,9 +35,10 @@ the behaviour. A fitted implementation is always labelled as fitted.
 8. **Captures live outside the repo** (`D:/ow-dumps`, gitignored). They are
    session-specific: the same build maps at different base addresses, so every
    address names its capture and its translation.
-9. **Never silently mix fitted and read behaviour.** A fitted or assumed value
-   says so in the code and in `docs/fitted-ledger.md`; a read value cites its
-   address.
+9. **Never silently mix fitted and read behaviour.** A fitted, assumed,
+   stand-in or supplied value carries a `FIT-*` id next to its code *and* a row
+   in `docs/fitted-ledger.md`; a read value cites its address.
+   `cargo xtask fit-check` fails when the two sides disagree.
 10. **A stage that cannot be recovered is declared, not faked.** Mark it tier 3,
     write the boundary down, and keep every other stage exact.
 
@@ -93,10 +94,11 @@ the behaviour. A fitted implementation is always labelled as fitted.
 - If you are unsure, say so. A confident wrong answer costs hours.
 - After two real attempts at a problem, stop and write up `STATUS-handoff.md`
   instead of trying random variations.
-- Run the relevant tests before claiming something works:
-  - `cargo test --release -p ow-casc -p ow-tank`
-  - `cargo test -p ow-view`
-  - `cargo run --release -p ow-view -- --play --hero 3 --anim auto`
+- **One gate decides whether a change is done:** `cargo xtask verify`.
+  It runs fmt, clippy (warnings are errors), the tests, the tool index and the
+  fitted-ledger check. `--fast` leaves out the tests that read the install.
+- The eye-check is still the operator's: `cargo run --release -p ow-view --
+  --play --hero 3 --anim auto`.
 - Golden vectors and `trace_diff` decide whether a movement stage is exact.
 
 ## Tooling map
@@ -106,7 +108,7 @@ the behaviour. A fitted implementation is always labelled as fitted.
 | Ghidra MCP bridge | behaviour: decompile, callers/callees, value flow, strings | captures in `D:/ow-dumps`; merged images above |
 | `dev/live_page_diff.py` | which pages are actually readable/decrypted during a session | live, read-only; operator's run |
 | `dev/warm_poll.py` | continuous warm-page accumulation | live, read-only; fallback |
-| `dev/*.py` probes | capture scans, region extraction, PE wrapping, heap/trace work | `dev/regions.py`, `dev/mkpe.py` |
+| `dev/*.py` probes | capture scans, region extraction, PE wrapping, heap/trace work | `dev/INDEX.md` lists all of them |
 | `ow-tank` bins / examples | data: formats, class registry, STU bags, entities, weapons, graphs, animation clips | `crates/ow-tank/src/bin/`, `crates/ow-tank/examples/` |
 | `ow-sim` / `trace_diff` | movement/combat verification, first divergence | `crates/ow-sim/src/trace.rs` |
 | `ow-view` / `ow-game` | the viewer, play harness and Bevy shell | `crates/ow-view`, `crates/ow-game` |
@@ -122,3 +124,7 @@ the behaviour. A fitted implementation is always labelled as fitted.
 - `docs/fitted-ledger.md`: every fitted, assumed, tier-3 or stand-in
   implementation. Add the row in the same change that introduces the fit;
   remove it when a capture or decompile settles it.
+- `docs/open-questions.md`: the work queue. The next thing to work on is at
+  the top of it.
+- `dev/INDEX.md`: the tool list, generated from the tools themselves.
+  `python dev/make_index.py` refreshes it; the gate checks it is current.

@@ -1,7 +1,38 @@
 # MODLOG
 
 Newest first. Milestones only; details and addresses live in `docs/formats/`,
-current state in `STATUS-handoff.md`, fits in `docs/fitted-ledger.md`.
+current state in `STATUS-handoff.md`, fits in `docs/fitted-ledger.md`, the
+work queue in `docs/open-questions.md`.
+
+## 2026-10-21 - the project gets a gate, a toolbox and a ledger
+
+- **The rewrite is in git.** The whole product (60k lines of Rust across seven
+  crates, the format docs, the tools) had never been committed: `HEAD` held 59
+  files and the worktree held ~140 more. It now lands in three commits, each of
+  which builds.
+- **The gates are green.** `cargo fmt --check` and
+  `cargo clippy --workspace --all-targets` pass (the lint policy that matches
+  the client's own shapes is declared once in the workspace manifest), and the
+  real-install test that failed - the shader group parser, which had lost the
+  group's last two arrays - now parses 200 of the first 400 groups again.
+- **`cargo xtask verify` is the gate**: fmt, clippy with warnings as errors,
+  the tests, the tool index and the fitted-ledger check.
+- **The toolbox is pruned and tracked.** 70 scripts are gone (one-off clip
+  probes, superseded loader scans, closed keystream hypotheses, tools whose
+  question the docs already answer). The 121 that remain are listed in
+  `dev/INDEX.md`, generated from their own headers, and they are tracked so a
+  re-derivation survives a lost machine. The captures, the Ghidra project and
+  the multi-MB outputs moved out to `D:/ow-dumps`; nothing that came out of
+  the game (disassembly, extracted strings, raw asset bytes) is tracked.
+- **The plans are one plan.** The finished plans (the cleanup plan, the
+  systems-extraction sweep) moved to `docs/history/`;
+  `docs/open-questions.md` is the work queue: each open question with what
+  would settle it and the command that would do it.
+- **The fitted ledger is checkable.** Every fitted, assumed, stand-in and
+  supplied implementation has an id (`FIT-CAM-01` and friends) next to its code
+  and in the ledger, and `cargo xtask fit-check` fails when the two drift.
+- 37 public functions that no reader, probe, test or document called are gone,
+  with the imports they kept alive.
 
 ## 2026-10-21 - page decrypt: candidate live-verified; `w` still open
 

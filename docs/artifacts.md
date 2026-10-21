@@ -139,3 +139,21 @@ Referenced dumps intentionally stay in dev/ because docs cite them:
 class_registry.txt, class_descriptors.txt, class_inheritance.txt,
 physics_funcs.txt, mover_body_funcs.txt, domino_schema.txt,
 component_router_paired.txt.
+
+## Where the dumps live now
+
+The dumps that used to sit in `dev/` moved out whole, so nothing that came
+out of the game is inside the repository:
+
+| was | is now |
+|---|---|
+| `dev/ghidra_run/` | `D:/ow-dumps/dev_ghidra_run/` (the Ghidra project) |
+| `dev/dumps_range/` | `D:/ow-dumps/dev_dumps_range/` |
+| `dev/mdlc_probe/` | `D:/ow-dumps/dev_mdlc_probe/` |
+| `dev/work/*.bin`, `*.npy`, `*.raw` | `D:/ow-dumps/dev_work/` |
+
+The small value tables that the docs cite stay in `dev/` and are tracked:
+component_router_paired.txt, component_table.txt, domino_schema.txt,
+faultsync_watchlist.txt, range_chunks.txt, range_mdl_values.txt,
+volley_slots.txt. The `dev/work/*.py` scripts (the page-decrypt hunt) are
+tracked too, and every tool is listed in `dev/INDEX.md`.

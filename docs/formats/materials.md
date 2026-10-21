@@ -31,7 +31,7 @@ This document records what has been established about the first hop from the
 retail install's files **and from decompilation of the captured running
 client**, what has been ruled out, and where the remaining unknown sits. Nothing
 below is copied from the game; every address is a coordinate in the operator's
-own capture under `dev/dumps_range` (gitignored), recorded so the work can be
+own capture under `D:/ow-dumps/dev_dumps_range` (gitignored), recorded so the work can be
 re-derived.
 
 ## From the files
@@ -70,7 +70,7 @@ So the mapping is either a keyed/uncommon hash, or an invertible
 nonlinear transform (e.g. a Feistel/ARX mix). It cannot be recovered from the
 files alone; it must be read from the code that produces or consumes it.
 
-## From the captured client (Ghidra, `dev/dumps_range`)
+## From the captured client (Ghidra, `D:/ow-dumps/dev_dumps_range`)
 
 Capture regions are raw binaries named `base_size_type.bin`; the Ghidra
 programs are opened at their recorded base (`x86:LE:64`). The addresses below
@@ -258,7 +258,7 @@ There is **no transform** in the builder either: it is a repack.
 
 ### What the install actually ships (probe over the live registry)
 
-`dev/mdlc_probe` (read-only, opens the install the same way the rest of the
+`D:/ow-dumps/dev_mdlc_probe` (read-only, opens the install the same way the rest of the
 tree does) walks the model assets and prints both arrays:
 
 * 31,280 model assets exist; the MDLC payload is 144 bytes on simple models,
@@ -398,7 +398,7 @@ identifies the *field-record* family every material read goes through.
 * **The shipped values are not the runtime records.** The applier's
   value-record form (self-relative dword offset to a u16) does **not** hold
   for the file's u64 array: a probe over 3,796 models and 9,049 shipped values
-  (`dev/mdlc_probe/examples/u64role.rs`) finds only **15 values (0.17%)** whose
+  (`D:/ow-dumps/dev_mdlc_probe/examples/u64role.rs`) finds only **15 values (0.17%)** whose
   low or high dword lands a u16 inside the MDLC payload — and all of them are
   the zero value. So the runtime record arrays at `model+0x48`/`+0x58` are
   **built at load time**, and the shipped u64 value is the *loader's input*,
@@ -473,7 +473,7 @@ textured hero does not need the MDLC join to be solved.
 
    * **They are not asset GUIDs.** Decoding each value with the project's GUID
      type/index split gives random type fields (0x5fd…0xe8a across the first
-     models) and **0 of 52,626 values resolve as assets** (`dev/mdlc_probe/
+     models) and **0 of 52,626 values resolve as assets** (`D:/ow-dumps/dev_mdlc_probe/
      examples/join.rs`).
    * **No (008) asset carries them as 8-byte ids.** Building the set of every
      8-byte value in every locally available material asset (819 of the
@@ -481,7 +481,7 @@ textured hero does not need the MDLC join to be solved.
      refs like `0x04d0…`, `0x0e10…`, `0x0210…`, `0x09c…`, plus zeros) and
      testing all 52,626 model values across 19,055 models yields **60 hits,
      all of them the value `0x0000000000000000`** (empty slots); the reverse
-     direction finds no non-zero overlap (`dev/mdlc_probe/examples/join2.rs`).
+     direction finds no non-zero overlap (`D:/ow-dumps/dev_mdlc_probe/examples/join2.rs`).
    * The values are shared and stable (6,598 distinct across 52,626 values —
      an ~8× reuse factor), so they live in a shared id space, but one that is
      **not** the material-asset id space reachable from files.

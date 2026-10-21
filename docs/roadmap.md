@@ -91,7 +91,7 @@ That is a different kind of step, and two things need saying plainly:
    it should be weighed before, not after.
 
 The policy that follows from both: **structure comes from the files; behaviour
-comes from the capture.** The captures already taken (`dev/dumps_range` and
+comes from the capture.** The captures already taken (`D:/ow-dumps/dev_dumps_range` and
 friends, read-only `ReadProcessMemory` dumps) are the standing reference for
 decomp work and carry no further risk — they are the primary instrument for
 matching the original's behaviour, per the note at the top. *New* captures mean

@@ -21,7 +21,7 @@ section below); `cargo test --release -p ow-sim`.
 This records what a session of decomp + file reading established about
 `STUCharacterMoverComponent` — the component that carries a hero's movement
 figures — and the client machinery around entity components in general.
-Addresses are coordinates in the operator's own capture (`dev/dumps_range`,
+Addresses are coordinates in the operator's own capture (`D:/ow-dumps/dev_dumps_range`,
 gitignored) at build `2.25.0.0.154088`; the *file-side* facts come from
 the per-hero mover dump and do not move with the build.
 

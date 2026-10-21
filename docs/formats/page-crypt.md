@@ -142,7 +142,7 @@ Other VP holders are outside the candidate span: `0x837b20`, `0xffaa20`,
 ### Static refinement (2026-10-21)
 
 Re-derived from `loader_disk_rva.bin` with capstone and from the live loader
-image `dev/work/live_loader_flat.bin`. No new live read.
+image `D:/ow-dumps/dev_work/live_loader_flat.bin`. No new live read.
 
 - **Pad-base census:** exactly ten `lea reg,[rip+disp]` sites target
   `0x1d77f80` - eight inside the candidate span (`0x1438132`, `0x143ee78`,
@@ -448,7 +448,7 @@ Dumps (outside the repo):
 - `D:/ow-dumps/ow_heap_full.dmp` - 13.5 GB full minidump of the same series
   (base `0x7ff6a2d80000`, loader `0x7ffc52d50000`).
 - `D:/ow-dumps/ow_heap_norm.dmp` - 446 KB normal dump; no heap.
-- `dev/work/ghost_loader.bin` - the loader's private ghost copy at
+- `D:/ow-dumps/dev_work/ghost_loader.bin` - the loader's private ghost copy at
   `0x1ba39390000` (pad and `.eidsig` present; `.eid` byte-identical to disk).
 
 Tools:

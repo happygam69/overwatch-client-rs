@@ -4,7 +4,8 @@ One line per system: its state and the document that carries the findings.
 The full evidence ledger - every decompiled path, address and open anchor,
 verbatim - is [`history/coverage-detail.md`](history/coverage-detail.md).
 "Read" means a decompiled path with recorded addresses, not a full
-reimplementation.
+reimplementation. The open questions, in the order they are worth attacking,
+are in [`open-questions.md`](open-questions.md).
 
 | # | system | state | where |
 |---|---|---|---|

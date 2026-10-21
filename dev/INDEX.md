@@ -130,4 +130,34 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `warm_merge.py` | Merge warm_poll captures over the flattened v2b image, page by page. | 164 |
 | `warm_poll.py` | Continuous read-only warm-page accumulator for the client. | 406 |
 | `watch_chunks.py` | Catch a map's chunks as the game loads them. | 78 |
+| `work/blocks_around.py` | Show the candidate VM basic blocks around the tracked sites. | 86 |
+| `work/branch_targets.py` | Find the branches that guard the candidate VirtualProtect calls. | 44 |
+| `work/build_live_loader.py` | Build a flat loader image from one page-diff run. | 26 |
+| `work/build_live_main.py` | Build a flat main-module image from one page-diff run. | 28 |
+| `work/dis_range.py` | Disassemble a loader code range at the given RVAs. | 23 |
+| `work/dump_cand_stack.py` | Find candidate page-path PCs on the dump's thread stacks. | 49 |
+| `work/dump_stacks.py` | Find loader code addresses on the dump's thread stacks. | 57 |
+| `work/dump_stride_search.py` | Search the full heap dump for window-start runs at strides. | 58 |
+| `work/etw_context.py` | Print the stack frames around sampled loader PCs in an ETL. | 40 |
+| `work/etw_count2.py` | Count ETL samples of the selector-chain and descriptor addresses. | 38 |
+| `work/etw_main_hot.py` | Rank the hot main-module addresses found in an ETL. | 52 |
+| `work/find_callers.py` | Find the callers of the first-person consumer and its bind. | 45 |
+| `work/find_camera_refs.py` | Find the references to the first-person camera setup. | 34 |
+| `work/find_fp_component.py` | Locate first-person component scalars in the heap dump. | 42 |
+| `work/find_getcomp35.py` | Find the code sites that read first-person component type 0x35. | 62 |
+| `work/find_meta_table.py` | Find the qword tables pointing into the page metadata range. | 58 |
+| `work/find_page_arrays.py` | Find the arrays of page VAs inside the module images. | 47 |
+| `work/find_vm_refs.py` | Find the functions holding both viewmodel constants 0x758/0x778. | 41 |
+| `work/follow_meta.py` | Follow the type-A record pointers hunting for a stored window start. | 66 |
+| `work/ghost_scan.py` | Extract the ghost loader copy and stride-search it for w. | 85 |
+| `work/meta_record_w.py` | Test the page metadata record fields for the window start. | 66 |
+| `work/padb_blocks.py` | Show the pad-family B basic blocks around its mask sites. | 84 |
+| `work/pagehash_w.py` | Test the page metadata hashes against the window start. | 97 |
+| `work/pdata_lookup.py` | Look up the loader .pdata function bounds that contain RVAs. | 59 |
+| `work/read_meta_record.py` | Dump two page metadata records field by field. | 32 |
+| `work/recursive_disasm.py` | Measure the decoded coverage of the four loader VM regions. | 85 |
+| `work/stack_field_writers.py` | Find the writes to the candidate descriptor's stack fields. | 71 |
+| `work/stackrefs.py` | List the candidate frame's slot references by stack offset. | 39 |
+| `work/stride_search.py` | Search the flat images for the window-start run at strides. | 74 |
+| `work/trace_back.py` | Print the instruction context around candidate loader addresses. | 68 |
 | `xref_rva.py` | Scan a session image for code references to given rvas. | 81 |

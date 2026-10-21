@@ -467,7 +467,7 @@ is plausibly the node type's first-occurrence position in the graph).
 
 ## Ninth pass: the file-side index-space check
 
-**File-side check: the index space is the graph's node-type set, and the assignment is first-occurrence order** (`dev/mdlc_probe/examples/graphidx.rs`, run against the install; 5,687 graph assets of type `0x01B`):
+**File-side check: the index space is the graph's node-type set, and the assignment is first-occurrence order** (`D:/ow-dumps/dev_mdlc_probe/examples/graphidx.rs`, run against the install; 5,687 graph assets of type `0x01B`):
 
 * **No per-node index exists in the file format.** `ow-stu`'s instance records carry
   `{class hash, embedder field, embedder index, size, data offset}` and nothing

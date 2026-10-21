@@ -93,7 +93,8 @@ export OW_TACTLIB='path/to/TACTLib/TACTLib'             # per-build manifest key
 export OW_OWLIB='path/to/OWLib'                         # optional, STU class names
 export OW_SUPPORT_KEYRING='path/to/Overwatch.keyring'   # optional
 
-cargo test --release                                    # real-install reads are skipped without an install
+cargo xtask verify                                      # the gate: fmt, clippy, tests, index, ledger
+cargo xtask verify --fast                               # the same, without the install-reading tests
 cargo run --release -p ow-view -- list                  # map chunks worth drawing
 cargo run --release -p ow-view -- --play --hero 3 --anim auto
 ```
@@ -142,11 +143,13 @@ crates/ow-sim    movement/combat simulation and trace verification
 crates/ow-scene  map geometry and model assembly for the renderer
 crates/ow-view   the wgpu viewer and the play harness
 crates/ow-game   the Bevy shell around the simulation
+crates/xtask    the project's own commands: `cargo xtask verify` is the gate
 docs/formats/    verified layouts and decompiled-behaviour findings
+docs/open-questions.md       the work queue: what is open and what would settle it
 docs/fitted-ledger.md       every fitted/assumed/tier-3/stand-in implementation
 docs/systems-coverage.md    every client system, state and next anchor
 docs/provenance.md          evidence classes and method
-dev/                        read-only captures, probes and tooling (gitignored output)
+dev/                        the analysis tools (tracked); their output is not
 ```
 
 Captures and merged images live outside the repo, under `D:/ow-dumps`; nothing
