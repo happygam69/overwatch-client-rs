@@ -122,12 +122,6 @@ impl<'a> EncodingFile<'a> {
         })
     }
 
-    /// Bytes beyond the last section. Non-zero on this install (62 bytes of
-    /// unknown trailing data), so callers must not treat it as an error.
-    pub fn trailing_bytes(&self) -> usize {
-        self.data.len() - (self.es_bodies + self.n_es_pages * self.es_page_size)
-    }
-
     fn page_first_key(&self, index_start: usize, page: usize) -> Option<[u8; 16]> {
         let at = index_start + page * PAGE_INDEX_ENTRY;
         let slice = self.data.get(at..at + 16)?;

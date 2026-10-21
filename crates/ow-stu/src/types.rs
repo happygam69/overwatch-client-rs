@@ -392,10 +392,6 @@ impl ClassRegistry {
         }
         out
     }
-
-    pub fn class_name(&self, hash: u32) -> Option<&str> {
-        self.classes.get(&hash).map(|c| c.name.as_str())
-    }
 }
 
 // ---------------------------------------------------------------------------

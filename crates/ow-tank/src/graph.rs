@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use crate::classes::{self, config_var};
 use crate::entity::Value;
 use crate::fieldnames::FieldNames;
-use crate::{GameData, Result};
+
 use ow_stu::Stu;
 
 /// One named parameter of a graph state.
@@ -187,12 +187,6 @@ pub fn all_params_of(stu: &Stu, class_names: &crate::classes::ClassMap) -> Vec<P
     }
     out.sort_by_key(|p| (p.state, p.field_hash));
     out
-}
-
-/// Named parameters for a graph asset.
-pub fn params_for_graph(data: &GameData, graph: u64) -> Result<Vec<Param>> {
-    let stu = data.stu_of(graph)?;
-    Ok(params_of(&stu, &data.classes, &data.fields))
 }
 
 #[cfg(test)]

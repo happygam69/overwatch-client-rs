@@ -37,8 +37,6 @@
 
 use std::fmt;
 
-use crate::guid;
-
 pub const HEADER_SIZE: usize = 16;
 pub const COMMON_SIZE: usize = 24;
 
@@ -993,11 +991,6 @@ fn read_placeable(
     }
 
     placeable
-}
-
-/// The type of a placeable's model reference, for a quick sanity check.
-pub fn model_type(guid: u64) -> u16 {
-    guid::type_of(guid)
 }
 
 #[cfg(test)]

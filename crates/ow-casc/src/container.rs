@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::blte;
 use crate::encoding::EncodingFile;
@@ -349,11 +349,6 @@ impl Store {
         self.encoding_report.borrow_mut().clone_from(&report);
         *self.encoding.borrow_mut() = Some(blobs);
         Ok(())
-    }
-
-    /// How many encoding manifests were read (for a diagnostic to print).
-    pub fn encoding_manifests(&self) -> usize {
-        self.encoding.borrow().as_ref().map(Vec::len).unwrap_or(0)
     }
 
     /// Search a build-config manifest (by its config key) for a content key.
@@ -1045,17 +1040,6 @@ fn load_bucket_index(install: &Install) -> Result<HashMap<[u8; 9], Location>> {
     Ok(buckets)
 }
 
-/// Path of a config file, which lives two directory levels below `config/`.
-pub fn config_file_path(install_root: &std::path::Path, key: &str) -> PathBuf {
-    install_root
-        .join("data")
-        .join("casc")
-        .join("config")
-        .join(&key[0..2])
-        .join(&key[2..4])
-        .join(key)
-}
-
 fn parse_hex_key(hex: &str) -> Result<[u8; 16]> {
     if hex.len() != 32 {
         return Err(Error::Parse(format!("key {hex:?} is not 16 bytes")));
@@ -1074,6 +1058,8 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     const TEST_PAGE: usize = 1024;

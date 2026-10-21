@@ -1789,14 +1789,6 @@ pub struct SoundBank {
 }
 
 impl SoundBank {
-    /// The bank's Wwise media ids, one per media entry, in declaration order.
-    pub fn media_ids(&self) -> Vec<u32> {
-        self.media
-            .iter()
-            .map(|b| b.wwise_file_ids.first().copied().unwrap_or(0))
-            .collect()
-    }
-
     /// How many payload assets the bank names.
     pub fn payload_count(&self) -> usize {
         self.media
@@ -2116,54 +2108,6 @@ pub fn read_sound(data: &GameData, asset: u64) -> Result<Sound> {
     })
 }
 
-/// Read one [`SoundSwitch`] by GUID.
-pub fn read_sound_switch(data: &GameData, asset: u64) -> Result<SoundSwitch> {
-    let mut stu = data.stu_of(asset)?;
-    SoundSwitch::read_in(&mut stu, asset).ok_or_else(|| {
-        crate::Error::NotFound(format!(
-            "sound switch 0x{asset:016x} has no switch instance"
-        ))
-    })
-}
-
-/// Read one [`SoundParameter`] by GUID.
-pub fn read_sound_parameter(data: &GameData, asset: u64) -> Result<SoundParameter> {
-    let mut stu = data.stu_of(asset)?;
-    SoundParameter::read_in(&mut stu, asset).ok_or_else(|| {
-        crate::Error::NotFound(format!(
-            "sound parameter 0x{asset:016x} has no parameter instance"
-        ))
-    })
-}
-
-/// Read one [`SoundBank`] by GUID.
-pub fn read_sound_bank(data: &GameData, asset: u64) -> Result<SoundBank> {
-    let mut stu = data.stu_of(asset)?;
-    SoundBank::read_in(&mut stu, asset).ok_or_else(|| {
-        crate::Error::NotFound(format!("sound bank 0x{asset:016x} has no bank instance"))
-    })
-}
-
-/// Read one [`VoiceSet`] by GUID.
-pub fn read_voice_set(data: &GameData, asset: u64) -> Result<VoiceSet> {
-    let mut stu = data.stu_of(asset)?;
-    VoiceSet::read_in(&mut stu, asset).ok_or_else(|| {
-        crate::Error::NotFound(format!(
-            "voice set 0x{asset:016x} has no voice-set instance"
-        ))
-    })
-}
-
-/// Read one [`VoiceLineSet`] by GUID.
-pub fn read_voice_line_set(data: &GameData, asset: u64) -> Result<VoiceLineSet> {
-    let mut stu = data.stu_of(asset)?;
-    VoiceLineSet::read_in(&mut stu, asset).ok_or_else(|| {
-        crate::Error::NotFound(format!(
-            "voice line set 0x{asset:016x} has no line-set instance"
-        ))
-    })
-}
-
 /// Read one [`WemWrapper`] — a `STU_FBCC5EB2` — by GUID.
 ///
 /// The wrapper is not an asset type of its own: it is what a
@@ -2197,21 +2141,6 @@ pub fn read_wem(data: &GameData, asset: u64) -> std::result::Result<(WemHeader, 
 /// Every sound asset in the loaded manifest, in registry order.
 pub fn sounds(data: &GameData) -> Vec<Sound> {
     read_type(data, types::SOUND, Sound::read_in)
-}
-
-/// Every sound switch in the loaded manifest.
-pub fn sound_switches(data: &GameData) -> Vec<SoundSwitch> {
-    read_type(data, types::SOUND_SWITCH, SoundSwitch::read_in)
-}
-
-/// Every sound parameter in the loaded manifest.
-pub fn sound_parameters(data: &GameData) -> Vec<SoundParameter> {
-    read_type(data, types::SOUND_PARAMETER, SoundParameter::read_in)
-}
-
-/// Every voice set in the loaded manifest.
-pub fn voice_sets(data: &GameData) -> Vec<VoiceSet> {
-    read_type(data, types::VOICE_SET, VoiceSet::read_in)
 }
 
 /// The GUID of the voice set a hero's gameplay entity names, found by walking

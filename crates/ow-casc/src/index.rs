@@ -65,15 +65,6 @@ pub struct Location {
     pub size: u32,
 }
 
-/// Which of the sixteen bucket files a key belongs to.
-pub fn bucket_of(ekey: &[u8; 9]) -> u8 {
-    let mut x: u8 = 0;
-    for b in ekey {
-        x ^= b;
-    }
-    (x & 0x0F) ^ (x >> 4)
-}
-
 /// Parse one bucket file. `expect_bucket` is verified against the header.
 pub fn parse_bucket_file(
     path: &Path,

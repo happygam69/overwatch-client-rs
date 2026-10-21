@@ -61,7 +61,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::{guid, GameData, Result};
+use crate::{guid, GameData};
 use ow_stu::Stu;
 
 // ---------------------------------------------------------------------------
@@ -1390,24 +1390,11 @@ impl Unlock {
             .or_else(|| self.grant(field::loot_unlock::HERO))
     }
 
-    /// The parent skin unlock, for a mythic customization option.
-    pub fn parent_unlock(&self) -> Option<u64> {
-        self.grant(field::skin_component::PARENT_UNLOCK)
-    }
-
     /// A grant by field hash.
     pub fn grant(&self, field_hash: u32) -> Option<u64> {
         self.grants
             .iter()
             .find(|g| g.field == field_hash)
-            .map(|g| g.target)
-    }
-
-    /// A grant by its reference-tooling name, case-insensitively.
-    pub fn grant_named(&self, name: &str) -> Option<u64> {
-        self.grants
-            .iter()
-            .find(|g| g.label.is_some_and(|l| l.eq_ignore_ascii_case(name)))
             .map(|g| g.target)
     }
 
@@ -2019,26 +2006,6 @@ fn read_rarity_rules(
             .map(|f| f.offset + f.size)
             .unwrap_or(4)
             .max(4);
-    }
-    out
-}
-
-/// Read every `STULootBoxUnlocks` instance declared in an already-parsed asset.
-///
-/// This finds the top-level instances only. A `STULootBoxUnlocks` nested inside
-/// another structure is not collected here; the progression reader reaches those
-/// through `m_lootBoxesUnlocks`, which is where the generated classes say they
-/// live.
-pub fn loot_box_unlocks_in(stu: &mut Stu) -> Vec<LootBoxUnlocks> {
-    let mut out = Vec::new();
-    for root in stu.instances_of(class::LOOT_BOX_UNLOCKS) {
-        let kind = stu
-            .read_u32(root, field::loot_unlocks::LOOT_BOX_TYPE)
-            .map(|v| LootBoxKind::from_raw(v as i32));
-        out.push(LootBoxUnlocks {
-            kind,
-            unlocks: unlocks_at_field(stu, root, field::loot_unlocks::UNLOCKS),
-        });
     }
     out
 }
@@ -2760,16 +2727,6 @@ fn unnamed(stu: &Stu, asset: u64) -> Record {
 // Whole-type readers, for callers that want the surface rather than a sample
 // ---------------------------------------------------------------------------
 
-/// Every unlock asset in the install, in registry order.
-pub fn unlocks_of_type(data: &GameData) -> Vec<Unlock> {
-    read_type(data, types::UNLOCK, read_unlock_in)
-}
-
-/// Every skin-theme and mythic-skin asset of type `0xA6`.
-pub fn skin_themes(data: &GameData) -> Vec<SkinTheme> {
-    read_type(data, types::SKIN_THEME, read_skin_theme_in)
-}
-
 /// Every loot-box asset.
 pub fn loot_boxes(data: &GameData) -> Vec<LootBox> {
     read_type(data, types::LOOT_BOX, read_loot_box_in)
@@ -2780,21 +2737,6 @@ pub fn achievements(data: &GameData) -> Vec<Achievement> {
     read_type(data, types::ACHIEVEMENT, read_achievement_in)
 }
 
-/// Every ranked-season asset.
-pub fn ranked_seasons(data: &GameData) -> Vec<RankedSeason> {
-    read_type(data, types::RANKED_SEASON, read_ranked_season_in)
-}
-
-/// Every progression-unlocks asset.
-pub fn progression_unlocks(data: &GameData) -> Vec<ProgressionUnlocks> {
-    read_type(data, types::PROGRESSION_UNLOCKS, read_progression_in)
-}
-
-/// Every voice-conversation asset.
-pub fn voice_conversations(data: &GameData) -> Vec<VoiceConversation> {
-    read_type(data, types::VOICE_CONVERSATION, read_conversation_in)
-}
-
 /// Every stat asset.
 pub fn stats(data: &GameData) -> Vec<Stat> {
     read_type(data, types::STAT, read_stat_in)
@@ -2803,21 +2745,6 @@ pub fn stats(data: &GameData) -> Vec<Stat> {
 /// Every catalog asset.
 pub fn catalogs(data: &GameData) -> Vec<Catalog> {
     read_type(data, types::CATALOG, read_catalog_in)
-}
-
-/// Read one unlock asset by GUID.
-pub fn read_unlock(data: &GameData, asset: u64) -> Result<Unlock> {
-    let mut stu = data.stu_of(asset)?;
-    read_unlock_in(&mut stu, asset)
-        .ok_or_else(|| crate::Error::NotFound(format!("unlock 0x{asset:016x} has no instance")))
-}
-
-/// Read one skin-theme asset by GUID.
-pub fn read_skin_theme(data: &GameData, asset: u64) -> Result<SkinTheme> {
-    let mut stu = data.stu_of(asset)?;
-    read_skin_theme_in(&mut stu, asset).ok_or_else(|| {
-        crate::Error::NotFound(format!("skin theme 0x{asset:016x} has no skin instance"))
-    })
 }
 
 // ---------------------------------------------------------------------------

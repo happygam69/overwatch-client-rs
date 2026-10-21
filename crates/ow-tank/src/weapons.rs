@@ -33,7 +33,7 @@
 //! than the type.
 
 use crate::classes::{self, weapon_component, weapon_definition};
-use crate::{guid, GameData, Result};
+use crate::{GameData, Result};
 use ow_stu::Stu;
 
 /// One weapon definition, as much of it as is currently understood.
@@ -104,12 +104,6 @@ pub fn weapons_in(stu: &mut Stu) -> Vec<Weapon> {
     out
 }
 
-/// Whether a graph reference points at an asset that exists and is a graph.
-pub fn graph_is_present(data: &GameData, graph: u64) -> bool {
-    data.registry().get(graph).is_some()
-        && guid::type_of(graph) == classes::STATESCRIPT_GRAPH_ASSET_TYPE
-}
-
 /// The health-modification amounts a weapon graph declares, as `(node, field,
 /// value)` rows.
 ///
@@ -148,15 +142,6 @@ pub fn modify_health_amounts(
 pub const MOVER_COMPONENT: u32 = 0x6EFD_BD73;
 /// The field that reads as a speed.
 pub const MOVER_SPEED_FIELD: u32 = 0x031F_E7EE;
-
-/// Read a hero entity's movement speed, if the component is present.
-pub fn move_speed(data: &GameData, entity: u64) -> Result<Option<f32>> {
-    let mut stu = data.stu_of(entity)?;
-    let Some(instance) = stu.instance(MOVER_COMPONENT) else {
-        return Ok(None);
-    };
-    Ok(stu.read_f32(instance, MOVER_SPEED_FIELD))
-}
 
 #[cfg(test)]
 mod tests {

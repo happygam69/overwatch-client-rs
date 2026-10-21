@@ -46,28 +46,14 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-fn i16_at(d: &[u8], at: usize) -> Option<i16> {
-    d.get(at..at + 2).map(|b| i16::from_le_bytes([b[0], b[1]]))
-}
-fn i64_at(d: &[u8], at: usize) -> Option<i64> {
-    d.get(at..at + 8)
-        .map(|b| i64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-}
 fn u64_at(d: &[u8], at: usize) -> Option<u64> {
     d.get(at..at + 8)
         .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-}
-fn f32_at(d: &[u8], at: usize) -> Option<f32> {
-    d.get(at..at + 4)
-        .map(|b| f32::from_bits(u32::from_le_bytes([b[0], b[1], b[2], b[3]])))
 }
 
 pub fn parse_ecat(payload: &[u8]) -> Option<EffectHardpoint> {
     let hp = u64_at(payload, 0)?;
     Some(EffectHardpoint { hardpoint: hp })
-}
-pub fn parse_esht(payload: &[u8]) -> Option<EffectHardpoint> {
-    parse_ecat(payload)
 }
 pub fn parse_ecss(payload: &[u8]) -> Option<EffectShaderSetup> {
     Some(EffectShaderSetup {
@@ -76,34 +62,6 @@ pub fn parse_ecss(payload: &[u8]) -> Option<EffectShaderSetup> {
         material_data: u64_at(payload, 16)?,
     })
 }
-pub fn parse_ecmp(payload: &[u8]) -> Option<EffectTiming> {
-    let start_time_offset = i64_at(payload, 0)?;
-    let duration_offset = i64_at(payload, 8)?;
-    let mut out = EffectTiming {
-        start_time_offset,
-        duration_offset,
-        hardpoint: u64_at(payload, 16)?,
-        float_one_a: f32_at(payload, 24)?,
-        float_one_b: f32_at(payload, 28)?,
-        unk: i64_at(payload, 32)?,
-        index: i16_at(payload, 40)?,
-        ..EffectTiming::default()
-    };
-    if out.start_time_offset != 0 {
-        let off = out.start_time_offset as usize;
-        if off + 4 <= payload.len() {
-            out.start_time = f32_at(payload, off).unwrap_or(0.0);
-        }
-    }
-    if out.duration_offset != 0 {
-        let off = out.duration_offset as usize;
-        if off + 4 <= payload.len() {
-            out.duration = f32_at(payload, off).unwrap_or(0.0);
-        }
-    }
-    Some(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

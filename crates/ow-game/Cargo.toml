@@ -16,7 +16,6 @@ ow-sim = { path = "../ow-sim" }
 ow-tank = { path = "../ow-tank" }
 ow-casc = { path = "../ow-casc" }
 ow-scene = { path = "../ow-scene" }
-glam = "0.29"
 
 # Bevy is the shell, never the simulation (see docs/rewrite-plan.md, "Bevy's
 # role and boundary"): it owns the window, input, rendering and HUD and drives

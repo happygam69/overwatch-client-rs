@@ -446,14 +446,6 @@ impl Clip {
             body,
         })
     }
-
-    /// This clip's record stride, gated on its family word.
-    ///
-    /// `None` means the stride is unmeasured for this family and records must
-    /// not be walked positionally. See [`record_stride_for_family`].
-    pub fn record_stride(&self) -> Option<usize> {
-        record_stride_for_family(self.header.family)
-    }
 }
 
 /// The client's own decode of a stored 16-bit value, read from its code.
@@ -1702,43 +1694,6 @@ pub enum RotationSource {
 pub struct SourcedRotationTrack {
     pub track: RotationTrack,
     pub source: RotationSource,
-}
-
-/// Decode every rotation track, preferring the format's own flag.
-///
-/// The reference selects the packing from `InfoTableFlags.NewRotationCompression`
-/// rather than probing. We try the flagged form first and fall back to the
-/// search, recording which was used, so the two readings can be compared rather
-/// than one silently masking the other.
-pub fn decode_rotation_tracks_sourced(body: &[u8], frames: u16) -> Vec<SourcedRotationTrack> {
-    let legacy = decode_rotation_tracks(body, frames);
-    let new = decode_rotation_tracks_new(body, frames);
-    let mut out = Vec::new();
-    let mut used_new: Vec<usize> = Vec::new();
-    for (i, t) in new.into_iter().enumerate() {
-        // only accept the 8-byte form where the 6-byte form did *not* decode:
-        // otherwise the two searches overlap and the flag is not doing anything
-        if legacy
-            .iter()
-            .any(|l| l.offset == t.offset || l.keys == t.keys)
-        {
-            continue;
-        }
-        used_new.push(t.offset);
-        out.push(SourcedRotationTrack {
-            track: t,
-            source: RotationSource::SearchFallback,
-        });
-        let _ = i;
-    }
-    for t in legacy {
-        out.push(SourcedRotationTrack {
-            track: t,
-            source: RotationSource::FlagLegacy,
-        });
-    }
-    out.sort_by_key(|s| s.track.offset);
-    out
 }
 
 /// One bone's complete animation data: which bone it is, and its rotation track.

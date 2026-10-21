@@ -58,10 +58,6 @@ pub fn is_stu_v1_type(t: u16) -> bool {
 pub fn is_stu_v2_type(t: u16) -> bool {
     STU_V2_TYPES.contains(&t)
 }
-pub fn is_chunked_type(t: u16) -> bool {
-    CHUNKED_TYPES.contains(&t) || MAP_CHUNK_TYPES.contains(&t)
-}
-
 /// What kind of file a type holds.
 ///
 /// This is the single place the reference's overlapping type lists are
@@ -234,12 +230,7 @@ pub struct TypeRecords {
     pub stu_fallback: Vec<u64>,
 }
 
-impl TypeRecords {
-    /// Records that were really read, with their reference lists intact.
-    pub fn complete_records(&self) -> impl Iterator<Item = &AssetRecord> {
-        self.records.iter().filter(|r| r.status.is_complete())
-    }
-}
+impl TypeRecords {}
 
 #[derive(Debug, Clone, Default)]
 pub struct TypeManifest {
@@ -413,26 +404,6 @@ pub fn process_asset(data: &GameData, guid: u64, known: &HashSet<u64>) -> AssetR
             dropped_by_membership: 0,
         },
     }
-}
-
-/// Read every asset of one type.
-pub fn build_asset_records(data: &GameData, type_id: u16, known: &HashSet<u64>) -> TypeRecords {
-    let mut out = TypeRecords {
-        type_id,
-        ..Default::default()
-    };
-    if !is_known_payload_type(type_id) {
-        for guid in data.guids_of_type(type_id) {
-            let record = process_asset(data, guid, known);
-            match record.status {
-                AssetStatus::Unreadable(_) => out.unreadable.push(guid),
-                AssetStatus::StuParseFailed(_) => out.stu_fallback.push(guid),
-                _ => {}
-            }
-            out.records.push(record);
-        }
-    }
-    out
 }
 
 /// Render one record as JSON.

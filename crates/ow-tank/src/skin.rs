@@ -278,19 +278,6 @@ impl Skin {
             .fold(0.0f32, f32::max)
     }
 
-    /// How many bones the mesh actually uses, from a set of indices.
-    pub fn bones_used(indices: &[[u16; 4]], weights: &[[u8; 4]]) -> usize {
-        let mut seen = std::collections::BTreeSet::new();
-        for (js, ws) in indices.iter().zip(weights) {
-            for k in 0..4 {
-                if ws[k] > 0 {
-                    seen.insert(js[k]);
-                }
-            }
-        }
-        seen.len()
-    }
-
     /// The bone one raw mesh index names, through the Lookup table.
     ///
     /// `None` is a missing influence, not an error: past the end of the table
