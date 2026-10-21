@@ -14,6 +14,7 @@ read-only memory captures. Nothing from the game ships in this repository.
 | **pick the next thing to work on** | **[`open-questions.md`](open-questions.md)** |
 | know what is fitted, assumed or tier 3 | [`fitted-ledger.md`](fitted-ledger.md) |
 | know how evidence is classified | [`provenance.md`](provenance.md) |
+| work in the decompiler | [`ghidra-project.md`](ghidra-project.md) - the project, its programs, the addresses |
 | find a file on `D:/ow-dumps` | [`artifacts.md`](artifacts.md) |
 | know which tool answers a question | [`../dev/INDEX.md`](../dev/INDEX.md) |
 | know how a subsystem works today | [`formats/`](formats/) (one file per system) |

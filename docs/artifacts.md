@@ -147,7 +147,7 @@ out of the game is inside the repository:
 
 | was | is now |
 |---|---|
-| `dev/ghidra_run/` | `D:/ow-dumps/dev_ghidra_run/` (the Ghidra project) |
+| `dev/ghidra_run/` | **stays where it is** (the Ghidra project, on the SSD, git-ignored) |
 | `dev/dumps_range/` | `D:/ow-dumps/dev_dumps_range/` |
 | `dev/mdlc_probe/` | `D:/ow-dumps/dev_mdlc_probe/` |
 | `dev/work/*.bin`, `*.npy`, `*.raw` | `D:/ow-dumps/dev_work/` |

@@ -4,6 +4,25 @@ Newest first. Milestones only; details and addresses live in `docs/formats/`,
 current state in `STATUS-handoff.md`, fits in `docs/fitted-ledger.md`, the
 work queue in `docs/open-questions.md`.
 
+## 2026-10-21 - the Ghidra project is tidied and explained
+
+- The project stays in the repo folder (`dev/ghidra_run/`, on the SSD because
+  Ghidra reads it hard) and is git-ignored: it is the client's own code.
+  `docs/ghidra-project.md` is the guide - every program, its base address,
+  what it answers, how an address in a doc maps onto it, and how to add a
+  capture.
+- Eleven spent programs are gone (21 -> 10, 4.2 GB -> 2.2 GB): the
+  superseded `module.bin` and `module_v2.bin`, the two range-capture wraps
+  and the animation/evaluator region wraps, whose questions the docs already
+  answer. What is left is the reference set: `module_v2full.bin` (the
+  analysed program, v2b base `0x7ff7c4d20000`), the standing capture's
+  mapped and heap images, the newest live main image, the camera region, the
+  three region wraps the docs cite, and the two loader programs. The region
+  wraps moved into a `/regions` folder so the root holds only the reference
+  images.
+- A snapshot of the project as it was before the cleanup is at
+  `D:/ow-dumps/owmod_snapshot_20261021_preprune`.
+
 ## 2026-10-21 - the project gets a gate, a toolbox and a ledger
 
 - **The rewrite is in git.** The whole product (60k lines of Rust across seven

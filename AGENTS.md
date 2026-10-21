@@ -34,7 +34,9 @@ the behaviour. A fitted implementation is always labelled as fitted.
    decision every time.**
 8. **Captures live outside the repo** (`D:/ow-dumps`, gitignored). They are
    session-specific: the same build maps at different base addresses, so every
-   address names its capture and its translation.
+   address names its capture and its translation. The one exception is the
+   Ghidra project, which stays in `dev/ghidra_run/` on the SSD (Ghidra reads
+   it hard) and is git-ignored; `docs/ghidra-project.md` says what is in it.
 9. **Never silently mix fitted and read behaviour.** A fitted, assumed,
    stand-in or supplied value carries a `FIT-*` id next to its code *and* a row
    in `docs/fitted-ledger.md`; a read value cites its address.
@@ -46,11 +48,13 @@ the behaviour. A fitted implementation is always labelled as fitted.
 
 - **Files answer data questions.** Use `ow-tank` bins, the typed STU layer and
   `docs/formats/` for formats, registries, geometry and values.
-- **Ghidra MCP answers behaviour questions** over the captured images in
-  `D:/ow-dumps`. The current merged images on disk are `module_after_diff.bin`
-  (v2b base `0x7ff7c4d20000`) and `loader_after_diff.bin`; the Ghidra project's
-  analysed program is `module_v2full.bin` with the warm pages patched in. The
-  older `warm_best.bin` remains useful for comparison.
+- **Ghidra MCP answers behaviour questions** over the captured images. The
+  project is `dev/ghidra_run/owmod` and the analysed program is
+  `module_v2full.bin` (v2b base `0x7ff7c4d20000`, the warm pages patched in);
+  `docs/ghidra-project.md` lists every program, its base and what it answers.
+  The merged images themselves stay in `D:/ow-dumps` (`module_after_diff.bin`,
+  `loader_after_diff.bin`); the older `warm_best.bin` remains useful for
+  comparison.
 - **Preferred live capture: `dev/live_page_diff.py`.** Read-only; it selects
   `Overwatch.exe` by name (not the largest module), watches page protections,
   reads a page when it becomes readable, retries ciphertext pages, and logs

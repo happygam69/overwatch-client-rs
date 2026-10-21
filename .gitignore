@@ -33,6 +33,10 @@
 !/dev/*.md
 !/dev/*.txt
 !/dev/*.jsonl
+
+# dev/'s sub-folders are ignored, except dev/work/ (the page-decrypt scripts,
+# which are tracked). dev/ghidra_run/ is the Ghidra project: the client's own
+# code, kept on the SSD because Ghidra reads it hard, never tracked.
 /dev/*/
 !/dev/work/
 /dev/work/*

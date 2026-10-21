@@ -29,7 +29,9 @@ That is what "done" means here. The eye-check is still the operator's:
 - Merged images (outside the repo): `D:/ow-dumps/module_after_diff.bin` (v2b
   base `0x7ff7c4d20000`) and `loader_after_diff.bin`; the current-build
   plaintext loader is `D:/ow-dumps/loader_disk_rva.bin`.
-- The Ghidra project moved out of the repo to `D:/ow-dumps/dev_ghidra_run`.
+- The Ghidra project is `dev/ghidra_run/owmod` (on the SSD, git-ignored, 10
+  programs after the 2026-10-21 cleanup); `docs/ghidra-project.md` says which
+  program answers what.
 - The view model, FP camera and animation retarget are the active area.
   Movement, combat, scene and most data systems are usable.
 
@@ -234,6 +236,8 @@ collision, damage rules and combat defaults. Do not move one of these into
 
 - `docs/open-questions.md` - the work queue: what is open and what would
   settle it.
+- `docs/ghidra-project.md` - the decompiler project: its programs, their base
+  addresses, and how an address in a doc maps onto one.
 - `docs/formats/page-crypt.md` - page-keystream data, candidate applier,
   watchlist and runbook.
 - `docs/formats/animation.md` - skeleton, clips, evaluator, FP blend tree,

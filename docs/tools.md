@@ -98,8 +98,10 @@ The table below is the same set by task, with the Rust probes.
 
 ## Decompilation (Ghidra, headless)
 
-- Projects: `E:/ghidra/hproj*` (see `artifacts.md`); the working project moved
-  to `D:/ow-dumps/dev_ghidra_run`.
+- The working project is `dev/ghidra_run/owmod` (on the SSD, git-ignored).
+  [ghidra-project.md](ghidra-project.md) lists every program in it, its base address and what it
+  answers; the older headless projects are `E:/ghidra/hproj*` (see
+  `artifacts.md`).
 - Canonical scripts are tracked in [`ghidra/`](ghidra/) and deployed to
   `C:/Users/Happy/ghidra_scripts/` (Ghidra only loads scripts from there):
   - `McpDecompile.java <args-file> <out-file> [timeout-sec]` - one
