@@ -20,7 +20,7 @@ cipher's fault-synchronous run.
 | `D:/ow-dumps/live_page_diff/run_*` | 17 page-diff runs, 19-21 October, 8k-22k pages each, with `warm.csv`, `encrypted.csv`, `events.csv` and a phase marker |
 | `D:/ow-dumps/warm_poll/run_*` | 2 warm-poll runs (19 October) |
 | `D:/ow-dumps/module_after_diff.bin` | the **standing image** the docs are written against (v2b base `0x7ff7c4d20000`, 20 October) - build **2.25.0.0** |
-| `D:/ow-dumps/module_v21_clean.bin` | the current build's image (21 October, build **2.25.0.1**), merged from the two 21 October runs |
+| `D:/ow-dumps/module_v21c.bin` | the current build's image (build **2.25.0.1**), merged from every 21-22 October run of that build: **23.5%** of `.text` is still cold |
 | `D:/ow-dumps/module_v2full.bin` | the 12 October image, build **2.25.0.0** - the basis of the docs' addresses |
 | `D:/ow-dumps/loader_after_diff.bin` | the loader with its decrypted pages (flat; a file offset is an RVA) |
 | `D:/ow-dumps/ow_heap_full.dmp` | the 13.5 GB full heap dump (21 October) |
@@ -39,6 +39,15 @@ builds. The image's build is the one its version string says
 So a merge across the two is meaningless - it produces an image whose bytes
 at a given address come from different builds. The rule is: **merge within a
 build, and say which build the image is.**
+
+### The current build, captured
+
+Five runs of build 2.25.0.1 (21-22 October) are merged into
+`D:/ow-dumps/module_v21c.bin`. The cold `.text` went **28.9% -> 23.5%**
+(3,491 -> 2,840 pages). The runs that paid were the ones that attached to a
+**freshly started client**: a new process re-encrypts everything, and the
+startup storm is where the pages come from (9,091 pages rescued from
+ciphertext in one run, 0 in a run that attached to an already-warm client).
 
 ## The addresses moved: the translation table
 

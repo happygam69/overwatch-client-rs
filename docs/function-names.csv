@@ -1,14 +1,14 @@
 program,address,doc_address,name,role
-module_after_diff_v2.bin;module_v2full.bin,0x7ff7c4ff0060,0xd2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; resolves the view-model entity and model and calls the bind
-module_after_diff_v2.bin;module_v2full.bin,0x7ff7c6e84610,0x7ff7c6e84610,AnimSamplerRule,The per-child sampler gate: vec4 lanes; winner-take-all above weight 0.5
-module_after_diff_v2.bin;module_v2full.bin,0x7ff7c7a38c40,0x7ff7c7a38c40,DmBodyDescriptorInit,Fills a static descriptor with literal stores
-module_after_diff_v2.bin;module_v2full.bin,0x7ff7c7a38cbf,0x7ff7c7a38cbf,DmBodyFieldArrayFill,Writes the field array of that descriptor
-module_after_diff_v2.bin;module_v2full.bin,0x7ff7c7a4c150,0x7ff7c7a4c150,DmWorldInvDt0Writer,The writer of dmWorld.m_inv_dt0 (+0x198)
-module_after_diff_v2.bin;module_v2full.bin,0x7ff7c7a4c730,0x7ff7c7a4c730,DmWorldSubstepDriver,The substep driver of the solver chain
-module_after_diff_v2.bin;module_v2full.bin,0x7ff7c7a47c70,0x7ff7c7a47c70,DmWorldConstruct,The dmWorld constructor
-module_after_diff_v2.bin;module_v2full.bin,0x7ff7c7a46d60,0x7ff7c7a46d60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0)
-module_after_diff_v2.bin;module_v2full.bin,0x7ff7c7a4cce0,0x7ff7c7a4cce0,DmHandleDecode,The per-handle decode
+module_v2full.bin,0x7ff7c4ff0060,0xd2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; resolves the view-model entity and model and calls the bind
+module_v21_clean.bin,0x7ff7c6e1eca0,0x7ff7c6e84610,AnimSamplerRule,The per-child sampler gate: vec4 lanes; winner-take-all above weight 0.5
+module_v2full.bin,0x7ff7c7a38c40,0x7ff7c7a38c40,DmBodyDescriptorInit,Fills a static descriptor with literal stores
+module_v2full.bin,0x7ff7c7a38cbf,0x7ff7c7a38cbf,DmBodyFieldArrayFill,Writes the field array of that descriptor
+module_v21_clean.bin,0x7ff7c79e3050,0x7ff7c7a4c150,DmWorldInvDt0Writer,The writer of dmWorld.m_inv_dt0 (+0x198)
+module_v21_clean.bin,0x7ff7c79e3630,0x7ff7c7a4c730,DmWorldSubstepDriver,The substep driver of the solver chain
+module_v21_clean.bin,0x7ff7c79deb70,0x7ff7c7a47c70,DmWorldConstruct,The dmWorld constructor
+module_v21_clean.bin,0x7ff7c79ddc60,0x7ff7c7a46d60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0)
+module_v2full.bin,0x7ff7c7a4cce0,0x7ff7c7a4cce0,DmHandleDecode,The per-handle decode
 ldr/loader_xor_regions.exe,0x1814380e0,0x14380e0,PageXorApplier,The candidate page-XOR applier: the pad-base arms; the VirtualProtect indcalls; the byte and dword xor leaves; the and 0x3fff window mask
-ldr/loader_xor_regions.exe,0x181015a94,0x1015a94,PageXorApplierCaller,The caller of the applier; returns at 0x1015a99, directly above the leaf PC in the stack
+ldr/loader_xor_regions.exe,0x181015a94,0x1015a94,PageXorApplierCaller,The caller of the applier; returns at 0x1015a99
 ldr/loader_xor_regions.exe,0x1810c1e20,0x10c1e20,PadBXorFamily,The second pad-base family: the 4-byte-granular and 0x3ffc mask; called from 0x8a4ad0
 ldr/loader_xor_regions.exe,0x1810b72f0,0x10b72f0,PadCXorFamily,The third pad-base region

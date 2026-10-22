@@ -28,7 +28,13 @@ What this means in practice:
 
 - **Read code in the build the capture belongs to.** The project now holds
   both: `module_v21_clean.bin` (2.25.0.1, the current build) and
-  `module_v2full.bin` (2.25.0.0, the basis of the docs' addresses).
+  `module_v2full.bin` (2.25.0.0, the basis of the docs' addresses). The
+  current build's image is now `D:/ow-dumps/module_v21c.bin` (five runs of
+  2.25.0.1; 23.5% of `.text` still cold).
+- **A fresh client is worth more than a long session.** A capture that
+  attaches to a just-started process catches the startup storm: one such run
+  rescued 9,091 pages from ciphertext, where a run on an already-warm client
+  rescued none. Restart the client before a capture.
 - **Never merge the two builds' pages.** The first re-merge did exactly that
   and produced a Frankenstein image: 11% of the code was "recovered" but the
   bytes at a given address came from different builds. It is deleted.

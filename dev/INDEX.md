@@ -15,6 +15,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `build_translate.py` | Translate a function's address from one client build to the next. | 198 |
 | `capture_coverage.py` | Do we have the code for this address? | 322 |
 | `capture_range.py` | Capture a running game and look for the map it has loaded. | 90 |
+| `carry_names.py` | Carry the name table into the next client build. | 99 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
 | `clip_fp.py` | Byte-level orientation probes for the first-person clip family 0x00020400. | 100 |
 | `clip_fp_lanes.py` | Column-consistency scanner over the FP-family clip value area. | 55 |
