@@ -15,10 +15,36 @@ cargo xtask verify --fast     # the same, without the tests that read the instal
 That is what "done" means here. The eye-check is still the operator's:
 `cargo run --release -p ow-view -- --play --hero 3 --anim auto`.
 
+## The build changed under us (2026-10-21)
+
+**The install is now build `2.25.0.1.154504`; every address in the docs
+belongs to `2.25.0.0.154088`.** The client updated itself between the
+20 October and the 21 October captures, and the update moved the code:
+page for page, **0 of 15,297** non-empty pages keep their address between
+the two builds. The docs' conclusions still hold (they are about behaviour),
+but their *addresses* are the old build's.
+
+What this means in practice:
+
+- **Read code in the build the capture belongs to.** The project now holds
+  both: `module_v21_clean.bin` (2.25.0.1, the current build) and
+  `module_v2full.bin` (2.25.0.0, the basis of the docs' addresses).
+- **Never merge the two builds' pages.** The first re-merge did exactly that
+  and produced a Frankenstein image: 11% of the code was "recovered" but the
+  bytes at a given address came from different builds. It is deleted.
+- **A capture is worth nothing without its build.** The runs name their
+  build only implicitly; the standing image's build is the one its version
+  string says (`2.25.0.0` in the 20.10 image, `2.25.0.1` in the 21.10 one).
+- **The addresses still need carrying across.** `dev/build_translate.py`
+  matches one build's pages and functions against the next; the function
+  level match needs the old build's function list (the 2.25.0.0 captures
+  have **no** `.pdata`, so the extents come from the analysis).
+
 ## Where we are
 
-- Retail install: `2.25.0.0.154088` (current build; older warm images describe
-  the previous build and are not valid as current-build oracles).
+- Retail install: `2.25.0.1.154504` (the 21 October captures). The docs were
+  written against `2.25.0.0.154088` (the 12-20 October captures); see the
+  section above.
 - Newest live runs: page-diff `run_20261021_105102` (phase-marked, gate passes)
   and cookie `run_20261021_105145` (same pid, loader base `0x7ffc52d50000`). The
   full-coverage oracle run remains `run_20261021_033126` (15,636 pages, 443

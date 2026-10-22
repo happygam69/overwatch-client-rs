@@ -20,8 +20,8 @@ names the program (or the capture) it was read from.
 
 | program | base | what it is | what it answers |
 |---|---|---|---|
-| `module_after_diff_v2.bin` | `0x7ff7c4d20000` (v2b) | **the code image**: the standing image re-merged from all 17 runs (20-21 October), 73 MB, ~117k functions | **the default.** Every `v2b` address in the docs resolves here: the camera, the animation runtime, the entity and component system, the weapons and statescript code. Read its **code**; its data pointers belong to no single session (see below) |
-| `module_v2full.bin` | `0x7ff7c4d20000` (v2b) | the 12 October flatten, the older code image (38% cold pages) | what the project held until the re-merge; the function names were applied here first |
+| `module_v21_clean.bin` | `0x7ff7c4d20000` (v2b) | **the current build's code image** (2.25.0.1, the 21 October capture), 73 MB | **the default for new work**: the camera, the animation runtime, the entity and component system, the weapons and statescript code of the build the install is running now. Read its **code**; its data pointers belong to no single session (see below) |
+| `module_v2full.bin` | `0x7ff7c4d20000` (v2b) | the 12 October flatten, build **2.25.0.0** - the build the docs' addresses belong to | the basis of the docs' findings: every `v2b` address in `docs/formats/` resolves here. It is the *old* build: the client has since updated (see the build note below) |
 | `module_mapped.bin` | `0x7ff649000000` | **the pointer image**: the range capture's mapped code regions, at that session's base | chasing pointers in the range session: a pointer read here resolves inside this program |
 | `module_heap.bin` | `0x161b0000000` | the same capture's heap regions | runtime structures: the material chain, the FP component, class descriptors - and the heap side of the pointers |
 | `live_main_flat.bin` | `0x7ff736e60000` | the newest session's flat main image, at that session's base | the newest session's code **and** its pointers |
@@ -44,6 +44,25 @@ readable copy of its code is the warm flat image, and a function created in a
 23 MB "function" that the decompiler then chokes on). Wrapping the four
 regions that matter keeps every function small. Rebuild the wrap with
 `python dev/build_loader_wrap.py` after a new capture.
+
+## Which build is which
+
+The client updates itself, and an update moves the code: between the
+2.25.0.0 and 2.25.0.1 builds, **0 of 15,297** non-empty pages keep their
+address. So each program says which build it is:
+
+| program | build | use it for |
+|---|---|---|
+| `module_v21_clean.bin` | 2.25.0.1 (current) | new work, and any capture taken from the install now |
+| `module_v2full.bin` | 2.25.0.0 | the docs' addresses, and the findings they record |
+| `module_mapped.bin`, `module_heap.bin` | 2.25.0.0 (range session) | pointers in the range session |
+| `live_main_flat.bin` | 2.25.0.1 (newest session) | pointers in the newest session |
+| `ldr/loader_xor_regions.exe` | the loader of the captures | the page cipher |
+
+**Never merge two builds' pages into one image.** It produces an image
+whose bytes at a given address come from different builds - every decompile
+in it is a chimera. `dev/build_translate.py` carries an address from one
+build to the next instead.
 
 ## Code is session-independent; data is not
 

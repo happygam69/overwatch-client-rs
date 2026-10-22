@@ -19,13 +19,26 @@ cipher's fault-synchronous run.
 |---|---|
 | `D:/ow-dumps/live_page_diff/run_*` | 17 page-diff runs, 19-21 October, 8k-22k pages each, with `warm.csv`, `encrypted.csv`, `events.csv` and a phase marker |
 | `D:/ow-dumps/warm_poll/run_*` | 2 warm-poll runs (19 October) |
-| `D:/ow-dumps/module_after_diff.bin` | the **standing image** the docs are written against (v2b base `0x7ff7c4d20000`, 20 October) |
-| `D:/ow-dumps/module_after_diff_v2.bin` | the same image re-merged from all 17 runs (built during this check) |
-| `D:/ow-dumps/module_v2full.bin` | the 12 October image **the Ghidra project still holds** |
+| `D:/ow-dumps/module_after_diff.bin` | the **standing image** the docs are written against (v2b base `0x7ff7c4d20000`, 20 October) - build **2.25.0.0** |
+| `D:/ow-dumps/module_v21_clean.bin` | the current build's image (21 October, build **2.25.0.1**), merged from the two 21 October runs |
+| `D:/ow-dumps/module_v2full.bin` | the 12 October image, build **2.25.0.0** - the basis of the docs' addresses |
 | `D:/ow-dumps/loader_after_diff.bin` | the loader with its decrypted pages (flat; a file offset is an RVA) |
 | `D:/ow-dumps/ow_heap_full.dmp` | the 13.5 GB full heap dump (21 October) |
 | `D:/ow-dumps/dev_ghidra_run`-derived images | the region wraps and the merged images |
 | the Ghidra project `dev/ghidra_run/owmod` | 11 programs: the analysed module, the standing capture's mapped and heap images, the live image, the camera region, the loader, the loader's XOR regions, three region wraps |
+
+## The build changed: the captures are not all the same build
+
+The client updates itself. The 12-20 October captures are build
+**2.25.0.0.154088** (the one the docs describe); the 21 October captures and
+the current install are build **2.25.0.1.154504**. The update moved the
+code: of 15,297 non-empty pages, **0 keep their address** between the two
+builds. The image's build is the one its version string says
+(`2.25.0.0` in the 20 October image, `2.25.0.1` in the 21 October one).
+
+So a merge across the two is meaningless - it produces an image whose bytes
+at a given address come from different builds. The rule is: **merge within a
+build, and say which build the image is.**
 
 ## The standing image is stale, and re-merging is free
 

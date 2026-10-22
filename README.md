@@ -29,7 +29,7 @@ in engine code and generated graphs rather than in the assets.
 
 ## Status
 
-Verified against the retail install `2.25.0.0.154088`.
+Verified against the retail install `2.25.0.0.154088`. **The client has since updated itself to `2.25.0.1.154504`** - the code moved, so the addresses in the docs are the older build's (`docs/capture-coverage.md`).
 
 **Works**
 

@@ -4,6 +4,26 @@ Newest first. Milestones only; details and addresses live in `docs/formats/`,
 current state in `STATUS-handoff.md`, fits in `docs/fitted-ledger.md`, the
 work queue in `docs/open-questions.md`.
 
+## 2026-10-21 - the client updated itself: the builds do not mix
+
+- The install is now build **2.25.0.1.154504**; every address in the docs
+  belongs to **2.25.0.0.154088** (the 12-20 October captures). The update
+  moved the code: of 15,297 non-empty pages, **0 keep their address** between
+  the two builds, so the docs' addresses are the old build's and the
+  conclusions are unaffected.
+- The first re-merge of all 17 runs **mixed the two builds** - the image's
+  bytes at a given address came from different builds. It is deleted, and
+  the standing image is kept per build: `module_after_diff.bin` (2.25.0.0,
+  the docs' basis) and `module_v21_clean.bin` (2.25.0.1, the current
+  build, from the 21 October runs).
+- The Ghidra project now holds **one build per program**: `module_v21_clean`
+  for new work, `module_v2full` (2.25.0.0) for the docs' addresses, and the
+  session images for pointers.
+- The 2.25.0.0 captures have **no `.pdata`** at all (the unwind table was
+  never resident in those sessions); the 2.25.0.1 capture has all of it, so
+  the current build's function extents are exact.
+- `dev/build_translate.py` carries an address from one build to the next.
+
 ## 2026-10-21 - the captures are checked, per system
 
 - `docs/capture-coverage.md` answers "do we have the captures we need?"

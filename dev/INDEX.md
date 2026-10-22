@@ -12,6 +12,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `anim_chain_args.py` | Collect the animation-chain function list (main module) for headless. | 79 |
 | `anim_input.py` | Send the animation-driving keys to a running client, on a schedule. | 115 |
 | `build_loader_wrap.py` | Build the loader's XOR regions as one PE, in the client's address frame. | 64 |
+| `build_translate.py` | Translate a function's address from one client build to the next. | 134 |
 | `capture_coverage.py` | Do we have the code for this address? | 322 |
 | `capture_range.py` | Capture a running game and look for the map it has loaded. | 90 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
@@ -59,7 +60,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `focus_window.py` | Bring a process's main window to the foreground (un-minimise + focus). | 88 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
 | `gh.py` | Call the Ghidra bridge over HTTP. | 66 |
-| `gh_apply_names.py` | Name the client's functions in the Ghidra project. | 107 |
+| `gh_apply_names.py` | Name the client's functions in the Ghidra project. | 115 |
 | `graph_scan.py` | Find graph-container objects in a heap capture by the deserializer's shape. | 171 |
 | `hunt_actor.py` | Watch every mover, its owner, and one pointer level out, during a real walk. | 351 |
 | `hunt_node.py` | Hunt the player transform node by behaviour, not by shape. | 309 |

@@ -83,6 +83,7 @@ def main() -> int:
     check = "--check" in sys.argv
     named = 0
     missing = 0
+    touched: set[str] = set()
     for row in rows():
         programs = [p.split("/")[-1] for p in row["program"].split(";")]
         address = row["address"]
@@ -91,6 +92,7 @@ def main() -> int:
             out = make_and_name(program, address, name)
             if ok(out):
                 named += 1
+                touched.add(program)
                 print(f"named {name:<28} {address} in {program}")
             else:
                 missing += 1
@@ -99,6 +101,12 @@ def main() -> int:
     print(f"\n{named} named, {missing} not found")
     if check and missing:
         return 1
+    # A rename that is not saved is lost the next time Ghidra restarts, and
+    # Ghidra's save can take a while on a big image, so save each program
+    # that changed and say so.
+    for program in sorted(touched):
+        out = gh.call("/save_program", {"program": program}, timeout=600)
+        print(f"saved {program}: {out.get('message', out)}")
     return 0
 
 
