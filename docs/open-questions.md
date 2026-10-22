@@ -61,6 +61,15 @@ then `python dev/faultsync_correlate.py <run>/events.csv` (must print
 camera). The consumer is a system keyed by type `0x35`/entity offset, still
 unread.
 
+**In the current build (2.25.0.1) the path is located and named:** the
+consumer is v2b `0x7ff7c5a4f060`, the bind `0x7ff7c5a4faa0`, the two
+per-frame slots `0x7ff7c5a51bf0` and `0x7ff7c5a522f0`, the event player
+`0x7ff7c5a49c60` - all read from the view-model class's own vtable, all
+present in the capture, all named in `docs/function-names.csv`. The
+per-frame slot A walks the six 0x110-stride animation slots and runs the
+event player on each, which is what the doc says; the camera consumer is
+still the open part.
+
 **Next anchor.** `docs/formats/animation.md` (the first-person section) and
 `docs/formats/input-camera-audio.md`.
 

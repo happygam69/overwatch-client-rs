@@ -14,3 +14,7 @@ ldr/loader_xor_regions.exe,0x1810c1e20,0x10c1e20,PadBXorFamily,The second pad-ba
 ldr/loader_xor_regions.exe,0x1810b72f0,0x10b72f0,PadCXorFamily,The third pad-base region
 module_v21_clean.bin,0x7ff7c5a4f060,0xd2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; checks it against the type descriptor; resolves the view-model entity and its model; calls the bind; registers the first-person config vars
 module_v21_clean.bin,0x7ff7c5a4faa0,0xd4faa0,FpViewmodelBind,The bind: stores the view-model entity and model references and resets the view-model state; it does not read m_position or the four scalars
+module_v21_clean.bin,0x7ff7c5a51bf0,0xd31bf0,FpViewmodelUpdateA,Per-frame update (view-model vtable slot +0xe0): walks the six 0x110-stride animation slots and runs the event player on each
+module_v21_clean.bin,0x7ff7c5a522f0,0xd322f0,FpViewmodelUpdateB,Per-frame update (view-model vtable slot +0xe8): the second of the two per-frame slots
+module_v21_clean.bin,0x7ff7c5a49c60,0xd29c60,FpViewmodelEventPlayer,The animation event/state player: dispatches event masks against the slot's event list
+module_v21_clean.bin,0x7ff7c5a47410,0xd27410,FpViewmodelEventSort,Sorts the 0x50-byte event records by their short priority

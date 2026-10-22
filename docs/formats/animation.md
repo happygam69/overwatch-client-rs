@@ -376,11 +376,23 @@ and the separate view-model entity are confirmed, but the **per-frame**
 consumer that applies the offsets/scalars is still open.
 
 > **Frame note (2026-10-22).** The RVAs in this section are the **live main
-> image's** (the session flat dump), not the v2b standing image: the consumer
-> sits at v2b `0x7ff7c5a4f060` and the bind at v2b `0x7ff7c5a4faa0` in build
-> 2.25.0.1, and both are named in the Ghidra project
-> (`docs/function-names.csv`). The per-frame slots below are the same story:
-> v2b `0x7ff7c5a1bf0` and `0x7ff7c5a22f0`.
+> image's** (the session flat dump), not the v2b standing image. In build
+> 2.25.0.1 - the build the install runs now - the whole first-person path
+> sits at these v2b addresses, and every one of them is named in the Ghidra
+> project (`docs/function-names.csv`):
+>
+> | what | live-image RVA | v2b address (2.25.0.1) |
+> |---|---|---|
+> | the consumer | `0xd2f060` | `0x7ff7c5a4f060` |
+> | the bind | `0xd2faa0` | `0x7ff7c5a4faa0` |
+> | per-frame update A (slot `+0xe0`) | `0xd31bf0` | `0x7ff7c5a51bf0` |
+> | per-frame update B (slot `+0xe8`) | `0xd322f0` | `0x7ff7c5a522f0` |
+> | the event player | `0xd29c60` | `0x7ff7c5a49c60` |
+> | the event sort | `0xd27410` | `0x7ff7c5a47410` |
+>
+> The addresses come from the view-model class's own vtable (the live image's
+> RVA `0x3115ef0`): slot `+0x20` is the consumer, `+0xd8` a setter, `+0xe0`
+> and `+0xe8` the per-frame updates.
 
 The view-model object's class vtable is at RVA `0x3115ef0` (run `105102`,
 session base `0x7ff736e60000`). Slot `+0x20` is `FpViewmodelConsumer`; slot

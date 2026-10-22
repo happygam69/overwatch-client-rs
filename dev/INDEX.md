@@ -9,6 +9,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `actor_watch.py` | Series-watch all actor transforms through a scripted key sequence. | 123 |
 | `air_probe.py` | Measure the airborne horizontal acceleration from a keyed trace. | 116 |
 | `analyze_mover_trace.py` | Correlate a raw mover trace's slots with the recorded key timeline. | 133 |
+| `anchor_check.py` | Do we have the code for each anchor, in this build's image? | 88 |
 | `anim_chain_args.py` | Collect the animation-chain function list (main module) for headless. | 79 |
 | `anim_input.py` | Send the animation-driving keys to a running client, on a schedule. | 115 |
 | `build_loader_wrap.py` | Build the loader's XOR regions as one PE, in the client's address frame. | 64 |
