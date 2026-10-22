@@ -150,6 +150,21 @@ strings at v2b `0x7ff7c73b7xxx`, the D3D12/DXGI functions around
 `0x7ff7c73b7e30` and `0x7ff7c82ca310` are all warm. The older "no capture
 holds the renderer's code pages" paragraph describes the *old* standing dump.
 
+## The loader did not change with the client
+
+The page cipher is the client's loader, not the client. The loader on disk
+today has the **same PE timestamp and the same section layout** as the copy
+the 21 October capture used - but its `.text`, `.pdata`, `.rdata`, `.eid` and
+`.eidsig` are all different bytes, because the loader re-encrypts its own
+code on disk. The *code* it decrypts to is the same build, so:
+
+- the loader addresses in `docs/formats/page-crypt.md` (`0x14380e0`,
+  `0x144c839`, ...) still hold;
+- the `w` table (`keystream_current.npy`) is a per-build draw and still
+  applies.
+
+This is the one part of the project the client update did **not** disturb.
+
 ## The one thing that needs a new capture
 
 **The page cipher's `w` derivation.** The code is available (the loader's
