@@ -12,7 +12,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `anim_chain_args.py` | Collect the animation-chain function list (main module) for headless. | 79 |
 | `anim_input.py` | Send the animation-driving keys to a running client, on a schedule. | 115 |
 | `build_loader_wrap.py` | Build the loader's XOR regions as one PE, in the client's address frame. | 64 |
-| `build_translate.py` | Translate a function's address from one client build to the next. | 134 |
+| `build_translate.py` | Translate a function's address from one client build to the next. | 198 |
 | `capture_coverage.py` | Do we have the code for this address? | 322 |
 | `capture_range.py` | Capture a running game and look for the map it has loaded. | 90 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
@@ -30,7 +30,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `dump_domino_schema.py` | Dump the complete Domino physics schema from the v2b capture. | 95 |
 | `dump_exec_regions.py` | Dump the executable regions of a running client, with their addresses. | 69 |
 | `dump_object.py` | Dump an object region as qwords with pointer analysis. | 50 |
-| `dump_process.py` | Write a read-only full-memory minidump of a process. | 97 |
+| `dump_process.py` | Read a process's memory, and write a read-only full-memory minidump of it. | 199 |
 | `dump_qwords.py` | Dump qwords of given rvas from a module image. | 59 |
 | `emu_tls.py` | Offline Unicorn emulation of the loader's TLS callback chain (current | 288 |
 | `emu_tls_replay_fresh.py` | Replay-emu: loader flat image + captured RUNTIME .data/.rdata overlaid, then run TLS cb[0]. | 73 |

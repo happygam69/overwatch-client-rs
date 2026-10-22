@@ -1,6 +1,5 @@
-"""Write a read-only full-memory minidump of a process.
+"""Read a process's memory, and write a read-only full-memory minidump of it.
 
-Usage:
     python dev/dump_process.py <pid|name> <out.dmp>
 
 Uses dbghelp!MiniDumpWriteDump with MiniDumpWithPrivateReadWriteMemory by
@@ -8,6 +7,11 @@ default; `--full` adds MiniDumpWithFullMemory. On the retail game the
 private-RW default returns E_INVALIDARG; `--normal` and `--full` work. It only
 reads the target; the dump file is written by us. Needs the same user as the
 target (or elevation).
+
+The module is also the toolbox's **process memory** half: `open_target`,
+`regions` and `read_region` are what the live tools use to read a running
+client. Those open the process with read and query rights only - no write, no
+injection, no hooking (see AGENTS.md).
 """
 from __future__ import annotations
 
@@ -24,6 +28,104 @@ FILE_ATTRIBUTE_NORMAL = 0x80
 MiniDumpWithFullMemory = 0x00000002
 MiniDumpWithPrivateReadWriteMemory = 0x00000200
 MiniDumpWithThreadInfo = 0x00001000
+
+# Memory protection and type bits (winnt.h).
+PAGE_NOACCESS = 0x01
+PAGE_READONLY = 0x02
+PAGE_READWRITE = 0x04
+PAGE_WRITECOPY = 0x08
+PAGE_EXECUTE = 0x10
+PAGE_EXECUTE_READ = 0x20
+PAGE_EXECUTE_READWRITE = 0x40
+PAGE_EXECUTE_WRITECOPY = 0x80
+PAGE_GUARD = 0x100
+MEM_COMMIT = 0x1000
+MEM_IMAGE = 0x1000000
+MEM_MAPPED = 0x40000
+MEM_PRIVATE = 0x20000
+
+# The address space of a 64-bit process, and the granularity the kernel
+# reports regions in.
+MAX_ADDRESS = 0x7FFFFFFF0000
+ALLOCATION_GRANULARITY = 0x10000
+
+
+class MEMORY_BASIC_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BaseAddress", ctypes.c_void_p),
+        ("AllocationBase", ctypes.c_void_p),
+        ("AllocationProtect", wt.DWORD),
+        ("PartitionId", wt.WORD),
+        ("RegionSize", ctypes.c_size_t),
+        ("State", wt.DWORD),
+        ("Protect", wt.DWORD),
+        ("Type", wt.DWORD),
+    ]
+
+
+def _kernel32():
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wt.HANDLE
+    k32.OpenProcess.argtypes = (wt.DWORD, wt.BOOL, wt.DWORD)
+    k32.CloseHandle.argtypes = (wt.HANDLE,)
+    k32.VirtualQueryEx.restype = ctypes.c_size_t
+    k32.VirtualQueryEx.argtypes = (wt.HANDLE, ctypes.c_void_p,
+                                   ctypes.POINTER(MEMORY_BASIC_INFORMATION),
+                                   ctypes.c_size_t)
+    k32.ReadProcessMemory.restype = wt.BOOL
+    k32.ReadProcessMemory.argtypes = (wt.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+                                      ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t))
+    return k32
+
+
+def open_target(pid: int | str):
+    """Open a process for reading: query and VM_READ, nothing else."""
+    if isinstance(pid, str):
+        pid = find_pid(pid)
+    k32 = _kernel32()
+    handle = k32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
+    if not handle:
+        raise OSError(f"OpenProcess({pid}) failed: {ctypes.get_last_error()}")
+    return handle
+
+
+def regions(handle) -> list[tuple[int, int, int, int, int]]:
+    """Every committed region: (base, size, protect, kind, allocation base).
+
+    The fallback walker for the live tools: it asks the kernel about the
+    whole address space, which is slow but never misses a region.
+    """
+    k32 = _kernel32()
+    out = []
+    addr = 0
+    while addr < MAX_ADDRESS:
+        mbi = MEMORY_BASIC_INFORMATION()
+        got = k32.VirtualQueryEx(handle, ctypes.c_void_p(addr),
+                                 ctypes.byref(mbi), ctypes.sizeof(mbi))
+        if not got:
+            break
+        base = mbi.BaseAddress or 0
+        size = mbi.RegionSize
+        if size == 0:
+            break
+        if mbi.State == MEM_COMMIT:
+            out.append((base, size, mbi.Protect, mbi.Type, mbi.AllocationBase or 0))
+        addr = base + size
+    return out
+
+
+def read_region(handle, addr: int, size: int) -> bytes:
+    """Read up to `size` bytes at `addr`; a short read is not an error."""
+    if size <= 0:
+        return b""
+    k32 = _kernel32()
+    buf = ctypes.create_string_buffer(size)
+    got = ctypes.c_size_t(0)
+    ok = k32.ReadProcessMemory(handle, ctypes.c_void_p(addr), buf, size,
+                               ctypes.byref(got))
+    if not ok:
+        return b""
+    return buf.raw[: got.value]
 
 
 def find_pid(name: str) -> int:
