@@ -97,6 +97,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `live_pose_trace.py` | Capture the client's live pose as a trace, outside the repo. | 165 |
 | `live_trace.py` | Sample a running client's physics bodies into a trace file. | 931 |
 | `loader_imports.py` | (no header) | 60 |
+| `make_focus.py` | Build the focus file for the next capture. | 131 |
 | `mkpe.py` | Wrap raw captured regions as one minimal valid PE for analysis tools. | 99 |
 | `outline_sites.py` | Outline the function behind each address and disassemble around it. | 54 |
 | `page_crypt_battery.py` | Cipher-structure battery for the Overwatch.exe page transform. | 104 |
