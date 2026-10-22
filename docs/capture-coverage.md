@@ -40,6 +40,30 @@ So a merge across the two is meaningless - it produces an image whose bytes
 at a given address come from different builds. The rule is: **merge within a
 build, and say which build the image is.**
 
+## The addresses moved: the translation table
+
+Of the **355** distinct v2b addresses the docs cite, in build 2.25.0.1:
+
+| outcome | how many | what it means |
+|---|---|---|
+| same address | 1 | the code did not move |
+| moved | 90 | the same bytes, a new address (51 matched on the whole 96-byte window, 39 on the first 24) |
+| rewritten | 179 | the patch changed the code there (most are data - vtables, tables, var names) |
+| outside the old image | 77 | the address was in another frame, not the v2b one |
+
+The table is `D:/ow-dumps/build_2.25.0.0_to_2.25.0.1.txt`; it is made by
+
+```sh
+python dev/build_translate.py --old D:/ow-dumps/module_after_diff.bin \
+  --new D:/ow-dumps/module_v21_clean.bin --addresses <file-of-addresses>
+```
+
+A moved address is a *lead*, not a proof: the match is on bytes, so a
+function that was rewritten is not found, and a 24-byte match is weaker than a
+96-byte one. The reliable way to re-derive a finding in the new build is to
+find it again in `module_v21_clean.bin` - the Ghidra project now holds the
+current build for exactly that.
+
 ## The standing image is stale, and re-merging is free
 
 `dev/warm_merge.py` over the 17 existing runs - **no new capture** - produces

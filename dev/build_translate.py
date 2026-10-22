@@ -74,10 +74,59 @@ def functions(blob: bytes) -> list[tuple[int, int]]:
     return out
 
 
+def translate_addresses(old: bytes, new: bytes, addresses: list[int]) -> None:
+    """Find where each old-build address lives in the new build.
+
+    The old address points into a function; the function's bytes are the
+    handle. A patch that only *moves* code keeps the bytes, so the new
+    address is where those bytes now are; a patch that rewrites the function
+    leaves no trace, and the address is reported as changed.
+    """
+    window = 96
+    found = moved = changed = 0
+    base = 0x7FF7C4D20000
+    for addr in addresses:
+        off = addr - base  # the docs' addresses are v2b; the images are flat
+        if off < 0 or off + window > len(old):
+            print(f"{addr:#x}: not in the old image")
+            continue
+        needle = old[off : off + window]
+        if len(needle) < window:
+            print(f"{addr:#x}: beyond the image")
+            continue
+        if needle.count(0) == window:
+            print(f"{addr:#x}: the old capture has no code here (a cold page)")
+            continue
+        if new[off : off + window] == needle:
+            print(f"{addr:#x}: same address")
+            found += 1
+            continue
+        at = new.find(needle)
+        if at < 0:
+            # A patch often keeps the head of a function and rewrites the
+            # rest, so a shorter window still finds it.
+            for smaller in (48, 24):
+                at = new.find(old[off : off + smaller])
+                if at >= 0:
+                    print(f"{addr:#x}: -> {base + at:#x} (matched on {smaller} bytes)")
+                    moved += 1
+                    break
+            else:
+                print(f"{addr:#x}: not found - the code was rewritten")
+                changed += 1
+            continue
+        again = new.find(needle, at + 1)
+        note = " (the bytes occur twice)" if again >= 0 else ""
+        print(f"{addr:#x}: -> {base + at:#x}{note}")
+        moved += 1
+    print(f"\n{found} unchanged, {moved} moved, {changed} rewritten")
+
+
 def main() -> int:
     args = sys.argv[1:]
     old_path = new_path = None
     out_path = None
+    addr_file = None
     for i, a in enumerate(args):
         if a == "--old" and i + 1 < len(args):
             old_path = pathlib.Path(args[i + 1])
@@ -85,12 +134,27 @@ def main() -> int:
             new_path = pathlib.Path(args[i + 1])
         elif a == "--out" and i + 1 < len(args):
             out_path = pathlib.Path(args[i + 1])
+        elif a == "--addresses" and i + 1 < len(args):
+            addr_file = pathlib.Path(args[i + 1])
     if not old_path or not new_path:
         print(__doc__)
         return 2
 
     old = old_path.read_bytes()
     new = new_path.read_bytes()
+
+    if addr_file:
+        wanted = []
+        for line in addr_file.read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            wanted.append(int(line.rsplit(" ", 1)[-1], 16))
+        print(f"translating {len(wanted)} addresses "
+              f"({old_path.name} -> {new_path.name}):")
+        translate_addresses(old, new, wanted)
+        return 0
+
     old_fns = functions(old)
     new_fns = functions(new)
     print(f"{old_path.name}: {len(old_fns)} functions from .pdata")
