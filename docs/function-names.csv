@@ -1,5 +1,5 @@
 program,address,doc_address,name,role
-module_v2full.bin,0x7ff7c4ff0060,0xd2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; resolves the view-model entity and model and calls the bind
+module_v2full.bin,0x7ff7c4ff0060,0xd2f060,ViewmodelVtableInit,A static initialiser: stores the view-model class vtable pointer and guards a one-shot setup
 module_v21_clean.bin,0x7ff7c6e1eca0,0x7ff7c6e84610,AnimSamplerRule,The per-child sampler gate: vec4 lanes; winner-take-all above weight 0.5
 module_v2full.bin,0x7ff7c7a38c40,0x7ff7c7a38c40,DmBodyDescriptorInit,Fills a static descriptor with literal stores
 module_v2full.bin,0x7ff7c7a38cbf,0x7ff7c7a38cbf,DmBodyFieldArrayFill,Writes the field array of that descriptor
@@ -12,3 +12,5 @@ ldr/loader_xor_regions.exe,0x1814380e0,0x14380e0,PageXorApplier,The candidate pa
 ldr/loader_xor_regions.exe,0x181015a94,0x1015a94,PageXorApplierCaller,The caller of the applier; returns at 0x1015a99
 ldr/loader_xor_regions.exe,0x1810c1e20,0x10c1e20,PadBXorFamily,The second pad-base family: the 4-byte-granular and 0x3ffc mask; called from 0x8a4ad0
 ldr/loader_xor_regions.exe,0x1810b72f0,0x10b72f0,PadCXorFamily,The third pad-base region
+module_v21_clean.bin,0x7ff7c5a4f060,0xd2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; checks it against the type descriptor; resolves the view-model entity and its model; calls the bind; registers the first-person config vars
+module_v21_clean.bin,0x7ff7c5a4faa0,0xd4faa0,FpViewmodelBind,The bind: stores the view-model entity and model references and resets the view-model state; it does not read m_position or the four scalars
