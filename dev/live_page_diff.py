@@ -824,6 +824,12 @@ def main() -> int:
         try:
             with open(args.focus_file, "r", encoding="utf-8") as fh:
                 for line in fh:
+                    # A line that starts with # is a comment - the whole
+                    # line, not just the first token: the file's own header
+                    # would otherwise be parsed as addresses.
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#"):
+                        continue
                     focus_tokens.extend(line.replace(",", " ").split())
         except OSError as exc:
             print(f"focus-file unreadable: {exc}")

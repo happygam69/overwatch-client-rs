@@ -90,7 +90,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `live_find_clip.py` | Find the client's *loaded* animation clips in memory, by their own bytes. | 86 |
 | `live_mapscan.py` | Scan a running game's whole address space for the loaded map. | 109 |
 | `live_move_rows.py` | What actually moves while the client animates: a row-level differential. | 143 |
-| `live_page_diff.py` | Protection-differential page capture for the running client (v3). | 2227 |
+| `live_page_diff.py` | Protection-differential page capture for the running client (v3). | 2233 |
 | `live_page_grab.py` | Grab a page that the client keeps marked no-access, by polling for the moment | 86 |
 | `live_pose_matrix.py` | Read a live transform array: the pose, as it moves. | 173 |
 | `live_pose_rank.py` | Find a *real* runtime pose: quaternion runs that move and carry varied values. | 118 |
