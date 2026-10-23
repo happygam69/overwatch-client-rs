@@ -75,7 +75,9 @@ Binary/example entry points live in `crates/ow-tank/src/bin` (`hero`,
    `0x7ff7c4d20000`), the union of all 17 runs - the client's unread `.text`
    is 11% of it, and `.pdata` (the function table of the whole client) is
    fully readable. `module_after_stripped.bin` is the same image rebased
-   `-0x10000` for the headless import.
+   `-0x10000` for the headless import. For the **current** build, the complete
+   Plan A image is the Ghidra program `Overwatch.exe` (every `.text` page,
+   preferred base `0x140000000`).
 4. **Ghidra headless** (`E:/ghidra/hproj*`, script
    `McpDecompile.java`): import the stripped image, decompile function
    ranges listed in an args file, export `.c` into `D:/ow-dumps`.
@@ -90,6 +92,8 @@ indexed separately (`loader_disk_rva.bin`) and needs no capture.
   in a flattened image equals the RVA.
 - Session address = `v2b + (session base - 0x7ff7c4d20000)`. Session bases
   are in each run's `meta.json`.
+- Offline-PE address = `0x140000000 + (v2b - 0x7ff7c4d20000)`; the Ghidra
+  program `Overwatch.exe` holds every `.text` page of that build.
 - Ghidra stripped addresses = `RVA - 0x10000` (the first 64 KiB are
   removed on import).
 - The loader uses its own image bases (disk `0x180000000`, captured

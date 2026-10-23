@@ -49,12 +49,13 @@ the behaviour. A fitted implementation is always labelled as fitted.
 - **Files answer data questions.** Use `ow-tank` bins, the typed STU layer and
   `docs/formats/` for formats, registries, geometry and values.
 - **Ghidra MCP answers behaviour questions** over the captured images. The
-  project is `dev/ghidra_run/owmod` and the analysed program is
-  `module_v2full.bin` (v2b base `0x7ff7c4d20000`, the warm pages patched in);
-  `docs/ghidra-project.md` lists every program, its base and what it answers.
-  The merged images themselves stay in `D:/ow-dumps` (`module_after_diff.bin`,
-  `loader_after_diff.bin`); the older `warm_best.bin` remains useful for
-  comparison.
+  project is `dev/ghidra_run/owmod`: `Overwatch.exe` is the **complete**
+  current-build image (all `.text` recovered offline, base `0x140000000`),
+  `module_v21_clean.bin` is the same build's v2b frame, and `module_v2full.bin`
+  is the old build the docs' addresses use; `docs/ghidra-project.md` lists
+  every program, its base and what it answers. The merged images themselves
+  stay in `D:/ow-dumps` (`module_after_diff.bin`, `loader_after_diff.bin`);
+  the older `warm_best.bin` remains useful for comparison.
 - **Preferred live capture: `dev/live_page_diff.py`.** Read-only; it selects
   `Overwatch.exe` by name (not the largest module), watches page protections,
   reads a page when it becomes readable, retries ciphertext pages, and logs

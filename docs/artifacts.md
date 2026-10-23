@@ -14,7 +14,7 @@ All are flattened images at the v2b base `0x7ff7c4d20000` unless noted.
 | `module_after_diff.bin` | the previous standing image: union of the 2026-10-20 sessions, base `0x7ff7c4d20000`, 76,947,456 B |
 | `module_after_diff_20261020a.bin`, `_20261020b.bin` | backups taken before the 2026-10-20 refreshes |
 | `module_after_diff_20261019.bin` | older standing image, 70,123,520 B |
-| `module_v2full.bin` | the 12 October flatten (`0x42ea000`) that the GUI Ghidra project holds; 38% of its pages are cold, so the project sees less code than the captures hold (`docs/capture-coverage.md`) |
+| `module_v2full.bin` | the 12 October flatten (`0x42ea000`) that the GUI Ghidra project holds for the docs' old-build addresses; 38% of its pages are cold - use `Overwatch.exe` for complete current-build code (`docs/capture-coverage.md`) |
 | `module_warm.bin`, `warm_best.bin` | older cumulative warm captures |
 | `module_mapped.bin`, `module_v2.bin` | older full-size captures (100 MB images) |
 | `module_all_20261020_fixed.bin` | all-module merge from the 2026-10-20 sessions |
@@ -38,10 +38,16 @@ Session bases: 124815 `0x7ff67c0c0000`, 113932 `0x7ff658ff0000`,
 
 | file | what it is |
 |---|---|
-| `pagepak/keystream.npy` | `[12182, 4096]` per-page keystream (`disk XOR plain`), 9,449 pages filled (77.6%) |
+| `pagepak/keystream.npy` | `[12182, 4096]` per-page keystream (`disk XOR plain`), 9,449 pages filled (77.6%) - previous build |
+| `pagepak/keystream_current.npy` | current-build oracle rows, 2,285 pages |
 | `pagepak/keystream_meta.json` | coverage, sources, disk `.text` layout, the equality-across-sessions note |
 | `page_crypt_survey.csv` | per-page cipher survey from the battery |
 | `dev/ks_linear.py`, `dev/ks_key_test.py`, `dev/ks_hash_test.py` | keystream tests (BM complexity; standard cipher/hash schemes - all negative) |
+| `offline_recover/module_offline.bin` | full PE at preferred base `0x140000000` with recovered `.text`/`.pdata`; imported as the Ghidra program `Overwatch.exe` (151,260 functions) |
+| `offline_recover/text.bin`, `text.csv` | recovered `.text` and per-page `w`/score/mode |
+| `offline_recover/pdata.bin`, `pdata.csv` | plaintext `.pdata` and per-page table |
+| `offline_recover/REPORT.md`, `*.json` | validation, confidence, ambiguous page and run time |
+| `dev/offline_page_recover.py` | offline Plan A tool |
 
 ## Decompiled exports
 
@@ -119,6 +125,10 @@ Produced by headless Ghidra argument files (`anim_args*.txt`) and
 
 ## Ghidra projects and scripts
 
+- `E:/OverwatchTest/dev/ghidra_run/owmod` - **the live project**: `Overwatch.exe`
+  (the complete 2.25.0.1 image), `module_v21_clean.bin` (the same build's v2b
+  frame and names), `module_v2full.bin` (2.25.0.0, the docs' addresses), plus
+  the session, loader and region programs (`docs/ghidra-project.md`).
 - `E:/ghidra/hproj/hmod` - captured loader (band work, whole-text export).
 - `E:/ghidra/hproj2/hmod2` - loader band 111 export.
 - `E:/ghidra/hproj4/hmod4` - standing main image (`module_after_stripped.bin`); animation/camera rounds.
@@ -148,6 +158,7 @@ component_router_paired.txt.
 | `D:/ow-dumps/module_after_diff.bin` | the standing image the docs are written against (v2b base `0x7ff7c4d20000`, 20 October) |
 | `D:/ow-dumps/module_after_diff_v2.bin` | the same image re-merged from all 17 `live_page_diff` runs: the client's unread `.text` drops from 21% to 11% and `.pdata` becomes fully readable (`docs/capture-coverage.md`) |
 | `D:/ow-dumps/module_v2full.bin` | the 12 October image the Ghidra project still holds (38% cold) |
+| `dev/ghidra_run/owmod` program `Overwatch.exe` | the **complete** current-build image: all 12,076 `.text` pages, 201,246 `.pdata` entries, 151,260 functions (imported 2026-10-23) |
 
 ## Where the dumps live now
 

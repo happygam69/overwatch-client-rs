@@ -4,6 +4,154 @@ Newest first. Milestones only; details and addresses live in `docs/formats/`,
 current state in `STATUS-handoff.md`, fits in `docs/fitted-ledger.md`, the
 work queue in `docs/open-questions.md`.
 
+## 2026-10-23 - Complete image imported into Ghidra
+
+- The Plan A PE (`D:/ow-dumps/offline_recover/module_offline.bin`, preferred
+  base `0x140000000`, all 12,076 `.text` pages, 201,246 `.pdata` entries) is
+  now the Ghidra program **`Overwatch.exe`**, auto-analysed to **151,260
+  functions**. This closes the 2,351 zero `.text` pages left in
+  `module_v21_clean.bin`; the same code is at
+  `0x140000000 + (v2b - 0x7ff7c4d20000)` (checked at RVA `0x1000` and at
+  `FpViewmodelConsumer`, RVA `0xd2f060`).
+- The current-build names remain applied to `module_v21_clean.bin`; the new
+  program is unnamed so far. Docs updated: `docs/ghidra-project.md`,
+  `docs/capture-coverage.md`, `docs/artifacts.md`,
+  `docs/formats/page-crypt.md`, `docs/formats/camera.md`,
+  `docs/formats/animation.md`, `docs/open-questions.md`,
+  `docs/architecture.md`, `STATUS-handoff.md`, `AGENTS.md`.
+
+## 2026-10-23 - Offline .text / .pdata recovery (Plan A)
+
+- `dev/offline_page_recover.py` recovers all 12,076 `.text` pages from the
+  on-disk ciphertext with the loader pad, no live capture.  Pad check: 2,284
+  single-window oracle rows plus the one 16-zero two-window splice
+  (`0x53a000`, windows 1524/1512, split 1056), 2,285/2,285.  Held-out oracle
+  top-1 2,284/2,284; warm images match 4,887/4,888 and 5,350/5,351 pages.
+  `.pdata` is plaintext (201,246 sorted entries) and byte-identical to both
+  warm images.  One page (`0x540000`) keeps a 16-byte non-cipher tail; its PE
+  entry function is a 32-byte plaintext island recovered from the disk.
+  Artifacts and `REPORT.md` live under `D:/ow-dumps/offline_recover/`.
+
+## 2026-10-23 - View-model sampler and weapon source fixes
+
+- `anim_tree::evaluate` now applies layer rotation and translation
+  independently for one-link layer bones, matching `AnimSamplerRule`
+  (`0x7ff7c6e84610`). Dropped-ancestor chains still use the composed pair and
+  scalar lanes are not decoded (FIT-ANI-08/05).
+- The default weapon source is the selected **FP skeleton's** bones 44/74 and
+  its hardpoint local; `--weapon-fold 1` keeps the old character-c71 A/B path
+  (FIT-ANI-04). `docs/formats/animation.md`, the fitted ledger and the
+  reference findings note were corrected (spring `600.0/s` ramp, `0.004 m`
+  threshold, target `+0x1370`).
+- The reference retarget, FP camera pose target and Pose2d dataflow VM remain
+  unread; the gate passes with the new code and ledger rows.
+
+## 2026-10-23 - View-model animation exactness check
+
+- Ghidra read against `module_v21_clean.bin`: `AnimSamplerRule`
+  (`0x7ff7c6e84610`) copies child 0 unconditionally and replaces each present
+  rotation/translation/scale lane only at `w > 0.5`, scalars lerp; the two FP
+  per-frame slots advance **event** timelines, not pose; the client registers
+  `anim.EnableProxyRetarget`/`anim.EnableFinalRetarget`; the FP camera is the
+  animated pose (`+0x1350/+0x1310/+0x1320`); pistols use FP bones 44/74, not
+  the character rig; the real spring is on `+0x1350` (`0.235/0.48`, decay
+  `0.008`).
+- The viewer is **not exact**: reference retarget omitted, per-channel
+  sampler not implemented, FP camera/weapon source/spring still fitted or
+  wrong. `docs/formats/animation.md` has the comparison table;
+  `docs/fitted-ledger.md` FIT-ANI-04/05/08 and FIT-CAM-01 were corrected.
+  No behavior code was changed in this check.
+
+## 2026-10-23 - Ghidra image: missing pages filled
+
+- `module_v21_clean.bin` was missing whole sections. Filled in place: 488
+  `.text` and 13 `.data` pages from `module_v21d.bin`; 372 `.rdata`, 16
+  `.data` and 4 `.pdata` pages from the on-disk `Overwatch.exe` (same
+  `TimeDateStamp`). Pointers were rebased with the executable's `.reloc` table
+  to the image's PE base (`0x7ff736e60000`), not copied from another session;
+  6 live pages were kept. `K` = 0.011519 and the FP half-angle constant
+  0.00872665 now read correctly in Ghidra; function count 92,728.
+- Full image and manifest: `D:/ow-dumps/module_v21_clean_full.bin` and
+  `module_v21_clean_full.manifest.txt`; `docs/ghidra-project.md` records the
+  sources, pointer rule and the remaining 2,351 zero `.text` pages.
+- The per-frame camera look consumer was not among the newly analysed pages;
+  the input tick and the large render update are the only warm readers of the
+  look accumulator offsets.
+
+## 2026-10-23 - World camera uses the read FOV/clip planes
+
+- `ow-view`'s world pass uses the read **0.1 / 16384.0** clip planes and the
+  **103 deg horizontal -> 70.53 deg vertical** FOV; `FIT-CAM-04` is removed.
+  The `.rdata` constants are read from the **on-disk executable**, not the
+  merged image: the merged `module_v21_clean.bin` zeroed its `.rdata` pages.
+- The projection builder is read (`BuildPerspectiveMatrix`
+  `0x7ff7c6d95a70`: row-major, left-handed, depth 0..1). The view's x row is
+  `A x B` and the projection's x scale is negative, so the signs cancel; the
+  viewer's right-handed look/projection pair gives the same image.
+- The FP FOV formula is decoded: `UpdateFirstPersonCameraPose`
+  (`0x7ff7c56b7b90`) calls `FUN_7ff7c5700f50`, which reads `GetHorizontalFov`
+  (103), halves it to radians (`0.00872665`), applies `tan`, the 9/16 factor
+  and `atan`, and doubles: **70.53 deg vertical at 16:9**. The `60.0` angle is
+  a fallback and the per-hero `50` scalar is not the FOV. The FP pose
+  (animation camera bone, drop/back) stays fitted.
+- The mouse `K` is read from the on-disk `.rdata` at `0x7ff7c7ccc4b0`
+  (`0x3C3CBADB` = 0.011519); with the old-build default scale 0.15 the viewer
+  uses 0.00172785 (`FIT-CAM-08`, scale still fitted). The pitch clamp remains
+  fitted; the component's `-89/+89` limits are recorded.
+
+## 2026-10-23 - Camera surface read; world near/far settled; tick not located
+
+- `docs/formats/camera.md` is written: the 2.25.0.1 camera var surface
+  (`camera.*`, `camera3Panim.*`, 3P, `firstPerson.*`, `localhiteffects.*`) is
+  mapped with registration groups, record blocks, static objects and defaults.
+  The defaults match the old build, so they are true statics.
+- The world camera pair is read: `DefaultNearZ` **0.1 m**, `DefaultFarZ`
+  **16384.0 m** (registration `0x7ff7c51e2980` / `0x7ff7c51e2890`, getters
+  `0x7ff7c686cbc0` / `0x7ff7c686cba0`); the first-person pair is exactly one
+  tenth (`0.01 / 1638.4`). This closes the near/far half of open question 6.
+- The **first-person camera setup** is v2b `0x7ff7c568c5b0` (read, not a
+  defined Ghidra function): six 0x110 animation slots, a 60.0 deg angle, FP
+  near/far and an animation FOV blend. It is not the type-`0x35` component
+  consumer; `m_position` and the four scalars remain unread.
+- **Negative result, recorded:** the five interpolation-inverse vars and four
+  speed rates have no direct reader outside registration. The camera code
+  pages are warm (the input tick at `0x7ff7c5301000` is 3733/4096 nonzero), so
+  the tick is reached indirectly or through a copied settings block; it stays
+  fitted. The 64-bit name table holding `Camera` and `CameraShake` is an
+  animation/effect name dictionary, not a class registry; it has no code
+  references.
+- **Fourteen camera functions are now named** in `module_v21_clean.bin` and in
+  `docs/function-names.csv` (63 rows total): the near/far getters and
+  registration, the FOV registration, the plane setter, the two mouse-look
+  deltas, the FP clip-plane registration, the FP slot dispatcher, the FP offset
+  transform, the input poll, force-input mode, the replay proto merge and the
+  view-params constructor. Names are **not** applied where the entry is not a
+  function or the role is inferred; `camera.md` section 8 lists both sets.
+- Dead ends and false leads (name table, message-helper functions,
+  mis-bounded functions) are recorded in `camera.md` section 9.
+
+## 2026-10-22 - 49 function names; the two 2.25.0.0 standing images split
+
+- `docs/function-names.csv` now names **49 settled functions**: the previous
+  19 plus 30 current-build rows seeded by `dev/naming_seed.py` from the docs'
+  decompiled-path findings (animation, statescript, materials chain, domino
+  physics, mover shell, netcode, debug panels). Every one of the 30 targets
+  was confirmed to sit exactly at a real function begin of
+  `module_v21_clean.bin` through the Ghidra program before writing; 88 further
+  candidates were refused honestly (`not matched`, ambiguous needles, cold
+  windows, holes), so the skips are recorded as unfound, never guessed.
+- `DmHandleDecode` is corrected: domino.md:264 shows the handle-level function
+  at `0x7ff7c7a4cce0` zeroes force and torque behind the +0x15c gate, so the
+  row is now `DmWorldClearForces`.
+- One v2b address carried two doc claims: the MRNM chunk deserializer
+  (materials.md:203) and the MRNM runtime-table builder (animation.md:64) are
+  the same function; the v21 row is `MrnmHandler` with both docrefs.
+- `module_v2full.bin` and `module_after_diff_v2.bin` are **not** the same
+  bytes: over 10,582 shared nonzero pages, 5,961 agree and **4,621 differ**
+  (the dmWorld::Create prologue sits where the docs say only in v2full). The
+  docs frame is `module_v2full.bin`; byte translation into the current build
+  reads from it now. The cause is open question 12.
+
 ## 2026-10-21 - the client updated itself: the builds do not mix
 
 - The install is now build **2.25.0.1.154504**; every address in the docs
@@ -165,10 +313,11 @@ work queue in `docs/open-questions.md`.
   and camera); the FP arms keep the selected animation. This replaces the
   bind/FP-parent gun path that crossed the pistols. Test:
   `cargo run --release -p ow-view -- --play --hero 3 --anim auto --fp-eye 1.25 --fp-fov 50`.
-- Declared the **`w` derivation tier 3**: the picker is inside the Denuvo VM
-  (`0x2511e0` dispatcher, 22 KB `0x40bee0..0x411536`); the XOR transform is
-  exact and the current-build `w` is read, but a new build needs a fresh
-  oracle. No fit is standing in for it.
+- Declared the **`w` derivation tier 3**: the picker is inside the loader's
+  own obfuscated VM/dispatcher (`0x2511e0` dispatcher, 22 KB
+  `0x40bee0..0x411536`). The earlier "Denuvo VM" label was wrong. The XOR
+  transform is exact and the current-build `w` is read, but a new build needs
+  a fresh oracle. No fit is standing in for it.
 - Correction: the **disk** `.pdata` is encrypted; only the **live** `.pdata`
   is valid. The previous entry's "`.pdata` is intact" refers to the live image.
 - The dump tool's private-RW default returns `E_INVALIDARG` on the game;

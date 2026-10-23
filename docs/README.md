@@ -14,7 +14,7 @@ read-only memory captures. Nothing from the game ships in this repository.
 | **pick the next thing to work on** | **[`open-questions.md`](open-questions.md)** |
 | know what is fitted, assumed or tier 3 | [`fitted-ledger.md`](fitted-ledger.md) |
 | know how evidence is classified | [`provenance.md`](provenance.md) |
-| work in the decompiler | [`ghidra-project.md`](ghidra-project.md) - the project, its programs, the addresses |
+| work in the decompiler | [`ghidra-project.md`](ghidra-project.md) - the project, its programs, the addresses; [`ghidra/view-model-animation-2026-10-23.md`](ghidra/view-model-animation-2026-10-23.md) - the view-model animation subagent findings |
 | find a file on `D:/ow-dumps` | [`artifacts.md`](artifacts.md) |
 | know what the captures cover | [`capture-coverage.md`](capture-coverage.md) - measured, per system |
 | know which tool answers a question | [`../dev/INDEX.md`](../dev/INDEX.md) |
@@ -35,11 +35,12 @@ Plans and process docs (different scopes, on purpose):
 Reading orders by task:
 
 - **Animation / view model**: `architecture.md` -> `formats/animation.md`
-  (current section) -> `fitted-ledger.md` -> `history/animation.md`.
+  (current section) -> `fitted-ledger.md` -> `history/animation.md` ->
+  `ghidra/view-model-animation-2026-10-23.md` (raw subagent findings).
 - **Movement / combat**: `formats/character-controller.md`,
   `formats/domino.md`, `formats/weapons.md` -> `ow-sim` tests.
-- **Camera**: `formats/input-camera-audio.md` -> `formats/animation.md`
-  (first-person section) -> the FP camera ledger rows.
+- **Camera**: `formats/camera.md` -> `formats/input-camera-audio.md` ->
+  `formats/animation.md` (first-person section) -> the camera ledger rows.
 - **Data formats**: `formats/casc.md`, `formats/stu.md`, `formats/mstu.md`,
   `formats/materials.md`.
 
@@ -54,7 +55,8 @@ Reading orders by task:
   the simulation uses a measured replacement and says so.
 - **Addresses**: every address names its image and its conversion. `v2b` is
   the standing image space; a session address is
-  `v2b + (session base - 0x7ff7c4d20000)`. See `architecture.md`.
+  `v2b + (session base - 0x7ff7c4d20000)`; an address in the complete offline
+  image is `0x140000000 + (v2b - 0x7ff7c4d20000)`. See `architecture.md`.
 - **Not tested** is written down where it is true.
 
 ## Quick start

@@ -19,8 +19,9 @@ in engine code and generated graphs rather than in the assets.
   are read from the install and checked by tests that fail if the reading is
   wrong. Findings live in `docs/formats/`.
 * **The decompiled client gives behaviour.** Ghidra is run over the operator's
-  own memory captures. Only addresses and conclusions are written down, never
-  disassembly or decompiled code. `docs/provenance.md` defines the evidence
+  own memory captures and the complete image recovered offline from the
+  operator's installed executable. Only addresses and conclusions are written
+  down, never disassembly or decompiled code. `docs/provenance.md` defines the evidence
   classes; `docs/fitted-ledger.md` lists every place where a behaviour is
   fitted, assumed, tier 3 or a stand-in.
 * **Neither substitutes for the other.** A file question that cannot be settled
@@ -29,7 +30,7 @@ in engine code and generated graphs rather than in the assets.
 
 ## Status
 
-Verified against the retail install `2.25.0.0.154088`. **The client has since updated itself to `2.25.0.1.154504`** - the code moved, so the addresses in the docs are the older build's (`docs/capture-coverage.md`).
+Verified against the retail install `2.25.0.0.154088`. **The client has since updated itself to `2.25.0.1.154504`** - the code moved, so old-build addresses in the docs stay in the old build's frame. The project holds both: the **complete current-build code image** (`Overwatch.exe`, all `.text` recovered offline) and the old-build image the docs' addresses were read in (`docs/capture-coverage.md`).
 
 **Works**
 
@@ -49,14 +50,19 @@ Verified against the retail install `2.25.0.0.154088`. **The client has since up
   the shipped texture formats; `ow-view` is a direct `wgpu`/`winit` viewer with
   offscreen shots and the `--play` harness.
 * **View model and camera:** the first-person model, its own render pass with
-  the client's near/far (`0.01 / 1638.4 m`), the client's `HorizontalFOV`
-  (`103°` horizontal), a zero-rest drag spring from
-  `STUFirstPersonComponent` (`64 / 16 / -1`; constants read, form fitted) and
-  the opt-in fitted look filter (`--cam-look-inverse 0.1`).
+  the client's near/far (`0.01 / 1638.4 m`), the read **103° horizontal** world
+  FOV (70.53° vertical at 16:9; the FP path uses the same), a zero-rest drag
+  spring from `STUFirstPersonComponent` (`64 / 16 / -1`; constants read, form
+  fitted) and the opt-in fitted look filter (`--cam-look-inverse 0.1`). The
+  world camera near/far are read: `0.1 / 16384 m`, with the first-person pair
+  one tenth; the mouse scale `K` is read from the executable's `.rdata`.
 * **First-person animation:** the clip feed and the real `STUAnimBlendTree`
   are evaluated (`--anim auto`; category 5 -> c71, category 9 -> c50; Pose2d
   layers at their slot weights; the per-child >0.5 sampler gate); the FP
-  retarget's dropped-ancestor fold is measured and implemented.
+  retarget's dropped-ancestor fold is measured and implemented. The 2026-10-23
+  Ghidra check found the authored idle but **not an exact client pose**: the
+  reference→model retarget, animated FP camera pose, FP weapon source,
+  per-channel sampler and the real `+0x1350` spring are still different.
 * **Content surfaces:** skin themes, customizable skin themes, voice
   conversations, progression unlocks, loot boxes, stats and catalogs (6 of 9
   surfaces readable on this install).
@@ -70,13 +76,21 @@ Verified against the retail install `2.25.0.0.154088`. **The client has since up
 * **First-person animation:** the Pose2d dataflow VM (driver inputs and layer
   weights) and the reference-skeleton/rest data behind the 2.395x shoulder rows
   are unread; at the authored defaults the tree output is the base clip (c71).
-* **The first-person camera transform:** the FP near/far, `HorizontalFOV`, the
-  per-hero `STUFirstPersonComponent` values (offset, spring, four scalars) and
-  the live component layout are read; the type-0x35 consumer and its per-frame
-  slots are identified, but the per-frame offset/scalar application is not. The
-  FP drop/back framing stays explicitly fitted (`--fp-cam-drop`,
-  `--fp-cam-back`).
-* **World camera near/far** are not read (the FP pair is).
+* **The first-person camera transform:** the FP near/far, the per-hero
+  `STUFirstPersonComponent` values (offset, spring, four scalars) and the live
+  component layout are read; the type-0x35 consumer and its per-frame slots are
+  identified, but the per-frame offset/scalar application is not. The FP camera
+  pose is read as a separate path: `UpdateFirstPersonCameraPose` builds it from
+  the FP animation basis/position and `ApplyFirstPersonCamera` applies it
+  (`docs/formats/camera.md`). Which component scalar feeds its FOV is still
+  unread, so the FP drop/back framing stays explicitly fitted
+  (`--fp-cam-drop`, `--fp-cam-back`).
+* **World camera near/far and FOV are read** (`0.1 / 16384 m`; FP one tenth;
+  103° horizontal -> 70.53° vertical at 16:9). The FP FOV is the same; the
+  per-frame look application and the FP camera pose (drop/back) remain open or
+  fitted. The perspective-matrix builder is read (row-major, left-handed,
+  depth 0..1); the view's `A x B` x row and the projection's negative x scale
+  cancel.
 * **Materials:** the model-to-look-to-texture chain works where the keyring has
   the keys; several hero body materials and many map props remain blocked.
 * **Per-shot damage**, the steep-slide rule, the v1 STU path, the replay frame

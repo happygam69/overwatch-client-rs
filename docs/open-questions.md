@@ -9,16 +9,15 @@ Rules for an entry: a question is *settled* when it has a recorded address or
 a measured number, not when it has a plausible guess. A guess becomes a row in
 [`fitted-ledger.md`](fitted-ledger.md) and stays a guess.
 
-**Do we have the captures for these?** Yes, with one exception. Every code
-address the open questions need is warm in the standing image - measured, not
-assumed: [`capture-coverage.md`](capture-coverage.md) lists the address of
-each question and whether we hold it. Only question 1 needs a new capture
-(it wants runtime state, not code), and questions 2-11 are analysis or
-measurement work over code we already have.
+**Do we have the captures for these?** Yes, and page coverage no longer needs
+a new capture either. Plan A recovered all `.text` and `.pdata` from the
+installed executable offline, and the project holds that complete image as
+the Ghidra program `Overwatch.exe` (151,260 functions). Questions 2-11 are
+analysis/measurement work over code we now fully hold.
 
 ---
 
-## 1. The page-key (`w`) derivation - tier 3, declared
+## 1. The page-key (`w`) derivation - coverage solved offline, picker tier 3
 
 **Question.** The on-disk `.text` is XORed with a 4 KB window drawn from a
 static 16 KiB cycle. The window's start (`w`) is a build-time uniform draw.
@@ -26,40 +25,53 @@ Where is `w` computed?
 
 **What is known.** The XOR transform is exact (2,285 current-build oracle rows
 verify). The applier is `0x14380e0` (loop `0x144c839`, caller `0x1015a94`),
-live-verified in `cpu_20261021_124450.etl`. The picker is inside the Denuvo VM
-(`0x2511e0` dispatcher): the selector chain `0x1ce59b0 -> 0x3fa280 ->
+live-verified in `cpu_20261021_124450.etl`. The picker is inside the loader's
+own obfuscated VM/dispatcher, not Denuvo (`0x2511e0` dispatcher): the selector
+chain `0x1ce59b0 -> 0x3fa280 ->
 0x1494090` hashes the page VA and takes `hash % count` over a 1,439-entry table
 of type-A page records. No stored or hashed `w` table was found in the disk
 loader, the live loader, the live main module, the private ghost loader copy
 or the full heap dump.
 
-**What would settle it.** A new live capture that is *fault-synchronous*: the
-faulting rip and the first handler, in the same session as the `w` value. The
-ETL path is tested; the fault path is not.
+**Coverage result (2026-10-23).** `dev/offline_page_recover.py` recovered
+**12,076/12,076 `.text` pages** and the `.pdata` table from the on-disk
+ciphertext using the pad and ciphertext-only scoring. Held-out oracle
+2,284/2,284; warm images 4,887/4,888 and 5,350/5,351. One page keeps a
+declared 16-byte tail (`0x540000`). Image:
+`D:/ow-dumps/offline_recover/module_offline.bin` (preferred base
+`0x140000000`), imported as the Ghidra program `Overwatch.exe` and analysed
+to 151,260 functions; report: `D:/ow-dumps/offline_recover/REPORT.md`. Read a
+v2b address there as `0x140000000 + (v2b - 0x7ff7c4d20000)`.
 
-**Next anchor.** `docs/formats/page-crypt.md` (the runbook, steps 0-5).
+**What would settle the picker.** Static reverse/emulation of the loader VM
+at `0x2511e0`/`0x40bee0..0x411536`; a fault-synchronous capture is no longer
+needed for coverage, only for naming the derivation.
 
-**Command.**
-`python dev/live_page_diff.py --seconds 90 --out D:/ow-dumps/live_page_diff --all-modules --surge-seconds 90 --include-data --focus-file D:/ow-dumps/live_page_diff/run_20261021_033126/gaps.focus`
-then `python dev/faultsync_correlate.py <run>/events.csv` (must print
-`ATTRIBUTABLE-CANDIDATE`).
+**Command.** `python dev/offline_page_recover.py --stage all`
 
-**Impact.** A new build needs a fresh oracle while this is open.
+**Impact.** A new build re-extracts the pad and reruns the blind solver; no
+fresh oracle is required. The picker stays tier 3 until the VM is read.
 
 ---
 
-## 2. The first-person camera consumer
+## 2. The first-person camera consumer and the per-frame camera tick
 
 **Question.** `STUFirstPersonComponent` is read: the per-hero values
 (`64/16/-1` then `50/1.25/0.875/0.8`), the schema (`0x70`, 7 fields), the
 `m_position` offset, and the consumer path (`FpViewmodelConsumer`, RVA
 `0xd2f060` -> bind `0xd2faa0`). The bind stores the references but never reads
-`m_position` or the four scalars. Where are they applied per frame?
+`m_position` or the four scalars. Where are they applied per frame? The
+**camera interpolation tick** is also unlocated: the five
+`*InterpolationSpeedInverse` vars and the four `*Speed` rates have no direct
+reader outside their registration stubs. The camera code pages are warm, so
+the reader is reached indirectly or through a copied settings block; this is
+not a cold-code gap.
 
 **What would settle it.** A read of the type-`0x35` system's per-frame path
 (the vtable slots `+0xe0` / `+0xe8` are an animation event player, not the
 camera). The consumer is a system keyed by type `0x35`/entity offset, still
-unread.
+unread. For the tick, a capture with the registry-reader pages warm, or a live
+read trace of the static var objects listed in `formats/camera.md`.
 
 **In the current build (2.25.0.1) the path is located and named:** the
 consumer is v2b `0x7ff7c5a4f060`, the bind `0x7ff7c5a4faa0`, the two
@@ -70,12 +82,62 @@ per-frame slot A walks the six 0x110-stride animation slots and runs the
 event player on each, which is what the doc says; the camera consumer is
 still the open part.
 
-**Next anchor.** `docs/formats/animation.md` (the first-person section) and
+**The FP camera itself is a separate path (read 2026-10-23).** The setup is
+v2b `0x7ff7c568c5b0` (RVA `0x96c5b0`), readable but not a defined Ghidra
+function. It sets a **60.0 deg initial plane angle** (`0x7ff7c8582b0c`), the
+FP near/far pair, an animation-blended FOV and the camera pose. The pose comes
+from `UpdateFirstPersonCameraPose` (`0x7ff7c56b7b90`), which fills the FP
+camera FOV from `FUN_7ff7c5700f50(0)` (a full angle clamped to `[0.05, 3.0]`
+rad). That function calls `GetHorizontalFov` (`0x7ff7c6850fc0`) through the
+aspect-correction helper `FUN_7ff7c684b940`, then converts the 103-deg
+horizontal setting with `tan`/`atan` and the 9/16 factor: **70.53 deg
+vertical** at 16:9. The `50` scalar is **not** the FP FOV, and the `60.0` is a
+fallback. The FP FOV is therefore the same as the world FOV; only the camera
+pose/drop/back remains fitted (`--fp-cam-drop`, `--fp-cam-back`).
+
+**Next anchor.** `docs/formats/camera.md` (first-person section),
+`docs/formats/animation.md` (the first-person section) and
 `docs/formats/input-camera-audio.md`.
 
 **Impact.** The FP camera framing stays fitted (`--fp-cam-drop`,
 `--fp-cam-back`); the eye height and FOV in the ledger are read values but
-their application is not.
+their application is not. The interpolation behind `--cam-look-inverse`
+stays fitted.
+
+---
+
+## 2b. View-model animation exactness (2026-10-23 check)
+
+**Question.** The viewer plays the authored idle tree, but is it the client's
+exact pose? The check against `module_v21_clean.bin` says no. Proven gaps:
+
+- **Reference retarget.** The client registers `anim.EnableProxyRetarget` /
+  `anim.EnableFinalRetarget`; the card P lane is a reference-skeleton local and
+  is mapped to the model by the final stage. The viewer applies it directly,
+  stretching shoulders by 2.395x.
+- **Sampler channels.** `AnimSamplerRule` (`0x7ff7c6e84610`) copies child 0
+  unconditionally and replaces each present rotation/translation/scale lane
+  independently at `w > 0.5`; scalars lerp; absent lanes keep the previous
+  value. The viewer now does this for one-link layer bones; dropped-ancestor
+  chains fall back to the composed pair and scalar lanes are not decoded.
+- **FP camera.** `UpdateFirstPersonCameraPose` uses the animated FP pose
+  (`+0x1350/+0x1310/+0x1320`); the viewer uses the player eye/yaw/pitch plus a
+  fitted drop/back. The pose's target writer is unread.
+- **Weapons.** The pistols are on FP hardpoints/bones 44/74 with the folded
+  chain; the viewer now defaults to that FP source (`--weapon-fold 1` keeps
+  the old character-c71 A/B).
+- **Spring.** The per-frame spring is on `+0x1350` toward `+0x1370` with
+  `0.235/0.48`, k ramp `600.0/s`, settle threshold `0.004 m`; the viewer's
+  64/16/-1 form has no reader and the target writer is unread.
+- **Events.** The six `0x110` slots are event/state timelines; the viewer has
+  no animation events, but they do not write pose.
+
+**What would settle it.** Read the reference-retarget body, the FP camera/spring
+target writer and the Pose2d dataflow VM. The per-channel sampler fix and the
+FP weapon source are applied.
+
+**Next anchor.** `docs/formats/animation.md` (2026-10-23 exactness check) and
+`docs/fitted-ledger.md` FIT-ANI-04/05/08, FIT-CAM-01.
 
 ---
 
@@ -117,14 +179,27 @@ on-disk shape is not what runs) or a key for the blocked assets.
 
 ---
 
-## 6. The world camera near/far
+## 6. The per-frame camera look application
 
-**Question.** The first-person pair is read (`0.01 / 1638.4 m`); the world
-pass still uses the viewer's `0.01 / 8000` stand-in.
+**Question.** The input tick writes look deltas to entity `+0x1294`/`+0x1298`;
+the camera basis at `+0x1310`/`+0x1320` is written by `FUN_7ff7c54a9720` from a
+quaternion. The function that turns the look deltas into that quaternion is
+not located, even though the look code pages are warm. The FOV, near/far and
+projection are settled: 103 horizontal -> **70.53 vertical** at 16:9,
+`0.1/16384` and `0.01/1638.4`, with the x double negative cancelled.
 
-**What would settle it.** A read of the world camera's projection setup.
+**What is known.** The input tick page `0x7ff7c5301000` is 3733/4096 nonzero.
+The five interpolation-inverse vars and four speed rates have no direct reader
+outside registration, so the consumer is reached indirectly or through a
+copied settings block. The camera component carries read pitch limits of
+**-89/+89 deg** at `+0x94`/`+0x98`, but no consumer is located.
 
-**Next anchor.** `docs/formats/input-camera-audio.md`.
+**What would settle it.** Trace the warm indirect dispatch / animation-event
+path from the input tick to the camera basis, or a live trace of the look
+accumulators and the camera basis.
+
+**Next anchor.** `docs/formats/camera.md` (input to camera) and
+`docs/formats/input-camera-audio.md`.
 
 ---
 
@@ -175,6 +250,32 @@ not decoded.
 
 **Next anchor.** `docs/systems-coverage.md` (rows 9-10) and the statescript
 docs.
+
+---
+
+## 12. The two standing 2.25.0.0 images disagree
+
+**Question.** `module_v2full.bin` (the docs' Ghidra basis) and
+`module_after_diff_v2.bin` (the 17-run warm merge, which carries the only
+readable `.pdata`) are both declared 2.25.0.0, yet a page census over their
+10,582 shared nonzero pages (2026-10-21) reads **5,961 equal and 4,621
+different** - at least one merge placed captured pages wrongly, or the two
+capture sets decode pages differently. The docs' v2b addresses answer to
+`module_v2full.bin` only (verified: the dmWorld::Create prologue the deliverable
+describes sits at `0x7ff7c7a4cd70` in v2full and not where after_diff holds
+bytes), so byte matching for the docs frame now reads from `module_v2full.bin`
+(`dev/naming_seed.py`), and numbers derived from
+`module_after_diff_v2.bin`-besides the ones already decompiled-verified - are
+suspect until explained.
+
+**What would settle it.** Rebuild both images from the same runs with
+provenance per page attached, or diff run-by-run to find which side carries
+foreign bytes.
+
+**Next anchor.** The merge scripts behind `module_after_diff_v2.bin` and
+`module_v2full.bin` in `D:/ow-dumps`; `dev/live_page_diff.py` /
+`dev/warm_poll.py --all-regions` output files list which run produced each
+page.
 
 ---
 

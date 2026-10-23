@@ -26,11 +26,12 @@ but their *addresses* are the old build's.
 
 What this means in practice:
 
-- **Read code in the build the capture belongs to.** The project now holds
-  both: `module_v21_clean.bin` (2.25.0.1, the current build) and
-  `module_v2full.bin` (2.25.0.0, the basis of the docs' addresses). The
-  current build's image is now `D:/ow-dumps/module_v21c.bin` (five runs of
-  2.25.0.1; 23.5% of `.text` still cold).
+- **Read code in the build the capture belongs to.** The project holds both:
+  `Overwatch.exe` (2.25.0.1, the **complete** image - all `.text` recovered
+  offline) and `module_v21_clean.bin` (the same build's v2b frame and named
+  functions); `module_v2full.bin` is 2.25.0.0, the basis of the docs'
+  addresses. The earlier live merge `D:/ow-dumps/module_v21c.bin` (five runs of
+  2.25.0.1, 23.5% cold) is superseded.
 - **A fresh client is worth more than a long session.** A capture that
   attaches to a just-started process catches the startup storm: one such run
   rescued 9,091 pages from ciphertext, where a run on an already-warm client
@@ -45,6 +46,20 @@ What this means in practice:
   matches one build's pages and functions against the next; the function
   level match needs the old build's function list (the 2.25.0.0 captures
   have **no** `.pdata`, so the extents come from the analysis).
+- **Naming crosses the builds now (2026-10-22; camera added 2026-10-23).**
+  `docs/function-names.csv` carries **174 settled names** (175 lines,
+  2026-10-23); the camera rows cover the near/far and FOV getters/registration,
+  the plane setter, the mouse-look deltas, the FP clip planes and offset
+  transform, the input poll and force-input mode, the replay proto merge, the
+  view-params constructor, and the view/projection and FP-pose builders.
+  `dev/naming_seed.py` seeds rows from the docs'
+  decompiled-path findings and byte-matches the v2full frame into
+  `module_v21_clean.bin`, confirming every hit at a real Ghidra function begin
+  before it writes. 88 candidates were refused honestly (not matched,
+  ambiguous needles, cold windows). The two standing 2.25.0.0 images disagree
+  on **4,621 of 10,582** shared nonzero pages, so docs-frame matching reads
+  from `module_v2full.bin` only - `docs/open-questions.md` question 12 tracks
+  the cause.
 
 ## Where we are
 
@@ -61,11 +76,25 @@ What this means in practice:
 - Merged images (outside the repo): `D:/ow-dumps/module_after_diff.bin` (v2b
   base `0x7ff7c4d20000`) and `loader_after_diff.bin`; the current-build
   plaintext loader is `D:/ow-dumps/loader_disk_rva.bin`.
-- The Ghidra project is `dev/ghidra_run/owmod` (on the SSD, git-ignored, 10
-  programs after the 2026-10-21 cleanup); `docs/ghidra-project.md` says which
-  program answers what.
+- The Ghidra project is `dev/ghidra_run/owmod` (on the SSD, git-ignored, 13
+  programs); `docs/ghidra-project.md` says which program answers what.
+- On 2026-10-23 `module_v21_clean.bin` was filled in place: **488 `.text`**
+  and **13 `.data`** pages from `module_v21d.bin`; **372 `.rdata`**, **16
+  `.data`** and **4 `.pdata`** from the on-disk executable (same build,
+  `.reloc`-rebased pointers); 6 live pages kept. Function count **92,728**;
+  **2,351 `.text` pages remained zero**. Full image/manifest:
+  `D:/ow-dumps/module_v21_clean_full.bin` and
+  `module_v21_clean_full.manifest.txt`.
+- **The complete image is imported.** The Plan A PE
+  (`D:/ow-dumps/offline_recover/module_offline.bin`, preferred base
+  `0x140000000`, all 12,076 `.text` pages, 201,246 `.pdata` entries) is the
+  Ghidra program `Overwatch.exe`, auto-analysed to **151,260 functions**. Read
+  a v2b address there as `0x140000000 + (v2b - 0x7ff7c4d20000)`; this closes
+  the 2,351-page gap. The names remain applied to `module_v21_clean.bin`.
 - The view model, FP camera and animation retarget are the active area.
-  Movement, combat, scene and most data systems are usable.
+  Movement, combat, scene and most data systems are usable. The camera's
+  per-frame look consumer is still unlocated even though its code pages are
+  warm; `docs/formats/camera.md` records the read surface and the boundary.
 
 ## What works
 
@@ -78,12 +107,25 @@ What this means in practice:
   hitscan. Damage is supplied; damage order/armour mitigation are assumed.
 - **Scene/view:** real map geometry, hero models, skeletons, skinning, texture
   decoding; `ow-view` and the `--play` harness.
-- **Camera:** client `HorizontalFOV` 103 deg, first-person near/far
-  `0.01/1638.4 m`, separate first-person pass, zero-rest drag spring
-  (`64/16/-1`), opt-in look filter (`--cam-look-inverse 0.1`).
+- **Camera:** world near/far `0.1/16384 m`; world/FP FOV **103 deg horizontal
+  -> 70.53 deg vertical at 16:9** (`GetHorizontalFov` -> `FUN_7ff7c5700f50`,
+  tan/atan with the 9/16 factor; the camera component's 70.0 is the rounded
+  fallback). First-person near/far `0.01/1638.4 m`, separate first-person
+  pass, zero-rest drag spring (`64/16/-1`), opt-in look filter
+  (`--cam-look-inverse 0.1`). The mouse `K` is read from the on-disk
+  executable's `.rdata` (`0.011519`). The camera var surface/registration,
+  the FP setup (60 deg fallback, FP clip planes, animation FOV blend), the
+  input->command-frame path and the view/projection builders are read. The
+  per-frame look application and the shake math are open. Details:
+  `docs/formats/camera.md`.
 - **View model:** camera-relative placement, animation feed (single clip or
-  `--anim auto` with the blend tree), weapon hooks at bind orientation,
-  dual-pistol hardpoints.
+  `--anim auto` with the blend tree), FP hardpoint attachment on bones 44/74
+  (the old character-c71 source is `--weapon-fold 1`), dual-pistol hardpoints.
+  The per-channel layer sampler now matches for ordinary bones. The 2026-10-23
+  Ghidra check still finds **no exact client pose**: the reference retarget,
+  animated FP camera pose and the `+0x1350` spring target are unread, and the
+  clipped `2.395x` shoulder reference still differs. Details:
+  `docs/formats/animation.md`.
 - **Animation format:** clip header and packed-u16 rotation/position/scale
   tracks, the general family-agnostic row reader, the FP blend-tree item/tree
   decode and evaluation.
@@ -93,7 +135,18 @@ What this means in practice:
 - **Page-decrypt data:** the 16 KiB cycle, window/draw model and oracle are
   fully characterised.
 
-## The page-decrypt hunt (the top open problem)
+## The page-decrypt hunt (coverage solved offline)
+
+**Coverage is solved without a capture (2026-10-23).**
+`dev/offline_page_recover.py` recovered all **12,076** `.text` pages and the
+`.pdata` table from the installed `Overwatch.exe` using the known pad and
+ciphertext-only scoring. The held-out oracle is 2,284/2,284; the warm images
+match 4,887/4,888 and 5,350/5,351 readable pages. One page keeps a declared
+16-byte tail (`0x540000`). The full image is
+`D:/ow-dumps/offline_recover/module_offline.bin` (preferred base
+`0x140000000`); `REPORT.md` has the validation. It is imported as the Ghidra
+program `Overwatch.exe` (151,260 functions, every `.text` page initialized).
+The `w` **picker** is still unread, but it is no longer needed for coverage.
 
 **The data half is solved.** Each on-disk `.text` page is XORed with a 4 KB
 window drawn uniformly from one static 16 KiB cycle in the loader's `.rdata`
@@ -153,11 +206,13 @@ selector chain is VM-wrapped: `0x1ce59b0` -> `0x3fa280` -> `0x1494090` ->
 page loop `0x144c839` is reached from the same caller, so `w` crosses from VM
 state into the native descriptor.
 
-**Tier 3 boundary.** The `w` **derivation** is inside the Denuvo VM
-(`0x2511e0` dispatcher, 22 KB `0x40bee0..0x411536`; `0x40cd87` is a
-mid-function handler). The XOR transform is exact and the `w` table is read
-for the current build, but the picker is not recovered. A new build needs a
-fresh oracle; this is declared, not fitted.
+**Tier 3 boundary.** The `w` **derivation** is inside the loader's own
+obfuscated VM/dispatcher (`0x2511e0` dispatcher, 22 KB
+`0x40bee0..0x411536`; `0x40cd87` is a mid-function handler). The earlier
+"Denuvo VM" label was wrong; it is the loader's own code. The XOR transform
+is exact and the blind solver recovers this build's pages without the oracle;
+the picker itself is not recovered. A new build needs a fresh pad extraction
+and a rerun of the blind solver; no live oracle is required.
 
 **Live evidence.** The newest phase-marked run
 `D:/ow-dumps/live_page_diff/run_20261021_105102` (pid 4100, 90 s, 1,597 flips;
@@ -225,20 +280,23 @@ Yes, with one exception, and it is measured rather than assumed
   result is `D:/ow-dumps/module_after_diff_v2.bin`.
 - The two capture gaps the docs recorded (the mover component's four methods,
   the volley class's region) are **closed**.
-- **One thing needs a new capture:** the page cipher's `w`, which wants
-  runtime state (the faulting rip), not code.
-- **One thing is worth fixing here:** the Ghidra project still holds the
-  12 October image (38% cold pages), so every decompile sees less of the
-  client than the captures hold. Refreshing it to the re-merged image is a
-  single import plus a re-analysis.
+- **No capture is needed for page coverage any more:** Plan A recovered all
+  `.text`/`.pdata` offline; the picker itself remains a VM-reversing target,
+  not a blocker.
+- **The Ghidra step is done:** the offline image is the program `Overwatch.exe`
+  (preferred base `0x140000000`), auto-analysed; the 2,351 pages that were cold
+  in `module_v21_clean.bin` now read as code. `docs/ghidra-project.md` has the
+  address rule.
 
 ## Open problems
 
 The queue with the full detail is **`docs/open-questions.md`**. In order:
 
-1. **Page-decrypt applier.** Live-verified as `0x14380e0` (loop `0x144c839`,
-   caller `0x1015a94`); the faulting rip/first handler and the `w` derivation
-   remain open, and the derivation is declared tier 3 (Denuvo VM).
+1. **Page-decrypt picker.** Coverage is solved offline by
+   `dev/offline_page_recover.py`; the applier is live-verified as `0x14380e0`
+   (loop `0x144c839`, caller `0x1015a94`). The faulting rip/first handler and
+   the `w` derivation remain unread, but they no longer block reading the
+   executable (tier 3 VM/dispatcher; not Denuvo).
 2. **FP pose / reference-skeleton retarget.** `retarget_probe 3` settles the
    bind question: character rig **200**, FP rig **79**, **64 common ids**,
    and the binds are **identical** (worst translation delta 0.0059 m at vm
@@ -260,14 +318,20 @@ The queue with the full detail is **`docs/open-questions.md`**. In order:
    slots `+0xe0` (`0xd31bf0`) and `+0xe8` (`0xd322f0`) are the per-frame
    updates and walk six `0x110`-stride animation slots (`FUN_00d29c60` /
    `FUN_00d3a020`) - an animation event/state player, not the pose or camera.
-   The FP camera/FOV consumer is still unread. `retarget_probe` c71 worlds:
+   The FP camera pose/FOV path is now read: `UpdateFirstPersonCameraPose`
+   (`0x7ff7c56b7b90`) builds the pose from the FP animation basis/position, and
+   `ApplyFirstPersonCamera` (`0x7ff7c568c5b0`) applies it. The type-0x35
+   consumer for `m_position`/the scalars is still unread, and which scalar
+   feeds the pose FOV (`FUN_7ff7c5700f50`) is unread. `retarget_probe` c71 worlds:
    hands 14 `(0.155,1.367,0.091)`, 55 `(-0.210,1.364,0.092)`; weapons 44
    `(0.113,1.441,0.348)` fwd `+x`, 74 `(-0.143,1.506,0.350)` fwd `-x`; the bind
    hardpoints are `+/-0.44,0.93`. At eye `1.75` / FOV `29.4` the grips are
    outside the view (only tips); the component's `1.25` eye height with FOV
    `50` brings hands and guns in. Test `--fp-eye 1.25 --fp-fov 50`.
-5. **World camera near/far.** Not read; the world pass still uses the viewer's
-   `0.01/8000` stand-in.
+5. **World camera near/far and FOV.** Read and in use: `0.1/16384 m` and
+   103 deg horizontal -> 70.53 deg vertical at 16:9 (`FIT-CAM-04` removed).
+   The same FOV is used by the FP pose. The projection builder is read; its
+   view-row and projection x signs cancel (`docs/formats/camera.md`).
 6. **Encrypted pages.** `encrypted.csv` lists pages never read as plain; a
    targeted second run with `--focus-file gaps.focus` still recovers
    stragglers.
@@ -281,8 +345,8 @@ Read values cite their capture and address in `docs/formats/`. Fitted,
 assumed, tier-3 and stand-in behaviour is listed in `docs/fitted-ledger.md`,
 each with an id that also stands next to the code. Current entries include the
 drag-spring form, the FP camera drop/back, the weapon-hook skip, the
-single-clip playback heuristic, eye height, world near/far, the sandbox
-collision, damage rules and combat defaults. Do not move one of these into
+single-clip playback heuristic, eye height, the pitch clamp, the mouse scale,
+the sandbox collision, damage rules and combat defaults. Do not move one of these into
 "read" without an address or a capture that settles it.
 
 ## Key files

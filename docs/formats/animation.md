@@ -319,8 +319,9 @@ Read values:
   `+/-0.44, 0.93`; c71 brings both weapons toward the centre and points them
   outward. At eye `1.75` / FOV `29.4` the grips are outside the view (only the
   tips); the component's `1.25` eye height with FOV `50` brings hands and guns
-  into view. The viewer uses the **bind** weapon bones; the character c71
-  weapon pose is the correct source for the guns.
+  into view. The client attaches at the FP skeleton's 44/74; the viewer now
+  defaults to that source, with `--weapon-fold 1` keeping the character-c71
+  A/B path.
 
 ### Runtime FP component objects (2026-10-21)
 
@@ -407,15 +408,42 @@ priority. No bone transform is written here. The view-model **pose** remains
 the clip/blend/retarget path, and the FP camera/FOV consumer is still unread.
 Implementing these six slots would add animation events, not move the arms.
 
-The viewer now poses the two **weapon instances** from the character `c71`
-rig at 44/74 (character skin + `BlendPose` c71), then applies the hardpoint
-local and camera; the FP arms keep the selected animation. This is the read
-idle path, not the old bind/FP parent path that crossed the pistols.
+The viewer now poses the two **weapon instances** from the selected **FP
+skeleton's 44/74** and applies the hardpoint local and camera, matching the
+client's attachment. `--weapon-fold 1` keeps the old character-`c71` source
+for A/B. The card-local retarget is still missing (FIT-ANI-08).
+
+## 2026-10-23 exactness check (Ghidra)
+
+The `--play` view-model animation is **not exact**. Read against
+`module_v21_clean.bin` (the filled image; base `0x7ff7c4d20000`); the same
+code is complete in `Overwatch.exe` (base `0x140000000`, address =
+`0x140000000 + (v2b - 0x7ff7c4d20000)`):
+
+| stage | client (read) | viewer |
+|---|---|---|
+| per-child sampler | `AnimSamplerRule` v2b `0x7ff7c6e84610`: child 0 is copied **unconditionally**; for each later child, rotation/translation/scale lanes are replaced only when that child's weight is `> 0.5`, never lerped; four scalars are lerped at any weight; an absent lane keeps the previous value | fixed for one-link layer bones: `anim_tree.rs` now replaces rotation and translation independently; dropped-ancestor chains still fall back to the composed pair; scalar lanes are not decoded |
+| reference skeleton | `anim.EnableProxyRetarget` / `anim.EnableFinalRetarget` are registered with descriptions "proxy pose re-target between (inherited) blend trees with different reference skeletons" / "final pose re-target between reference skeleton and model skeleton" | no reference stage; the clip P lane is applied directly as the FP model local |
+| Pose2d driver | dataflow VM writes branch category, x/y and the LayerChild weight | fixed `x=y=0`, layer weight 0 (file default); `--tree-*` are experiments |
+| time wrap | `FUN_7ff7c58b1ef0`: sign-preserving `fmod` by the clip period if loop bit 0 is set, otherwise clamp to `[min, period]` | always wraps `(seconds*fps).rem_euclid(frames)+1` |
+| view-model update slots | six `0x110` slots at `+0x60` are **event/state timelines**; `FpViewmodelUpdateA/B` advance event timers and dispatch masks, no clock and no bone write | no animation events/timelines |
+| weapons | hardpoints `0x0dc:0a/0b` hang off the **FP skeleton's** weapon bones 44/74; pose is `FP bone world * hardpoint local` using the selected FP skeleton/retarget; character → FP chain is `284*44` / `285*74` | default now uses the selected FP skeleton's 44/74; `--weapon-fold 1` keeps the old character-c71 source for A/B; the reference retarget is still missing |
+| FP camera | `UpdateFirstPersonCameraPose` (`0x7ff7c56b7b90`) takes position `anim+0x1350`, forward `+0x1310`, up `+0x1320`, FOV 70.53° and applies that to the camera | world eye + yaw/pitch + fitted `--fp-cam-drop 0.35` / `--fp-cam-back 0.30` |
+| drag spring | `FUN_7ff7c53ab620` on anim `+0x1350` toward `+0x1370`: coefficients `0.235` / `0.48`, k ramp `600.0/s`, settle threshold `0.004 m` | `vm_spring_step` 64 / 16 / -1 (the component spring has **no reader** in the image; the target writer is still unread) |
+| component fields | `m_position` (0.1375, 0.23375, 0.20625), `50`, `1.25`, `0.875`, `0.8` have **no readable consumer** (the type-0x35 consumer only reads the view-model entity/model refs) | not applied; `50` was correctly rejected as the FP FOV |
+
+What **does** match: the `0.5` gate constant (`0x7ff7c7ca0ff8`), strict
+`>` replacement, item 3 / category 5 -> c71 at the authored defaults, the
+id join for the 64 common bones, the FP hardpoint attachment points, the
+103°→70.53° FOV and the FP clip planes; the per-channel sampler now matches
+for ordinary one-link layer bones, and the weapon source now defaults to the
+FP skeleton.
 
 ## What works
 
 - `--anim auto` plays the FP idle through the blend tree; default category 5
-  selects c71.
+  selects c71. The tree is the authored idle, but the reference retarget,
+  camera pose, weapon source and sampler channel rules above are not exact.
 - `--anim <guid>` plays a single clip for every family the row readers handle;
   the walk/trio/zone and slot families are playable.
 - `--play-th` prints the tree summary and per-clip pairing/movement counts for
@@ -427,29 +455,37 @@ idle path, not the old bind/FP parent path that crossed the pistols.
 
 ## Open problems
 
-1. FP retarget: `retarget_probe 3` settles the bind question — character
-   **200** bones, FP **79**, **64 common ids**, binds **identical** (worst
-   delta 0.0059 m at vm bone 25); shoulder 13/54 and hand 44/74 are
-   bind-identical. Weapon 44/74 differ locally only by parent (char 284/285 vs
-   vm 28/58) and the fold matches. No per-bone rest matrix is needed for the
-   shared bones; the earlier "direct clip-local is wrong by construction" is
-   retracted for them.
-2. Renderer-side FP camera transform. The fitted drop/back (0.35/0.30) moves
-   the FP camera away from the `c71` weapon world `(0.11, 1.44, 0.35)`, which
-   is **0.31 m below the eye**; that is the likely "far" cause. Test
-   `--fp-cam-drop 0 --fp-cam-back 0` with `--fp-fov 29.4` (50 horizontal)
-   before more fits.
-3. Pose2d dataflow VM (x/y inputs, category selection, per-tick weights).
-4. Cold evaluator kinds; needs a capture with those pages resident.
-5. Walk item's 8 not-installed clips; tier-3 play-slot names.
-6. World-pass near/far (still the viewer's `0.01/8000`).
+1. **Reference-skeleton retarget.** The client registers
+   `anim.EnableProxyRetarget` and `anim.EnableFinalRetarget`; the card P lane
+   is the reference local, and the final stage maps reference -> model. The
+   viewer applies it directly, which stretches the shoulders by the source
+   rig's `2.395x` grip width. The retarget body is not in the readable pages;
+   do not invent a per-bone rest matrix.
+2. **FP camera pose setter.** The camera is the animated FP entity pose
+   (`anim+0x1350`, `+0x1310`, `+0x1320`); the viewer's `eye`/`yaw`/`pitch`
+   plus drop/back is a fit. The model entity's transform setter is still
+   unresolved. `camera.FirstPersonAnimationWeight` is camera-only.
+3. **Pose2d dataflow VM** (x/y inputs, category selection, per-tick weights).
+4. **Per-channel sampler.** The client rule is read; the viewer's
+   `TreeAnim::evaluate` must represent rotation/translation/scale separately
+   (and child 0's unconditional copy) before layer experiments are meaningful.
+5. **Weapon source.** The client uses the FP skeleton's 44/74 with the
+   hardpoint local; the viewer uses the character c71 rig. Use the selected
+   FP pose once the retarget is read.
+6. **View-model event timelines.** The six `0x110` slots are event/state
+   timelines; the viewer has no events. They do not write bone transforms, so
+   this is state/effect fidelity, not the arm pose.
+7. Cold evaluator kinds; needs a capture with those pages resident.
+8. Walk item's 8 not-installed clips; tier-3 play-slot names.
 
 ## Evidence boundary
 
-Fitted entries in this area are listed in `docs/fitted-ledger.md`: the
-drag-spring form, the FP camera drop/back framing, whole-rig FP pitch, the
-depth clear between passes, and the world-pass near/far stand-in. Addresses in
-this file name their capture or build; do not promote a fit without one.
+Fitted entries in this area are listed in `docs/fitted-ledger.md`: the omitted
+reference-skeleton retarget, the FP camera drop/back framing, whole-rig FP
+pitch, the character-c71 weapon source, the per-channel sampler/driver math,
+and the depth clear between passes. The component's 64/16/-1 spring is **not**
+the client's `+0x1350` spring; the latter is read. Addresses in this file name
+their capture or build; do not promote a fit without one.
 
 ## Commands
 

@@ -7,11 +7,12 @@ section and per function range), and the runs' own `warm.csv` /
 
 **The short answer:** yes, for the systems that are open. Every code address
 the project still needs is warm in the standing image - 41 of 41 checked,
-across animation, camera, movement, combat and physics. What was missing was
-not a capture but a **re-merge**: the standing image was three days stale, and
-re-merging the runs we already have takes the client's unread `.text` from
-**21% to 11%**. The one thing that genuinely needs a new capture is the page
-cipher's fault-synchronous run.
+across animation, camera, movement, combat and physics. Page coverage is now
+**complete offline and in Ghidra**: Plan A recovered all 12,076 `.text` pages
+and the `.pdata` table from the installed executable without a live capture
+(one declared 16-byte tail), and the project holds that image as the
+`Overwatch.exe` program (151,260 functions). The page cipher's picker remains
+a reversing target, not a capture requirement.
 
 ## What we have
 
@@ -22,10 +23,11 @@ cipher's fault-synchronous run.
 | `D:/ow-dumps/module_after_diff.bin` | the **standing image** the docs are written against (v2b base `0x7ff7c4d20000`, 20 October) - build **2.25.0.0** |
 | `D:/ow-dumps/module_v21c.bin` | the current build's image (build **2.25.0.1**), merged from every 21-22 October run of that build: **23.5%** of `.text` is still cold |
 | `D:/ow-dumps/module_v2full.bin` | the 12 October image, build **2.25.0.0** - the basis of the docs' addresses |
+| `D:/ow-dumps/offline_recover/module_offline.bin` | the **complete current-build code image**: all 12,076 `.text` pages and the `.pdata` table recovered offline, preferred base `0x140000000` (build **2.25.0.1**) |
 | `D:/ow-dumps/loader_after_diff.bin` | the loader with its decrypted pages (flat; a file offset is an RVA) |
 | `D:/ow-dumps/ow_heap_full.dmp` | the 13.5 GB full heap dump (21 October) |
 | `D:/ow-dumps/dev_ghidra_run`-derived images | the region wraps and the merged images |
-| the Ghidra project `dev/ghidra_run/owmod` | 11 programs: the analysed module, the standing capture's mapped and heap images, the live image, the camera region, the loader, the loader's XOR regions, three region wraps |
+| the Ghidra project `dev/ghidra_run/owmod` | 13 programs: the complete `Overwatch.exe` image, the analysed module, the standing capture's mapped and heap images, the live image, the camera region, the loader, the loader's XOR regions, three region wraps |
 
 ## The build changed: the captures are not all the same build
 
@@ -85,15 +87,17 @@ current build for exactly that.
 | `.data` | 462 cold | 428 cold |
 | `.pdata` | 298 cold (50%) | **0 cold** |
 
-The `.pdata` result matters: the function table of the *whole* client is now
-readable, so every function's extent is known - the "the disk `.pdata` is
-encrypted" problem is solved by the capture we already had.
+The `.pdata` result matters: the function table of the *whole* client is
+readable, so every function's extent is known. Plan A later showed the
+**main executable's disk `.pdata` is plaintext** (201,246 sorted entries);
+the earlier "disk `.pdata` is encrypted" note was the loader's table, not the
+main module.
 
 The pages that stay cold after the re-merge were never seen as code by any
 run: they are pages of uniform filler (readable memory, not code) and
 regions of `.text` that never became resident in any captured session. A
-re-merge cannot recover them, and neither can more of the same kind of
-session.
+re-merge cannot recover them; **Plan A's offline solver can**, and did for all
+12,076 `.text` pages.
 
 ## The systems, one by one
 
@@ -174,27 +178,29 @@ code on disk. The *code* it decrypts to is the same build, so:
 
 This is the one part of the project the client update did **not** disturb.
 
-## The one thing that needs a new capture
+## The capture question (coverage resolved offline)
 
-**The page cipher's `w` derivation.** The code is available (the loader's
-warm image and the four XOR regions in the wrap are readable), and the
-*derivation* is inside the Denuvo VM. What is missing is not code but
-**runtime state**: the faulting rip and the first handler, in the same session
-as the `w` value. That needs a fault-synchronous capture, which is the
-operator's run (`docs/formats/page-crypt.md`, the runbook).
+**The page cipher's `w` derivation is no longer a coverage blocker.**
+`dev/offline_page_recover.py` recovered all 12,076 `.text` pages and the
+`.pdata` table from the installed `Overwatch.exe` without any live capture:
+2,284/2,284 held-out oracle pages and 4,887/4,888 + 5,350/5,351 warm pages
+match; one page keeps a declared 16-byte tail. The picker itself is still
+unread inside the loader's own obfuscated VM/dispatcher (not Denuvo), but it
+is a reversing target, not something the coverage needs. A new build needs
+the pad re-extracted and the blind solver rerun; no fault-synchronous capture
+is required (`docs/formats/page-crypt.md`, Offline recovery).
 
-Everything else on the list is either warm or is a *live measurement* (a
-trace of the client doing the thing), which is also the operator's run.
+## Ghidra coverage is complete (2026-10-23)
 
-## The one thing worth fixing on this machine
-
-**The Ghidra project holds a 12 October image** (`module_v2full.bin`, 38.2%
-cold pages) while the re-merged standing image has 9.8% cold. Every
-decompile the operator does is therefore against an image that is missing
-**38%** of the client's code, where the captures we already have would show
-**10%**. Refreshing the project's image to `module_after_diff_v2.bin` is a
-single import plus a re-analysis; the function names come back with one
-command (`python dev/gh_apply_names.py`).
+**The Ghidra project now holds the complete image.** The Plan A image is
+imported as the program `Overwatch.exe`: preferred base `0x140000000`, all
+12,076 `.text` pages, 201,246 `.pdata` entries and **151,260 functions** after
+auto-analysis. The 2,351 pages that were zero in `module_v21_clean.bin` read
+as code there; RVA `0x1000` is zero in the old program and a real `.pdata`
+function in the new one. Read a doc's v2b address as
+`0x140000000 + (v2b - 0x7ff7c4d20000)`. Names are still applied to
+`module_v21_clean.bin`; the same bytes are at the mapped address in
+`Overwatch.exe`.
 
 ## How to reproduce this check
 
@@ -205,6 +211,7 @@ python dev/capture_coverage.py --gaps                # what a re-merge would rec
 python dev/capture_coverage.py --merge-gain          # what each run would add
 python dev/coverage_gap.py D:/ow-dumps/module_after_diff_v2.bin \
   --exe "E:/Overwatch/_retail_/Overwatch.exe"        # per section and per function range
+python dev/offline_page_recover.py --stage all       # rebuild the complete .text/.pdata
 ```
 
 `dev/needed-code.txt` is the list of addresses the project still needs, one

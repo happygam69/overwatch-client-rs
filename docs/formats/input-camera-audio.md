@@ -3,10 +3,13 @@
 ## Current state
 
 - **Input:** config-var registry and handler names read; the per-frame
-  handler update is open.
+  handler update is open. The input->command-frame path (mouse scale, aim
+  assist, force-input mode) is now partly read; see `camera.md`.
 - **Camera:** the var surface with defaults is read (HorizontalFOV 103, FP
   near/far 0.01/1638.4, interp speeds); the FP projection pass is
-  implemented; the per-frame consumer and world near/far are open.
+  implemented; the world near/far are now read (`0.1/16384`, FP one tenth);
+  the per-frame interpolation consumer is open. The full camera map is
+  `camera.md`.
 - **Audio:** Wwise is statically linked; metadata and WEM containers are
   read; no audio is decoded (needs an encoder; not started).
 
@@ -58,7 +61,7 @@ mechanically, each carrying its own inlined name record.
 | `0x7ff7c8699654` `input.ForceInputMode` | var name, same stub |
 | `0x7ff7c86a60dc` `ECSingletonInput_C WorkingBindings Input Handler` | input-handler class name; referenced at v2b `0x7ff7c54d6059` |
 | `0x7ff7c87f2b74` `teScopedTemporaryInputHandler` | scoped handler name; referenced at v2b `0x7ff7c688efc9` |
-| `0x7ff7c7d2a338` `"commandframe"` | the movement command frame's name (in the name table; no direct code ref in captured bytes) |
+| `0x7ff7c7d2a338` `"commandframe"` | a replay stream name, not the movement command frame (corrected 2026-10-23) |
 
 The input surface the earlier rounds needed for the mover is all here: mouse
 scale, gamepad aim-assist and debug, forced input mode, the two handler class
@@ -99,8 +102,11 @@ stub at v2b `0x7ff7c52c243e..0x7ff7c52c447e` (exec `0x7ff753aa243e`):
 
 The per-frame code that consumes the inverse speeds and rates is **still
 cold**: no read sites for the five interpolation defaults appear in the
-patched program, so that update is not in the captured pages. The 3P block
-(`3PPositionOffsetY.*`, `3PDistanceSmoothing.chaseRate`) is likewise data-only.
+patched program, so that update is not in the captured pages. The FP camera
+setup is a separate readable path at v2b `0x7ff7c568c5b0` (current build); its
+60 deg angle, FP clip planes and animation FOV blend are in `camera.md`. The
+3P block (`3PPositionOffsetY.*`, `3PDistanceSmoothing.chaseRate`) is
+likewise data-only.
 
 A camera-shake var (`localhiteffects.3PcameraShake`, v2b `0x7ff7c869e64c`) and a
 `CameraShake` name (v2b `0x7ff7c87f504c`) tie weapon/hit feedback into the

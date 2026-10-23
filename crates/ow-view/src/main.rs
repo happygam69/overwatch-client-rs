@@ -46,15 +46,31 @@ pub(crate) struct Camera {
     pub(crate) speed: f32,
 }
 
-/// The client's default `HorizontalFOV`: **103??**. The settings registration
-/// at v2b `0x7ff7c51dd6a8` writes `0x42ce0000` to `0x7ff7c8f83db8`; the var is
-/// the same `HorizontalFOV` setting at `0x7ff7c87f2f9c`. The client fixes the
-/// horizontal FOV and derives the vertical one from the aspect.
+/// The client's `HorizontalFOV` setting: **103 deg**.
+///
+/// The setting is read by `GetHorizontalFov` (`module_v21_clean.bin`
+/// `0x7ff7c6850fc0`). The first-person FOV conversion
+/// `FUN_7ff7c5700f50` takes the half-angle in radians (`0.00872665` =
+/// deg2rad/2, on-disk `.rdata` `0x7ff7c7cb3da8`), applies `tan`, multiplies by
+/// the 9/16 aspect factor, applies `atan` and doubles; at 16:9 and 103 deg it
+/// returns **70.53 deg vertical**. `ApplyFirstPersonCamera` sets that FOV on
+/// the world camera each frame; the camera component's 70.0 deg
+/// (`ConstructCameraComponent` `+0x48`) is the rounded 16:9 fallback.
 const HORIZONTAL_FOV_DEG: f32 = 103.0;
 
+/// World clip planes. `GetDefaultNearZ`/`GetDefaultFarZ` in
+/// `module_v21_clean.bin` (`0x7ff7c686cbc0`/`0x7ff7c686cba0`) return
+/// `0.1` / `16384.0` m.
+pub(crate) const WORLD_NEAR: f32 = 0.1;
+pub(crate) const WORLD_FAR: f32 = 16384.0;
+
+/// First-person clip planes: `camera.FirstPersonNearZ`/`FarZ` are exactly one
+/// tenth of the world pair (`0.01` / `1638.4` m).
+pub(crate) const FP_NEAR: f32 = 0.01;
+pub(crate) const FP_FAR: f32 = 1638.4;
+
 /// Vertical FOV for a horizontal FOV of [`HORIZONTAL_FOV_DEG`] at `aspect`
-/// (`width / height`). At 16:9 this is ???70??, which is why the old hardcoded
-/// 70?? looked right there and drifted on other window shapes.
+/// (`width / height`).
 fn vertical_fov(aspect: f32) -> f32 {
     let half = HORIZONTAL_FOV_DEG.to_radians() * 0.5;
     2.0 * (half.tan() / aspect.max(1e-3)).atan()
@@ -639,18 +655,15 @@ impl Renderer {
 
     fn render(&mut self) {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        // FIT-CAM-04: world camera near/far: stand-in (only the FP pair is read)
-        // World projection. The client's **world** near/far are not read, so
-        // this remains the viewer's stand-in; the first-person pair below is
-        // the client's own (`camera.FirstPersonNearZ`/`FarZ`, v2b
-        // `0x7ff7c56b24e0` region, defaults 0.01/1638.4 m). Both use the
-        // client's 103?? horizontal FOV, converted to the vertical FOV the
-        // projection matrix takes.
+        // World projection: the client's 103-deg horizontal FOV converted to
+        // vertical (70.53 deg at 16:9) and the read clip planes. The
+        // first-person pair is the client's own (`camera.FirstPersonNearZ`/
+        // `FarZ`, 0.01/1638.4 m).
         let fov = vertical_fov(aspect);
-        let projection = Mat4::perspective_rh(fov, aspect, 0.01, 8000.0);
+        let projection = Mat4::perspective_rh(fov, aspect, WORLD_NEAR, WORLD_FAR);
         let fp_fov = self.fp_fov.map(f32::to_radians).unwrap_or(fov);
         // FIT-CAM-03: FP pass: near/far read, the depth clear is fitted
-        let fp_projection = Mat4::perspective_rh(fp_fov, aspect, 0.01, 1638.4);
+        let fp_projection = Mat4::perspective_rh(fp_fov, aspect, FP_NEAR, FP_FAR);
         let uniforms = Uniforms {
             view_projection: (projection * self.camera.view()).to_cols_array_2d(),
             camera: [
@@ -1053,7 +1066,7 @@ fn shot(path: &str, scene: &scene::Scene, width: u32, height: u32) -> Result<(),
     });
 
     let aspect = width as f32 / height as f32;
-    let projection = Mat4::perspective_rh(vertical_fov(aspect), aspect, 0.05, 8000.0);
+    let projection = Mat4::perspective_rh(vertical_fov(aspect), aspect, WORLD_NEAR, WORLD_FAR);
     let camera = Camera {
         position: scene.eye,
         yaw: scene.yaw,
@@ -1339,8 +1352,9 @@ fn main() {
 mod camera_tests {
     use super::vertical_fov;
 
-    /// The vertical FOV is derived from the client's 103?? horizontal value,
-    /// so converting back must give 103?? at every aspect ratio.
+    /// The viewer uses the client's 103 deg `HorizontalFOV`; converting back
+    /// must give 103 deg at every aspect ratio. At 16:9 the vertical FOV is
+    /// 70.53 deg, and the first-person FOV conversion returns the same value.
     #[test]
     fn vertical_fov_reproduces_103_horizontal() {
         for aspect in [16.0 / 9.0, 4.0 / 3.0, 21.0 / 9.0, 1.0] {

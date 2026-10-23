@@ -113,6 +113,8 @@ pub fn sample_chain(source: &BlendPose, links: &[ChainLink], t: f32) -> Option<(
     if links.is_empty() || !links.iter().any(|l| l.record.is_some()) {
         return None;
     }
+    // FIT-ANI-08: reference-skeleton retarget omitted; the clip P lane is
+    // applied directly as the FP model local.
     let mut acc: Option<(Quat, Vec3)> = None;
     for link in links {
         let local = match link.record {
@@ -144,11 +146,35 @@ impl ClipLayer {
         sample_chain(&self.source, self.bone_chain.get(bone)?, t)
     }
 
-    fn drives(&self, bone: usize) -> bool {
-        self.bone_chain
-            .get(bone)
-            .map(|c| c.iter().any(|l| l.record.is_some()))
-            .unwrap_or(false)
+    /// The layer's **lane presence** for this bone.
+    ///
+    /// The client's `AnimSamplerRule` replaces rotation and translation
+    /// independently, so a layer that authors only rotation must not
+    /// overwrite the base translation. For ordinary one-link bones the lane
+    /// flags come from the bone's own record; a dropped-ancestor chain falls
+    /// back to the composed pair (the client's reference retarget is not
+    /// implemented yet; see the fitted ledger).
+    fn sample_lanes(
+        &self,
+        bone: usize,
+        t: f32,
+    ) -> Option<((Option<Quat>, Option<Vec3>), (Quat, Vec3))> {
+        let links = self.bone_chain.get(bone)?;
+        if links.is_empty() {
+            return None;
+        }
+        if links.len() == 1 {
+            let link = &links[0];
+            let record = link.record?;
+            let (r, p) = self.source.sample_record(record, t)?;
+            if r.is_none() && p.is_none() {
+                return None;
+            }
+            Some(((r, p), link.bind))
+        } else {
+            let (q, v) = sample_chain(&self.source, links, t)?;
+            Some(((Some(q), Some(v)), links.last()?.bind))
+        }
     }
 }
 
@@ -257,16 +283,17 @@ impl TreeAnim {
                 continue;
             };
             // The sampler's vec4 rule: at or below the 0.5 gate the child's
-            // lanes do not apply; above it they replace the current pose.
+            // lanes do not apply; above it each authored lane replaces its
+            // own channel. Missing lanes keep the base/earlier-layer value.
             if weight <= 0.5 {
                 continue;
             }
             for bone in 0..bones {
-                if layer.drives(bone) {
-                    if let Some(s) = layer.sample(bone, t) {
-                        pose[bone] = Some(s);
-                    }
-                }
+                let Some(((r, p), bind)) = layer.sample_lanes(bone, t) else {
+                    continue;
+                };
+                let (cq, ct) = pose[bone].unwrap_or(bind);
+                pose[bone] = Some((r.unwrap_or(cq), p.unwrap_or(ct)));
             }
         }
         pose

@@ -101,6 +101,8 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `loader_imports.py` | (no header) | 60 |
 | `make_focus.py` | Build the focus file for the next capture. | 131 |
 | `mkpe.py` | Wrap raw captured regions as one minimal valid PE for analysis tools. | 99 |
+| `naming_seed.py` | (no header) | 571 |
+| `offline_page_recover.py` | Recover Overwatch.exe `.text` / `.pdata` offline with the known page cipher. | 1240 |
 | `outline_sites.py` | Outline the function behind each address and disassemble around it. | 54 |
 | `page_crypt_battery.py` | Cipher-structure battery for the Overwatch.exe page transform. | 104 |
 | `page_crypt_survey.py` | Classify every 4 KB page of the flattened captures against the on-disk PEs. | 171 |

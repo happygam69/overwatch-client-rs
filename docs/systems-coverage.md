@@ -20,8 +20,8 @@ are in [`open-questions.md`](open-questions.md).
 | 9 | Mover update path | chain read; concrete class registration path read; the control itself is **tier 3** (obfuscated) | `formats/character-controller.md` |
 | 10 | Domino physics | solver chain, integration order and dt read (1/30 s steps, commanded step count) | `formats/domino.md` |
 | 11 | UI, menus, HUD | ImGui (docking) statically linked; window-list pass read | `formats/ui-menu.md` |
-| 12 | Input | var registry and handler names read; handler update/command frames open | `formats/input-camera-audio.md` |
-| 13 | Camera | var surface read; FP projection/pass implemented; per-frame consumer and world near/far open | `formats/input-camera-audio.md`, `formats/animation.md` |
+| 12 | Input | var registry and the input->command-frame path read (mouse scale, aim assist, force-input mode); handler update and camera handoff open | `formats/camera.md`, `formats/input-camera-audio.md` |
+| 13 | Camera | var surface and registration mapped in 2.25.0.1; world near/far read (0.1/16384, FP one tenth); FP camera setup and input->command path read; per-frame interpolation consumer, perspective builder and shake math open | `formats/camera.md`, `formats/input-camera-audio.md`, `formats/animation.md` |
 | 14 | Audio | Wwise statically linked; metadata/WEM container read; decoding not started | `formats/input-camera-audio.md`, `formats/sound.md` |
 | 15 | Animation | clips, pose path, blend tree and FP retarget measured; tree implemented; Pose2d VM and FP camera consumer open | `formats/animation.md` |
 | 16 | Maps and streaming | data read and the map-load code path read; streaming policy open | `formats/maps-streaming.md` |

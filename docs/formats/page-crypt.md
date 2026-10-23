@@ -2,8 +2,8 @@
 
 The loader keeps `.text` encrypted on disk and decrypts pages on demand when
 they become executable. This file records the page transform, the evidence for
-it, the live capture that is still missing, and the exact runbook for that
-capture.
+it, the offline recovery that now covers the whole executable, and the optional
+work to read the loader's `w` picker.
 
 Evidence classes: `static`, `live capture`, `decompiled`, `install`. Nothing
 here is fitted. All addresses are RVA in the current-build loader unless marked
@@ -25,22 +25,29 @@ here is fitted. All addresses are RVA in the current-build loader unless marked
   (function `0x1a0a3f0`). PadB `0x10c1e20` is live too, but its dword loops
   (`0x10c7692`, `0x10c9835`) are called from `0x8a4ad0`, a separate path.
   See "Live ETW leaf evidence".
-- **Still open:** the **`w` source** and the **faulting rip/first handler**.
-  The ETW sampling proves the loop executes, not which page it decrypted or
-  where `w` came from. The 5th argument is a hash-table lookup at
-  `0x1012e1a` (`0x1ce59b0` -> `0x3fa280` -> `hash(rdi) % count`); the value
-  is a type-A record whose fields do not contain `w` plainly.
-- **Tier 3 boundary:** the `w` **derivation** is inside the Denuvo VM
-  (`0x2511e0` dispatcher, 22 KB `0x40bee0..0x411536`; `0x40cd87` is a
-  mid-function handler block). The transform is exact and the `w` table is
-  read for the current build, but the picker is not recovered. A new build
-  needs a fresh oracle, not a new fit.
+- **Still open (picker only):** the **`w` source** and the **faulting
+  rip/first handler**. The ETW sampling proves the loop executes, not which
+  page it decrypted or where `w` came from. The 5th argument is a hash-table
+  lookup at `0x1012e1a` (`0x1ce59b0` -> `0x3fa280` -> `hash(rdi) % count`);
+  the value is a type-A record whose fields do not contain `w` plainly.
+- **Coverage solved offline (2026-10-23):** `dev/offline_page_recover.py`
+  recovered all 12,076 `.text` pages and the `.pdata` table from the on-disk
+  ciphertext without a live capture. Held-out oracle 2,284/2,284; warm images
+  4,887/4,888 and 5,350/5,351; one declared 16-byte tail. See "Offline
+  recovery" below. The blind solver replaces the need for the `w` picker; a
+  new build re-extracts the pad and reruns it.
+- **Tier 3 boundary:** the `w` **derivation** is inside the loader's own
+  obfuscated VM/dispatcher (`0x2511e0` dispatcher, 22 KB
+  `0x40bee0..0x411536`; `0x40cd87` is a mid-function handler block). The
+  earlier "Denuvo VM" label was wrong; the protection is the loader's own
+  code, not Denuvo. The picker is not recovered; this no longer blocks
+  reading the executable.
 - **Latest page-diff run:** `run_20261021_105102` is phase-marked and passes
   the correlation gate as `ATTRIBUTABLE-CANDIDATE`. It has no faulting rip,
   handler or `VirtualProtect` arguments.
-- **Next step:** extract the descriptor/table from the full dump, or run one
-  operator-approved fault-synchronous capture for the `w`/first handler.
-  Read-only polls are exhausted.
+- **Next step:** the picker is optional static work (reverse the loader VM).
+  For coverage, use the offline solver; no fault-synchronous capture is
+  required.
 
 ## The transform
 
@@ -82,8 +89,9 @@ P[o..o+0x1000] = C[o..o+0x1000] XOR K[(w + 0) .. (w + 0x1000)]
   observed stream, not a missing row or a capture failure; all 2,285 oracle
   rows verify including the splice.
 
-The per-page stream is therefore known for the current build. The missing
-piece is the code path that chooses the window at fault time and applies it.
+The per-page stream is therefore known for the current build. The code path
+that chooses the window at fault time is still unread, but the blind
+ciphertext solver no longer depends on it (see "Offline recovery" below).
 
 ## Oracle and coverage
 
@@ -97,8 +105,9 @@ piece is the code path that chooses the window at fault time and applies it.
 - `run_20261021_033126` is also the main coverage run: 15,636 pages and 443
   protection flips. `encrypted.csv` lists pages read only as cipher.
 
-The data side is closed. No new capture is needed to learn the keystream; the
-remaining reason to capture is the applier address.
+The data side is closed and page coverage is solved offline. No new capture is
+needed for either; the only remaining page-cipher question is the picker's VM
+derivation, which is optional static work.
 
 ## The candidate applier
 
@@ -483,8 +492,44 @@ Tools:
 - `dev/emu_tls.py` - offline Unicorn TLS-callback harness.
 - `dev/ldr_sweep.py`, `dev/ldr_cryptoscan.py`, `dev/ldr_vehunt.py`,
   `dev/ldr_iat.py` - static loader probes.
+- `dev/offline_page_recover.py` - recovers `.text`/`.pdata` from the installed
+  executable with the pad and ciphertext-only scoring (Plan A).
 - `dev/pagepak_build.py` - idempotent keystream-table builder.
 - `dev/page_crypt_x.py`, `dev/page_crypt_battery.py` - page-pair tests.
+
+## Offline recovery (2026-10-23)
+
+`dev/offline_page_recover.py` recovers `.pdata` and `.text` from the installed
+`Overwatch.exe` with no live capture and no process access.  Artifacts and
+`REPORT.md` are under `D:/ow-dumps/offline_recover/`.
+
+- **Pad:** the bytes at `0x1d77f80` are the logical cycle verbatim.  All 2,284
+  single-window oracle rows match a 4-byte-aligned `w`; a 19-byte rotation only
+  matches with a non-aligned `w` (`+19 -> w%4=3`, `-19 -> w%4=1`), so it is an
+  alias, not the stored phase.
+- **Splice:** the remaining oracle row (`0x53a000`) is a two-window stream:
+  window `1524` for bytes `0..1056`, 16 zero keystream bytes, window `1512`
+  from byte `1072`.  Two-window validation is 2,285/2,285.  The blind recovery
+  finds the same `w_prefix=1524`, `w_suffix=1512`, split `1056` from the page
+  alone, and both warm images match the result byte-exactly.
+- **`.pdata`:** the disk section is plaintext, not page-encrypted: 201,246
+  sorted `RUNTIME_FUNCTION` entries, every start/end in `.text`, every unwind
+  RVA in `.rdata`, and byte-identical to `module_v21_clean.bin` /
+  `module_v21d.bin`.  No pad window parses to a valid table.
+- **`.text`:** all 12,076 pages recovered.  Held-out oracle top-1 is
+  2,284/2,284 (100%), min gap 1.21 nats/byte.  Warm images match 4,887/4,888
+  and 5,350/5,351 readable pages.  Three pages are embedded RVA tables
+  (`0x23bb000`, `0x2e1f000`, `0x2e20000`) and score by 32-bit RVA content.
+- **Boundary:** `0x540000` has a 32-byte plaintext island at its PE entry
+  function (`0x540fd0`), recovered by anchoring on `AddressOfEntryPoint`; the
+  last 16 bytes (`0x540ff0..0x540fff`, a `jmp` thunk plus `int3` padding in the
+  warm image) match neither the window nor the identity and are declared, not
+  faked.  The page stays marked ambiguous in `text.csv`.
+- **In Ghidra (2026-10-23):** the image is the program `Overwatch.exe` at its
+  preferred base `0x140000000`, auto-analysed to **151,260 functions** with all
+  12,076 `.text` pages initialized.  Read a doc's v2b address there as
+  `0x140000000 + (v2b - 0x7ff7c4d20000)`; it is the program to use for pages
+  that are zero in `module_v21_clean.bin`.
 
 ## Corrections and retractions
 

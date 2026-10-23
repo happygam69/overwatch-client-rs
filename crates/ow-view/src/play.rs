@@ -223,6 +223,10 @@ impl PlayState {
     /// and fire.
     pub fn frame(&mut self, dt: f32, input: Input, look: Vec2) {
         self.controller.yaw -= look.x;
+        // FIT-CAM-07: pitch clamp: fitted. The camera component carries read
+        // limits of -89/+89 deg at `+0x94`/`+0x98` (`ConstructCameraComponent`
+        // v21_clean `0x7ff7c6dc3340`), but the look integrator that consumes
+        // them is cold; this stays the eye-check fit until that reader is read.
         self.pitch = (self.pitch - look.y).clamp(-1.45, 1.45);
         self.controller.advance(dt, input);
         let eye = self.controller.pos;
@@ -1627,10 +1631,9 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
         proj_base: usize,
         /// How many projectile markers the batch holds.
         proj_cap: usize,
-        /// Drive the weapon hooks from the character rig's weapon bones
-        /// (the chain fold). Off by default: the composition is exact for
-        /// the character rig but the FP hooks are a different attachment,
-        /// so this is an A/B knob, not a claim.
+        /// Use the character c71 rig as the weapon source (the old
+        /// workaround). Off by default: the client attaches the pistols to
+        /// the FP skeleton's 44/74 hardpoints, so the FP pose drives them.
         weapon_fold: bool,
     }
 
@@ -1927,19 +1930,10 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                         // +0.31 x — the guns cross). Leaving their local at
                         // bind keeps the model's authored gun orientation and
                         // lets the posed hand parents carry them.
-                        let weapon_bones: Vec<usize> = self
-                            .scene
-                            .weapon_attachments
-                            .iter()
-                            .map(|(_, bone, _)| *bone)
-                            .collect();
                         let palette = match anim {
                             Anim::Bones(a) => {
                                 let frame = a.frame_at(self.anim_time);
                                 let mut posed = skin.palette(&|b| {
-                                    if !self.weapon_fold && weapon_bones.contains(&b) {
-                                        return None;
-                                    }
                                     a.quat_at(b, frame)
                                         .map(|q| glam::Quat::from_xyzw(q[0], q[1], q[2], q[3]))
                                 });
@@ -1954,9 +1948,6 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                                 for (bone, links) in chains.iter().enumerate() {
                                     if bone >= bones.len() {
                                         break;
-                                    }
-                                    if !self.weapon_fold && weapon_bones.contains(&bone) {
-                                        continue;
                                     }
                                     if let Some(s) = crate::anim_tree::sample_chain(
                                         source,
@@ -1974,15 +1965,8 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                                 palette
                             }
                             Anim::Tree(tree) => {
-                                let mut bones: Vec<Option<(glam::Quat, glam::Vec3)>> =
+                                let bones: Vec<Option<(glam::Quat, glam::Vec3)>> =
                                     tree.evaluate(self.anim_time, skin.parents.len());
-                                if !self.weapon_fold {
-                                    for bone in &weapon_bones {
-                                        if *bone < bones.len() {
-                                            bones[*bone] = None;
-                                        }
-                                    }
-                                }
                                 let mut palette = Vec::with_capacity(skin.parents.len() + 1);
                                 palette.push(glam::Mat4::IDENTITY);
                                 palette.extend(
@@ -1992,47 +1976,50 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                             }
                         };
                         renderer.set_joints(&palette);
-                        // The guns are authored on the character rig. Their
-                        // FP bones (44/74) have a different parent chain
-                        // (char 284/285 vs vm 28/58), so the bind fold matches
-                        // but the animated FP local crosses them. Pose the two
-                        // weapon roots from the character c71 rig, then apply
-                        // the hardpoint local and the camera placement.
+                        // The client attaches the pistols to the FP skeleton's
+                        // 44/74 hardpoints, so the selected FP pose drives
+                        // them. `--weapon-fold 1` keeps the old character-c71
+                        // workaround for A/B; the FP path is the read one.
                         let mut char_weapon_world: std::collections::HashMap<u32, glam::Mat4> =
                             std::collections::HashMap::new();
-                        if let (Some(cskin), Some(cpose)) = (
-                            &self.scene.character_skin,
-                            &self.scene.character_weapon_pose,
-                        ) {
-                            let ids = &self.scene.character_ids;
-                            if ids.len() == cskin.parents.len() {
-                                let mut rec = std::collections::HashMap::new();
-                                for r in 0..cpose.records() {
-                                    if let Some(id) = cpose.bone_id(r) {
-                                        rec.insert(id, r);
+                        if self.weapon_fold {
+                            if let (Some(cskin), Some(cpose)) = (
+                                &self.scene.character_skin,
+                                &self.scene.character_weapon_pose,
+                            ) {
+                                let ids = &self.scene.character_ids;
+                                if ids.len() == cskin.parents.len() {
+                                    let mut rec = std::collections::HashMap::new();
+                                    for r in 0..cpose.records() {
+                                        if let Some(id) = cpose.bone_id(r) {
+                                            rec.insert(id, r);
+                                        }
                                     }
-                                }
-                                let dur = cpose.frames() as f32 / cpose.fps().max(1.0);
-                                let t = if dur > 0.0 { self.anim_time % dur } else { 0.0 };
-                                let char_palette = cskin.palette_full(&|b| {
-                                    let id = *ids.get(b)?;
-                                    let r = *rec.get(&id)?;
-                                    let (q, p) = cpose.sample_record(r, t).unwrap_or((None, None));
-                                    let (_, bq, bt) =
-                                        cskin.local[b].to_scale_rotation_translation();
-                                    Some((q.unwrap_or(bq), p.unwrap_or(bt)))
-                                });
-                                let bind = cskin.bind_world();
-                                for &(_, bone, local) in &self.scene.weapon_attachments {
-                                    let Some(fp_id) = self.scene.view_model_ids.get(bone).copied()
-                                    else {
-                                        continue;
-                                    };
-                                    let Some(ci) = ids.iter().position(|id| *id == fp_id) else {
-                                        continue;
-                                    };
-                                    if let Some(m) = char_palette.get(1 + ci) {
-                                        char_weapon_world.insert(fp_id, *m * bind[ci] * local);
+                                    let dur = cpose.frames() as f32 / cpose.fps().max(1.0);
+                                    let t = if dur > 0.0 { self.anim_time % dur } else { 0.0 };
+                                    let char_palette = cskin.palette_full(&|b| {
+                                        let id = *ids.get(b)?;
+                                        let r = *rec.get(&id)?;
+                                        let (q, p) =
+                                            cpose.sample_record(r, t).unwrap_or((None, None));
+                                        let (_, bq, bt) =
+                                            cskin.local[b].to_scale_rotation_translation();
+                                        Some((q.unwrap_or(bq), p.unwrap_or(bt)))
+                                    });
+                                    let bind = cskin.bind_world();
+                                    for &(_, bone, local) in &self.scene.weapon_attachments {
+                                        let Some(fp_id) =
+                                            self.scene.view_model_ids.get(bone).copied()
+                                        else {
+                                            continue;
+                                        };
+                                        let Some(ci) = ids.iter().position(|id| *id == fp_id)
+                                        else {
+                                            continue;
+                                        };
+                                        if let Some(m) = char_palette.get(1 + ci) {
+                                            char_weapon_world.insert(fp_id, *m * bind[ci] * local);
+                                        }
                                     }
                                 }
                             }
@@ -2048,13 +2035,16 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                             let camera = scene::Scene::view_model_matrix(eye, vm_yaw, vm_pitch);
                             for &(weapon, bone, local) in &self.scene.weapon_attachments {
                                 let fp_id = self.scene.view_model_ids.get(bone).copied();
-                                let world = fp_id
-                                    .and_then(|id| char_weapon_world.get(&id).copied())
-                                    .or_else(|| {
-                                        palette
-                                            .get(1 + bone)
-                                            .map(|m| *m * skin.bind_world()[bone] * local)
-                                    });
+                                let char_world = if self.weapon_fold {
+                                    fp_id.and_then(|id| char_weapon_world.get(&id).copied())
+                                } else {
+                                    None
+                                };
+                                let world = char_world.or_else(|| {
+                                    palette
+                                        .get(1 + bone)
+                                        .map(|m| *m * skin.bind_world()[bone] * local)
+                                });
                                 if let Some(world) = world {
                                     renderer.set_instance(weapon, camera * world);
                                 }
@@ -2315,7 +2305,12 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
         anim_time: 0.0,
         grabbed: false,
         focused: true,
-        sensitivity: flag_f32(args, "--sens").unwrap_or(0.0022),
+        // FIT-CAM-08: mouse sensitivity: K is read from the on-disk
+        // executable's `.rdata` at `0x7ff7c7ccc4b0` (0x3C3CBADB = 0.011519
+        // rad/count; the merged image zeroed that `.rdata` page). The default
+        // input scale is 0.15 (old-build value), giving 0.00172785. `--sens`
+        // overrides; the scale is the remaining fit.
+        sensitivity: flag_f32(args, "--sens").unwrap_or(0.001_727_85),
         renderer: None,
         keys: std::collections::HashMap::new(),
         last_frame: None,
