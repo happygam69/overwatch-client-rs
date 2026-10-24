@@ -93,7 +93,7 @@ Cheat-oriented material on the game executable was not consulted at all.
 
 ## Tools used
 
-* **Ghidra** and the Ghidra MCP bridge - used against the operator's own
+* **Ghidra** and the Ghidra MCP bridge - used against your own
   read-only memory captures of the running client. No disassembly or
   decompilation is committed; only addresses and behavioural conclusions are
   written down, as coordinates so the reading can be re-derived from the same

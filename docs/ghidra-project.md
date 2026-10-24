@@ -4,7 +4,7 @@ Everything known about the client's *behaviour* is read in one Ghidra project.
 This file says what is in it, which program answers which question, and how
 the addresses in the docs map onto it.
 
-**Where it lives:** `E:\OverwatchTest\dev\ghidra_run` - inside the project
+**Where it lives:** `E:\overwatch-client-rs\dev\ghidra_run` - inside the project
 folder, on the SSD, because Ghidra reads it hard. It is **not in git**: it is
 the client's code, and the repository holds only original source and
 documentation (see `CREDITS.md`).
@@ -185,7 +185,7 @@ canonical script is `docs/ghidra/McpDecompile.java`, deployed to
 `C:\Users\Happy\ghidra_scripts\`:
 
 ```text
-analyzeHeadless.bat E:\OverwatchTest\dev\ghidra_run\owmod module_v2full.bin \
+analyzeHeadless.bat E:\overwatch-client-rs\dev\ghidra_run\owmod module_v2full.bin \
   -noanalysis -scriptPath C:\Users\Happy\ghidra_scripts \
   -postScript McpDecompile.java D:/ow-dumps/anim_args_s.txt D:/ow-dumps/anim_chain.c
 ```

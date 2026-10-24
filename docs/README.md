@@ -1,8 +1,8 @@
 # Project docs: read this first
 
 Clean-room Rust reimplementation of the parts of the Overwatch client that
-matter for gameplay, reconstructed only from the operator's own install and
-read-only memory captures. Nothing from the game ships in this repository.
+matter for gameplay, reconstructed only from your own install and read-only
+memory captures. Nothing from the game ships in this repository.
 
 ## Where to start
 

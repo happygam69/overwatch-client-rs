@@ -16,8 +16,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.83"
 license = "MIT OR Apache-2.0"
-repository = "https://example.invalid/ow-combat-rust"
-description = "Clean-room Rust reader for a local Overwatch install's gameplay data"
+repository = "https://github.com/happygam69/overwatch-client-rs"
+description = "Clean-room Rust reimplementation of the Overwatch client, verified against your own install"
 
 [workspace.lints.clippy]
 # The readers mirror the shapes the client itself uses: wide argument lists,

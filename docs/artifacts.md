@@ -125,7 +125,7 @@ Produced by headless Ghidra argument files (`anim_args*.txt`) and
 
 ## Ghidra projects and scripts
 
-- `E:/OverwatchTest/dev/ghidra_run/owmod` - **the live project**: `Overwatch.exe`
+- `E:/overwatch-client-rs/dev/ghidra_run/owmod` - **the live project**: `Overwatch.exe`
   (the complete 2.25.0.1 image, carrying the current-build names),
   `module_v2full.bin` (2.25.0.0, the docs' addresses), plus
   the session, loader and region programs (`docs/ghidra-project.md`).

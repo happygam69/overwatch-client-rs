@@ -1,4 +1,4 @@
-# OWLib vs E:\OverwatchTest — side-by-side system comparison and gaps
+# OWLib vs E:\overwatch-client-rs — side-by-side system comparison and gaps
 
 Companion docs: `docs/systems-coverage.md`, `docs/formats/*`, `STATUS-handoff.md`. OWLib reference: `E:\CASCReader\OWLib` (.NET 10 toolchain).
 

@@ -1,8 +1,13 @@
-# ow-combat-rust
+# overwatch-client-rs
 
-A clean-room Rust rewrite of Overwatch gameplay, built from the operator's own
-installed copy. It reads the client's data at runtime and reimplements what the
-client does with it: movement, combat, the map, the view model and the camera.
+A clean-room Rust reimplementation of the Overwatch client, built from your own
+installed copy. It reads the game's files from the install you already own and
+reimplements - piece by piece, and only as far as it has been verified against
+the client - the parts that matter for gameplay: movement, combat, the map, the
+view model and the camera. What is exact, what is measured, and what is still a
+fitted stand-in is written down rather than glossed over
+(`docs/fitted-ledger.md`, `docs/systems-coverage.md`); this is a research
+reconstruction in progress, not a finished game.
 
 **This repository contains no Blizzard content.** No art, models, sounds, maps,
 textures, locale data, extracted tables or decompiled code - only original Rust
@@ -18,9 +23,9 @@ in engine code and generated graphs rather than in the assets.
 * **Files give structure.** Formats, registries, schemas, geometry and values
   are read from the install and checked by tests that fail if the reading is
   wrong. Findings live in `docs/formats/`.
-* **The decompiled client gives behaviour.** Ghidra is run over the operator's
-  own memory captures and the complete image recovered offline from the
-  operator's installed executable. Only addresses and conclusions are written
+* **The decompiled client gives behaviour.** Ghidra is run over your own
+  memory captures and the complete image recovered offline from your
+  installed executable. Only addresses and conclusions are written
   down, never disassembly or decompiled code. `docs/provenance.md` defines the evidence
   classes; `docs/fitted-ledger.md` lists every place where a behaviour is
   fitted, assumed, tier 3 or a stand-in.
@@ -44,7 +49,7 @@ Verified against the retail install `2.25.0.0.154088`. **The client has since up
   replacement.
 * **Combat:** health/armour/shield pools, weapon intervals, volley counts,
   projectile speed/gravity/lifetime and hitscan traces. Damage is supplied by
-  the operator because the install does not expose it; damage order and armour
+  you because the install does not expose it; damage order and armour
   mitigation are assumptions.
 * **Scene and view:** real map geometry, hero models, skeletons, skinning and
   the shipped texture formats; `ow-view` is a direct `wgpu`/`winit` viewer with
@@ -130,7 +135,7 @@ Useful harness flags:
 * `--vm-k` / `--vm-c` / `--vm-g` - override the view-model drag spring.
 * `--play-th <seconds>` - headless harness for scripted checks.
 
-Live capture (read-only, operator's decision):
+Live capture (read-only, your decision - the game must be running):
 
 ```sh
 python dev/live_page_diff.py --wait --out D:/ow-dumps/live_page_diff --all-modules
