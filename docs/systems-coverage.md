@@ -23,7 +23,7 @@ are in [`open-questions.md`](open-questions.md).
 | 12 | Input | var registry and the input->command-frame path read (mouse scale, aim assist, force-input mode); handler update and camera handoff open | `formats/camera.md`, `formats/input-camera-audio.md` |
 | 13 | Camera | var surface and registration mapped in 2.25.0.1; world near/far read (0.1/16384, FP one tenth); FP camera setup and input->command path read; per-frame interpolation consumer, perspective builder and shake math open | `formats/camera.md`, `formats/input-camera-audio.md`, `formats/animation.md` |
 | 14 | Audio | Wwise statically linked; metadata/WEM container read; decoding not started | `formats/input-camera-audio.md`, `formats/sound.md` |
-| 15 | Animation | clips, pose path, blend tree and FP retarget measured; tree implemented; Pose2d VM and FP camera consumer open | `formats/animation.md` |
+| 15 | Animation | clips, pose path, blend tree and FP retarget measured; tree implemented; Pose2d VM and FP camera consumer open; two leaf functions (`AnimTimeWrap`, `CurveKeySampleDual`) mechanically verified against the emulated bytes by `dev/verify_harness/` | `formats/animation.md` |
 | 16 | Maps and streaming | data read and the map-load code path read; streaming policy open | `formats/maps-streaming.md` |
 | 17 | Rendering pipeline | data surface read; the viewer draws textured, skinned models; animated draws and a real shading model open | `formats/rendering.md`, `formats/lighting.md` |
 | 18 | Shaders | containers read; bytecode semantics out of scope by design | `formats/shaders.md` |

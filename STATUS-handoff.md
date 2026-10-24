@@ -26,12 +26,15 @@ but their *addresses* are the old build's.
 
 What this means in practice:
 
-- **Read code in the build the capture belongs to.** The project holds both:
+- **Read code in the build the capture belongs to.** The project holds
   `Overwatch.exe` (2.25.0.1, the **complete** image - all `.text` recovered
-  offline) and `module_v21_clean.bin` (the same build's v2b frame and named
-  functions); `module_v2full.bin` is 2.25.0.0, the basis of the docs'
-  addresses. The earlier live merge `D:/ow-dumps/module_v21c.bin` (five runs of
-  2.25.0.1, 23.5% cold) is superseded.
+  offline, with the current-build names) and `module_v2full.bin`
+  (2.25.0.0, the basis of the docs' addresses).
+  `module_v21_clean.bin` was deleted 2026-10-24 (superseded by
+  `Overwatch.exe`; its image stays at
+  `D:/ow-dumps/module_v21_clean_full.bin`). The earlier live merge
+  `D:/ow-dumps/module_v21c.bin` (five runs of 2.25.0.1, 23.5% cold) is
+  superseded.
 - **A fresh client is worth more than a long session.** A capture that
   attaches to a just-started process catches the startup storm: one such run
   rescued 9,091 pages from ciphertext, where a run on an already-warm client
@@ -52,10 +55,12 @@ What this means in practice:
   the plane setter, the mouse-look deltas, the FP clip planes and offset
   transform, the input poll and force-input mode, the replay proto merge, the
   view-params constructor, and the view/projection and FP-pose builders.
-  `dev/naming_seed.py` seeds rows from the docs'
-  decompiled-path findings and byte-matches the v2full frame into
-  `module_v21_clean.bin`, confirming every hit at a real Ghidra function begin
-  before it writes. 88 candidates were refused honestly (not matched,
+   `dev/naming_seed.py` seeds rows from the docs'
+  decompiled-path findings and byte-matches the v2full frame into the
+  current-build image, confirming every hit at a real Ghidra function begin
+  before it writes (since 2026-10-24 the rows tag `Overwatch.exe` at the
+  exec address `0x140000000 + RVA`). 88 candidates were refused honestly
+  (not matched,
   ambiguous needles, cold windows). The two standing 2.25.0.0 images disagree
   on **4,621 of 10,582** shared nonzero pages, so docs-frame matching reads
   from `module_v2full.bin` only - `docs/open-questions.md` question 12 tracks
@@ -76,7 +81,7 @@ What this means in practice:
 - Merged images (outside the repo): `D:/ow-dumps/module_after_diff.bin` (v2b
   base `0x7ff7c4d20000`) and `loader_after_diff.bin`; the current-build
   plaintext loader is `D:/ow-dumps/loader_disk_rva.bin`.
-- The Ghidra project is `dev/ghidra_run/owmod` (on the SSD, git-ignored, 13
+- The Ghidra project is `dev/ghidra_run/owmod` (on the SSD, git-ignored, 10
   programs); `docs/ghidra-project.md` says which program answers what.
 - On 2026-10-23 `module_v21_clean.bin` was filled in place: **488 `.text`**
   and **13 `.data`** pages from `module_v21d.bin`; **372 `.rdata`**, **16
@@ -90,7 +95,8 @@ What this means in practice:
   `0x140000000`, all 12,076 `.text` pages, 201,246 `.pdata` entries) is the
   Ghidra program `Overwatch.exe`, auto-analysed to **151,260 functions**. Read
   a v2b address there as `0x140000000 + (v2b - 0x7ff7c4d20000)`; this closes
-  the 2,351-page gap. The names remain applied to `module_v21_clean.bin`.
+  the 2,351-page gap. The names were migrated from `module_v21_clean.bin` to
+  `Overwatch.exe` on 2026-10-24, the day that program was deleted.
 - The view model, FP camera and animation retarget are the active area.
   Movement, combat, scene and most data systems are usable. The camera's
   per-frame look consumer is still unlocated even though its code pages are
@@ -129,6 +135,28 @@ What this means in practice:
 - **Animation format:** clip header and packed-u16 rotation/position/scale
   tracks, the general family-agnostic row reader, the FP blend-tree item/tree
   decode and evaluation.
+- **Function verification (2026-10-24):** `dev/verify_harness/` decides
+  mechanically whether a reconstruction of a client function behaves
+  identically to the shipped bytes. The oracle is the real code emulated
+  offline over `D:/ow-dumps/offline_recover/module_offline.bin` (the
+  complete offline-recovered image, every `.text` page); tier 1
+  compiles the Ghidra C from `dev/decompiles/`, tier 2 runs
+  `rust_probe.rs` through a subprocess protocol. Five stages: load,
+  determinism, differential (return bits, arg writes, undeclared-read
+  check), branch coverage on the oracle, mutation of the candidate.
+  Digest-bound ledger; `python dev/verify_harness/cli.py selftest` injects
+  known defects and requires detection before any unit may be called
+  verified. **Verified so far:** `fn/AnimTimeWrap` (`0x7ff7c58b1ef0`),
+  `fn/CurveKeySampleDual` (`0x7ff7c58b09d0`), and the Rust probe against
+  the AnimTimeWrap oracle. The harness already caught two Ghidra-output
+  bug classes (float-conversion-instead-of-bit-load; IEEE ifs instead of
+  SSE minss/maxss) and both decompiles were corrected from the emulated
+  bytes. Three other zero-callee decompiles are not verifiable as they
+  stand (two are comment-only stubs; `DispatchFpCameraSlotTime` has an
+  indirect call and an unrecovered jumptable). **Subagent workflow:**
+  `dev/verify_harness/AGENT-PROTOCOL.md`. Run all units with
+  `python dev/verify_harness/cli.py all` (needs gcc, rustc, unicorn,
+  capstone, and the capture on D:).
 - **Capture:** protection-aware `dev/live_page_diff.py`; `dev/warm_poll.py`
   fallback; phase marking and encrypted-page logging. The tool list is
   `dev/INDEX.md`.

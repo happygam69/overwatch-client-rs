@@ -141,6 +141,35 @@ FP weapon source are applied.
 
 ---
 
+## 2c. Mechanically verify the next rung of client functions (2026-10-24)
+
+**Question.** `dev/verify_harness/` now decides, against the emulated real
+bytes, whether a reconstruction of a client function is behaviourally exact.
+Two zero-callee functions are verified (`AnimTimeWrap` `0x7ff7c58b1ef0`,
+`CurveKeySampleDual` `0x7ff7c58b09d0`); the decompiles had two bug classes the
+harness caught (conversion instead of bit-load; IEEE ifs instead of SSE
+minss/maxss). Which functions come next, and can the 1-3 callee rung be
+verified by emulating callees inside the mapped image?
+
+**What is known.** Three other zero-callee decompiles are not verifiable as
+they stand: `AnimWritesOrientationPosition` and `DecodeCameraNodeTypeNames`
+are comment-only stubs (need a Ghidra re-decompile first);
+`DispatchFpCameraSlotTime` has an indirect call and an unrecovered jumptable.
+The second rung (`AnimFovHelper` `0x7ff7c5700f50`, `AnimDragSpring`
+`0x7ff7c53ab620`, `FpViewmodelEventSort` `0x7ff7c5a47410`, …) has 1-3 named
+callees whose bodies sit in the same mapped image; the oracle's emulator can
+follow them if the fixture provides the globals they read, and the
+reads-outside-args check will name any undeclared state dependency.
+
+**What would settle it.** Re-decompile the two stubs and the jumptable
+function in Ghidra; add a unit per second-rung function with a fixture that
+satisfies its callees; run `python dev/verify_harness/cli.py all` to gate.
+
+**Next anchor.** `dev/decompiles/address_list.txt`, the unit JSONs under
+`dev/verify_harness/units/`.
+
+---
+
 ## 3. The Pose2d dataflow VM
 
 **Question.** What drives the first-person blend tree: the driver inputs and

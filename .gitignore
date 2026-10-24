@@ -35,12 +35,23 @@
 !/dev/*.jsonl
 
 # dev/'s sub-folders are ignored, except dev/work/ (the page-decrypt scripts,
-# which are tracked). dev/ghidra_run/ is the Ghidra project: the client's own
-# code, kept on the SSD because Ghidra reads it hard, never tracked.
+# which are tracked) and dev/verify_harness/ (the differential-verification
+# harness, original work). dev/ghidra_run/ is the Ghidra project: the client's
+# own code, kept on the SSD because Ghidra reads it hard, never tracked.
+# dev/decompiles/ holds decompiled client code and stays ignored.
 /dev/*/
 !/dev/work/
 /dev/work/*
 !/dev/work/*.py
+!/dev/verify_harness/
+/dev/verify_harness/*
+!/dev/verify_harness/*.py
+!/dev/verify_harness/*.h
+!/dev/verify_harness/*.rs
+!/dev/verify_harness/*.md
+!/dev/verify_harness/units/
+/dev/verify_harness/units/*
+!/dev/verify_harness/units/*.json
 /target/
 **/target/
 

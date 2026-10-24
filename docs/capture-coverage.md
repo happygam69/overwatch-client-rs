@@ -72,7 +72,7 @@ python dev/build_translate.py --old D:/ow-dumps/module_after_diff.bin \
 A moved address is a *lead*, not a proof: the match is on bytes, so a
 function that was rewritten is not found, and a 24-byte match is weaker than a
 96-byte one. The reliable way to re-derive a finding in the new build is to
-find it again in `module_v21_clean.bin` - the Ghidra project now holds the
+find it again in `Overwatch.exe` - the Ghidra project now holds the complete
 current build for exactly that.
 
 ## The standing image is stale, and re-merging is free

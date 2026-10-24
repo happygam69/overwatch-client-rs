@@ -126,9 +126,11 @@ Produced by headless Ghidra argument files (`anim_args*.txt`) and
 ## Ghidra projects and scripts
 
 - `E:/OverwatchTest/dev/ghidra_run/owmod` - **the live project**: `Overwatch.exe`
-  (the complete 2.25.0.1 image), `module_v21_clean.bin` (the same build's v2b
-  frame and names), `module_v2full.bin` (2.25.0.0, the docs' addresses), plus
+  (the complete 2.25.0.1 image, carrying the current-build names),
+  `module_v2full.bin` (2.25.0.0, the docs' addresses), plus
   the session, loader and region programs (`docs/ghidra-project.md`).
+  `module_v21_clean.bin` and `camera_warm.exe` were deleted from it on
+  2026-10-24 (superseded).
 - `E:/ghidra/hproj/hmod` - captured loader (band work, whole-text export).
 - `E:/ghidra/hproj2/hmod2` - loader band 111 export.
 - `E:/ghidra/hproj4/hmod4` - standing main image (`module_after_stripped.bin`); animation/camera rounds.

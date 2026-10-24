@@ -9,6 +9,16 @@ operator decision every time.
   it is current.
 - **[`../docs/artifacts.md`](../docs/artifacts.md)** - what lives on
   `D:/ow-dumps`.
+- **`dev/verify_harness/`** - differential verification of client
+  functions: the oracle is the real bytes emulated offline (Unicorn over
+  `D:/ow-dumps/offline_recover/module_offline.bin`, the complete
+  offline-recovered image), the candidate is the Ghidra C from
+  `dev/decompiles/` (tier 1) or a Rust probe (tier 2). Five stages (load,
+  determinism, differential, coverage, mutation), digest-bound ledger,
+  selftest. `python dev/verify_harness/cli.py all` runs every unit;
+  `selftest` proves the verifier still detects injected defects. Verified
+  so far: `AnimTimeWrap`, `CurveKeySampleDual`. The subagent workflow is
+  `dev/verify_harness/AGENT-PROTOCOL.md`.
 
 The table below is the same set by task, with the Rust probes.
 

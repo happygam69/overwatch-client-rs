@@ -489,10 +489,11 @@ capture with the effect-node dispatch pages warm.
 
 ## 8. Function names applied to the Ghidra image
 
-The camera entries below are named in `module_v21_clean.bin`; the current
-`docs/function-names.csv` has 174 named rows (2026-10-23). The names are the
-ones this document uses; `dev/gh_apply_names.py` applied them and saved the
-program.
+The camera entries below were named in `module_v21_clean.bin`; on 2026-10-24
+the names were migrated to `Overwatch.exe` (address `0x140000000 + RVA`) and
+that program was deleted. The current `docs/function-names.csv` has 174 named
+rows. The names are the ones this document uses; `dev/gh_apply_names.py`
+applied them and saved the program.
 
 | address | name | role |
 |---|---|---|

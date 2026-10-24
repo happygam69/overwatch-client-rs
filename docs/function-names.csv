@@ -1,175 +1,175 @@
 program,address,doc_address,name,role
 module_v2full.bin,0x7ff7c4ff0060,0x2d0060,ViewmodelVtableInit,A static initialiser: stores the view-model class vtable pointer and guards a one-shot setup
-module_v21_clean.bin,0x7ff7c6e1eca0,0x7ff7c6e84610,AnimSamplerRule,The per-child sampler gate: vec4 lanes; winner-take-all above weight 0.5
+Overwatch.exe,0x1420feca0,0x7ff7c6e84610,AnimSamplerRule,The per-child sampler gate: vec4 lanes; winner-take-all above weight 0.5
 module_v2full.bin,0x7ff7c7a38c40,0x7ff7c7a38c40,DmBodyDescriptorInit,Fills a static descriptor with literal stores
 module_v2full.bin,0x7ff7c7a38cbf,0x7ff7c7a38cbf,DmBodyFieldArrayFill,Writes the field array of that descriptor
-module_v21_clean.bin,0x7ff7c79e3050,0x7ff7c7a4c150,DmWorldInvDt0Writer,The writer of dmWorld.m_inv_dt0 (+0x198)
-module_v21_clean.bin,0x7ff7c79e3630,0x7ff7c7a4c730,DmWorldSubstepDriver,The substep driver of the solver chain
-module_v21_clean.bin,0x7ff7c79deb70,0x7ff7c7a47c70,DmWorldConstruct,The dmWorld constructor
-module_v21_clean.bin,0x7ff7c79ddc60,0x7ff7c7a46d60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0)
+Overwatch.exe,0x142cc3050,0x7ff7c7a4c150,DmWorldInvDt0Writer,The writer of dmWorld.m_inv_dt0 (+0x198)
+Overwatch.exe,0x142cc3630,0x7ff7c7a4c730,DmWorldSubstepDriver,The substep driver of the solver chain
+Overwatch.exe,0x142cbeb70,0x7ff7c7a47c70,DmWorldConstruct,The dmWorld constructor
+Overwatch.exe,0x142cbdc60,0x7ff7c7a46d60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0)
 module_v2full.bin,0x7ff7c7a4cce0,0x7ff7c7a4cce0,DmWorldClearForces,"ClearForces: decodes the handle, returns behind the +0x15c gate, and walks the bodies zeroing force (0x130) and torque (0x140)"
 ldr/loader_xor_regions.exe,0x1814380e0,0x14380e0,PageXorApplier,The candidate page-XOR applier: the pad-base arms; the VirtualProtect indcalls; the byte and dword xor leaves; the and 0x3fff window mask
 ldr/loader_xor_regions.exe,0x181015a94,0x1015a94,PageXorApplierCaller,The caller of the applier; returns at 0x1015a99
 ldr/loader_xor_regions.exe,0x1810c1e20,0x10c1e20,PadBXorFamily,The second pad-base family: the 4-byte-granular and 0x3ffc mask; called from 0x8a4ad0
 ldr/loader_xor_regions.exe,0x1810b72f0,0x10b72f0,PadCXorFamily,The third pad-base region
-module_v21_clean.bin,0x7ff7c5a4f060,0xd2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; checks it against the type descriptor; resolves the view-model entity and its model; calls the bind; registers the first-person config vars
-module_v21_clean.bin,0x7ff7c5a4faa0,0xd4faa0,FpViewmodelBind,The bind: stores the view-model entity and model references and resets the view-model state; it does not read m_position or the four scalars
-module_v21_clean.bin,0x7ff7c5a51bf0,0xd31bf0,FpViewmodelUpdateA,Per-frame update (view-model vtable slot +0xe0): walks the six 0x110-stride animation slots and runs the event player on each
-module_v21_clean.bin,0x7ff7c5a522f0,0xd322f0,FpViewmodelUpdateB,Per-frame update (view-model vtable slot +0xe8): the second of the two per-frame slots
-module_v21_clean.bin,0x7ff7c5a49c60,0xd29c60,FpViewmodelEventPlayer,The animation event/state player: dispatches event masks against the slot's event list
-module_v21_clean.bin,0x7ff7c5a47410,0xd27410,FpViewmodelEventSort,Sorts the 0x50-byte event records by their short priority
-module_v21_clean.bin,0x7ff7c68a8f10,FUN_7ff7c68f1de0,MrnmHandler,"The MRNM chunk handler and its deserializer are one function: copies the header and copies the material values (materials.md) while building the runtime parent-indexed tables (0xA0/0xF8/0x18 strides, used-bone mask, roots at -1) (animation.md)"
-module_v21_clean.bin,0x7ff7c58b09d0,FUN_7ff7c58df9b0,CurveKeySampleDual,The shared curve pipeline's dual (two-source) sample stage feeding blend/replace
-module_v21_clean.bin,0x7ff7c6b4d5c0,FUN_7ff7c6ba3a70,ClipRuntimeConstruct,The clip runtime record's constructor
-module_v21_clean.bin,0x7ff7c5a4a250,FUN_00d2a250,AnimEventMaskDispatch,Current-build animation event player helper: dispatches event masks 0x100/0x200/0x400/0x800 against the slot's event list (RVA 0xd2a250)
-module_v21_clean.bin,0x7ff7c5a5a020,FUN_00d3a020,FpViewmodelEventPlayerB,Current-build: the second event/state player the per-frame view-model updates call (RVA 0xd3a020)
-module_v21_clean.bin,0x7ff7c6e730b0,FUN_7ff7c6eda1c0,StatescriptVarPoolConstruct,Constructs the runtime variable pool (pool 0x68 -> holder 0x240 with the 16x0x20 slot table -> instance >=0x15B0)
-module_v21_clean.bin,0x7ff7c6e75280,FUN_7ff7c6edc380,StatescriptApplyPass,The apply pass: walks the instance's elements and applies each record's default
-module_v21_clean.bin,0x7ff7c6e77910,FUN_7ff7c6edea10,StatescriptSlotResolve,Resolves an element by its id in the runtime
-module_v21_clean.bin,0x7ff7c57464c0,FUN_7ff7c5770230,StatescriptDriveWalk,The per-frame script walk: slot 100 (+0x320) of the host class; walks the script-instance array and runs element slots 43/44 around a parameter push
-module_v21_clean.bin,0x7ff7c6e61f70,FUN_7ff7c6ec9070,StatescriptNodePush,The parameter push: walks the element list and dispatches by node type index through the trampoline
-module_v21_clean.bin,0x7ff7c57bba70,FUN_7ff7c57e77b0,StatescriptSlot43Executor,Element vtable slot 43 (+0x158): the executor step that sets the busy counter
-module_v21_clean.bin,0x7ff7c6f16ae0,FUN_7ff7c6f7e310,StatescriptGraphMaterialize,"The graph materializer: walks the 0x10-byte node records {key, flags, kind, target} in order"
-module_v21_clean.bin,0x7ff7c6f0a960,FUN_7ff7c6f72190,WorldQueryByClass,"The world query a resolved reference lands in (world, u16 class id, 0x9e)"
-module_v21_clean.bin,0x7ff7c6663290,FUN_7ff7c66aa450,TypeIndexByHash,Maps the first-person component's class hash 0x9d28963f to type index 0x35
-module_v21_clean.bin,0x7ff7c5903700,FUN_7ff7c5933ec0,LobbyLog,"The shared lobby logger entry: (client, level, message, system-name string)"
-module_v21_clean.bin,0x7ff7c689b9d0,FUN_7ff7c68e4560,MaterialAssetLookup,"The material-asset lookup (registry, keyA, keyB); falls into the no-return assert path on a miss"
-module_v21_clean.bin,0x7ff7c68a39b0,FUN_7ff7c68ec880,MaterialKeyBind,The u64-array material binding: resolves keys -> indices clamped by the u64-value count
-module_v21_clean.bin,0x7ff7c68aa1d0,FUN_7ff7c68f30a0,MaterialSlotBind,The slot binder: sets the container's slot count and binds each material through the record's u16 at +4
-module_v21_clean.bin,0x7ff7c68aca70,FUN_7ff7c68f5940,MaterialParamApply,"The material-parameter applier: resolves the material descriptor, scans the model's key/value records, stores the min/max times"
-module_v21_clean.bin,0x7ff7c68a8cb0,FUN_7ff64ba31b80,MdlcMaterialRead,"The MDLC chunk deserializer: the material list (copies the header, memcpy's the material values)"
-module_v21_clean.bin,0x7ff7c68a94d0,FUN_7ff64ba323a0,MsklTableBuild,The mskl chunk deserializer: packs the 6-byte chain records into the table blob
-module_v21_clean.bin,0x7ff7c68a8e50,FUN_7ff64ba31d20,MoclRead,The MOCL chunk deserializer: the occlusion/limits table
-module_v21_clean.bin,0x7ff7c79f9c90,FUN_7ff756242d00,ConstraintDispatch,The per-constraint dispatcher (cases 1-9) inside the solve
-module_v21_clean.bin,0x7ff7c7a27170,FUN_7ff7562702a0,RotationInertiaSolve,A 4x4 rotation-inertia solver in the conditioned sweep (verified not the integrator)
-module_v21_clean.bin,0x7ff7c79ff710,FUN_7ff7c7a68840,DmResidualQuery,The residual query the step entry loops on (threshold 0.5 at DAT_7ff7c7d0c068)
-module_v21_clean.bin,0x7ff7c6dac070,FUN_7ff7c6e0fb50,DmTickKeeper,"The tick's keeper: zeroes the pending budget, clears the pending flag, recurses into children whose time is behind"
-module_v21_clean.bin,0x7ff7c59dacc0,FUN_7ff7c5a12c50,MoverStateMachine,"The per-frame character state machine: flags, timer, state id, the +0x1a79 state byte, the local vector and the ground probe"
-module_v21_clean.bin,0x7ff7c59c5940,FUN_7ff7c59fd050,MoverWishUpdate,"The wish-vector update wrapper: reads +0x1140, converts through the frame-conversion helper, applies the difference"
-module_v21_clean.bin,0x7ff7c697f5e0,FUN_7ff7c69cc160,TypeRegistrationCore,The type-registration core: allocates the per-flag registration tables
-module_v21_clean.bin,0x7ff7c6a4ea50,FUN_7ff7c6a9d590,PsoDebugPanelDraw,The draw callback of the PSO debug panel object
-module_v21_clean.bin,0x7ff7c686cba0,0x1b4cba0,GetDefaultFarZ,Reads the DefaultFarZ settings variable and falls back to 16384.0 when disabled
-module_v21_clean.bin,0x7ff7c686cbc0,0x1b4cbc0,GetDefaultNearZ,Reads the DefaultNearZ settings variable and falls back to 0.1 when disabled
-module_v21_clean.bin,0x7ff7c51e2890,0x4c2890,RegisterDefaultFarZ,Registers DefaultFarZ with its 16384.0 default and 100/20000 limits
-module_v21_clean.bin,0x7ff7c51dd630,0x4bd630,RegisterHorizontalFov,Registers HorizontalFOV with its 103.0/70.0 limits
-module_v21_clean.bin,0x7ff7c529a140,0x57a140,SetCameraPlaneValue,Sets one camera projection plane (0 angle 1 near 2 far) and returns the previous value
-module_v21_clean.bin,0x7ff7c54ba450,0x79a450,ComputeMouseLookDelta,Converts scaled mouse counts into yaw/pitch deltas with the invert-pitch sign
-module_v21_clean.bin,0x7ff7c54bb900,0x79b900,ComputeAimAssistedLookDelta,Computes the look delta and adds the view-target aim-assist delta
-module_v21_clean.bin,0x7ff7c568c290,0x96c290,RegisterFirstPersonClipPlanes,Registers camera.FirstPersonNearZ/FarZ at one tenth of the world clip planes
-module_v21_clean.bin,0x7ff7c568eab0,0x96eab0,DispatchFpCameraSlotTime,Dispatches the first-person camera slot event by round(time*1000)
-module_v21_clean.bin,0x7ff7c539db60,0x7ff7c539db60,ApplyFirstPersonOffsetTransform,Applies the firstPerson Offset/rotation overrides to the first-person model transform
-module_v21_clean.bin,0x7ff7c5329100,0x609100,InputPollMouseAndGamepad,Polls the mouse and gamepad look counts timestamp and mouse scale
-module_v21_clean.bin,0x7ff7c532a570,0x7ff7c532a570,EvaluateForceInputMode,Evaluates the input.ForceInputMode override and returns the selected input mode
-module_v21_clean.bin,0x7ff7c5c64ed0,0xf4ed0,MergeReplayCameraViewTelemetry,MergeFrom for the ReplayCameraView ProTelemetry message; not the in-game replay camera
-module_v21_clean.bin,0x7ff7c6d89710,0x2069710,InitCameraViewParams,Initialises a camera view struct with vtable matrices 35 deg half-FOV and near/far
-module_v21_clean.bin,0x7ff7c57d3110,0x7ff7c57d3110,PlayerCameraControllerUpdate,Reads the player camera component and distance then sets the camera mode and view
-module_v21_clean.bin,0x7ff7c6e6dcc0,0x7ff7c6e6dcc0,GetPlayerComponentByIndex,Returns a player component from the indexed component array
-module_v21_clean.bin,0x7ff7c6dc50d0,0x7ff7c6dc50d0,SetCameraMode,Selects the new camera mode and stores the FP/3P blend
-module_v21_clean.bin,0x7ff7c6dc5410,0x7ff7c6dc5410,SelectCameraMode,Resolves the camera mode transition from the distance and current mode
-module_v21_clean.bin,0x7ff7c6dc52a0,0x7ff7c6dc52a0,SetCameraView,Stores the view on the camera component
-module_v21_clean.bin,0x7ff7c568bef0,0x7ff7c568bef0,SelectFirstPersonCamera,Chooses and attaches the first-person camera component from the candidate lists
-module_v21_clean.bin,0x7ff7c6d8cfd0,0x7ff7c6d8cfd0,GetCameraComponent,Returns the camera component attached to a view
-module_v21_clean.bin,0x7ff7c6d8d3c0,0x7ff7c6d8d3c0,AttachCameraComponent,Attaches a camera component to a view and copies the view snapshot
-module_v21_clean.bin,0x7ff7c6dc4b90,0x7ff7c6dc4b90,ResetCameraComponent,Resets the camera component state
-module_v21_clean.bin,0x7ff7c6d8db20,0x7ff7c6d8db20,UpdateCameraView,Per-frame base view update: transition and component update and modifiers and final descriptor
-module_v21_clean.bin,0x7ff7c6dc4bb0,0x7ff7c6dc4bb0,UpdateCameraComponent,Applies the camera component FOV and mode update and shake state
-module_v21_clean.bin,0x7ff7c6dc39c0,0x7ff7c6dc39c0,InterpolateCameraTransition,Blends position and orientation and distance and FOV over the transition timer
-module_v21_clean.bin,0x7ff7c6dc53c0,0x7ff7c6dc53c0,UpdateCameraRecord,Runs the camera record pose builder for one update
-module_v21_clean.bin,0x7ff7c6d8ea60,0x7ff7c6d8ea60,UpdateCameraModifiers,Iterates the view modifier records and writes the final camera descriptor
-module_v21_clean.bin,0x7ff7c6d8e400,0x7ff7c6d8e400,BuildThirdPersonCameraPose,Computes the third-person eye from the pivot and distance and forward axis
-module_v21_clean.bin,0x7ff7c6d8e0a0,0x7ff7c6d8e0a0,ApplyThirdPersonCameraTrace,Copies the third-person descriptor and runs the collision trace
-module_v21_clean.bin,0x7ff7c6d8e1a0,0x7ff7c6d8e1a0,TraceThirdPersonCamera,Tests the third-person camera against the world and applies the pull-in correction
-module_v21_clean.bin,0x7ff7c6dd0f40,0x7ff7c6dd0f40,SolveThirdPersonCameraCollision,Four-ray near-plane cast that clamps the third-person distance
-module_v21_clean.bin,0x7ff7c56b7b90,0x7ff7c56b7b90,UpdateFirstPersonCameraPose,Builds the first-person camera pose and near clip and FOV from the owner
-module_v21_clean.bin,0x7ff7c56b7940,0x7ff7c56b7940,IsFirstPersonCameraActive,Returns whether the first-person camera owner is active
-module_v21_clean.bin,0x7ff7c56b7840,0x7ff7c56b7840,GetFirstPersonCameraDeltaTime,Returns the first-person camera delta time
-module_v21_clean.bin,0x7ff7c6dc50c0,0x7ff7c6dc50c0,SetCameraFov,Stores the camera component vertical FOV
-module_v21_clean.bin,0x7ff7c6dc3340,0x7ff7c6dc3340,ConstructCameraComponent,Constructs the base camera component with the 70 degree default FOV
-module_v21_clean.bin,0x7ff7c56b7640,0x7ff7c56b7640,ConstructFirstPersonCamera,Constructs the level-1 first-person camera component
-module_v21_clean.bin,0x7ff7c56b7c90,0x7ff7c56b7c90,BuildFirstPersonCameraVariant,Constructs the level-2 first-person camera component
-module_v21_clean.bin,0x7ff7c6e04aa0,0x7ff7c6e04aa0,ConstructThirdPersonSpringCamera,Constructs the third-person spring camera
-module_v21_clean.bin,0x7ff7c6d8d0f0,0x7ff7c6d8d0f0,PushCameraModifier,Appends a camera modifier record to the view
-module_v21_clean.bin,0x7ff7c6d8d310,0x7ff7c6d8d310,ComputeCameraPositionFromComponent,Computes the camera position from the component position and forward offset
-module_v21_clean.bin,0x7ff7c6d8d250,0x7ff7c6d8d250,SetCameraScreenOffset,Stores the camera screen offset
-module_v21_clean.bin,0x7ff7c6d8d2c0,0x7ff7c6d8d2c0,ResetCameraAnimationOwner,Clears the camera animation owner
-module_v21_clean.bin,0x7ff7c6d8d840,0x7ff7c6d8d840,SetCameraTransform,Applies the camera transform subobject
-module_v21_clean.bin,0x7ff7c6d60b40,0x7ff7c6d60b40,TickRegisteredCameraViews,Calls every registered view apply slot with the manager delta time
-module_v21_clean.bin,0x7ff7c6d48370,0x7ff7c6d48370,AddCameraView,Appends a view to the camera manager view array
-module_v21_clean.bin,0x7ff7c6d52060,0x7ff7c6d52060,DispatchCameraRequest,Dispatches a camera-system request
-module_v21_clean.bin,0x7ff7c6d56ac6,0x7ff7c6d56ac6,ProcessCameraRequest,Processes one camera-system request
-module_v21_clean.bin,0x7ff7c6d5c4e0,0x7ff7c6d5c4e0,UpdateCameraSystem,Runs the camera system update stage
-module_v21_clean.bin,0x7ff7c6d5cc30,0x7ff7c6d5cc30,AdvanceCameraSystemStage2,Runs the second camera system update stage
-module_v21_clean.bin,0x7ff7c53d9db0,0x7ff7c53d9db0,ResolveCameraModeComponent,Resolves the component for a camera mode from the mode table
-module_v21_clean.bin,0x7ff7c568c5b0,0x7ff7c568c5b0,ApplyFirstPersonCamera,Per-frame first-person view apply: FOV blend and clip planes and pose matrix
-module_v21_clean.bin,0x7ff7c568cb30,0x7ff7c568cb30,EvaluateFirstPersonCameraAnimation,Evaluates the FP animation and writes the three camera offset values
-module_v21_clean.bin,0x7ff7c57fea00,0x7ff7c57fea00,EvaluateFirstPersonAnimationNode,Applies the FP animation weight to an animation node
-module_v21_clean.bin,0x7ff7c4d84a30,0x7ff7c4d84a30,CacheFirstPersonFarPlane,Caches one tenth of the world far plane for first person
-module_v21_clean.bin,0x7ff7c4d84a50,0x7ff7c4d84a50,CacheFirstPersonNearPlane,Caches one tenth of the world near plane for first person
-module_v21_clean.bin,0x7ff7c51e2980,0x7ff7c51e2980,RegisterDefaultNearZ,Registers DefaultNearZ
-module_v21_clean.bin,0x7ff7c6850fc0,0x7ff7c6850fc0,GetHorizontalFov,Returns the HorizontalFOV setting
-module_v21_clean.bin,0x7ff7c53996c0,0x7ff7c53996c0,RegisterFirstPersonSettings,Registers the firstPerson settings group
-module_v21_clean.bin,0x7ff7c539f6e0,0x7ff7c539f6e0,RegisterLocalHitEffectsSettings,Registers the localhiteffects settings group
-module_v21_clean.bin,0x7ff7c532ada0,0x7ff7c532ada0,RegisterInputSettings,Registers the input settings group
-module_v21_clean.bin,0x7ff7c6d89a20,0x7ff7c6d89a20,ValidateAndNormalizeCameraDescriptor,Normalizes and validates the camera basis and FOV
-module_v21_clean.bin,0x7ff7c6d89c60,0x7ff7c6d89c60,OrthonormalizeCameraBasis,Orthonormalizes the camera basis rows
-module_v21_clean.bin,0x7ff7c6d8afe0,0x7ff7c6d8afe0,BuildViewMatricesFromCameraDescriptor,Builds the camera-to-world and world-to-view matrices
-module_v21_clean.bin,0x7ff7c6d95630,0x7ff7c6d95630,SetPerspectiveProjection,Sets the perspective projection from the view rectangle and half FOVs
-module_v21_clean.bin,0x7ff7c6d95a70,0x7ff7c6d95a70,BuildPerspectiveMatrix,Builds the left-handed row-major perspective matrix
-module_v21_clean.bin,0x7ff7c6d8a4a0,0x7ff7c6d8a4a0,RebuildProjection,Rebuilds the projection after a view parameter change
-module_v21_clean.bin,0x7ff7c6d8b2d0,0x7ff7c6d8b2d0,SetViewHalfFovs,Sets the view half-FOV pair
-module_v21_clean.bin,0x7ff7c6d8afb0,0x7ff7c6d8afb0,SetViewOutputRect,Sets the view output rectangle
-module_v21_clean.bin,0x7ff7c6d8a2b0,0x7ff7c6d8a2b0,SetPerspectiveViewRect,Sets the view rectangle and enables perspective projection
-module_v21_clean.bin,0x7ff7c6d8b4a0,0x7ff7c6d8b4a0,SetVerticalFovFull,Sets the vertical full FOV and rebuilds projection
-module_v21_clean.bin,0x7ff7c6d8b500,0x7ff7c6d8b500,ProjectWorldPoint,Projects a world point through the view and projection matrices
-module_v21_clean.bin,0x7ff7c6d95230,0x7ff7c6d95230,InitProjectionDescriptor,Initializes the projection descriptor
-module_v21_clean.bin,0x7ff7c6d95270,0x7ff7c6d95270,BuildFrustumPlanes,Builds the projection frustum planes
-module_v21_clean.bin,0x7ff7c6d95550,0x7ff7c6d95550,SetOrthoProjection,Sets an orthographic projection
-module_v21_clean.bin,0x7ff7c6d954a0,0x7ff7c6d954a0,SetExplicitBoundsProjection,Sets an explicit-bounds projection
-module_v21_clean.bin,0x7ff7c53f2610,0x7ff7c53f2610,ApplyCameraTransform,Applies a camera basis and position to the view matrices
-module_v21_clean.bin,0x7ff7c6d8eee0,0x7ff7c6d8eee0,ApplyCameraViewOffset,Applies the camera shake and positional offset to the view
-module_v21_clean.bin,0x7ff7c6e518b0,0x7ff7c6e518b0,AddVerticalFovOffset,Adds the vertical FOV offset to the camera descriptor
-module_v21_clean.bin,0x7ff7c6dd0a80,0x7ff7c6dd0a80,ProjectPointThroughBasis,Projects a point through a constructed camera basis
-module_v21_clean.bin,0x7ff7c6dd0b20,0x7ff7c6dd0b20,ProjectPointThroughView,Projects a point through a view
-module_v21_clean.bin,0x7ff7c6d8a5f0,0x7ff7c6d8a5f0,SetViewRectFromInts,Sets the view output rectangle from integer bounds
-module_v21_clean.bin,0x7ff7c52c0e70,0x7ff7c52c0e70,RefreshCameraViewRect,Refreshes the view output rectangle from the viewport
-module_v21_clean.bin,0x7ff7c51e2ab0,0x7ff7c51e2ab0,DecodeCameraNodeTypeNames,Decodes the 53 animation node type names
-module_v21_clean.bin,0x7ff7c52b9740,0x7ff7c52b9740,RegisterCameraConfigVariables,Registers the camera and 3P animation config variables
-module_v21_clean.bin,0x7ff7c52bc6e0,0x7ff7c52bc6e0,UpdateCameraAnimationState,Per-frame camera animation update
-module_v21_clean.bin,0x7ff7c52bd730,0x7ff7c52bd730,SampleCameraAnimationOffset,Samples the authored camera offset from the animation graph
-module_v21_clean.bin,0x7ff7c52bc350,0x7ff7c52bc350,StopCameraAnimationState,Stops and clears the camera animation state
-module_v21_clean.bin,0x7ff7c54bff00,0x7ff7c54bff00,ApplyInputSettingsToState,Applies sensitivity and invert and aim-assist settings to the input state
-module_v21_clean.bin,0x7ff7c5701b50,0x7ff7c5701b50,BuildLocalHitEffectEntry,Builds a local hit-effect render entry
-module_v21_clean.bin,0x7ff7c57020c0,0x7ff7c57020c0,UpdateLocalHitEffectEnable,Updates the local hit-effect enable flag
-module_v21_clean.bin,0x7ff7c6eed360,0x7ff7c6eed360,RegisterComponentTypeDescriptor,Registers a component type descriptor
-module_v21_clean.bin,0x7ff7c602d0b0,0x7ff7c602d0b0,ConstructFirstPersonComponent,Constructs the first-person STU component
-module_v21_clean.bin,0x7ff7c6032f30,0x7ff7c6032f30,FirstPersonComponentFieldDefault,Returns the first-person component field default
-module_v21_clean.bin,0x7ff7c6945110,0x7ff7c6945110,RegisterStaticValueObject,Registers a static value object
-module_v21_clean.bin,0x7ff7c697bfc0,0x7ff7c697bfc0,RegisterFloatValueRecord,Registers a float value record
-module_v21_clean.bin,0x7ff7c54fced0,0x7ff7c54fced0,ConstructSequenceCameraView,Constructs the sequence camera view object
-module_v21_clean.bin,0x7ff7c54fd390,0x7ff7c54fd390,AllocateSequenceCameraView,Allocates and constructs the sequence camera view
-module_v21_clean.bin,0x7ff7c54fcdc0,0x7ff7c54fcdc0,DestroySequenceCameraView,Destroys the sequence camera view
-module_v21_clean.bin,0x7ff7c54fcd50,0x7ff7c54fcd50,DestroySequenceViewTable,Destroys the sequence view table member
-module_v21_clean.bin,0x7ff7c53d81d0,0x7ff7c53d81d0,TickSequenceCameraView,Per-frame sequence camera view state machine
-module_v21_clean.bin,0x7ff7c53d7cc0,0x7ff7c53d7cc0,ResetSequenceCameraViewState,Resets the sequence camera view state subobject
-module_v21_clean.bin,0x7ff7c53d8660,0x7ff7c53d8660,ResetSequenceCameraViewList,Resets the sequence camera view list
-module_v21_clean.bin,0x7ff7c53da460,0x7ff7c53da460,BeginSequenceCameraViewTransition,Copies a request into the committed sequence camera fields
-module_v21_clean.bin,0x7ff7c53dd310,0x7ff7c53dd310,CreateSequenceCameraViewTarget,Creates and polls the sequence camera target
-module_v21_clean.bin,0x7ff7c53dcc10,0x7ff7c53dcc10,UpdateSequenceCameraViewTarget,Resolves the target and updates the sequence camera view
-module_v21_clean.bin,0x7ff7c53de230,0x7ff7c53de230,LookupSequenceCameraViewSequence,Looks up the sequence id for the current target
-module_v21_clean.bin,0x7ff7c53dbe90,0x7ff7c53dbe90,StopSequenceCameraView,Stops the sequence camera view and releases its targets
-module_v21_clean.bin,0x7ff7c53daf30,0x7ff7c53daf30,UpdateSequenceCameraViewFrameCounter,Updates the sequence camera view frame counter
-module_v21_clean.bin,0x7ff7c54fd3c0,0x7ff7c54fd3c0,GetActiveSequenceCameraView,Returns the active sequence camera view under the spinlock
-module_v21_clean.bin,0x7ff7c54fd410,0x7ff7c54fd410,LookupSequenceViewTableSlot,Looks up a sequence view table slot by handle
-module_v21_clean.bin,0x7ff7c54fd790,0x7ff7c54fd790,GetSequenceCameraViewSlotIndex,Returns the sequence camera view world slot index
-module_v21_clean.bin,0x7ff7c53da170,0x7ff7c53da170,UpdateSequenceCameraViewState3,Updates sequence camera view state 3
-module_v21_clean.bin,0x7ff7c53ddd40,0x7ff7c53ddd40,UpdateSequenceCameraViewState4,Updates sequence camera view state 4
-module_v21_clean.bin,0x7ff7c53dd560,0x7ff7c53dd560,UpdateSequenceCameraViewState5,Updates sequence camera view state 5
-module_v21_clean.bin,0x7ff7c53dc160,0x7ff7c53dc160,UpdateSequenceCameraViewState6,Updates sequence camera view state 6
-module_v21_clean.bin,0x7ff7c53dc420,0x7ff7c53dc420,UpdateSequenceCameraViewState7,Updates sequence camera view state 7
-module_v21_clean.bin,0x7ff7c53dc790,0x7ff7c53dc790,UpdateSequenceCameraViewState8,Updates sequence camera view state 8
-module_v21_clean.bin,0x7ff7c53d8bd0,0x7ff7c53d8bd0,UpdateSequenceCameraViewMode4,Updates sequence camera view mode 4
-module_v21_clean.bin,0x7ff7c53d8d80,0x7ff7c53d8d80,UpdateSequenceCameraViewMode5,Updates sequence camera view mode 5
-module_v21_clean.bin,0x7ff7c54fd760,0x7ff7c54fd760,AdvanceSequenceCameraViewState,Advances the sequence camera view state
-module_v21_clean.bin,0x7ff7c54fd800,0x7ff7c54fd800,ReleaseSequenceCameraViewObserver,Releases the sequence camera view observer slot
-module_v21_clean.bin,0x7ff7c53d7840,0x7ff7c53d7840,GetSequenceCameraViewActor,Returns the sequence camera view actor for the current thread
-module_v21_clean.bin,0x7ff7c53d9f30,0x7ff7c53d9f30,GetSpecialSequenceCameraEntity,Returns the special camera entity for the current thread
+Overwatch.exe,0x140d2f060,0xd2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; checks it against the type descriptor; resolves the view-model entity and its model; calls the bind; registers the first-person config vars
+Overwatch.exe,0x140d2faa0,0xd4faa0,FpViewmodelBind,The bind: stores the view-model entity and model references and resets the view-model state; it does not read m_position or the four scalars
+Overwatch.exe,0x140d31bf0,0xd31bf0,FpViewmodelUpdateA,Per-frame update (view-model vtable slot +0xe0): walks the six 0x110-stride animation slots and runs the event player on each
+Overwatch.exe,0x140d322f0,0xd322f0,FpViewmodelUpdateB,Per-frame update (view-model vtable slot +0xe8): the second of the two per-frame slots
+Overwatch.exe,0x140d29c60,0xd29c60,FpViewmodelEventPlayer,The animation event/state player: dispatches event masks against the slot's event list
+Overwatch.exe,0x140d27410,0xd27410,FpViewmodelEventSort,Sorts the 0x50-byte event records by their short priority
+Overwatch.exe,0x141b88f10,FUN_7ff7c68f1de0,MrnmHandler,"The MRNM chunk handler and its deserializer are one function: copies the header and copies the material values (materials.md) while building the runtime parent-indexed tables (0xA0/0xF8/0x18 strides, used-bone mask, roots at -1) (animation.md)"
+Overwatch.exe,0x140b909d0,FUN_7ff7c58df9b0,CurveKeySampleDual,The shared curve pipeline's dual (two-source) sample stage feeding blend/replace
+Overwatch.exe,0x141e2d5c0,FUN_7ff7c6ba3a70,ClipRuntimeConstruct,The clip runtime record's constructor
+Overwatch.exe,0x140d2a250,FUN_00d2a250,AnimEventMaskDispatch,Current-build animation event player helper: dispatches event masks 0x100/0x200/0x400/0x800 against the slot's event list (RVA 0xd2a250)
+Overwatch.exe,0x140d3a020,FUN_00d3a020,FpViewmodelEventPlayerB,Current-build: the second event/state player the per-frame view-model updates call (RVA 0xd3a020)
+Overwatch.exe,0x1421530b0,FUN_7ff7c6eda1c0,StatescriptVarPoolConstruct,Constructs the runtime variable pool (pool 0x68 -> holder 0x240 with the 16x0x20 slot table -> instance >=0x15B0)
+Overwatch.exe,0x142155280,FUN_7ff7c6edc380,StatescriptApplyPass,The apply pass: walks the instance's elements and applies each record's default
+Overwatch.exe,0x142157910,FUN_7ff7c6edea10,StatescriptSlotResolve,Resolves an element by its id in the runtime
+Overwatch.exe,0x140a264c0,FUN_7ff7c5770230,StatescriptDriveWalk,The per-frame script walk: slot 100 (+0x320) of the host class; walks the script-instance array and runs element slots 43/44 around a parameter push
+Overwatch.exe,0x142141f70,FUN_7ff7c6ec9070,StatescriptNodePush,The parameter push: walks the element list and dispatches by node type index through the trampoline
+Overwatch.exe,0x140a9ba70,FUN_7ff7c57e77b0,StatescriptSlot43Executor,Element vtable slot 43 (+0x158): the executor step that sets the busy counter
+Overwatch.exe,0x1421f6ae0,FUN_7ff7c6f7e310,StatescriptGraphMaterialize,"The graph materializer: walks the 0x10-byte node records {key, flags, kind, target} in order"
+Overwatch.exe,0x1421ea960,FUN_7ff7c6f72190,WorldQueryByClass,"The world query a resolved reference lands in (world, u16 class id, 0x9e)"
+Overwatch.exe,0x141943290,FUN_7ff7c66aa450,TypeIndexByHash,Maps the first-person component's class hash 0x9d28963f to type index 0x35
+Overwatch.exe,0x140be3700,FUN_7ff7c5933ec0,LobbyLog,"The shared lobby logger entry: (client, level, message, system-name string)"
+Overwatch.exe,0x141b7b9d0,FUN_7ff7c68e4560,MaterialAssetLookup,"The material-asset lookup (registry, keyA, keyB); falls into the no-return assert path on a miss"
+Overwatch.exe,0x141b839b0,FUN_7ff7c68ec880,MaterialKeyBind,The u64-array material binding: resolves keys -> indices clamped by the u64-value count
+Overwatch.exe,0x141b8a1d0,FUN_7ff7c68f30a0,MaterialSlotBind,The slot binder: sets the container's slot count and binds each material through the record's u16 at +4
+Overwatch.exe,0x141b8ca70,FUN_7ff7c68f5940,MaterialParamApply,"The material-parameter applier: resolves the material descriptor, scans the model's key/value records, stores the min/max times"
+Overwatch.exe,0x141b88cb0,FUN_7ff64ba31b80,MdlcMaterialRead,"The MDLC chunk deserializer: the material list (copies the header, memcpy's the material values)"
+Overwatch.exe,0x141b894d0,FUN_7ff64ba323a0,MsklTableBuild,The mskl chunk deserializer: packs the 6-byte chain records into the table blob
+Overwatch.exe,0x141b88e50,FUN_7ff64ba31d20,MoclRead,The MOCL chunk deserializer: the occlusion/limits table
+Overwatch.exe,0x142cd9c90,FUN_7ff756242d00,ConstraintDispatch,The per-constraint dispatcher (cases 1-9) inside the solve
+Overwatch.exe,0x142d07170,FUN_7ff7562702a0,RotationInertiaSolve,A 4x4 rotation-inertia solver in the conditioned sweep (verified not the integrator)
+Overwatch.exe,0x142cdf710,FUN_7ff7c7a68840,DmResidualQuery,The residual query the step entry loops on (threshold 0.5 at DAT_7ff7c7d0c068)
+Overwatch.exe,0x14208c070,FUN_7ff7c6e0fb50,DmTickKeeper,"The tick's keeper: zeroes the pending budget, clears the pending flag, recurses into children whose time is behind"
+Overwatch.exe,0x140cbacc0,FUN_7ff7c5a12c50,MoverStateMachine,"The per-frame character state machine: flags, timer, state id, the +0x1a79 state byte, the local vector and the ground probe"
+Overwatch.exe,0x140ca5940,FUN_7ff7c59fd050,MoverWishUpdate,"The wish-vector update wrapper: reads +0x1140, converts through the frame-conversion helper, applies the difference"
+Overwatch.exe,0x141c5f5e0,FUN_7ff7c69cc160,TypeRegistrationCore,The type-registration core: allocates the per-flag registration tables
+Overwatch.exe,0x141d2ea50,FUN_7ff7c6a9d590,PsoDebugPanelDraw,The draw callback of the PSO debug panel object
+Overwatch.exe,0x141b4cba0,0x1b4cba0,GetDefaultFarZ,Reads the DefaultFarZ settings variable and falls back to 16384.0 when disabled
+Overwatch.exe,0x141b4cbc0,0x1b4cbc0,GetDefaultNearZ,Reads the DefaultNearZ settings variable and falls back to 0.1 when disabled
+Overwatch.exe,0x1404c2890,0x4c2890,RegisterDefaultFarZ,Registers DefaultFarZ with its 16384.0 default and 100/20000 limits
+Overwatch.exe,0x1404bd630,0x4bd630,RegisterHorizontalFov,Registers HorizontalFOV with its 103.0/70.0 limits
+Overwatch.exe,0x14057a140,0x57a140,SetCameraPlaneValue,Sets one camera projection plane (0 angle 1 near 2 far) and returns the previous value
+Overwatch.exe,0x14079a450,0x79a450,ComputeMouseLookDelta,Converts scaled mouse counts into yaw/pitch deltas with the invert-pitch sign
+Overwatch.exe,0x14079b900,0x79b900,ComputeAimAssistedLookDelta,Computes the look delta and adds the view-target aim-assist delta
+Overwatch.exe,0x14096c290,0x96c290,RegisterFirstPersonClipPlanes,Registers camera.FirstPersonNearZ/FarZ at one tenth of the world clip planes
+Overwatch.exe,0x14096eab0,0x96eab0,DispatchFpCameraSlotTime,Dispatches the first-person camera slot event by round(time*1000)
+Overwatch.exe,0x14067db60,0x7ff7c539db60,ApplyFirstPersonOffsetTransform,Applies the firstPerson Offset/rotation overrides to the first-person model transform
+Overwatch.exe,0x140609100,0x609100,InputPollMouseAndGamepad,Polls the mouse and gamepad look counts timestamp and mouse scale
+Overwatch.exe,0x14060a570,0x7ff7c532a570,EvaluateForceInputMode,Evaluates the input.ForceInputMode override and returns the selected input mode
+Overwatch.exe,0x140f44ed0,0xf4ed0,MergeReplayCameraViewTelemetry,MergeFrom for the ReplayCameraView ProTelemetry message; not the in-game replay camera
+Overwatch.exe,0x142069710,0x2069710,InitCameraViewParams,Initialises a camera view struct with vtable matrices 35 deg half-FOV and near/far
+Overwatch.exe,0x140ab3110,0x7ff7c57d3110,PlayerCameraControllerUpdate,Reads the player camera component and distance then sets the camera mode and view
+Overwatch.exe,0x14214dcc0,0x7ff7c6e6dcc0,GetPlayerComponentByIndex,Returns a player component from the indexed component array
+Overwatch.exe,0x1420a50d0,0x7ff7c6dc50d0,SetCameraMode,Selects the new camera mode and stores the FP/3P blend
+Overwatch.exe,0x1420a5410,0x7ff7c6dc5410,SelectCameraMode,Resolves the camera mode transition from the distance and current mode
+Overwatch.exe,0x1420a52a0,0x7ff7c6dc52a0,SetCameraView,Stores the view on the camera component
+Overwatch.exe,0x14096bef0,0x7ff7c568bef0,SelectFirstPersonCamera,Chooses and attaches the first-person camera component from the candidate lists
+Overwatch.exe,0x14206cfd0,0x7ff7c6d8cfd0,GetCameraComponent,Returns the camera component attached to a view
+Overwatch.exe,0x14206d3c0,0x7ff7c6d8d3c0,AttachCameraComponent,Attaches a camera component to a view and copies the view snapshot
+Overwatch.exe,0x1420a4b90,0x7ff7c6dc4b90,ResetCameraComponent,Resets the camera component state
+Overwatch.exe,0x14206db20,0x7ff7c6d8db20,UpdateCameraView,Per-frame base view update: transition and component update and modifiers and final descriptor
+Overwatch.exe,0x1420a4bb0,0x7ff7c6dc4bb0,UpdateCameraComponent,Applies the camera component FOV and mode update and shake state
+Overwatch.exe,0x1420a39c0,0x7ff7c6dc39c0,InterpolateCameraTransition,Blends position and orientation and distance and FOV over the transition timer
+Overwatch.exe,0x1420a53c0,0x7ff7c6dc53c0,UpdateCameraRecord,Runs the camera record pose builder for one update
+Overwatch.exe,0x14206ea60,0x7ff7c6d8ea60,UpdateCameraModifiers,Iterates the view modifier records and writes the final camera descriptor
+Overwatch.exe,0x14206e400,0x7ff7c6d8e400,BuildThirdPersonCameraPose,Computes the third-person eye from the pivot and distance and forward axis
+Overwatch.exe,0x14206e0a0,0x7ff7c6d8e0a0,ApplyThirdPersonCameraTrace,Copies the third-person descriptor and runs the collision trace
+Overwatch.exe,0x14206e1a0,0x7ff7c6d8e1a0,TraceThirdPersonCamera,Tests the third-person camera against the world and applies the pull-in correction
+Overwatch.exe,0x1420b0f40,0x7ff7c6dd0f40,SolveThirdPersonCameraCollision,Four-ray near-plane cast that clamps the third-person distance
+Overwatch.exe,0x140997b90,0x7ff7c56b7b90,UpdateFirstPersonCameraPose,Builds the first-person camera pose and near clip and FOV from the owner
+Overwatch.exe,0x140997940,0x7ff7c56b7940,IsFirstPersonCameraActive,Returns whether the first-person camera owner is active
+Overwatch.exe,0x140997840,0x7ff7c56b7840,GetFirstPersonCameraDeltaTime,Returns the first-person camera delta time
+Overwatch.exe,0x1420a50c0,0x7ff7c6dc50c0,SetCameraFov,Stores the camera component vertical FOV
+Overwatch.exe,0x1420a3340,0x7ff7c6dc3340,ConstructCameraComponent,Constructs the base camera component with the 70 degree default FOV
+Overwatch.exe,0x140997640,0x7ff7c56b7640,ConstructFirstPersonCamera,Constructs the level-1 first-person camera component
+Overwatch.exe,0x140997c90,0x7ff7c56b7c90,BuildFirstPersonCameraVariant,Constructs the level-2 first-person camera component
+Overwatch.exe,0x1420e4aa0,0x7ff7c6e04aa0,ConstructThirdPersonSpringCamera,Constructs the third-person spring camera
+Overwatch.exe,0x14206d0f0,0x7ff7c6d8d0f0,PushCameraModifier,Appends a camera modifier record to the view
+Overwatch.exe,0x14206d310,0x7ff7c6d8d310,ComputeCameraPositionFromComponent,Computes the camera position from the component position and forward offset
+Overwatch.exe,0x14206d250,0x7ff7c6d8d250,SetCameraScreenOffset,Stores the camera screen offset
+Overwatch.exe,0x14206d2c0,0x7ff7c6d8d2c0,ResetCameraAnimationOwner,Clears the camera animation owner
+Overwatch.exe,0x14206d840,0x7ff7c6d8d840,SetCameraTransform,Applies the camera transform subobject
+Overwatch.exe,0x142040b40,0x7ff7c6d60b40,TickRegisteredCameraViews,Calls every registered view apply slot with the manager delta time
+Overwatch.exe,0x142028370,0x7ff7c6d48370,AddCameraView,Appends a view to the camera manager view array
+Overwatch.exe,0x142032060,0x7ff7c6d52060,DispatchCameraRequest,Dispatches a camera-system request
+Overwatch.exe,0x142036ac6,0x7ff7c6d56ac6,ProcessCameraRequest,Processes one camera-system request
+Overwatch.exe,0x14203c4e0,0x7ff7c6d5c4e0,UpdateCameraSystem,Runs the camera system update stage
+Overwatch.exe,0x14203cc30,0x7ff7c6d5cc30,AdvanceCameraSystemStage2,Runs the second camera system update stage
+Overwatch.exe,0x1406b9db0,0x7ff7c53d9db0,ResolveCameraModeComponent,Resolves the component for a camera mode from the mode table
+Overwatch.exe,0x14096c5b0,0x7ff7c568c5b0,ApplyFirstPersonCamera,Per-frame first-person view apply: FOV blend and clip planes and pose matrix
+Overwatch.exe,0x14096cb30,0x7ff7c568cb30,EvaluateFirstPersonCameraAnimation,Evaluates the FP animation and writes the three camera offset values
+Overwatch.exe,0x140adea00,0x7ff7c57fea00,EvaluateFirstPersonAnimationNode,Applies the FP animation weight to an animation node
+Overwatch.exe,0x140064a30,0x7ff7c4d84a30,CacheFirstPersonFarPlane,Caches one tenth of the world far plane for first person
+Overwatch.exe,0x140064a50,0x7ff7c4d84a50,CacheFirstPersonNearPlane,Caches one tenth of the world near plane for first person
+Overwatch.exe,0x1404c2980,0x7ff7c51e2980,RegisterDefaultNearZ,Registers DefaultNearZ
+Overwatch.exe,0x141b30fc0,0x7ff7c6850fc0,GetHorizontalFov,Returns the HorizontalFOV setting
+Overwatch.exe,0x1406796c0,0x7ff7c53996c0,RegisterFirstPersonSettings,Registers the firstPerson settings group
+Overwatch.exe,0x14067f6e0,0x7ff7c539f6e0,RegisterLocalHitEffectsSettings,Registers the localhiteffects settings group
+Overwatch.exe,0x14060ada0,0x7ff7c532ada0,RegisterInputSettings,Registers the input settings group
+Overwatch.exe,0x142069a20,0x7ff7c6d89a20,ValidateAndNormalizeCameraDescriptor,Normalizes and validates the camera basis and FOV
+Overwatch.exe,0x142069c60,0x7ff7c6d89c60,OrthonormalizeCameraBasis,Orthonormalizes the camera basis rows
+Overwatch.exe,0x14206afe0,0x7ff7c6d8afe0,BuildViewMatricesFromCameraDescriptor,Builds the camera-to-world and world-to-view matrices
+Overwatch.exe,0x142075630,0x7ff7c6d95630,SetPerspectiveProjection,Sets the perspective projection from the view rectangle and half FOVs
+Overwatch.exe,0x142075a70,0x7ff7c6d95a70,BuildPerspectiveMatrix,Builds the left-handed row-major perspective matrix
+Overwatch.exe,0x14206a4a0,0x7ff7c6d8a4a0,RebuildProjection,Rebuilds the projection after a view parameter change
+Overwatch.exe,0x14206b2d0,0x7ff7c6d8b2d0,SetViewHalfFovs,Sets the view half-FOV pair
+Overwatch.exe,0x14206afb0,0x7ff7c6d8afb0,SetViewOutputRect,Sets the view output rectangle
+Overwatch.exe,0x14206a2b0,0x7ff7c6d8a2b0,SetPerspectiveViewRect,Sets the view rectangle and enables perspective projection
+Overwatch.exe,0x14206b4a0,0x7ff7c6d8b4a0,SetVerticalFovFull,Sets the vertical full FOV and rebuilds projection
+Overwatch.exe,0x14206b500,0x7ff7c6d8b500,ProjectWorldPoint,Projects a world point through the view and projection matrices
+Overwatch.exe,0x142075230,0x7ff7c6d95230,InitProjectionDescriptor,Initializes the projection descriptor
+Overwatch.exe,0x142075270,0x7ff7c6d95270,BuildFrustumPlanes,Builds the projection frustum planes
+Overwatch.exe,0x142075550,0x7ff7c6d95550,SetOrthoProjection,Sets an orthographic projection
+Overwatch.exe,0x1420754a0,0x7ff7c6d954a0,SetExplicitBoundsProjection,Sets an explicit-bounds projection
+Overwatch.exe,0x1406d2610,0x7ff7c53f2610,ApplyCameraTransform,Applies a camera basis and position to the view matrices
+Overwatch.exe,0x14206eee0,0x7ff7c6d8eee0,ApplyCameraViewOffset,Applies the camera shake and positional offset to the view
+Overwatch.exe,0x1421318b0,0x7ff7c6e518b0,AddVerticalFovOffset,Adds the vertical FOV offset to the camera descriptor
+Overwatch.exe,0x1420b0a80,0x7ff7c6dd0a80,ProjectPointThroughBasis,Projects a point through a constructed camera basis
+Overwatch.exe,0x1420b0b20,0x7ff7c6dd0b20,ProjectPointThroughView,Projects a point through a view
+Overwatch.exe,0x14206a5f0,0x7ff7c6d8a5f0,SetViewRectFromInts,Sets the view output rectangle from integer bounds
+Overwatch.exe,0x1405a0e70,0x7ff7c52c0e70,RefreshCameraViewRect,Refreshes the view output rectangle from the viewport
+Overwatch.exe,0x1404c2ab0,0x7ff7c51e2ab0,DecodeCameraNodeTypeNames,Decodes the 53 animation node type names
+Overwatch.exe,0x140599740,0x7ff7c52b9740,RegisterCameraConfigVariables,Registers the camera and 3P animation config variables
+Overwatch.exe,0x14059c6e0,0x7ff7c52bc6e0,UpdateCameraAnimationState,Per-frame camera animation update
+Overwatch.exe,0x14059d730,0x7ff7c52bd730,SampleCameraAnimationOffset,Samples the authored camera offset from the animation graph
+Overwatch.exe,0x14059c350,0x7ff7c52bc350,StopCameraAnimationState,Stops and clears the camera animation state
+Overwatch.exe,0x14079ff00,0x7ff7c54bff00,ApplyInputSettingsToState,Applies sensitivity and invert and aim-assist settings to the input state
+Overwatch.exe,0x1409e1b50,0x7ff7c5701b50,BuildLocalHitEffectEntry,Builds a local hit-effect render entry
+Overwatch.exe,0x1409e20c0,0x7ff7c57020c0,UpdateLocalHitEffectEnable,Updates the local hit-effect enable flag
+Overwatch.exe,0x1421cd360,0x7ff7c6eed360,RegisterComponentTypeDescriptor,Registers a component type descriptor
+Overwatch.exe,0x14130d0b0,0x7ff7c602d0b0,ConstructFirstPersonComponent,Constructs the first-person STU component
+Overwatch.exe,0x141312f30,0x7ff7c6032f30,FirstPersonComponentFieldDefault,Returns the first-person component field default
+Overwatch.exe,0x141c25110,0x7ff7c6945110,RegisterStaticValueObject,Registers a static value object
+Overwatch.exe,0x141c5bfc0,0x7ff7c697bfc0,RegisterFloatValueRecord,Registers a float value record
+Overwatch.exe,0x1407dced0,0x7ff7c54fced0,ConstructSequenceCameraView,Constructs the sequence camera view object
+Overwatch.exe,0x1407dd390,0x7ff7c54fd390,AllocateSequenceCameraView,Allocates and constructs the sequence camera view
+Overwatch.exe,0x1407dcdc0,0x7ff7c54fcdc0,DestroySequenceCameraView,Destroys the sequence camera view
+Overwatch.exe,0x1407dcd50,0x7ff7c54fcd50,DestroySequenceViewTable,Destroys the sequence view table member
+Overwatch.exe,0x1406b81d0,0x7ff7c53d81d0,TickSequenceCameraView,Per-frame sequence camera view state machine
+Overwatch.exe,0x1406b7cc0,0x7ff7c53d7cc0,ResetSequenceCameraViewState,Resets the sequence camera view state subobject
+Overwatch.exe,0x1406b8660,0x7ff7c53d8660,ResetSequenceCameraViewList,Resets the sequence camera view list
+Overwatch.exe,0x1406ba460,0x7ff7c53da460,BeginSequenceCameraViewTransition,Copies a request into the committed sequence camera fields
+Overwatch.exe,0x1406bd310,0x7ff7c53dd310,CreateSequenceCameraViewTarget,Creates and polls the sequence camera target
+Overwatch.exe,0x1406bcc10,0x7ff7c53dcc10,UpdateSequenceCameraViewTarget,Resolves the target and updates the sequence camera view
+Overwatch.exe,0x1406be230,0x7ff7c53de230,LookupSequenceCameraViewSequence,Looks up the sequence id for the current target
+Overwatch.exe,0x1406bbe90,0x7ff7c53dbe90,StopSequenceCameraView,Stops the sequence camera view and releases its targets
+Overwatch.exe,0x1406baf30,0x7ff7c53daf30,UpdateSequenceCameraViewFrameCounter,Updates the sequence camera view frame counter
+Overwatch.exe,0x1407dd3c0,0x7ff7c54fd3c0,GetActiveSequenceCameraView,Returns the active sequence camera view under the spinlock
+Overwatch.exe,0x1407dd410,0x7ff7c54fd410,LookupSequenceViewTableSlot,Looks up a sequence view table slot by handle
+Overwatch.exe,0x1407dd790,0x7ff7c54fd790,GetSequenceCameraViewSlotIndex,Returns the sequence camera view world slot index
+Overwatch.exe,0x1406ba170,0x7ff7c53da170,UpdateSequenceCameraViewState3,Updates sequence camera view state 3
+Overwatch.exe,0x1406bdd40,0x7ff7c53ddd40,UpdateSequenceCameraViewState4,Updates sequence camera view state 4
+Overwatch.exe,0x1406bd560,0x7ff7c53dd560,UpdateSequenceCameraViewState5,Updates sequence camera view state 5
+Overwatch.exe,0x1406bc160,0x7ff7c53dc160,UpdateSequenceCameraViewState6,Updates sequence camera view state 6
+Overwatch.exe,0x1406bc420,0x7ff7c53dc420,UpdateSequenceCameraViewState7,Updates sequence camera view state 7
+Overwatch.exe,0x1406bc790,0x7ff7c53dc790,UpdateSequenceCameraViewState8,Updates sequence camera view state 8
+Overwatch.exe,0x1406b8bd0,0x7ff7c53d8bd0,UpdateSequenceCameraViewMode4,Updates sequence camera view mode 4
+Overwatch.exe,0x1406b8d80,0x7ff7c53d8d80,UpdateSequenceCameraViewMode5,Updates sequence camera view mode 5
+Overwatch.exe,0x1407dd760,0x7ff7c54fd760,AdvanceSequenceCameraViewState,Advances the sequence camera view state
+Overwatch.exe,0x1407dd800,0x7ff7c54fd800,ReleaseSequenceCameraViewObserver,Releases the sequence camera view observer slot
+Overwatch.exe,0x1406b7840,0x7ff7c53d7840,GetSequenceCameraViewActor,Returns the sequence camera view actor for the current thread
+Overwatch.exe,0x1406b9f30,0x7ff7c53d9f30,GetSpecialSequenceCameraEntity,Returns the special camera entity for the current thread

@@ -16,7 +16,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `build_translate.py` | Translate a function's address from one client build to the next. | 198 |
 | `capture_coverage.py` | Do we have the code for this address? | 322 |
 | `capture_range.py` | Capture a running game and look for the map it has loaded. | 90 |
-| `carry_names.py` | Carry the name table into the next client build. | 99 |
+| `carry_names.py` | Carry the name table into the next client build. | 104 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
 | `clip_fp.py` | Byte-level orientation probes for the first-person clip family 0x00020400. | 100 |
 | `clip_fp_lanes.py` | Column-consistency scanner over the FP-family clip value area. | 55 |
@@ -101,7 +101,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `loader_imports.py` | (no header) | 60 |
 | `make_focus.py` | Build the focus file for the next capture. | 131 |
 | `mkpe.py` | Wrap raw captured regions as one minimal valid PE for analysis tools. | 99 |
-| `naming_seed.py` | (no header) | 571 |
+| `naming_seed.py` | (no header) | 577 |
 | `offline_page_recover.py` | Recover Overwatch.exe `.text` / `.pdata` offline with the known page cipher. | 1240 |
 | `outline_sites.py` | Outline the function behind each address and disassemble around it. | 54 |
 | `page_crypt_battery.py` | Cipher-structure battery for the Overwatch.exe page transform. | 104 |
@@ -135,6 +135,18 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `trace_chain.py` | Trace pointer chains inside a session-coherent image. | 116 |
 | `trace_probe.py` | Measure the client's movement per write (frame) from a captured trace. | 89 |
 | `vel_scan.py` | Velocity-signature scan: find the (vx, 0, vz) walk-velocity triple. | 135 |
+| `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 78 |
+| `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 194 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 156 |
+| `verify_harness/cli.py` | Run verification units. Exit code is the gate. | 73 |
+| `verify_harness/coverage.py` | Basic-block / branch coverage of the oracle, measured on the very runs | 130 |
+| `verify_harness/curve_fixture.py` | Structured input factory for fn/CurveKeySampleDual. | 150 |
+| `verify_harness/emu_oracle.py` | Unicorn oracle: run one captured client function on one input. | 286 |
+| `verify_harness/gen.py` | Deterministic input generation for one unit. | 160 |
+| `verify_harness/ledger.py` | Digest-bound verification records. | 119 |
+| `verify_harness/mutate.py` | Behaviour-changing mutations of a C candidate, for measuring whether the | 206 |
+| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 538 |
+| `verify_harness/selftest.py` | The harness's own gate: inject known defects, require detection. | 195 |
 | `wall_diff.py` | Wall-pinned input diff: heap offsets that only change under a held key. | 107 |
 | `wall_watch.py` | Scan for W-only changing offsets, then behaviorally verify each candidate. | 114 |
 | `warm_merge.py` | Merge warm_poll captures over the flattened v2b image, page by page. | 164 |

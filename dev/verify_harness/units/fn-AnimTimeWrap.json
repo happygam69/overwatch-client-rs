@@ -1,0 +1,27 @@
+{
+  "id": "fn/AnimTimeWrap",
+  "title": "wrap a time value into [min,max], or modular-wrap when the range's flag bit 0 is set",
+  "address": { "v2b": "0x7ff7c58b1ef0" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "c_file": "dev/decompiles/AnimTimeWrap_0x140b91ef0.c",
+  "entry": "FUN_140b91ef0",
+  "args": [
+    { "name": "range", "kind": "ptr", "ptr_len": 16 },
+    { "name": "t", "kind": "f32" }
+  ],
+  "returns": "f32",
+  "argFactory": "anim_time_wrap_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 85,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 4241
+  },
+  "notes": [
+    "range is float[4]: [0]=min, [1]=max/period, [3] low bits are the flag dword; bit 0 selects modular wrap.",
+    "Zero callees, no global reads: the first rung of the ladder.",
+    "argFactory=anim_time_wrap_fixture pins flag-bit sweep cases at the front of the corpus so a mask-widen mutant (bit0 test widened to bit1) is always discriminated.",
+    "The clamp is SSE minss/maxss (NaN -> second source), not IEEE-ordered ifs; the decompile's original sequential ifs were fixed after this harness caught the NaN divergence."
+  ]
+}

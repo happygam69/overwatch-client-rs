@@ -4,6 +4,57 @@ Newest first. Milestones only; details and addresses live in `docs/formats/`,
 current state in `STATUS-handoff.md`, fits in `docs/fitted-ledger.md`, the
 work queue in `docs/open-questions.md`.
 
+## 2026-10-24 - Ghidra project pruned: three programs deleted
+
+- Deleted `camera_warm.exe` (never analysed, 0 functions; its code is
+  byte-identical across sessions and reads in `Overwatch.exe`),
+  `module_v21_clean.bin` (superseded by the complete `Overwatch.exe`: it
+  held every page, while 2,351 of the v21 program's `.text` pages were
+  zero) and `ldr-warm/loader_after_diff.bin` (the flat warm loader,
+  superseded by its own wrap). The images stay in `D:/ow-dumps`, so the
+  docs' citations can be re-derived.
+- Before deleting, the 166 `module_v21_clean.bin` names in
+  `docs/function-names.csv` were translated to the exec frame
+  (`0x140000000 + RVA`) and applied to `Overwatch.exe`; the check reports
+  **174 named, 0 missing**, and the program was saved. `dev/naming_seed.py`
+  now writes new rows for `Overwatch.exe` in that frame.
+- The three `regions/` wraps were **byte-checked and kept**: they are
+  old-build warm captures, not current-build duplicates. `mover_ctl` fills
+  704 and `speed_readers` 384 sampled windows where `module_v2full.bin` is
+  cold zero; `clipobj` lives in an old session frame whose citations
+  resolve only there. **10 programs remain** in `dev/ghidra_run/owmod`.
+- Debloat: the 2026-10-23 page-fill narrative in `docs/ghidra-project.md`
+  was compressed to a summary (the detail lives in MODLOG/STATUS and the
+  `D:/ow-dumps` manifests); the 4.1 GB pre-prune snapshot
+  (`owmod_snapshot_20261021_preprune`) and the root scratch dumps
+  `L_ctx.txt` / `L_settings_refs.txt` were deleted. `STATUS-handoff.md`,
+  `docs/artifacts.md`, `docs/capture-coverage.md`, `docs/formats/camera.md`
+  and `AGENTS.md` updated.
+
+## 2026-10-24 - Differential verification harness; two functions verified
+
+- `dev/verify_harness/` runs a five-stage ladder (load, determinism,
+  differential, coverage, mutation) against **the emulated real bytes**
+  (`D:/ow-dumps/offline_recover/module_offline.bin`, the complete
+  offline-recovered image, via Unicorn), never against a decompile.
+  Tier 1 compiles the Ghidra C (`dev/decompiles/`, renamed from
+  `anim_decompiles/`) through `ghidra_shim.h`; tier 2 runs `rust_probe.rs`
+  through a subprocess protocol. Digest-bound ledger; `cli.py selftest`
+  injects 10 defects and requires 10 detections, plus a broken-Rust entry.
+  Subagent workflow: `dev/verify_harness/AGENT-PROTOCOL.md`.
+- **`fn/AnimTimeWrap` (`0x7ff7c58b1ef0`) and `fn/CurveKeySampleDual`
+  (`0x7ff7c58b09d0`) are verified** on every channel at 100% branch coverage
+  and 100% mutation kill (3 declared observationally equivalent, with
+  rationales). The harness found two classes of Ghidra-output bug, both
+  fixed in the decompiles: a float-to-uint *conversion* where the bytes do
+  a raw bit test / dword load, and IEEE-ordered `if` chains where the bytes
+  are SSE `minss`/`maxss` (NaN yields the second source). `fn/AnimTimeWrap-rust`
+  verifies the same oracle against the Rust probe.
+- Three other zero-callee decompiles are **not verifiable as they stand**:
+  `AnimWritesOrientationPosition` and `DecodeCameraNodeTypeNames` are
+  comment-only stubs; `DispatchFpCameraSlotTime` has an indirect call and an
+  unrecovered jumptable.
+
 ## 2026-10-23 - Complete image imported into Ghidra
 
 - The Plan A PE (`D:/ow-dumps/offline_recover/module_offline.bin`, preferred

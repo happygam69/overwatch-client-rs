@@ -111,3 +111,10 @@ given here once.
 - **`trace_diff`** - golden-trace comparison for movement/combat commits.
 - **`blendset_probe` / `blendtree_probe` / `retarget_probe`** - read-only
   animation data probes (see `artifacts.md` and `tools.md`).
+- **`dev/verify_harness/`** - differential verification of client
+  functions: the oracle is the real bytes emulated offline (Unicorn over
+  the captured image), the candidate is the Ghidra C (tier 1) or a Rust
+  probe (tier 2); five stages (load, determinism, differential, coverage,
+  mutation), digest-bound ledger, selftest. `python
+  dev/verify_harness/cli.py all` runs every unit; `selftest` proves the
+  verifier still detects injected defects.

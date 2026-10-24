@@ -11,6 +11,11 @@ for the new.
 
 An address that cannot be translated (the patch rewrote the function) is
 kept for the old program only, and the row says so.
+
+The defaults remember the 2026-10-23 migration (into `module_v21_clean.bin`,
+since deleted from the Ghidra project); pass --from-program/--to-program
+explicitly for any new migration, and mind the address frame of the program
+you tag (the v2b flat images vs `Overwatch.exe`'s exec frame).
 """
 
 from __future__ import annotations

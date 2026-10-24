@@ -1,0 +1,26 @@
+{
+  "id": "fn/AnimTimeWrap-rust",
+  "title": "tier-2: the same AnimTimeWrap oracle, candidate is the rust_probe implementation",
+  "address": { "v2b": "0x7ff7c58b1ef0" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "anim_time_wrap",
+  "candidateLoader": "rust",
+  "args": [
+    { "name": "range", "kind": "ptr", "ptr_len": 16 },
+    { "name": "t", "kind": "f32" }
+  ],
+  "returns": "f32",
+  "argFactory": "anim_time_wrap_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 85,
+    "mutationCount": 10,
+    "mutationKillRate": 0.75,
+    "seed": 4241
+  },
+  "notes": [
+    "Same oracle as fn/AnimTimeWrap; the candidate is rust_probe.rs via the subprocess protocol.",
+    "Proves the tier-2 loader runs the full five-stage ladder, not just the selftest's differential slice.",
+    "Mutants are line-edits of rust_probe.rs; a mutant that fails rustc is counted killed."
+  ]
+}

@@ -27,6 +27,17 @@ view-model camera. Evidence classes are stated per section: `install`,
   drop/back framing stays fitted.
 - **Play-slot names: tier 3.** The slot descriptors are hashes with no readable
   member names; state assignment is shape-based.
+- **Mechanically verified functions (2026-10-24).** `dev/verify_harness/`
+  differential-tests a reconstruction against the emulated real bytes
+  (`D:/ow-dumps/offline_recover/module_offline.bin`). `AnimTimeWrap` (`0x7ff7c58b1ef0`,
+  wrap-or-clamp a time into a range) and `CurveKeySampleDual`
+  (`0x7ff7c58b09d0`, dual-track key interpolation) are verified on every
+  channel at 100% branch coverage and 100% mutation kill. The harness found
+  two Ghidra-output bug classes in the decompiles, both now corrected from the
+  bytes: a float-to-uint conversion where the code does a raw bit test /
+  dword load, and IEEE-ordered `if` chains where the code is SSE
+  `minss`/`maxss` (NaN yields the second source). The C decompiles live in
+  `dev/decompiles/` (untracked).
 
 ## Skeleton and rigs
 

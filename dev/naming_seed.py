@@ -21,7 +21,13 @@ BASE = 0x7FF7C4D20000
 EXEC_DELTA = 0x71820000
 RANGE_DELTA = 0x17AEC0000
 V2FULL = "module_v2full.bin"
-V21 = "module_v21_clean.bin"
+# Rows tag the Ghidra program that holds the current build. Since the
+# `module_v21_clean.bin` program was deleted (2026-10-24) that is the
+# complete offline image, whose addresses are exec addresses
+# (0x140000000 + RVA); the byte matching below still runs in the flat v2b
+# image on disk (NEW_IMAGE), whose file offsets are RVAs.
+CURRENT = "Overwatch.exe"
+CURRENT_DELTA = 0x140000000 - BASE
 
 
 # (doc_address, frame, name, role, docref)
@@ -488,7 +494,7 @@ def main() -> int:
         for prog in row["program"].split(";"):
             prog = prog.strip()
             names_used.add((prog, row["name"]))
-            if prog != V21:
+            if prog != CURRENT:
                 continue
             addrs_used.setdefault(prog, set()).add(row["address"])
 
@@ -534,26 +540,26 @@ def main() -> int:
                 continue
             depth = result
             new_addr = begin + BASE
-        if (V21, name) in names_used:
-            print(f"SKIP  {name:<24} name already in the table for {V21}")
+        if (CURRENT, name) in names_used:
+            print(f"SKIP  {name:<24} name already in the table for {CURRENT}")
             skipped += 1
             continue
-        addr_str = f"0x{new_addr:x}"
-        if addr_str in addrs_used.get(V21, set()):
-            print(f"SKIP  {name:<24} {addr_str} already named in {V21}")
+        addr_str = f"0x{new_addr + CURRENT_DELTA:x}"
+        if addr_str in addrs_used.get(CURRENT, set()):
+            print(f"SKIP  {name:<24} {addr_str} already named in {CURRENT}")
             skipped += 1
             continue
-        names_used.add((V21, name))
-        addrs_used.setdefault(V21, set()).add(addr_str)
+        names_used.add((CURRENT, name))
+        addrs_used.setdefault(CURRENT, set()).add(addr_str)
         rows.append({
-            "program": V21,
+            "program": CURRENT,
             "address": addr_str,
             "doc_address": doc_addr,
             "name": name,
             "role": role,
         })
-        print(f"add   {name:<24} 0x{new_addr:x}   ({frame} {doc_addr}; {docref})"
-              + ("" if not depth else f"; doc begin 0x{depth:x} into the v21 body"))
+        print(f"add   {name:<24} {addr_str}   ({frame} {doc_addr}; {docref})"
+              + ("" if not depth else f"; doc begin 0x{depth:x} into the current-build body"))
         added += 1
 
     if not dry and added:
