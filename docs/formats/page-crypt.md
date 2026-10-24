@@ -31,11 +31,11 @@ here is fitted. All addresses are RVA in the current-build loader unless marked
   lookup at `0x1012e1a` (`0x1ce59b0` -> `0x3fa280` -> `hash(rdi) % count`);
   the value is a type-A record whose fields do not contain `w` plainly.
 - **Coverage solved offline (2026-10-23):** `dev/offline_page_recover.py`
-  recovered all 12,076 `.text` pages and the `.pdata` table from the on-disk
-  ciphertext without a live capture. Held-out oracle 2,284/2,284; warm images
-  4,887/4,888 and 5,350/5,351; one declared 16-byte tail. See "Offline
-  recovery" below. The blind solver replaces the need for the `w` picker; a
-  new build re-extracts the pad and reruns it.
+  recovered all 12,076 `.text` pages from the on-disk ciphertext and copied
+  the install's **plaintext `.pdata`** table, without a live capture. Held-out
+  oracle 2,284/2,284; warm images 4,887/4,888 and 5,350/5,351; one declared
+  16-byte tail. See "Offline recovery" below. The blind solver replaces the
+  need for the `w` picker; a new build re-extracts the pad and reruns it.
 - **Tier 3 boundary:** the `w` **derivation** is inside the loader's own
   obfuscated VM/dispatcher (`0x2511e0` dispatcher, 22 KB
   `0x40bee0..0x411536`; `0x40cd87` is a mid-function handler block). The
@@ -492,15 +492,17 @@ Tools:
 - `dev/emu_tls.py` - offline Unicorn TLS-callback harness.
 - `dev/ldr_sweep.py`, `dev/ldr_cryptoscan.py`, `dev/ldr_vehunt.py`,
   `dev/ldr_iat.py` - static loader probes.
-- `dev/offline_page_recover.py` - recovers `.text`/`.pdata` from the installed
-  executable with the pad and ciphertext-only scoring (Plan A).
+- `dev/offline_page_recover.py` - recovers `.text` from the installed
+  executable with the pad and ciphertext-only scoring (Plan A); the `.pdata`
+  is plaintext and copied.
 - `dev/pagepak_build.py` - idempotent keystream-table builder.
 - `dev/page_crypt_x.py`, `dev/page_crypt_battery.py` - page-pair tests.
 
 ## Offline recovery (2026-10-23)
 
-`dev/offline_page_recover.py` recovers `.pdata` and `.text` from the installed
-`Overwatch.exe` with no live capture and no process access.  Artifacts and
+`dev/offline_page_recover.py` recovers `.text` from the installed
+`Overwatch.exe` with no live capture and no process access; `.pdata` is
+plaintext in that executable and is copied, not recovered. Artifacts and
 `REPORT.md` are under `D:/ow-dumps/offline_recover/`.
 
 - **Pad:** the bytes at `0x1d77f80` are the logical cycle verbatim.  All 2,284

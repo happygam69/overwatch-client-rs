@@ -12,6 +12,7 @@
 !/Cargo.lock
 !/README.md
 !/CREDITS.md
+!/CONTRIBUTING.md
 !/AGENTS.md
 !/STATUS-handoff.md
 !/MODLOG.md
@@ -19,6 +20,11 @@
 !/LICENSE-APACHE
 !/rust-toolchain.toml
 !/.gitattributes
+!/.cargo/
+!/.cargo/config.toml
+!/.github/
+!/.github/workflows/
+!/.github/workflows/*.yml
 !/crates/
 !/docs/
 !/dev/

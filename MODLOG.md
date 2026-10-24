@@ -4,6 +4,100 @@ Newest first. Milestones only; details and addresses live in `docs/formats/`,
 current state in `STATUS-handoff.md`, fits in `docs/fitted-ledger.md`, the
 work queue in `docs/open-questions.md`.
 
+## 2026-10-25 - The harness verifies shipped code; the mover advance is read
+
+- **Tier-2 now runs the crate, not a copy.** `crates/ow-sim/src/bin/verify_probe.rs`
+  is built by `cargo build --release` and imports the real `ow-sim` functions.
+  `candidate_rust.py` gained the `cargo` loader; the ledger binds a verdict to
+  the function's source file(s) (`candidate_sources`) plus `crate_rev` and the
+  probe source, so editing any of them expires the entry.
+- **State unit mode.** A unit may declare a `state` snapshot; the oracle
+  preloads it, pointer args index it by `guest` address, the whole region is
+  compared after the call (the `state` channel) and restored before the next.
+  Reads inside the declared region are expected, not undeclared globals.
+- **Unit scaffolder.** `dev/verify_harness/scaffold_unit.py` takes an address,
+  reads the `.pdata` extent from the flat recovery image, decompiles through
+  the Ghidra bridge and writes a template under `units/scaffolds/` with
+  `scaffold: true`; `cli.py all` skips those.
+- **Shipped-code units verified:** `fn/OrthonormalizeCameraBasis-cargo` and
+  `fn/OrthonormalizeCameraBasis-state` (the same leaf, the second through the
+  state channel). `crates/ow-sim/src/camera.rs` is the real implementation.
+- **Mover advance read in the current build.** Registration
+  `RegisterMoverComponent` (`0x14017a680`, hash `0x6EFDBD73`, id `0x26`);
+  `MoverAdvance` (`0x140ca7f30`) is base vtable `0x1431101e8` slot 15;
+  `MoverInvoker` (`0x1407ffc50`) is `0x142fdbf40` slot 9. The advance
+  reads the velocity quad at `+0xc0..0xcc`; the function that *writes* it is
+  still unlocated. `FIT-MOV-01` stays fitted and the mover unit stays a
+  scaffold (`units/fn-MoverAdvance.json`).
+- **Names applied:** the mover registration/constructor/advance/invoker and
+  the state getters were added to `docs/function-names.csv` and applied to
+  `Overwatch.exe` (178 named; 8 not found, all pre-existing).
+- **`.pdata` correction:** the installed `Overwatch.exe` already has a
+  plaintext, valid `.pdata` (201,246 entries at RVA `0x450b000`, byte-identical
+  to the offline image's copy). Plan A recovers `.text`; it does not recover
+  `.pdata`. The old "no `.pdata`" note was about the 2.25.0.0 merged captures,
+  and the "disk `.pdata` encrypted" note was a parser-bound error. Section
+  table and the flat-image raw-offset trap are in `docs/ghidra-project.md`.
+- **Field index:** `dev/field_index.py` scans `.pdata` or Ghidra function
+  ranges, follows `mov`/`lea` aliases so a biased base is reported at its real
+  field offset, and keeps the mover component, character body and dmBody as
+  separate profiles. `docs/ghidra/DumpFunctionRanges.java` exports Ghidra's
+  resolved entries for it. Initial finding: the obvious `+0xc0` stores are
+  constructors, bulk copies and the component data applier; the state
+  modifier's `param_1 + 0xc0` is byte `+0x600`. The ramp is not a raw store in
+  the `.pdata` functions scanned; the next data sources are the state modifier
+  table and the movement statescript graph.
+
+## 2026-10-24 - Repair pass: parser bugs, robustness, harness consistency
+
+- **Archive-index page count fixed in the whole-file parser.**
+  `parse_archive_index` applied the reference's `DynamicSize` to the footer's
+  position instead of the file length, one page short on every file (the
+  on-demand `PageIndex` was corrected 2026-10-17; this parser was not). The
+  last page of every `indices/*.index` and every `shmem` group file was
+  dropped, and a single-page index read as empty. Now the same expression as
+  `PageIndex::open`; pinned by a new test (the parser had none).
+- `find_ckey_in` off-by-one: the scan stopped one window short, so the last
+  `ekey/ckey` pair of a manifest blob never matched.
+- File-input robustness in `ow-casc`, all following the checked-math-first
+  pattern `ow-stu` already uses: BLTE chunk-table count is capped by the
+  container length before `Vec::with_capacity` (a corrupt u24 could force a
+  ~400 MB transient allocation); mode-'Z' chunks are capped by the declared
+  decoded size (decompression bomb); `read_stored` checks the indexed size
+  against the archive's remaining length before allocating; `decode_chunked`
+  uses `checked_add` on the response's chunk size; non-ASCII paths/keys slice
+  bytes (`.get`/`is_ascii`) instead of panicking on a char boundary
+  (`container.rs`, `blte.rs`, `cdn.rs`, `install.rs`).
+- `ray_capsule` solved in the ray's own parameter: the old horizontal-only
+  reading made a shot pitched at θ land long by `1/cos θ` and compared that
+  distance against vertical crossings measured in ray parameters; a vertical
+  ray normalized a zero vector to `[0,0,1]` and phantom-hit targets sharing
+  the shooter's x. Horizontal rays are unaffected.
+- `World::fire` takes the shooter: hitscan cannot land on the firer and
+  projectiles carry `owner` (the field and `step` honoured it; nothing set
+  it). Pinned by a self-immunity test. Callers pass `None` where the player
+  is not a combatant.
+- `trace_diff`'s write-gap and env-screened advances no longer carry a jump
+  edge from a held state, matching the main path's rising-edge reading
+  (Q3 unchanged: the contract's reading, not a new measurement).
+- Play harness: the per-frame pose palette is written at
+  `scene.hero_joint_base` (new field), not slot 1 — on a map scene the pose
+  landed on the map models' identity pool and the hero read identity; the
+  sandbox course's geometry uses identity slot 0 so an animated hero cannot
+  skin the floor (the hazard was already documented at the markers); bot and
+  projectile marker boxes had three faces wound backwards (back-face culled);
+  the fire log is capped; the plain viewer clears held keys on focus loss
+  (the play harness already did); `--cluster N` sorts deterministically on
+  ties.
+- Workspace hygiene: `ow-view`/`ow-scene` use workspace inheritance and
+  workspace deps like the other crates; `repository` on every crate; `glam`
+  and `bytemuck` hoisted to `[workspace.dependencies]`. `xtask` tries
+  `python3` when `python` is absent, so the gate runs on Linux.
+- Repo scaffolding: GitHub Actions runs `cargo xtask verify --fast` on push
+  and PR (`.github/workflows/ci.yml`); `CONTRIBUTING.md` (the gate, the
+  whitelist, the FIT-* rule, the doc files a change keeps updated); both
+  whitelisted in `.gitignore`.
+
 ## 2026-10-24 - Ghidra project pruned: three programs deleted
 
 - Deleted `camera_warm.exe` (never analysed, 0 functions; its code is

@@ -7,11 +7,17 @@
   are measured and verified against keyed traces.
 - **Mover update path: mapped.** Advance -> invoker -> collision sweep. The
   concrete class is a registered engine class whose own name is "Unknown".
-- **Control law: tier 3.** The client's ramp expression is obfuscated: no rate
-  literals, no computed velocity store, encrypted vtable slots. `ow-sim` uses
-  the measured replacement.
-- **Open:** crouch timing on a keyed trace, the steep-slide rule, and the
-  operator's feel check.
+- **Current build: the advance and invoker are read.** `MoverAdvance`
+  (`0x140ca7f30`) is the position integrator reached through the character
+  object's plaintext vtable slot 15; `MoverInvoker` (`0x1407ffc50`) is the
+  caller that stores the new position and dispatches on contact normals. The
+  component registration is `FUN_14017a680` (hash `0x6EFDBD73`, id `0x26`).
+- **The ramp itself: still an open read task.** The advance reads a
+  velocity-like quad at `+0xc0..0xcc`; the function that *writes* it with the
+  accel/friction law is not yet located. `Overwatch.exe` is the complete,
+  plaintext image, so this is a discovery gap, not an obfuscation claim.
+- **Open:** crouch timing on a keyed trace, the steep-slide rule, the ramp's
+  own expression, and the operator's feel check.
 
 **Verify:**
 
@@ -246,6 +252,96 @@ The chain:
   a stop, the last millimetres are this lerp, not mover integration. The
   traced node is the display/animation-side transform.
 
+## The current build's advance (Overwatch.exe)
+
+All addresses in this section are `Overwatch.exe` addresses (preferred base
+`0x140000000`); the v2b form is `0x7ff7c4d20000 + (exe - 0x140000000)`.
+
+The current-build component is registered by `FUN_14017a680` at
+`0x14017a680`: type hash `0x6EFDBD73` (id `0x26`,
+`STUCharacterMoverComponent`), size `0x130`. Its constructor
+`FUN_14111b120` installs three **plaintext** interface vtables at component
+`+0`, `+8` and `+0x48` (`0x143110068`, `0x14310ff38`, `0x14310ffd0`). This is
+the difference from the 2.25.0.0 capture, where the character object's
+class-specific slots were encrypted.
+
+The character object is the 0x1c00-byte body (`DestructMoverBody` at
+`0x1407ff270` frees it); its 0x1b70-byte base subobject is constructed by
+`ConstructMoverBase` at `0x140ca37d0` and installs the base vtable
+`0x1431101e8`. The derived/registration table at `0x1431101d8` repeats the
+same entries. The entries that matter:
+
+| base slot | address | role |
+|---|---|---|
+| 2 | `0x140ca4a50` | free the 0x1b70-byte base object |
+| 6 (derived table) | `0x140ca9730` | `ConstructMoverBody` - looks up component id `0x26` and binds the mover component |
+| 15 | `0x140ca7f30` | **`MoverAdvance`** - the per-frame position integrator (derived table slot 17) |
+| 26 | `0x140ca8fd0` | attach to a physics body |
+| 28 | `0x140ca9040` | detach from the physics body |
+
+`MoverInvoker` (`0x1407ffc50`) is the separate interface vtable
+`0x142fdbf40` slot 9. It calls the advance, stores the new position quad at
+character `+0x1b80`, dot-products the movement delta against the step state's
+contact normals at `[state+0x200]` (0x20-byte elements), and dispatches the
+handler for the selected contact. It is advance + collision notification, not
+the input-to-velocity ramp.
+
+`MoverAdvance` reads the velocity-like quad at `+0xc0..0xcc` and has two
+paths:
+
+* **plain body:** `out_i = (a * X_i + pos_i) * b + off_i`, with `X` the quad
+  at `+0xc0..0xcc`;
+* **character:** the collision sweep, using the walk-state bytes at
+  `+0x1a79`/`+0x1a7c`, the step state and the body/session handle at
+  `+0x35b`.
+
+Both paths also call the object's slot `+0x98` and the world/sweep helpers, so
+the advance is not a pure leaf. A state unit can drive it only with declared
+no-op pointers for those calls; the cleaner target is the still-unlocated
+function that writes `+0xc0`.
+
+**What this does not settle.** The advance is the integrator, not the control
+law. No function that writes `+0xc0..0xcc` with the measured accel/friction
+rates has been located, and the rate literals are still absent from the
+current image. `FIT-MOV-01` remains fitted; the `ow-sim` rates stay as
+measured, and the mover unit is a scaffold (`dev/verify_harness/units/fn-MoverAdvance.json`)
+until the ramp itself is read.
+
+**Evidence class:** read code and plaintext vtable pointers from
+`Overwatch.exe` (current build, preferred base `0x140000000`). The advance's
+formula was read from its decompile; no disassembly is copied here. The
+component/vtable chain is cross-checked by the registration's arguments and
+the vtable's own code pointers.
+
+### Discovery notes (2026-10-25)
+
+The install's `.pdata` is plaintext and complete (201,246 entries); the
+offline image's copy is byte-identical at RVA `0x450b000`. Function extents
+are therefore not a gap. Ghidra's **function boundaries** are the remaining
+problem: `.pdata` entries can be chained/fragmented, so a `.pdata` begin is
+not always the real entry and the decompiler can start mid-function
+(`FUN_1407875e0` is the standing example). `docs/ghidra/DumpFunctionRanges.java`
+exports Ghidra's resolved entries for `dev/field_index.py`.
+
+The field index shows that the obvious stores to the character body's
+`+0xc0` are constructors, bulk copies and the component data applier, not a
+ramp. The state-modifier evaluator's `param_1 + 0xc0` is **byte +0x600**
+because `param_1` is a `longlong *`; the decompiler's pointer type must be
+read literally. The apparent "decompiler-hostile" handlers are plaintext
+jump tables / state dispatchers, not encrypted code, and the page bytes match
+the warm images.
+
+The remaining candidates are therefore:
+
+* the **state modifier table** (`[body+0x10e]`, 0x38-byte records) and its
+  per-field add/mul/min/max values;
+* the **statescript graph** for the movement state, read with
+  `ow-tank`'s graph/parameter tools;
+* a **force path** into `dmBody.force` (`+0x130`) that lets the island solve
+  produce the velocity.
+
+The next pass reads those data sources, not more raw-offset stores.
+
 ## Measured movement
 
 The mover integrates **once per frame** with the frame's own dt, not at the
@@ -296,7 +392,8 @@ descent; it ends where the traced jump happens. The trace cannot say whether
 the client called it grounded: the samples carry no body flags, `vel` is zero,
 and with no yaw field the wish direction during the slide is unrecorded. This
 is a slide/lost-footing state, not ground-following; its rule belongs to the
-obfuscated control (tier 3) or to terrain behaviour.
+unlocated ramp/terrain code (an open read task), not to the measured flat
+ground rule.
 
 `Controller::ground_normal` (default `[0,1,0]`) scales the wish by the
 directional slope's cosine and carries the sine share as `slope_vertical` while
@@ -389,43 +486,71 @@ frame time.
   the health array framing has one alignment; the mover hash column
   reproduces three known names in order.
 
-## Verdict: the control is obfuscated (tier 3)
+## Verdict: the ramp is not yet located (open read task)
 
-Every readable route to the ramp has been exhausted. The control is
-**obfuscated**, most plausibly a bytecode/VM layer using the same
-`(ptr + K) ^ K2` pointer idiom seen in the Domino handle table and the mover
-class vtables.
+**Current-build correction (2026-10-25):** `Overwatch.exe` is the **complete**
+current-build image, and its code and data are plaintext. There is no
+tier-3/obfuscated region in it to appeal to. The earlier "obfuscated" verdict
+was a conclusion about the *old capture's coverage*: `module_v2full.bin` and
+the warm regions had cold pages, and the old sweeps matched the **component**
+offsets (0x130-byte `STUCharacterMoverComponent`) against dmBody fields, not
+the **character object's** offsets. The advance and invoker are now read from
+the complete image (see above), which proves the path is readable. The ramp
+writer is a **discovery gap**, not an obfuscation claim.
 
-The evidence:
+Every readable route tried so far has not named the writer. The remaining
+candidates are:
 
-1. The concrete class's second vtable (`0x7ff7c7d8e0b8`) carries encrypted
-   slots from 13 onward (`0xa24b69a6c1deedc9`, `0xa5ae2a583bd75a70`, ...)
-   where slots 0-12 are ordinary code pointers.
-2. `FUN_7ff7c5a191c0` is 34 bytes that decompile to hundreds of kilobytes of
-   repeated `*in_RAX = *in_RAX + cVar8`; decompiler-hostile, not real code.
-3. No literal for any measured rate exists in `module_v2full.bin`, the 1695
-   exec region dumps, or the warm capture: 121.4, 72.6, 17.37, 5.33, 5.5,
-   4.95 all zero hits. 60.0/36.0 exist but are never paired within 0x60 bytes,
-   and 60.0 is also a frame-rate constant.
-4. No computed store to the mover's velocity quad in any encoding (movss,
-   movups, movaps, movdqu, mov32, mov64, imm32, SIB) in any capture. The only
-   writes are the data applier's scalars and reset/zero loops.
-5. No movement code reads the mover's speed fields. The `[obj+0xb4]` readers
-   are the field comparator and the script opcode applier; the `[obj+0xe0]`
-   readers are skeletal-animation functions. The rest were data false
-   positives.
+1. the per-frame update that writes the character object's `+0xc0..0xcc`
+   quad (the old sweeps looked for a direct `movss` store in cold pages);
+2. a force/impulse path that writes `dmBody.force` at `+0x130` and lets the
+   island solve produce velocity (the body integration is already extracted);
+3. the field-modifier evaluator `FUN_140cbcbe0`, which multiplies `+0xc0` by
+   state-driven factors and may be the visible part of the ramp.
 
-The **behaviour** is fully measured and verified (101/101 comparable writes
-inside the frame-jitter floor; 0.0018616 m max step deviation; 18/18 jump
-writes at 0.0014184 m vertical error), and the measured arithmetic is
-implemented in `ow-sim::movement` with golden-vector tests. The client's own
-expressions are unrecoverable here and are **declared tier 3** under
-`AGENTS.md`: the numbers stand as trace-measured, not as a reading. Crouch
+The next pass searches the **complete image** for stores/reads of the
+character-object offsets and the dmBody force fields, grouped by true `.pdata`
+functions, and ranks by co-occurrence with the wish vector at `+0x1140`.
+
+**Why the old evidence pointed away from the writer** (kept so it is not
+repeated):
+
+1. The old build's concrete vtable (`0x7ff7c7d8e0b8`) carried non-code-looking
+   slots from 13 onward. In the complete current image the corresponding class
+   vtables are plaintext and point at ordinary functions; the old slots were a
+   capture/coverage artefact, not an opaque code layer.
+2. The old "junk" function `FUN_7ff7c5a191c0` has a normal constructor body in
+   the current image (translated to `FUN_140cf91b0`); the decompiler-hostile
+   rendering was a symptom of a partial/cold body, not a VM.
+3. The old rate-literal search was over `module_v2full.bin`, the exec region
+   dumps and the warm capture. The **complete** image has every `.text` page,
+   so the search has to be rerun there. The real expression may not contain
+   the fitted numbers at all (it may use a per-hero scalar or a force/mass
+   form), which is exactly why the search must follow the data flow, not the
+   constants.
+4. The old store search was over captures with cold pages. The complete image
+   can be scanned end to end for stores to the character-object quad and the
+   dmBody force fields.
+5. The old offset sweeps mixed two different structs: the **component**
+   (`STUCharacterMoverComponent`, 0x130, fields at +0x08..+0x12d) and the
+   **character object** (`MoverBody`/`dmBody`, 0x1c00/0x1c0, velocity quad at
+   +0xc0, body force at +0x130). Co-occurrence over the component's +0xc0
+   crouch slot says nothing about the character body's +0xc0 velocity quad.
+
+The **behaviour** is measured and verified (101/101 comparable writes inside
+the frame-jitter floor; 0.0018616 m max step deviation; 18/18 jump writes at
+0.0014184 m vertical error), and the measured arithmetic is implemented in
+`ow-sim::movement` with golden-vector tests. The client's own expression is
+**not yet read**; that is an open read task, not a tier-3 declaration. The
+trace-measured values stay labelled until the writer is found. Crouch
 transition timing remains measurable from a trace rather than readable from
 code.
 
 ## Open
 
+- The velocity-ramp writer: find the function/force path that turns input into
+  the character object's `+0xc0..0xcc` quad (or `dmBody.force`). This is the
+  FIT-MOV-01 read task.
 - Crouch transition timing on a keyed trace.
 - The steep-slide (24.89-degree) rule; currently unmodelled and distinct from
   ground-following.

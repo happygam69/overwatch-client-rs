@@ -1,5 +1,7 @@
 # overwatch-client-rs
 
+[![ci](https://github.com/happygam69/overwatch-client-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/happygam69/overwatch-client-rs/actions/workflows/ci.yml)
+
 A clean-room Rust reimplementation of the Overwatch client, built from your own
 installed copy. It reads the game's files from the install you already own and
 reimplements - piece by piece, and only as far as it has been verified against
@@ -45,8 +47,9 @@ Verified against the retail install `2.25.0.0.154088`. **The client has since up
   groups (`0x085`), code blobs (`0x087`) and the material chain.
 * **Movement:** the mover is trace-measured and gated by `trace_diff` - speeds,
   acceleration, friction, gravity, jump, crouch, air control and slope
-  following. The control *code* is tier 3; the arithmetic is the measured
-  replacement.
+  following. The advance and invoker are read in the current build; the
+  velocity-ramp *writer* is still unlocated (the image is complete and
+  plaintext), so the arithmetic is the measured replacement.
 * **Combat:** health/armour/shield pools, weapon intervals, volley counts,
   projectile speed/gravity/lifetime and hitscan traces. Damage is supplied by
   you because the install does not expose it; damage order and armour
@@ -179,3 +182,15 @@ from the install is committed.
 
 MIT or Apache-2.0, at your option. That covers this code only - not the game,
 its data, or anything either of them produces.
+
+## Contributing
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and `AGENTS.md` (the project's
+working contract). The short version: one gate decides whether a change is
+done —
+
+```sh
+cargo xtask verify --fast   # what CI runs; drop --fast once you have an install
+```
+
+— and the work queue is `docs/open-questions.md`, next thing at the top.

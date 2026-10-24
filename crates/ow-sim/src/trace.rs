@@ -902,7 +902,11 @@ pub fn diff_trace_keys_states(trace: &Trace, speed: f32) -> Result<ReplayReport,
         let gap_frames = (((st.t - prev_t) / dt).round() as i64 - 1).clamp(0, 600);
         if gap_frames > 0 {
             sim.yaw = prev_yaw.to_radians();
-            let input = prev_keys.to_input();
+            let mut input = prev_keys.to_input();
+            // A held state cannot carry a jump edge (the main path below
+            // computes the rising edge explicitly at write boundaries); the
+            // `to_input` mapping is held-not-edge by design, so mask it here.
+            input.jump = false;
             for _ in 0..gap_frames {
                 sim.advance(dt, input);
                 sim.settle_ground(ground_y);
@@ -939,7 +943,11 @@ pub fn diff_trace_keys_states(trace: &Trace, speed: f32) -> Result<ReplayReport,
             env_writes += 1;
             seg_rows[seg_row].3 += 1;
             sim.yaw = prev_yaw.to_radians();
-            let input = prev_keys.to_input();
+            let mut input = prev_keys.to_input();
+            // Same edge rule as the write-gap path above: the screened
+            // advance crosses no write boundary, so there is no rising edge
+            // to apply.
+            input.jump = false;
             sim.advance(dt, input);
             prev_keys = st.keys;
             prev_yaw = st.yaw;

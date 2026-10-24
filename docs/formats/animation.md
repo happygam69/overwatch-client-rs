@@ -191,11 +191,35 @@ value.
   the same gate.
 - No load-time row expansion exists; every consumer is a per-tick sampler.
 
-The pose slot has a **translation lane**. The rotation helpers are quaternion-
-only, but the update (`FUN_7ff614ef08c0`, clipobj wrap) writes the per-bone
-rotation and position lanes against the skeleton bind. The card P lane is the
-file's local translation and the feed applies it. The earlier "hold translations
-at bind" rule is retired.
+The pose slot is **three 16-byte lanes**, read from the complete current-build
+image (`Overwatch.exe`, the functions below are byte-identical to the ones the
+`clipobj` wrap held — matched by masked prologue, so the build update only
+moved them):
+
+| lane | slot offset | blend | normalise |
+|---|---|---|---|
+| rotation | `+0x00` | nlerp, shortest-path negation when `dot ≤ -1.19e-7` | `rsqrtps` unit |
+| vector | `+0x10` | plain weighted sum `+= w·src` | `×= 1/total` |
+| vector | `+0x20` | plain weighted sum `+= w·src` | `×= 1/total` |
+
+The division by the total weight happens **once, at the end**, over both
+vector lanes — not per source. Three functions, all in `Overwatch.exe`:
+
+- `0x141b812c0` — the blender: accumulates the three lanes across `N`
+  sources; lane 0 negates against the accumulator's dot for the short path,
+  lanes 1 and 2 are `+= w·src` with no gate.
+- `0x141b82d70` — the normaliser: `param_1[0..3]` unit, `param_1[4..7]` and
+  `param_1[8..11]` each scaled by `rcpss(total)` (`(2 - t·rcp)·rcp`).
+- `0x141b81240` — the slot allocator: per-bone defaults `(0,0,0,1)` /
+  `(1,1,1,1)` / `(0,0,0,0)`, i.e. the scale lane rests at **1** and the
+  third lane at **0**.
+
+So a single-source pose is `lane1 = w·src / w = src` — the file's own value —
+which is why holding every translation at bind made the hands overlap
+(`animation.md` history). The translation lane **is** real and the feed
+applies it; what the viewer was missing was only the `1/total` division, which
+matters the moment more than one source contributes. The earlier "hold
+translations at bind" rule stays retired.
 
 Skinning: a pose replaces the bind's local matrix
 (`local' = T(pose_t) * R(pose_r) * S(local_s)`); the absolute-rotation path

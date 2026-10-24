@@ -32,6 +32,7 @@
 //! is an explicit input rather than a guess dressed up as data.
 
 pub mod body;
+pub mod camera;
 pub mod movement;
 pub mod rules;
 pub mod trace;
@@ -332,41 +333,59 @@ pub fn cross(a: Vec3, b: Vec3) -> Vec3 {
 /// Distance along `dir` at which a ray first enters a target's capsule, if it
 /// does within `max_range`.
 ///
-/// The capsule is treated as a vertical cylinder with hemispherical caps ignored,
-/// which is accurate enough for a body and much simpler to reason about.
+/// The capsule is a vertical cylinder of the target's radius clipped to its
+/// vertical span `[pos.y, pos.y + height]`; the hemispherical caps are
+/// ignored, which is accurate enough for a body and much simpler to reason
+/// about. A shot that crosses the flat top or bottom first is therefore a
+/// miss, and a ray starting inside the cylinder misses too.
+///
+/// Solved in the ray's own parameter — `origin + t * dir`, `dir` unit length —
+/// so the returned distance and `max_range` are along the 3D ray. (An earlier
+/// reading measured the entry point along the horizontal only, which made a
+/// shot pitched at θ land long by `1/cos θ` and compared that against the
+/// vertical crossings' ray parameters.)
 pub fn ray_capsule(origin: Vec3, dir: Vec3, target: &Combatant, max_range: f32) -> Option<f32> {
-    let rel = sub(target.pos, origin);
-    // Horizontal projection.
-    let rel_xz = [rel[0], 0.0, rel[2]];
-    let dir_xz = normalize([dir[0], 0.0, dir[2]]);
-    let along = dot(rel_xz, dir_xz);
-    let closest = sub(rel_xz, scale(dir_xz, along));
-    let lateral = length(closest);
-    if lateral > target.radius {
-        return None;
-    }
-    // Distance to the entry point along the ray.
-    let back = (target.radius * target.radius - lateral * lateral).sqrt();
-    let enter_xz = along - back;
-    if enter_xz < 0.0 || enter_xz > max_range {
-        return None;
-    }
-    // Vertical extent: the target spans [pos.y, pos.y + height].
-    if dir[1].abs() > 1e-6 {
-        let t_low = (target.pos[1] - origin[1]) / dir[1];
-        let t_high = (target.pos[1] + target.height - origin[1]) / dir[1];
-        let (lo, hi) = if t_low <= t_high {
-            (t_low, t_high)
-        } else {
-            (t_high, t_low)
-        };
-        if enter_xz < lo || enter_xz > hi {
+    // Cylinder intersection in the horizontal plane: the ray's horizontal
+    // distance to the vertical axis through the target, squared.
+    let rx = origin[0] - target.pos[0];
+    let rz = origin[2] - target.pos[2];
+    let a = dir[0] * dir[0] + dir[2] * dir[2];
+    let b = 2.0 * (rx * dir[0] + rz * dir[2]);
+    let c = rx * rx + rz * rz - target.radius * target.radius;
+    let enter = if a > 1e-8 {
+        let disc = b * b - 4.0 * a * c;
+        if disc < 0.0 {
             return None;
         }
-    } else if origin[1] < target.pos[1] || origin[1] >= target.pos[1] + target.height {
+        (-b - disc.sqrt()) / (2.0 * a)
+    } else if dir[1].abs() > 1e-6 {
+        // Straight up or down: either the ray is inside the cylinder's
+        // column, and entry is where it crosses a span plane, or it misses.
+        // (The old path normalized a zero horizontal vector to [0, 0, 1],
+        // which phantom-hit targets that merely shared the shooter's x.)
+        if c > 0.0 {
+            return None;
+        }
+        let cap = if dir[1] > 0.0 {
+            target.pos[1]
+        } else {
+            target.pos[1] + target.height
+        };
+        (cap - origin[1]) / dir[1]
+    } else {
+        // No horizontal component and no vertical one either: a zero
+        // direction cannot hit anything.
+        return None;
+    };
+    if enter < 0.0 || enter > max_range {
         return None;
     }
-    Some(enter_xz)
+    // Vertical extent: the entry point must land inside the span.
+    let y = origin[1] + enter * dir[1];
+    if y < target.pos[1] || y > target.pos[1] + target.height {
+        return None;
+    }
+    Some(enter)
 }
 
 /// A projectile in flight.
@@ -421,9 +440,21 @@ impl World {
 
     /// The nearest live combatant along a ray.
     pub fn raycast(&self, origin: Vec3, dir: Vec3, max_range: f32) -> Option<Hit> {
+        self.raycast_excluding(origin, dir, max_range, None)
+    }
+
+    /// [`World::raycast`], but a combatant can be excluded — the shooter, so
+    /// a shot cannot hit the body it left from.
+    fn raycast_excluding(
+        &self,
+        origin: Vec3,
+        dir: Vec3,
+        max_range: f32,
+        skip: Option<usize>,
+    ) -> Option<Hit> {
         let mut best: Option<Hit> = None;
         for (index, target) in self.combatants.iter().enumerate() {
-            if !target.alive {
+            if !target.alive || Some(index) == skip {
                 continue;
             }
             if let Some(distance) = ray_capsule(origin, dir, target, max_range) {
@@ -523,6 +554,11 @@ impl World {
     }
 
     /// Resolve one shot from a weapon.
+    ///
+    /// `shooter` is the combatant pulling the trigger, when there is one: its
+    /// own hitscan cannot land on it and its projectiles carry it as `owner`,
+    /// which `step` honours. `None` is a shot from outside the world (a test
+    /// rig, a shell whose player is not a combatant).
     pub fn fire(
         &mut self,
         weapon: &Weapon,
@@ -530,6 +566,7 @@ impl World {
         forward: Vec3,
         spread: &mut Spread,
         rules: &rules::Rules,
+        shooter: Option<usize>,
     ) -> ShotResult {
         let forward = normalize(forward);
         let mut hits = Vec::with_capacity(weapon.pellets as usize);
@@ -565,15 +602,17 @@ impl World {
                         damage: weapon.damage_per_projectile,
                         falloff: weapon.falloff,
                         gravity,
-                        owner: None,
+                        owner: shooter,
                     });
                     hits.push(None);
                 }
                 FireMode::Hitscan { .. } => {
-                    let hit = self.raycast(origin, dir, range).map(|mut h| {
-                        h.factor = weapon.falloff.map(|f| f.factor(h.distance)).unwrap_or(1.0);
-                        h
-                    });
+                    let hit = self
+                        .raycast_excluding(origin, dir, range, shooter)
+                        .map(|mut h| {
+                            h.factor = weapon.falloff.map(|f| f.factor(h.distance)).unwrap_or(1.0);
+                            h
+                        });
                     if let Some(h) = hit {
                         let raw = weapon.damage_per_projectile * h.factor;
                         let outcome = self.combatants[h.target].take_damage(raw, rules);
@@ -695,6 +734,7 @@ mod tests {
             [0.0, 0.0, 1.0],
             &mut spread,
             &Rules::default(),
+            None,
         );
         assert_eq!(result.hits.len(), 8, "one entry per pellet");
         // 8 pellets of 10 against 60 health: lethal, and it stops at zero rather
@@ -758,6 +798,7 @@ mod projectile_tests {
             [0.0, 0.0, 1.0],
             &mut spread,
             &rules,
+            None,
         );
         assert_eq!(shot.damage_total, 0.0, "nothing lands on the shot itself");
         assert_eq!(world.projectiles.len(), 1);
@@ -800,11 +841,44 @@ mod projectile_tests {
             [0.0, 0.0, 1.0],
             &mut spread,
             &rules,
+            None,
         );
 
         let events = world.step(0.1, &rules);
         assert_eq!(events.len(), 1, "the target is in the way and must be hit");
         assert_eq!(events[0].target, target);
+    }
+
+    #[test]
+    fn a_shooter_cannot_hit_itself() {
+        let (mut world, shooter) = target_world();
+        let weapon = Weapon {
+            interval: 1.0,
+            pellets: 1,
+            damage_per_projectile: 20.0,
+            mode: FireMode::Projectile {
+                speed: 50.0,
+                gravity: 0.0,
+            },
+            lifetime: Some(5.0),
+            ..Weapon::default()
+        };
+        let mut spread = Spread::new(1);
+        let rules = Rules::default();
+        // Fired from the shooter's own position along an arbitrary ray: the
+        // projectile must pass through its owner, not land on it.
+        world.fire(
+            &weapon,
+            world.combatants[shooter].pos,
+            [1.0, 0.0, 0.0],
+            &mut spread,
+            &rules,
+            Some(shooter),
+        );
+        for _ in 0..10 {
+            let events = world.step(0.1, &rules);
+            assert!(events.is_empty(), "a projectile hit its own owner");
+        }
     }
 
     #[test]

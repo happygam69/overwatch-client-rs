@@ -55,9 +55,10 @@ def main() -> int:
                 params = ", ".join(p["name"] for p in t.get("params", []))
                 print(f"{t['path']}  ({params})")
         return 0
-    body = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+    body = json.loads(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] != "--full" else {}
+    full = "--full" in sys.argv[2:]
     out = call(sys.argv[1], body)
-    print(json.dumps(out, indent=1)[:8000])
+    print(json.dumps(out, indent=1) if full else json.dumps(out, indent=1)[:8000])
     return 0
 
 

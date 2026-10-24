@@ -10,10 +10,11 @@ a measured number, not when it has a plausible guess. A guess becomes a row in
 [`fitted-ledger.md`](fitted-ledger.md) and stays a guess.
 
 **Do we have the captures for these?** Yes, and page coverage no longer needs
-a new capture either. Plan A recovered all `.text` and `.pdata` from the
-installed executable offline, and the project holds that complete image as
-the Ghidra program `Overwatch.exe` (151,260 functions). Questions 2-11 are
-analysis/measurement work over code we now fully hold.
+a new capture either. Plan A recovered all `.text` from the installed
+executable's disk ciphertext; `.pdata` is already plaintext in that executable
+and was copied verbatim. The project holds the complete image as the Ghidra
+program `Overwatch.exe` (151,260 functions). Questions 2-11 are
+analysis/measurement work over code and function extents we now fully hold.
 
 ---
 
@@ -34,8 +35,8 @@ loader, the live loader, the live main module, the private ghost loader copy
 or the full heap dump.
 
 **Coverage result (2026-10-23).** `dev/offline_page_recover.py` recovered
-**12,076/12,076 `.text` pages** and the `.pdata` table from the on-disk
-ciphertext using the pad and ciphertext-only scoring. Held-out oracle
+**12,076/12,076 `.text` pages** from the on-disk ciphertext and copied the
+install's **plaintext `.pdata`** (201,246 entries). Held-out oracle
 2,284/2,284; warm images 4,887/4,888 and 5,350/5,351. One page keeps a
 declared 16-byte tail (`0x540000`). Image:
 `D:/ow-dumps/offline_recover/module_offline.bin` (preferred base
@@ -151,6 +152,15 @@ harness caught (conversion instead of bit-load; IEEE ifs instead of SSE
 minss/maxss). Which functions come next, and can the 1-3 callee rung be
 verified by emulating callees inside the mapped image?
 
+**Shipped-code path (2026-10-25).** Tier 2 no longer verifies a copy:
+`crates/ow-sim/src/bin/verify_probe.rs` is built by cargo and imports the real
+crate functions. The ledger binds to `candidate_sources` + `crate_rev`.
+`fn/OrthonormalizeCameraBasis-cargo` and `-state` are verified this way, and
+the state unit proves the snapshot/state-channel path for stateful functions.
+`scaffold_unit.py` turns an address into a `.pdata` extent, a decompile and a
+unit template under `units/scaffolds/`; the mover template is
+`units/fn-MoverAdvance.json`.
+
 **What is known.** Three other zero-callee decompiles are not verifiable as
 they stand: `AnimWritesOrientationPosition` and `DecodeCameraNodeTypeNames`
 are comment-only stubs (need a Ghidra re-decompile first);
@@ -164,9 +174,11 @@ reads-outside-args check will name any undeclared state dependency.
 **What would settle it.** Re-decompile the two stubs and the jumptable
 function in Ghidra; add a unit per second-rung function with a fixture that
 satisfies its callees; run `python dev/verify_harness/cli.py all` to gate.
+Prefer a `"cargo"` unit whose probe entry is the real crate function; a
+stateful one declares a `state` block and a `guest` pointer.
 
 **Next anchor.** `dev/decompiles/address_list.txt`, the unit JSONs under
-`dev/verify_harness/units/`.
+`dev/verify_harness/units/`, and `dev/verify_harness/scaffold_unit.py`.
 
 ---
 
@@ -241,6 +253,42 @@ slide is not modelled.
 `dev/ctrl_probe.py` / `dev/trace_probe.py`.
 
 **Next anchor.** `docs/formats/character-controller.md`.
+
+---
+
+## 7b. The mover velocity-ramp writer (FIT-MOV-01)
+
+**Question.** `MoverAdvance` (`0x140ca7f30`, base vtable
+`0x1431101e8` slot 15) reads the velocity-like quad at `+0xc0..0xcc`;
+`MoverInvoker` (`0x1407ffc50`) integrates it. Which function *writes* that
+quad with the accel/friction/air-control law?
+
+**What is known.** The component is `RegisterMoverComponent` (`0x14017a680`,
+hash `0x6EFDBD73`, id `0x26`); its interface vtables are plaintext in the
+current build. The advance's plain-body formula is
+`out_i = (a * X_i + pos_i) * b + off_i`; the character path is the collision
+sweep. The advance is the integrator, not the ramp. The install's `.pdata` is
+plaintext and complete; Ghidra's function boundaries are fragmented in
+places, so use Ghidra's entry points (`docs/ghidra/DumpFunctionRanges.java`)
+for decompilation, not a `.pdata` begin alone. `dev/field_index.py` is the
+struct-aware finder: it separates the mover component, the character body and
+dmBody, and follows biased bases. The obvious `+0xc0` stores are constructors,
+bulk copies and the component data applier, not a ramp. The state modifier's
+`param_1 + 0xc0` is byte `+0x600` (the decompiler's `longlong *` type), so the
+state table's field IDs must be mapped to byte offsets before it is read.
+
+**What would settle it.** Read the state modifier table (`[body+0x10e]`,
+0x38-byte records) and/or the movement statescript graph with `ow-tank`'s
+graph/parameter tools; determine whether the acceleration/friction is a
+per-field add/mul modifier, a graph value, or a force into `dmBody.force`
+(`+0x130`). Then add a `mover_ramp` entry to
+`crates/ow-sim/src/bin/verify_probe.rs` and a state unit, or gate the
+integrated behaviour with the keyed traces. Only then remove the `FIT-MOV-01`
+marker and its ledger row.
+
+**Next anchor.** `docs/formats/character-controller.md`, the scaffolder
+template `dev/verify_harness/units/fn-MoverAdvance.json`, and
+`dev/field_index.py`.
 
 ---
 

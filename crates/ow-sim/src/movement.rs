@@ -63,15 +63,16 @@
 //!   horizontal share `speed * cos(slope)`, the vertical `speed * sin(slope)`,
 //!   the heading the wish's) — measured on a 17.9° climb: 4.940 m/s = the 4.95
 //!   slot to 0.2%, and its heading is the forward run's reversed to 0.2°. The
-// FIT-MOV-02: steep slide: not modelled, tier 3
-//!   *steep*-slide case (|v| = 4.6895 m/s, not a slot) stays unmodelled, tier 3.
+// FIT-MOV-02: steep slide: not modelled (needs a keyed steep-slope trace)
+//!   *steep*-slide case (|v| = 4.6895 m/s, not a slot) stays unmodelled.
 //!
-//! The mover control's *code* (plan question Q3) is **closed as tier 3**: the
-//! constants above are trace-measured rates, and the control itself is
-//! obfuscated (encrypted vtable slots, junk decompilations, and no rate literal
-//! or velocity store in any capture — the evidence trail is in
-//! `docs/formats/character-controller.md`, the rule in `AGENTS.md`). The
-//! physics the mover drives is extracted — [`crate::body`] holds the client's
+//! The mover control's *code* (plan question Q3) is **not read yet**: the
+//! advance and invoker are read in the current build, but the writer of the
+//! velocity quad is still not located. `Overwatch.exe` is the complete,
+//! plaintext image, so that is a discovery gap, not an obfuscation claim.
+//! The constants above are trace-measured rates; the client's expression is
+//! the open task (`docs/formats/character-controller.md`). The physics the
+//! mover drives is extracted - [`crate::body`] holds the client's
 //! island-solve integration with golden vectors.
 //!
 //! `docs/formats/character-controller.md` carries the extraction addresses.
@@ -124,7 +125,7 @@ pub const GRAVITY: f32 = 17.37;
 /// frame (0.1267069 m of extra displacement over a partial first frame at
 /// dt = 0.032309), so the rate is 121.4. The measurement is one frame pair
 /// (+/-0.7); 121.4 is 1.2% above 120, which is within that band.
-// FIT-MOV-01: mover rates: fitted to keyed traces (the control code is tier 3)
+// FIT-MOV-01: mover rates: fitted to keyed traces (the writer is not yet located)
 pub const ACCEL: f32 = 121.4;
 /// Horizontal friction toward zero when no direction is held, in metres per
 /// second squared. **Measured**: the decrement is a *constant* 2.345 m/s per
@@ -153,6 +154,10 @@ pub const AIR_ACCEL: f32 = 18.5;
 /// degrees of it), and the traced stop sheds
 /// a constant speed along the old direction. A per-component clamp would swing
 /// the direction during a turn.
+pub fn move_toward(v: [f32; 2], target: [f32; 2], limit: f32) -> [f32; 2] {
+    move_toward_vec(v, target, limit)
+}
+
 fn move_toward_vec(v: [f32; 2], target: [f32; 2], limit: f32) -> [f32; 2] {
     let d = [target[0] - v[0], target[1] - v[1]];
     let len = (d[0] * d[0] + d[1] * d[1]).sqrt();

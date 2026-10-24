@@ -9,10 +9,11 @@ section and per function range), and the runs' own `warm.csv` /
 the project still needs is warm in the standing image - 41 of 41 checked,
 across animation, camera, movement, combat and physics. Page coverage is now
 **complete offline and in Ghidra**: Plan A recovered all 12,076 `.text` pages
-and the `.pdata` table from the installed executable without a live capture
-(one declared 16-byte tail), and the project holds that image as the
-`Overwatch.exe` program (151,260 functions). The page cipher's picker remains
-a reversing target, not a capture requirement.
+from the installed executable's disk ciphertext and copied the install's
+**plaintext `.pdata`** table, without a live capture (one declared 16-byte
+tail). The project holds that image as the `Overwatch.exe` program (151,260
+functions). The page cipher's picker remains a reversing target, not a capture
+requirement.
 
 ## What we have
 
@@ -23,7 +24,7 @@ a reversing target, not a capture requirement.
 | `D:/ow-dumps/module_after_diff.bin` | the **standing image** the docs are written against (v2b base `0x7ff7c4d20000`, 20 October) - build **2.25.0.0** |
 | `D:/ow-dumps/module_v21c.bin` | the current build's image (build **2.25.0.1**), merged from every 21-22 October run of that build: **23.5%** of `.text` is still cold |
 | `D:/ow-dumps/module_v2full.bin` | the 12 October image, build **2.25.0.0** - the basis of the docs' addresses |
-| `D:/ow-dumps/offline_recover/module_offline.bin` | the **complete current-build code image**: all 12,076 `.text` pages and the `.pdata` table recovered offline, preferred base `0x140000000` (build **2.25.0.1**) |
+| `D:/ow-dumps/offline_recover/module_offline.bin` | the **complete current-build code image**: all 12,076 `.text` pages recovered, plus the install's plaintext `.pdata` (201,246 entries) at RVA, preferred base `0x140000000` (build **2.25.0.1**) |
 | `D:/ow-dumps/loader_after_diff.bin` | the loader with its decrypted pages (flat; a file offset is an RVA) |
 | `D:/ow-dumps/ow_heap_full.dmp` | the 13.5 GB full heap dump (21 October) |
 | `D:/ow-dumps/dev_ghidra_run`-derived images | the region wraps and the merged images |

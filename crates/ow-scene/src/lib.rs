@@ -201,6 +201,12 @@ pub struct Scene {
     /// pool); map models share the identity pool at base 1, which is exact in
     /// bind pose and keeps every joint index valid.
     pub joints: Vec<[[f32; 4]; 4]>,
+    /// Where the hero's palette starts inside `joints`: 1 when the scene was
+    /// empty (the hero replaced the placeholder), or the identity pool's size
+    /// when the map models grew it first. A per-frame re-pose must write its
+    /// matrices at this base, not at 1, or the hero reads map-identity slots
+    /// and the pool slots take hero bones.
+    pub hero_joint_base: u32,
     /// The pose applied, as `(bone, axis, degrees)`, for the report.
     pub pose: Vec<(usize, char, f32)>,
     /// The skin the hero was drawn with, for a viewer that wants to pose it.
@@ -242,6 +248,7 @@ impl Scene {
             clip: None,
             clip_guid: 0,
             joints: vec![Mat4::IDENTITY.to_cols_array_2d()],
+            hero_joint_base: 1,
             pose: Vec::new(),
             skin: None,
             hero_model_guid: None,
@@ -1309,10 +1316,14 @@ fn push_box(scene: &mut Scene, min: [f32; 3], max: [f32; 3], texture: u32) {
                 2 => [1.0, 1.0],
                 _ => [0.0, 1.0],
             };
+            // Identity slot 0 (see `build_sandbox`): the sandbox is the one
+            // scene whose hero palette replaces the placeholder, so the
+            // base-1 default would ride the hero's bone 0.
             scene.vertices.push(Vertex {
                 position: *corner,
                 normal,
                 uv: [uv[0] * span, uv[1] * span],
+                joints: [0, 0, 0, 0],
                 ..Vertex::default()
             });
         }
@@ -1360,6 +1371,12 @@ fn build_sandbox(scene: &mut Scene) -> Result<(), String> {
             normal: [0.0, 1.0, 0.0],
             // One checker tile per metre, so the plane shows scale.
             uv: [corner[0] * 0.25, corner[2] * 0.25],
+            // Identity slot 0, not the `[1, 0, 0, 0]` map-prop default: the
+            // sandbox course is the one scene where a placed hero *replaces*
+            // the palette (nothing grew an identity pool first), so a
+            // base-1 vertex would be skinned by the hero's bone 0 once
+            // `--anim` drives it.
+            joints: [0, 0, 0, 0],
             ..Vertex::default()
         });
     }
@@ -1781,6 +1798,7 @@ fn place_hero(
             joint_base = scene.joints.len() as u32;
             scene.joints.extend(cells.iter().copied());
         }
+        scene.hero_joint_base = joint_base;
         scene.pose = pose;
         report.push(format!(
             "skin: {} bones, palette of {} matrices at base {joint_base} (bind-pose deviation {:.2e}, file's inverse-bind array {}{})",
@@ -2049,7 +2067,26 @@ fn cluster_chunks(data: &GameData, guids: &[u64], resolves: &dyn Fn(u64) -> bool
             }
         })
         .collect();
-    out.sort_by_key(|c| std::cmp::Reverse(c.chunks.len()));
+    // Largest first, with a centre tiebreak so two same-sized clusters keep
+    // one order across runs: `into_values` is HashMap-ordered, and `--cluster
+    // N` has to name the same cluster every run.
+    out.sort_by(|a, b| {
+        b.chunks
+            .len()
+            .cmp(&a.chunks.len())
+            .then_with(|| {
+                a.centre
+                    .x
+                    .partial_cmp(&b.centre.x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                a.centre
+                    .z
+                    .partial_cmp(&b.centre.z)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
     out
 }
 

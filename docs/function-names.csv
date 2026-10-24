@@ -173,3 +173,15 @@ Overwatch.exe,0x1407dd760,0x7ff7c54fd760,AdvanceSequenceCameraViewState,Advances
 Overwatch.exe,0x1407dd800,0x7ff7c54fd800,ReleaseSequenceCameraViewObserver,Releases the sequence camera view observer slot
 Overwatch.exe,0x1406b7840,0x7ff7c53d7840,GetSequenceCameraViewActor,Returns the sequence camera view actor for the current thread
 Overwatch.exe,0x1406b9f30,0x7ff7c53d9f30,GetSpecialSequenceCameraEntity,Returns the special camera entity for the current thread
+Overwatch.exe,0x14017a680,0x7ff7c4e9a680,RegisterMoverComponent,Registers STUCharacterMoverComponent (type hash 0x6EFDBD73, component id 0x26, size 0x130)
+Overwatch.exe,0x14111b120,0x7ff7c5e3b120,ConstructMoverComponent,Installs the mover component's three plaintext interface vtables and base state
+Overwatch.exe,0x14111b4b0,0x7ff7c5e3b4b0,SetMoverComponentDefaults,Writes the mover component's default scalars, including the jump-struct defaults
+Overwatch.exe,0x140ca9730,0x7ff7c59c9730,ConstructMoverBody,Derived character-body constructor: looks up component id 0x26 and binds the mover component
+Overwatch.exe,0x140ca37d0,0x7ff7c59c37d0,ConstructMoverBase,Base 0x1b70-byte character-body constructor; installs the base vtables and subobjects
+Overwatch.exe,0x140ca4310,0x7ff7c59c4310,DestructMoverBase,Releases the character-body subobjects and the physics session
+Overwatch.exe,0x140ca4a50,0x7ff7c59c4a50,FreeMoverBase,Frees the 0x1b70-byte character-body base object
+Overwatch.exe,0x140ca7f30,0x7ff7c59c7f30,MoverAdvance,Per-frame position integrator: character collision sweep, or the plain-body (a*X+pos)*b+off formula
+Overwatch.exe,0x1407ffc50,0x7ff7c551fc50,MoverInvoker,Calls the advance, stores the new position at +0x1b80, and dispatches on contact normals
+Overwatch.exe,0x1407ff4d0,0x7ff7c551f4d0,GetMoverStateId,Returns the character body's state id at +0x1b78
+Overwatch.exe,0x1407ff4e0,0x7ff7c551f4e0,GetMoverStateDescriptor,Returns the state descriptor selected by the character body's state id
+Overwatch.exe,0x1407ff270,0x7ff7c551f270,DestructMoverBody,Releases the 0x1c00-byte character body and calls the base destructor

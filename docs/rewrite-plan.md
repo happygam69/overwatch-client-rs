@@ -8,7 +8,7 @@ taken from the operator's own installed copy.
 
 This document sequences that work. The whole-project accounting (assets,
 renderer, maps) stays in [`roadmap.md`](roadmap.md); the capture-side findings
-that feed this plan are in [`history/systems-plan.md`](systems-plan.md); the method
+that feed this plan are in [`history/systems-plan.md`](history/systems-plan.md); the method
 rules are [`provenance.md`](provenance.md)'s. Everything below is against
 build `2.25.0.0.154088`, with the per-capture ASLR deltas already recorded in
 `history/systems-plan.md` (range→exec `+0x1096A0000`, range→v2b `+0x17AEC0000`,
@@ -61,14 +61,15 @@ replace).
 The two **assumed** rows above are the debt this plan exists to retire. A third
 was retired on 2026-10-15: `ACCEL` 121.4, `FRICTION` 72.6, `AIR_ACCEL` 18.5 and
 the crouch/back/terminal slots are all **capture-data** now, not published
-figures. What remains unrecoverable is *declared*, not assumed — the mover
-control's internals are tier 3 because the capture shows encrypted vtable slots
-and no rate literal in any region (`formats/character-controller.md` § Q3).
+figures. What remains unread is the mover's velocity-ramp writer. The old
+tier-3 label was based on partial captures; `Overwatch.exe` is the complete,
+plaintext current image, so the writer is an open read task, not an
+obfuscation claim (`formats/character-controller.md` § Q3).
 
 ## The questions the rewrite still depends on
 
 Each question with the evidence its answer needs — the working checklist, in
-[`history/systems-plan.md`](systems-plan.md)'s sweep order and REA's evidence
+[`history/systems-plan.md`](history/systems-plan.md)'s sweep order and REA's evidence
 discipline.
 
 * **Q1 — dmBody/dmWorld field offsets.** Needed to read and write live bodies
@@ -187,13 +188,13 @@ decompilation route cannot pin. Runs in parallel with Lane A from M0 on.
   across 101 writes on the flat trace (max step deviation 0.0018616 m) and
   across 18 on the jump trace (max vertical delta error 0.0014 m), with terrain
   screened by step and sustained-vertical tests and the coverage printed per
-  segment. **The client's own
-  expressions are closed as tier 3**: the control is obfuscated (encrypted
-  vtable slots, junk decompilations, and no rate literal or velocity store in
-  any capture), so the numbers stand as trace-measured under `AGENTS.md`'s
-  rule. Remaining open: crouch transition timing (needs one operator capture
+  segment. **The client's own expressions are not yet read**: the advance and
+  invoker are read in the current build, but the writer of the velocity quad is
+  not located. The current image is complete and plaintext, so this is a
+  discovery gap; the numbers stand as trace-measured until the writer is found.
+  Remaining open: crouch transition timing (needs one operator capture
   holding `ctrl`; all six existing captures lack it) and the steep-slope slide
-  (|v| = 4.6895 over a straight 24.89° descent, not a slot), which belongs to the tier-3 control or terrain. **The mover-velocity link was searched and
+  (|v| = 4.6895 over a straight 24.89° descent, not a slot), which belongs to the unlocated ramp or terrain. **The mover-velocity link was searched and
   closed as a negative**: no live dmBody holds a readable velocity for the
   local character — a heap-wide search for the exact walking velocity vector,
   for speed/displacement scalars (cross-checked S vs W), and for the
@@ -298,8 +299,9 @@ shape.
   transitions, the airborne ramp (`AIR_ACCEL` = 18.5 m/s^2) and the reverse
   (ACCEL + FRICTION while the wish opposes) are measured and implemented, and
   the gate on `player_ctrl4.jsonl` reports max vertical delta error 0.0019 m
-  over 300 s. The decompile route ended at tier 3 (obfuscated control, see the
-  M2 note above), so the gate is carried by measurement plus the differ.
+  over 300 s. The decompile route is still open: the advance and invoker are
+  read, the writer is not; the gate is carried by measurement plus the differ
+  until it is found.
 * **M3 — combat facts (Q5–Q8).** Volley timing, projectile motion, hit
   shapes, damage rules, each into `formats/weapons.md` /
   `formats/character-controller.md` with evidence.
@@ -334,7 +336,7 @@ named in `STATUS-handoff.md`. **Replay:** `cargo run -p ow-sim --bin trace_diff 
 | crouch (slot and transition) | **3** | the crouch-walk plateau reads 2.960-3.011 m/s = the 3.0 slot across five clean segments, and both transitions are the ordinary ACCEL-limited approach in 1-2 frames (5.5 -> 3.46 -> 2.97, 2.97 -> 4.16 -> 5.54 m/s); boundary = the key lands inside a frame, so the transition's exact first frame is not resolvable |
 | the reverse (wish opposes the velocity) | **3** | the traced reversal crosses zero in one write at 210-231 m/s^2, where ACCEL alone would take three; implemented as friction *plus* accel while opposing (194 m/s^2); boundary = the same frame-phase limit, and the residual 2-5% step differences at reversal writes sit at the 200 Hz sampling floor |
 | slope-following (|v| = the slot along the surface) | **3** | the traced 17.9° climb is 4.940 = the 4.95 slot to 0.2%, and its heading is the wish's (9.7° against the forward run's −170.5°, the exact reverse to 0.2°); boundary = the steep-slide case (|v| = 4.6895) is not reproduced, and a wish *off* the fall line would distinguish uniform scaling from a true projection (no trace has one) |
-| the client's own expressions | **3** | the control is obfuscated (encrypted vtable slots, junk decompilations, no rate literal or velocity store in any capture); boundary = `AGENTS.md`'s unrecoverable-stage rule, numbers stand as trace-measured |
+| the client's own expressions | **open read** | the advance and invoker are read; the writer of the velocity quad is not yet located. The current image is complete and plaintext, so the old "obfuscated" evidence was a capture-coverage artefact, not an unrecoverable-stage boundary; numbers stand as trace-measured until the writer is found |
 
 **Gate results:** flat trace — no divergence across 101 compared writes (75
 environment-affected and 20 input-transition writes screened; max step

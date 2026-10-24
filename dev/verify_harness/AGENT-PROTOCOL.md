@@ -31,6 +31,14 @@ identical inputs in identical sandboxes, producing identical observable
 results — over inputs whose reach was measured and whose detection power was
 demonstrated.**
 
+The candidate is now **shipped code, not a harness copy**. A `"cargo"` unit
+builds `crates/ow-sim/src/bin/verify_probe.rs` with `cargo build --release`;
+the probe imports the real crate functions. The ledger binds the verdict to
+the function's own source file(s) (`candidate_sources`), the probe source and
+the git revision (`crate_rev`), so editing any of them expires the entry. The
+old `"rust"` loader (`rust_probe.rs`, built with `rustc`) remains for the
+selftest's deliberately-broken entry; a new unit must not use it.
+
 Two bug classes this harness has already caught in real decompiles — expect
 them in yours:
 
@@ -154,11 +162,31 @@ Field notes:
   so both loaders rebase them).
 - **`returns`**: `f32`, `f64`, `u64`, or `void`.
 - **`candidateLoader`**: omit (or `"c"`) for tier 1 (the decompile);
-  `"rust"` for tier 2 (`rust_probe.rs`, entry is the Rust fn name).
+  `"cargo"` for the shipped tier-2 probe
+  (`crates/ow-sim/src/bin/verify_probe.rs`, built by `cargo build --release`);
+  `"rust"` for the legacy standalone `rust_probe.rs` (the selftest's
+  deliberately-broken entry and old units).
+- **`state`**: optional block for a stateful unit. The snapshot is written at
+  `base` before every oracle call, the whole region is compared after the call
+  (the `state` channel), and the region is restored before the next call. A
+  pointer arg that names a `guest` address indexes this snapshot; the probe
+  translates the same guest address into its own copy. Reads inside the
+  declared region are expected, not "undeclared global state":
+  ```json
+  "state": { "base": "0x200000000000", "hex": "00…" }
+  ```
+  or `"image": "path/to/snapshot.bin"` instead of `"hex"`. The state region is
+  part of the surfaces digest; editing the file expires the verdict.
+- **`scaffold`**: `true` marks a template emitted by `scaffold_unit.py`.
+  `cli.py all` skips scaffolds; an explicit `cli.py fn/<Name>` still runs it.
+  Never remove the flag until the unit is real.
 - **`knownEquivalentMutants` / `acknowledgedGaps`**: see step 6.
 - **`options`**: `coverageThreshold` is a percentage of discovered
   conditional branches; `mutationKillRate` is killed/scored. Do not lower
-  them to pass — close the gap or declare, step 6.
+  them to pass — close the gap or declare, step 6. `allowedImageReads`
+  accepts an exact address or an inclusive `0xlo-0xhi` range; use a range for
+  a declared global block, and keep the list to constants/state the fixture
+  actually models.
 
 ### Step 4 — write the fixture (the hard part, the part that matters)
 
@@ -182,6 +210,28 @@ For linked structures you own `make_args(i)`:
    you learn nothing.
 5. **Deterministic.** `make_args(i)` must return the same input for the
    same `i` forever; both sides depend on that.
+6. **Stateful units put the struct in the `state` block, not in a fresh
+   arena.** Return `ArgSpec(..., guest=base+off)` for the pointer; the
+   oracle and probe both index the preloaded snapshot. The whole region is
+   the state channel, so a field the function writes outside the pointee is
+   still compared. Declare every pointer-shaped field's reloc offset so the
+   state channel masks the two different host addresses.
+
+### Step 4b — scaffold the unit from an address
+
+`scaffold_unit.py` mechanises the boring part:
+
+```bash
+python dev/verify_harness/scaffold_unit.py 0x142069c60 --name OrthonormalizeCameraBasis
+```
+
+It resolves the address to an RVA, reads the `.pdata` function extent from the
+flat recovery image, decompiles through the Ghidra bridge into
+`dev/decompiles/<Name>_<exe>.c`, and writes a **template** under
+`units/scaffolds/` (gitignored) with `"scaffold": true`. The template is not a
+verification claim: fill the real argument surface, fixture and oracle, then
+move it to `units/` and remove the flag. A scaffold that is never run cannot
+turn the gate green.
 
 ### Step 5 — run the harness
 
@@ -279,9 +329,11 @@ no unit may be called verified — fix the harness first.
 The harness prints `verified`, which requires all of:
 
 - the oracle bytes present and non-cold, the candidate compiling;
+- for a `"cargo"` unit, the probe built from the real crate and the ledger
+  bound to the function source + crate revision;
 - the oracle deterministic on identical inputs;
 - zero divergences across every channel (return bits, pointee writes,
-  no undeclared reads/writes);
+  state region, no undeclared reads/writes);
 - oracle branch coverage at or above the gate, or a named acknowledged gap;
 - mutation kill rate at or above the gate, every survivor either fixed or
   declared equivalent with a rationale;

@@ -1,0 +1,25 @@
+{
+  "id": "fn/InitProjectionDescriptor-rust",
+  "title": "tier-2: seed a projection descriptor with default scales and cleared extents",
+  "address": { "v2b": "0x7ff7c6d95230" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "init_projection_descriptor",
+  "candidateLoader": "rust",
+  "args": [
+    { "name": "desc", "kind": "ptr", "ptr_len": 160 }
+  ],
+  "returns": "void",
+  "options": {
+    "iterations": 64,
+    "coverageThreshold": 95,
+    "mutationCount": 8,
+    "mutationKillRate": 0.75,
+    "seed": 4241
+  },
+  "notes": [
+    "Zero named callees; pure leaf at 0x142075230 (Overwatch.exe / current build).",
+    "Stores 1.0f at +0x54/+0x58/+0x74/+0x78 and dword/qword zeros at +0x40/+0x4c/+0x5c/+0x64/+0x6c.",
+    "Generic random corpus is enough: every input is overwritten at the fixed offsets, so the mem channel sees the stores regardless of the starting bytes.",
+    "Return is the input pointer; declared void."
+  ]
+}

@@ -15,13 +15,14 @@ Usage (library):
 
 from __future__ import annotations
 
+import os
 import struct
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from unicorn import Uc, UcError, UC_ARCH_X86, UC_MODE_64
 from unicorn import x86_const as x
-from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
+from unicorn import UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn import UC_HOOK_MEM_READ_UNMAPPED, UC_HOOK_MEM_WRITE_UNMAPPED
 from unicorn import UC_HOOK_MEM_FETCH_UNMAPPED
 
@@ -39,6 +40,21 @@ SENTINEL = 0x0000_0003_0000_0000  # page of `ret` - return trap
 SHADOW_BASE = 0x0000_0003_1000_0000  # MS x64 shadow space for the call
 
 MAX_STEPS = 2_000_000
+
+# Images are large (tens of MB) and immutable during a session; several
+# consumers (selftest, runner, coverage) build more than one EmuOracle over
+# the same path. Read each file once per process.
+_IMAGE_CACHE: Dict[str, bytes] = {}
+
+
+def _read_image(path: str) -> bytes:
+    key = os.path.realpath(path)
+    img = _IMAGE_CACHE.get(key)
+    if img is None:
+        with open(path, "rb") as f:
+            img = f.read()
+        _IMAGE_CACHE[key] = img
+    return img
 
 
 @dataclass
@@ -62,6 +78,12 @@ class ArgSpec:
     value: float = 0.0
     bits: int = 0
     arena_offset: Optional[int] = None
+    # Absolute guest address for a pointer into a preloaded state snapshot.
+    # When set, `mem` is written at this address (after the snapshot load) and
+    # the pointer register is set to it; the arena layout is not used. The
+    # probe translates the same guest address into its state buffer, so both
+    # sides see one controlled struct.
+    guest: Optional[int] = None
     # Byte offsets within `mem` that hold a u64 relative pointer (offset
     # from the pointee's own base). The oracle rebases these to the real
     # arena address on write; the C candidate's wrapper rebases to its
@@ -82,14 +104,60 @@ class CallResult:
     fault: Optional[str] = None
     pointee_before: bytes = b""
     pointee_after: bytes = b""
+    # State-snapshot channel: the whole declared region before and after the
+    # call. None when the unit has no state.
+    state_before: Optional[bytes] = None
+    state_after: Optional[bytes] = None
 
 
 class EmuOracle:
     def __init__(self, image_path: str, base: int = V2B_BASE):
         self.base = base
-        with open(image_path, "rb") as f:
-            self.image = f.read()
+        self.image = _read_image(image_path)
         self.uc = self._build()
+        # (base, bytes) of the controlled state region, if one is declared.
+        self.state: Optional[Tuple[int, bytes]] = None
+        self._state_restore: Optional[Tuple[int, bytes]] = None
+        self._extra_maps: List[Tuple[int, int]] = []
+
+    def set_state(self, base: int, data: bytes) -> None:
+        """Preload a controlled memory snapshot for a stateful unit.
+
+        The region may live inside the image (a data address) or in a fresh
+        mapped block. Each ``call`` writes the snapshot, runs the function,
+        captures the whole region and restores the pre-snapshot bytes, so the
+        oracle stays stateless between calls just like the arena.
+        """
+        if not data:
+            raise ValueError("state snapshot is empty")
+        self.state = (base, bytes(data))
+        page = base & ~0xFFF
+        end = base + len(data)
+        if self._overlaps_known(page, end):
+            self._state_restore = (base, self._read_any(base, len(data)))
+        else:
+            size = ((end - page) + 0xFFF) & ~0xFFF
+            self.uc.mem_map(page, size)
+            self._extra_maps.append((page, size))
+            self._state_restore = None
+
+    def _overlaps_known(self, lo: int, hi: int) -> bool:
+        img_end = self.base + ((len(self.image) + 0xFFF) & ~0xFFF)
+        ranges = [
+            (self.base, img_end),
+            (STACK_BASE, STACK_BASE + STACK_SIZE),
+            (ARENA_BASE, ARENA_BASE + ARENA_SIZE),
+            (SENTINEL, SENTINEL + 0x1000),
+            (SHADOW_BASE, SHADOW_BASE + 0x1000),
+            *self._extra_maps,
+        ]
+        return any(lo < b and a < hi for a, b in ranges)
+
+    def _read_any(self, addr: int, size: int) -> bytes:
+        try:
+            return bytes(self.uc.mem_read(addr, size))
+        except UcError:
+            return b"\x00" * size
 
     def _build(self) -> Uc:
         u = Uc(UC_ARCH_X86, UC_MODE_64)
@@ -123,9 +191,29 @@ class EmuOracle:
         steps: int = MAX_STEPS,
     ) -> CallResult:
         u = self.uc
-        # Reset arena and stack each call - determinism by construction.
+        # Reset arena, stack and registers each call - determinism by
+        # construction, and the oracle is stateless between calls (which is
+        # what lets the runner cache and reuse results for identical args).
         u.mem_write(ARENA_BASE, b"\x00" * ARENA_SIZE)
         u.mem_write(STACK_BASE, b"\x00" * STACK_SIZE)
+        # The controlled state region is re-seeded from its snapshot on every
+        # call; the caller's per-case pointee writes below then specialise it.
+        state_lo = state_hi = None
+        if self.state is not None:
+            state_lo, state_data = self.state
+            state_hi = state_lo + len(state_data)
+            u.mem_write(state_lo, state_data)
+        for reg in (
+            x.UC_X86_REG_RAX, x.UC_X86_REG_RBX, x.UC_X86_REG_RCX,
+            x.UC_X86_REG_RDX, x.UC_X86_REG_RSI, x.UC_X86_REG_RDI,
+            x.UC_X86_REG_RBP, x.UC_X86_REG_R8, x.UC_X86_REG_R9,
+            x.UC_X86_REG_R10, x.UC_X86_REG_R11, x.UC_X86_REG_R12,
+            x.UC_X86_REG_R13, x.UC_X86_REG_R14, x.UC_X86_REG_R15,
+            x.UC_X86_REG_XMM0, x.UC_X86_REG_XMM1, x.UC_X86_REG_XMM2,
+            x.UC_X86_REG_XMM3, x.UC_X86_REG_XMM4, x.UC_X86_REG_XMM5,
+            x.UC_X86_REG_XMM6, x.UC_X86_REG_XMM7, x.UC_X86_REG_EFLAGS,
+        ):
+            u.reg_write(reg, 0)
 
         # Lay out pointees in the arena; record the layout for read/write filters.
         ptrs: List[int] = []
@@ -133,7 +221,16 @@ class EmuOracle:
         for a in args:
             if a.kind == "ptr":
                 mem = a.mem
-                if a.arena_offset is not None:
+                if a.guest is not None:
+                    addr = a.guest
+                    if self.state is None:
+                        raise ValueError("guest pointer requires a preloaded state")
+                    if addr < state_lo or addr + len(mem) > state_hi:
+                        raise ValueError(
+                            f"guest pointee {addr:#x}+{len(mem)} outside state "
+                            f"{state_lo:#x}..{state_hi:#x}"
+                        )
+                elif a.arena_offset is not None:
                     addr = ARENA_BASE + a.arena_offset
                     if addr + len(mem) > ARENA_BASE + ARENA_SIZE:
                         raise ValueError("arena_offset pointee exceeds arena")
@@ -180,7 +277,14 @@ class EmuOracle:
             else:
                 raise ValueError(f"unknown arg kind {a.kind!r}")
 
-        rsp = STACK_TOP & ~0xF
+        # MS x64: the caller's RSP is 16-byte aligned at the CALL, so after
+        # the call pushes the 8-byte return address, RSP % 16 == 8 at entry.
+        # STACK_TOP is 16-aligned, so STACK_TOP - 8 is exactly that. (Do NOT
+        # round: masking with ~0xF would undo the offset and emulate a
+        # misaligned caller.) The old code emulated RSP % 16 == 0 at entry,
+        # which faults every `movaps [rsp+X]` spill a real compiler emits
+        # after one push - a divergence the oracle itself manufactured.
+        rsp = STACK_TOP - 8
         u.reg_write(x.UC_X86_REG_RSP, rsp)
         u.mem_write(rsp, struct.pack("<Q", SENTINEL))
 
@@ -188,62 +292,72 @@ class EmuOracle:
         reads_outside: List[Tuple[int, int]] = []
         oow: List[Tuple[int, int]] = []
         arena_lo, arena_hi = ARENA_BASE, ARENA_BASE + ARENA_SIZE
-        stack_lo, stack_hi = STACK_BASE, STACK_BASE + STACK_SIZE
-        sent_lo, sent_hi = SENTINEL, SENTINEL + 0x1000
-        shadow_lo, shadow_hi = SHADOW_BASE, SHADOW_BASE + 0x1000
-        steps_hit = {"n": 0}
         fault: List[str] = []
 
-        def in_allowed(addr: int) -> bool:
-            return (
-                arena_lo <= addr < arena_hi
-                or stack_lo <= addr < stack_hi
-                or sent_lo <= addr < sent_hi
-                or shadow_lo <= addr < shadow_hi
-            )
+        def hook_arena_write(uu, access, address, size, value, ud):
+            blob = uu.mem_read(address, size)
+            writes.append((address, bytes(blob)))
 
-        def hook_write(uu, access, address, size, value, ud):
-            # Stack spills, shadow-space home slots and the sentinel page are
-            # normal function behaviour; only writes outside all of those
-            # (i.e. into the image or unknown memory) are undeclared.
-            if arena_lo <= address < arena_hi:
-                blob = uu.mem_read(address, size)
-                writes.append((address, bytes(blob)))
-            elif not (
-                stack_lo <= address < stack_hi
-                or shadow_lo <= address < shadow_hi
-                or sent_lo <= address < sent_hi
-            ):
-                oow.append((address, size))
+        def hook_image_write(uu, access, address, size, value, ud):
+            # A write into the image itself: the function patched shipped
+            # code/data. Undeclared by definition - unless it is a write into
+            # the controlled state region, which is the unit's declared state
+            # (the state channel compares it).
+            if state_lo is not None and state_lo <= address < state_hi:
+                return
+            oow.append((address, size))
 
-        def hook_read(uu, access, address, size, value, ud):
-            if not in_allowed(address):
-                reads_outside.append((address, size))
+        def hook_image_read(uu, access, address, size, value, ud):
+            # Reads of the image = global/constant reads outside declared
+            # args. Arena/stack/sentinel/shadow are allowed by construction
+            # and never reach this callback (range-limited hook).
+            reads_outside.append((address, size))
 
         def hook_unmapped(uu, access, address, size, value, ud):
-            kinds = {1: "read", 2: "write", 3: "fetch? "}
+            kinds = {16: "read", 17: "write", 18: "fetch",
+                     19: "read-unmapped", 20: "write-unmapped", 21: "fetch-unmapped"}
             fault.append(f"unmapped {kinds.get(access, access)} at {address:#x} size {size}")
             return False
 
-        def hook_code(uu, addr, size, ud):
-            steps_hit["n"] += 1
-            if steps_hit["n"] > steps:
-                fault.append(f"step limit {steps} exceeded at {addr:#x}")
-                uu.emu_stop()
-
-        h1 = u.hook_add(UC_HOOK_MEM_WRITE, hook_write)
-        h2 = u.hook_add(UC_HOOK_MEM_READ, hook_read)
-        h3 = u.hook_add(
+        # Range-limited hooks: the Python callbacks below fire only for
+        # accesses inside the image (the only mapped region where "outside
+        # the declared surface" is decidable). Arena/stack traffic - the
+        # overwhelming majority - stays native, which is several times
+        # faster than a whole-memory hook.
+        img_end = (len(self.image) + 0xFFF) & ~0xFFF
+        h1 = u.hook_add(UC_HOOK_MEM_WRITE, hook_arena_write,
+                        begin=arena_lo, end=arena_hi - 1)
+        h2 = u.hook_add(UC_HOOK_MEM_WRITE, hook_image_write,
+                        begin=self.base, end=self.base + img_end - 1)
+        h3 = u.hook_add(UC_HOOK_MEM_READ, hook_image_read,
+                        begin=self.base, end=self.base + img_end - 1)
+        h4 = u.hook_add(
             UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED | UC_HOOK_MEM_FETCH_UNMAPPED,
             hook_unmapped,
         )
-        h4 = u.hook_add(UC_HOOK_CODE, hook_code)
 
         ret_bits = 0
         ok = False
+        state_before = None
+        if self.state is not None:
+            # The per-case pointee writes above have been applied; this is the
+            # exact state the callee starts from.
+            state_before = bytes(u.mem_read(state_lo, state_hi - state_lo))
         try:
+            # `count` is the native instruction budget; no per-instruction
+            # Python hook is needed to enforce it.
             u.emu_start(v2b_addr, SENTINEL, count=steps)
-            ok = not fault
+            rip = u.reg_read(x.UC_X86_REG_RIP)
+            if rip != SENTINEL:
+                # Stopped mid-function: the native step budget ran out (an
+                # infinite/runaway loop) or emulation died. Either way this
+                # is NOT an ok result - the old code counted steps in a
+                # Python hook that could never fire past `count`, so a
+                # runaway returned ok=True with garbage registers.
+                fault.append(
+                    f"no clean return (rip={rip:#x}); step budget {steps} "
+                    "likely exhausted"
+                )
             if ret_kind == "f32":
                 ret_bits = u.reg_read(x.UC_X86_REG_XMM0) & 0xFFFF_FFFF
             elif ret_kind == "f64":
@@ -252,6 +366,7 @@ class EmuOracle:
                 ret_bits = u.reg_read(x.UC_X86_REG_RAX)
         except UcError as e:
             fault.append(f"UcError: {e}")
+        ok = not fault
 
         u.hook_del(h1)
         u.hook_del(h2)
@@ -263,6 +378,15 @@ class EmuOracle:
             if a.kind == "ptr":
                 after += u.mem_read(p, len(a.mem))
 
+        state_after = None
+        if self.state is not None:
+            state_after = bytes(u.mem_read(state_lo, state_hi - state_lo))
+            # Restore the pre-snapshot bytes so the next call starts from the
+            # same state irrespective of what this one wrote.
+            if self._state_restore is not None:
+                rb, rb_data = self._state_restore
+                u.mem_write(rb, rb_data)
+
         return CallResult(
             ok=ok,
             ret_bits=ret_bits,
@@ -270,10 +394,12 @@ class EmuOracle:
             writes=writes,
             reads_outside=reads_outside,
             out_of_arena_writes=oow,
-            steps=steps_hit["n"],
+            steps=steps if not ok else 0,  # nonzero only when the budget was hit
             fault=fault[0] if fault else None,
             pointee_before=before,
             pointee_after=after,
+            state_before=state_before,
+            state_after=state_after,
         )
 
 

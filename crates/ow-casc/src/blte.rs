@@ -88,7 +88,12 @@ pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>>
             return Err(Error::Malformed("unexpected chunk-table header"));
         }
         let count = u24_be(blte, 9)? as usize;
-        let mut table = Vec::with_capacity(count);
+        // Each record costs 24 bytes from offset 12, so a count larger than
+        // what the container can hold is malformed. Cap before reserving: a
+        // corrupt u24 must not allocate hundreds of MB first (ow-stu's bag
+        // parsers do the same check before their reserve).
+        let max_records = blte.len().saturating_sub(12) / 24;
+        let mut table = Vec::with_capacity(count.min(max_records));
         let mut p = 12;
         for _ in 0..count {
             if p + 24 > blte.len() {
@@ -131,9 +136,24 @@ pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>>
             b'N' => body.to_vec(),
             b'Z' => {
                 let mut buf = Vec::new();
-                flate2::read::ZlibDecoder::new(body)
-                    .read_to_end(&mut buf)
-                    .map_err(|e| Error::Zlib(e.to_string()))?;
+                let mut decoder = flate2::read::ZlibDecoder::new(body);
+                // Cap the expansion at the declared decoded size (+1 so an
+                // over-long body is caught by the size check below rather
+                // than read to the end): a corrupt chunk must not turn a
+                // small payload into a decompression bomb.
+                match chunk.decoded {
+                    Some(expected) => {
+                        decoder
+                            .take(expected as u64 + 1)
+                            .read_to_end(&mut buf)
+                            .map_err(|e| Error::Zlib(e.to_string()))?;
+                    }
+                    None => {
+                        decoder
+                            .read_to_end(&mut buf)
+                            .map_err(|e| Error::Zlib(e.to_string()))?;
+                    }
+                }
                 buf
             }
             _ => return Err(Error::Malformed("unknown BLTE chunk mode")),

@@ -1,0 +1,59 @@
+{
+  "id": "fn/OrthonormalizeCameraBasis-rust",
+  "title": "tier-2: re-orthonormalize two camera basis rows via cross + rsqrtps Newton",
+  "address": { "v2b": "0x7ff7c6d89c60" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "orthonormalize_camera_basis",
+  "candidateLoader": "rust",
+  "args": [
+    { "name": "basis", "kind": "ptr", "ptr_len": 48 }
+  ],
+  "returns": "void",
+  "argFactory": "orthonormalize_basis_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 90,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "allowedImageReads": [
+      "0x7ff7c7c9aad0",
+      "0x7ff7c7c9aae4",
+      "0x7ff7c7c9aaf0",
+      "0x7ff7c7c9aaf8",
+      "0x7ff7c7ca4b18",
+      "0x7ff7c7ca8df4",
+      "0x7ff7c7facdd0",
+      "0x7ff7c7facdd8",
+      "0x7ff7c7facde0",
+      "0x7ff7c7facde8",
+      "0x7ff7c80b0e20",
+      "0x7ff7c80b0e28",
+      "0x7ff7c80b0e40",
+      "0x7ff7c80b0e48"
+    ]
+  },
+  "notes": [
+    "Zero named callees; pure leaf at 0x142069c60 (Overwatch.exe / current build).",
+    "Reads two float4 rows at +0x10 and +0x20. Early-out (no stores) when both rows are unit-length (eps 0.008) and orthogonal (eps 0.004).",
+    "Rebuild path: cross = row0 x row1, then row1 = normalize(cross x row0) via rsqrtps + one Newton step; row0 stored back unchanged.",
+    "Unicorn implements rsqrtps as f32 sqrt + f32 1.0/sqrt (not the host CPU's low-precision hardware approximation); the candidate matches Unicorn's semantics so the bits agree.",
+    "The rewrite lives in rust_rewrites/OrthonormalizeCameraBasis.rs (include! into rust_probe.rs).",
+    "Degenerate-cross fallbacks (cross with +Y then +Z) are exercised by parallel / zero / Inf rows in the fixture front.",
+    "Return is void (function returns nothing).",
+    "allowedImageReads: 0x7ff7c7c9aad0=FLT_MIN, 0x7ff7c7c9aae4=1.0f, 0x7ff7c7c9aaf0/8=abs mask 0x7fffffff, 0x7ff7c7ca4b18=0.004f, 0x7ff7c7ca8df4=0.008f, 0x7ff7c7facdd0/de8=[0,1,0,0]/[0,0,1,0] fallback axes, 0x7ff7c7facde0/8=[0,0,0,0]/[1,0,0,0], 0x7ff7c80b0e20/28=3.0f, 0x7ff7c80b0e40/48=0.5f. All .rdata compiler constants the decompile already inlines; not game globals."
+  ],
+  "acknowledgedGaps": [],
+  "knownEquivalentMutants": [
+    {
+      "kind": "boundary -1",
+      "line": 89,
+      "rationale": "The assert checks desc.len() >= 0x30 before any load or store. Lowering it to 0x2f only accepts 47-byte buffers, which the fixture never produces (every case is exactly 0x30) and which the oracle's own pointee write would still need 48 bytes for on the rebuild path. What would observe a difference: a harness that declared ptr_len 47 and still expected the rebuild stores - the protocol requires ptr_len >= the widest write, so that state is outside this unit's contract."
+    },
+    {
+      "kind": "cmp-flip >=to>",
+      "line": 109,
+      "rationale": "The test is (len0 - 1.0).abs() >= 0.008 vs > 0.008. IEEE float equality at exactly 0.008 is a single bit pattern (0x3c03126f). The fixture's nearest cases are ~0.001999 (inside) and ~0.0201 (outside); neither lands on the boundary. What would observe a difference: a row whose |len2-1| is exactly the f32 value 0.008 - the early-out and rebuild paths would disagree only on that measure-zero input. Random f32 draws do not hit it, and the decompile's own comiss+jae uses the same IEEE relation, so the mutant is observationally equivalent for this unit's contract."
+    }
+  ]
+}

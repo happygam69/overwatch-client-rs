@@ -15,6 +15,22 @@ cargo xtask verify --fast     # the same, without the tests that read the instal
 That is what "done" means here. The eye-check is still the operator's:
 `cargo run --release -p ow-view -- --play --hero 3 --anim auto`.
 
+## Verification harness: shipped code, state, scaffolds
+
+- **Tier 2 runs the crate.** `crates/ow-sim/src/bin/verify_probe.rs` is built
+  by `cargo build --release` and imports the real `ow-sim` functions. A unit
+  declares `"candidateLoader": "cargo"`; the ledger records
+  `candidate_sources` (the function's own source file) and `crate_rev`.
+- **Stateful units.** A `state` block preloads a snapshot; `guest` pointer
+  args index it and the whole region is the `state` channel. The verified
+  `fn/OrthonormalizeCameraBasis-state` is the worked example.
+- **Scaffolds are not claims.** `python dev/verify_harness/scaffold_unit.py
+  <address> --name <Name>` produces a template under `units/scaffolds/`
+  (`scaffold: true`); `cli.py all` skips it. The mover scaffold is
+  `dev/verify_harness/units/fn-MoverAdvance.json`.
+- **Run one unit:** `python dev/verify_harness/cli.py fn/<Name>`; the ledger
+  and the five-stage ladder decide, not the author.
+
 ## The build changed under us (2026-10-21)
 
 **The install is now build `2.25.0.1.154504`; every address in the docs
@@ -50,8 +66,8 @@ What this means in practice:
   level match needs the old build's function list (the 2.25.0.0 captures
   have **no** `.pdata`, so the extents come from the analysis).
 - **Naming crosses the builds now (2026-10-22; camera added 2026-10-23).**
-  `docs/function-names.csv` carries **174 settled names** (175 lines,
-  2026-10-23); the camera rows cover the near/far and FOV getters/registration,
+  `docs/function-names.csv` carries **186 settled names** (187 lines,
+  2026-10-25); the camera rows cover the near/far and FOV getters/registration,
   the plane setter, the mouse-look deltas, the FP clip planes and offset
   transform, the input poll and force-input mode, the replay proto merge, the
   view-params constructor, and the view/projection and FP-pose builders.
@@ -108,7 +124,14 @@ What this means in practice:
   versions, typed class registry and field readers, shader groups and code
   blobs.
 - **Movement:** trace-measured mover arithmetic, verified by `trace_diff`;
-  crouch/air/slope rules measured. The mover control code is tier 3.
+  crouch/air/slope rules measured. The mover component, advance and invoker
+  are read in the current build (`RegisterMoverComponent` `0x14017a680`,
+  `MoverAdvance` `0x140ca7f30`, `MoverInvoker` `0x1407ffc50`); the velocity-ramp
+  writer is still unlocated. The install's `.pdata` is plaintext and complete;
+  the remaining issue is Ghidra's fragmented function boundaries and the
+  state-table/statescript data, not missing code. `dev/field_index.py` is the
+  struct-aware finder. The mover verification unit is a scaffold until the
+  ramp is read.
 - **Combat:** pools, fire intervals, volley figures, projectile motion,
   hitscan. Damage is supplied; damage order/armour mitigation are assumed.
 - **Scene/view:** real map geometry, hero models, skeletons, skinning, texture
@@ -166,11 +189,12 @@ What this means in practice:
 ## The page-decrypt hunt (coverage solved offline)
 
 **Coverage is solved without a capture (2026-10-23).**
-`dev/offline_page_recover.py` recovered all **12,076** `.text` pages and the
-`.pdata` table from the installed `Overwatch.exe` using the known pad and
-ciphertext-only scoring. The held-out oracle is 2,284/2,284; the warm images
-match 4,887/4,888 and 5,350/5,351 readable pages. One page keeps a declared
-16-byte tail (`0x540000`). The full image is
+`dev/offline_page_recover.py` recovered all **12,076** `.text` pages from the
+installed `Overwatch.exe` using the known pad and ciphertext-only scoring, and
+copied the install's **plaintext `.pdata`** table (201,246 entries). The
+held-out oracle is 2,284/2,284; the warm images match 4,887/4,888 and
+5,350/5,351 readable pages. One page keeps a declared 16-byte tail
+(`0x540000`). The full image is
 `D:/ow-dumps/offline_recover/module_offline.bin` (preferred base
 `0x140000000`); `REPORT.md` has the validation. It is imported as the Ghidra
 program `Overwatch.exe` (151,260 functions, every `.text` page initialized).
@@ -204,10 +228,14 @@ candidate region, one in `0x10b72f0`, one in `0x10c1e20`. All three regions
 take three small keys plus a data pointer, so the family may be data/string
 decoders. The **live** `.pdata` is intact: `0x14380e0..0x144ee19` is one
 function, and its page path is the state at `0x14388e7` -> `0x144968f` using a
-descriptor whose `w` field is `edx` at `0x14481c1`. The **disk** `.pdata` is
-encrypted; parsing it raw gives garbage, so function extents must come from the
-live image. `0x10c1e20` is the only region with the 4-byte-granular
-`and 0x3ffc` pad mask, which fits the measured 4-byte window alignment better
+descriptor whose `w` field is `edx` at `0x14481c1`. The **main executable's
+disk `.pdata` is plaintext** (201,246 entries, byte-identical to the offline
+image's at RVA `0x450b000`); the earlier "disk `.pdata` is encrypted" note was
+a parser-bound error, and the loader's table is valid at RVA `0x1f00000`
+(5,701 entries). Function extents for the main image come from its own
+`.pdata`, not from a live capture. `0x10c1e20` is the only region with the
+4-byte-granular `and 0x3ffc` pad mask, which fits the measured 4-byte window
+alignment better
 than the candidate's `0x3fff`. No stored or hashed `w` table was found in the
 disk loader, the live loader image, the live main-module image, the private
 ghost loader copy, or at any fixed stride in the full heap dump.

@@ -26,6 +26,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `clip_structure.py` | Dump the entire file structure to find pose data. | 57 |
 | `coverage_gap.py` | Coverage gap auditor for a session-coherent image. | 145 |
 | `ctrl_probe.py` | Measure crouch, jump and air-control behaviour from a captured trace. | 154 |
+| `data/bc7oracle/texture2ddecoder/__init__.py` | A python wrapper for [Perfare](https://github.com/Perfare)'s [Texture2DDecoder](https://github.com/Perfare/AssetStudio/tree/master/Texture2DDecoder). | 31 |
 | `disasm_field_sites.py` | Find every reference to a known field hash in the captured code, and | 182 |
 | `dump_class_descriptors.py` | Walk every class descriptor the registry knows and dump its slots. | 105 |
 | `dump_class_objects.py` | Dump the six animation-class objects' method pointers. | 94 |
@@ -43,6 +44,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `fast_rec.py` | High-rate ramp capture: 200 Hz samples of the player node on flat ground. | 85 |
 | `faultsync_correlate.py` | Offline fault-sync flip attribution check (no live touch). | 78 |
 | `faultsync_resolve.py` | Resolve the RVA watchlist to session-absolute addresses (offline, no live touch). | 48 |
+| `field_index.py` | Field-access index over the complete client image. | 383 |
 | `find_anim_decoder.py` | Find code that reads the animation clip header, by the loads it must make. | 107 |
 | `find_broadphase.py` | Find the physics world through its broadphase trees. | 343 |
 | `find_chunk_runs.py` | Find runs of map chunk GUIDs in a memory capture. | 76 |
@@ -61,7 +63,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `flatten.py` | Flatten captured code regions into one image Ghidra can import. | 49 |
 | `focus_window.py` | Bring a process's main window to the foreground (un-minimise + focus). | 88 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
-| `gh.py` | Call the Ghidra bridge over HTTP. | 66 |
+| `gh.py` | Call the Ghidra bridge over HTTP. | 67 |
 | `gh_apply_names.py` | Name the client's functions in the Ghidra project. | 115 |
 | `graph_scan.py` | Find graph-container objects in a heap capture by the deserializer's shape. | 171 |
 | `hunt_actor.py` | Watch every mover, its owner, and one pointer level out, during a real walk. | 351 |
@@ -135,18 +137,24 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `trace_chain.py` | Trace pointer chains inside a session-coherent image. | 116 |
 | `trace_probe.py` | Measure the client's movement per write (frame) from a captured trace. | 89 |
 | `vel_scan.py` | Velocity-signature scan: find the (vx, 0, vz) walk-velocity triple. | 135 |
-| `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 78 |
-| `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 194 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 156 |
-| `verify_harness/cli.py` | Run verification units. Exit code is the gate. | 73 |
-| `verify_harness/coverage.py` | Basic-block / branch coverage of the oracle, measured on the very runs | 130 |
+| `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 81 |
+| `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 249 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 432 |
+| `verify_harness/cli.py` | Run verification units. Exit code is the gate. | 92 |
+| `verify_harness/coverage.py` | Basic-block / branch coverage of the oracle, measured on the very runs | 204 |
 | `verify_harness/curve_fixture.py` | Structured input factory for fn/CurveKeySampleDual. | 150 |
-| `verify_harness/emu_oracle.py` | Unicorn oracle: run one captured client function on one input. | 286 |
-| `verify_harness/gen.py` | Deterministic input generation for one unit. | 160 |
-| `verify_harness/ledger.py` | Digest-bound verification records. | 119 |
-| `verify_harness/mutate.py` | Behaviour-changing mutations of a C candidate, for measuring whether the | 206 |
-| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 538 |
-| `verify_harness/selftest.py` | The harness's own gate: inject known defects, require detection. | 195 |
+| `verify_harness/emu_oracle.py` | Unicorn oracle: run one captured client function on one input. | 412 |
+| `verify_harness/gen.py` | Deterministic input generation for one unit. | 258 |
+| `verify_harness/ledger.py` | Digest-bound verification records. | 146 |
+| `verify_harness/mutate.py` | Behaviour-changing mutations of a C candidate, for measuring whether the | 256 |
+| `verify_harness/orthonormalize_basis_fixture.py` | Structured input factory for fn/OrthonormalizeCameraBasis. | 100 |
+| `verify_harness/orthonormalize_state_fixture.py` | State-mode fixture for fn/OrthonormalizeCameraBasis-state. | 26 |
+| `verify_harness/perspective_matrix_fixture.py` | Structured input factory for fn/BuildPerspectiveMatrix. | 159 |
+| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 908 |
+| `verify_harness/scaffold_unit.py` | Scaffold a verification unit from an address. | 292 |
+| `verify_harness/selftest.py` | The harness's own gate: inject known defects, require detection. | 221 |
+| `verify_harness/test_harness_smoke.py` | Smoke tests for the verify_harness fixes. | 401 |
+| `verify_harness/test_run_unit_e2e.py` | End-to-end test: run the full five-stage ladder on synthetic bytes. | 139 |
 | `wall_diff.py` | Wall-pinned input diff: heap offsets that only change under a held key. | 107 |
 | `wall_watch.py` | Scan for W-only changing offsets, then behaviorally verify each candidate. | 114 |
 | `warm_merge.py` | Merge warm_poll captures over the flattened v2b image, page by page. | 164 |

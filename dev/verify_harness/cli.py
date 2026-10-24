@@ -3,6 +3,7 @@
     python dev/verify_harness/cli.py fn/AnimTimeWrap
     python dev/verify_harness/cli.py all
     python dev/verify_harness/cli.py selftest
+    python dev/verify_harness/cli.py list
 """
 
 from __future__ import annotations
@@ -33,8 +34,26 @@ def main(argv):
 
         return selftest.main(argv[1:])
 
+    if cmd == "list":
+        for p in unit_paths():
+            try:
+                u = load_unit(p)
+                print(f"  {u.id}  ({os.path.basename(p)})  {u.title[:70]}")
+            except ValueError as e:
+                print(f"  INVALID {os.path.basename(p)}: {e}")
+        return 0
+
     if cmd == "all":
-        paths = unit_paths()
+        paths = []
+        for p in unit_paths():
+            import json as _json
+
+            with open(p, "r", encoding="utf-8") as f:
+                raw = _json.load(f)
+            if raw.get("scaffold"):
+                print(f"  SKIP (scaffold)  {raw.get('id', os.path.basename(p))}")
+                continue
+            paths.append(p)
     else:
         # Accept an id or a path.
         p = cmd if os.path.exists(cmd) else os.path.join(UNITS_DIR, cmd + ".json")

@@ -1,0 +1,33 @@
+{
+  "id": "fn/MoverAdvance",
+  "title": "SCAFFOLD: mover per-frame advance (position integrator) at 0x140ca7f30",
+  "address": { "v2b": "0x7ff7c59c7f30" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "c_file": "dev/decompiles/MoverAdvance_0x140ca7f30.c",
+  "entry": "mover_advance",
+  "candidateLoader": "cargo",
+  "scaffold": true,
+  "args": [
+    { "name": "mover", "kind": "ptr", "ptr_len": 7024 }
+  ],
+  "returns": "void",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 85,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 4241
+  },
+  "notes": [
+    "SCAFFOLD - not a verification claim. `cli.py all` skips it; an explicit `cli.py fn/MoverAdvance` will fail because the probe has no `mover_advance` entry yet.",
+    "Located from the mover component: registration FUN_14017a680 (type hash 0x6EFDBD73, component id 0x26, STUCharacterMoverComponent), whose constructor FUN_14111b120 installs plaintext vtables at +0, +8 and +0x48.",
+    "The character object is 0x1c00 bytes (DestructMoverBody 0x1407ff270 frees it); its 0x1b70-byte base subobject is built by ConstructMoverBase 0x140ca37d0 and installs vtable 0x1431101e8. MoverAdvance is slot 15 (0x143110260). The derived/registration table 0x1431101d8 repeats it at slot 17, and ConstructMoverBody 0x140ca9730 is slot 6 there.",
+    "The invoker is FUN_1407ffc50: it calls the advance, stores the result at +0x1b80, then dot-products the movement delta against the step state's contact normals at [state+0x200] (0x20-byte elements) and dispatches a per-id handler.",
+    ".pdata extent RVA 0xca7f30..0xca88fd (2509 bytes); the decompiler body is 2471 bytes. The advance reads the velocity-like quad at +0xc0..0xcc, flags at +0x21a, walk-state bytes +0xcb/+0x34f, the body/session handle at +0x35b, the timer at +0x10ec and the lerp weight at +0x10fc.",
+    "The plain-body path is out_i = (a * X_i + pos_i) * b + off_i with X at +0xc0..0xcc. The character path is the collision sweep. Neither is a pure leaf: both call the indirect slot at (*param_1 + 0x98) and the world/sweep helpers, so a state unit has to neutralise those with declared no-op pointers or target the pure control expression instead.",
+    "FIT-MOV-01 is NOT settled by this scaffold. The control law that writes +0xc0 (ACCEL/FRICTION/AIR_ACCEL) is still unidentified; the fitted rates in ow-sim::movement remain fitted until a unit or the trace gate replaces them.",
+    "Next: read the per-frame update that writes +0xc0, add a `mover_advance` entry to crates/ow-sim/src/bin/verify_probe.rs, and build the state fixture from the controlled mover struct."
+  ],
+  "acknowledgedGaps": [],
+  "knownEquivalentMutants": []
+}

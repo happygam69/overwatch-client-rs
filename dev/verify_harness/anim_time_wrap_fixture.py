@@ -23,6 +23,10 @@ from gen import focused_f32_edge_cases, generate_args, UnitArg
 
 SPECS = [UnitArg("range", "ptr", 16), UnitArg("t", "f32")]
 
+# Focused f32 edge cases are pure function of SPECS - build once, not once
+# per make_args call (the runner calls make_args several hundred times).
+_EDGES = focused_f32_edge_cases(SPECS)
+
 
 def _range_mem(min_v: float, max_v: float, slot2: float, flag: int) -> bytes:
     return (
@@ -68,10 +72,9 @@ def make_args(i: int) -> List[ArgSpec]:
     if i < len(specials):
         return specials[i]
     j = i - len(specials)
-    # Next 22: the generic focused f32 edge pool with a zeroed range
+    # Next: the generic focused f32 edge pool with a zeroed range
     # (clamp-only), mirroring what the non-factory path used to do.
-    edges = focused_f32_edge_cases(SPECS)
-    if j < len(edges):
-        return edges[j]
+    if j < len(_EDGES):
+        return _EDGES[j]
     # After that: the generic seeded random corpus.
-    return generate_args(SPECS, 4241, j - len(edges))
+    return generate_args(SPECS, 4241, j - len(_EDGES))

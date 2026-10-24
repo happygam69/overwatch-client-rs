@@ -119,13 +119,19 @@ impl Sim {
     }
 
     /// One trigger pull: the weapon as the install describes it, aimed along
-    /// the view ray.
+    /// the view ray. The player is not a combatant in this world — the bots
+    /// are — so there is no shooter to exclude (`None`).
     fn fire(&mut self) {
         let origin = self.eye_pos();
         let dir = self.eye_dir();
-        let result = self
-            .world
-            .fire(&self.weapon, origin, dir, &mut self.spread, &self.rules);
+        let result = self.world.fire(
+            &self.weapon,
+            origin,
+            dir,
+            &mut self.spread,
+            &self.rules,
+            None,
+        );
         self.shots += 1;
         self.pellets_landed += result.hits.iter().filter(|h| h.is_some()).count() as u64;
         self.kills += result.kills.len() as u64;

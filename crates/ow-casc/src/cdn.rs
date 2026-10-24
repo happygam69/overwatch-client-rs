@@ -381,10 +381,13 @@ fn normalize_host(host: &str) -> Result<String> {
     if host.is_empty() {
         return Err(Error::BadUrl("empty CDN host".to_string()));
     }
-    if host.len() >= 8 && host[..8].eq_ignore_ascii_case("https://") {
+    let bytes = host.as_bytes();
+    // Byte-slice, not `&str`-slice: a multi-byte character straddling the
+    // boundary would panic the slicing.
+    if bytes.len() >= 8 && bytes[..8].eq_ignore_ascii_case(b"https://") {
         return Err(Error::TlsRequired(host.to_string()));
     }
-    if host.len() >= 7 && host[..7].eq_ignore_ascii_case("http://") {
+    if bytes.len() >= 7 && bytes[..7].eq_ignore_ascii_case(b"http://") {
         return Ok(host.to_string());
     }
     Ok(format!("http://{host}"))
@@ -602,7 +605,11 @@ fn decode_chunked(raw: &[u8]) -> Result<Vec<u8>> {
         if size == 0 {
             return Ok(out);
         }
-        let end = at + size;
+        // `checked_add` before the slice: a hostile size line must be a bad
+        // response, not an overflow panic (or a wrapped slice in release).
+        let Some(end) = at.checked_add(size) else {
+            return Err(Error::BadResponse("chunk size overflows".to_string()));
+        };
         if end > raw.len() {
             return Err(Error::BadResponse("chunk runs past the body".to_string()));
         }

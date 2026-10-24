@@ -141,6 +141,8 @@ pub struct PlayState {
     // FIT-PRE-03: bots and projectiles: drawn as boxes and markers
     pub bots: Vec<Combatant>,
     pub labels: Vec<String>,
+    /// Recent fire results, newest last. The HUD shows the last few; the cap
+    /// keeps a long session from growing it without bound.
     pub log: Vec<String>,
     pub damage: f32,
     /// Seconds between trigger pulls; from the hero's volley literals.
@@ -161,6 +163,19 @@ pub struct PlayState {
 }
 
 impl PlayState {
+    /// Push a fire-log line, capped so an unbounded session cannot grow the
+    /// buffer for ever (the HUD reads only the tail). Takes the field, not
+    /// `self`: callers hold a live borrow of `self.projectiles` when they
+    /// log, and the borrow checker splits disjoint fields only through
+    /// places, not through a `&mut self` method.
+    fn log_line(log: &mut Vec<String>, line: String) {
+        const CAP: usize = 64;
+        if log.len() >= CAP {
+            log.remove(0);
+        }
+        log.push(line);
+    }
+
     /// Build the state: hero movers and pools from the entities, bots in a
     /// ring around the scene centroid, standing on the collider's ground.
     pub fn build(
@@ -303,12 +318,15 @@ impl PlayState {
                     }
                 }
                 if landed > 0 {
-                    self.log.push(format!(
-                        "{label}: dealt {:.0} (pool {:.0}, {landed}/{pellets} pellets)",
-                        dealt, pool,
-                    ));
+                    Self::log_line(
+                        &mut self.log,
+                        format!(
+                            "{label}: dealt {:.0} (pool {:.0}, {landed}/{pellets} pellets)",
+                            dealt, pool,
+                        ),
+                    );
                 } else {
-                    self.log.push("miss".into());
+                    Self::log_line(&mut self.log, "miss".into());
                 }
             }
         }
@@ -355,12 +373,15 @@ impl PlayState {
                     if let Some((hit_index, _at)) = best {
                         let outcome = self.bots[hit_index].take_damage(projectile.damage, &rules);
                         let label = self.labels[hit_index].clone();
-                        self.log.push(format!(
-                            "{label}: dealt {:.0} (mitigated {:.0}), pool {:.0}",
-                            outcome.dealt,
-                            outcome.mitigated,
-                            outcome.remaining.total()
-                        ));
+                        Self::log_line(
+                            &mut self.log,
+                            format!(
+                                "{label}: dealt {:.0} (mitigated {:.0}), pool {:.0}",
+                                outcome.dealt,
+                                outcome.mitigated,
+                                outcome.remaining.total()
+                            ),
+                        );
                         landed = true;
                         break;
                     }
@@ -650,10 +671,10 @@ fn install_markers(
         (
             [0.0, 0.0, -1.0],
             [
-                [-0.5, -0.5, -0.5],
                 [0.5, -0.5, -0.5],
-                [0.5, 0.5, -0.5],
+                [-0.5, -0.5, -0.5],
                 [-0.5, 0.5, -0.5],
+                [0.5, 0.5, -0.5],
             ],
         ),
         (
@@ -677,19 +698,19 @@ fn install_markers(
         (
             [1.0, 0.0, 0.0],
             [
-                [0.5, -0.5, -0.5],
                 [0.5, -0.5, 0.5],
-                [0.5, 0.5, 0.5],
+                [0.5, -0.5, -0.5],
                 [0.5, 0.5, -0.5],
+                [0.5, 0.5, 0.5],
             ],
         ),
         (
             [0.0, 1.0, 0.0],
             [
-                [-0.5, 0.5, -0.5],
-                [0.5, 0.5, -0.5],
-                [0.5, 0.5, 0.5],
                 [-0.5, 0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [0.5, 0.5, -0.5],
+                [-0.5, 0.5, -0.5],
             ],
         ),
         (
@@ -1646,12 +1667,12 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
         /// translation}` blocks, paired by record id → skin bone through the
         /// model's own skeleton. `pairs` is `pairs[record] = Option<bone>`;
         /// `None` = the record's id is one of the clip's extras the skin
-        /// never names. The runtime pose slot is **quaternion-only**
-        /// (`FUN_7ff614edc560` / `FUN_7ff614ed98d0`): every record's
-        /// translation is held at the bone's bind value and only rotations
-        /// drive. The card P lane is not a bone-local translation (the two
-        /// shoulder rows read 2.395× bind — see
-        /// `docs/formats/animation.md`).
+        /// never names. The pose slot is **three 16-byte lanes** — rotation
+        /// `+0x00`, vector `+0x10`, vector `+0x20` — and the translation lane
+        /// **does** drive (`docs/formats/animation.md`, read from
+        /// `0x141b812c0`/`0x141b82d70`/`0x141b81240` in `Overwatch.exe`).
+        /// Holding it at bind made the hands overlap, so the earlier
+        /// quaternion-only rule is retired.
         Blend {
             source: ow_tank::clip::BlendPose,
             /// Per-bone record chains over the character rig (the retarget:
@@ -1915,9 +1936,13 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                         let matrix = scene::Scene::view_model_matrix(eye, vm_yaw, vm_pitch);
                         renderer.set_instance(slot, matrix);
                     }
-                    // The animation: advance the clock and re-pose the rig. The
-                    // palette is `[identity, bone 0, …]`, matching what the
-                    // renderer uploaded at build time. Two pose sources ride
+                    // The animation: advance the clock and re-pose the rig.
+                    // The palette is the identity pool the map models share,
+                    // then the hero's matrices at the base `place_hero`
+                    // reported (`scene.hero_joint_base`) — on a map scene the
+                    // pool is wider than one slot, and writing the pose at
+                    // slot 1 would put the hero's bones where the pool is and
+                    // identity where the hero is. Two pose sources ride
                     // `--anim`: the bone-list `PoseClip` (rotation-only) and
                     // the FP blend-card `BlendPose` (rotation + translation,
                     // paired by bone id through the model's skeleton).
@@ -1930,17 +1955,13 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                         // +0.31 x — the guns cross). Leaving their local at
                         // bind keeps the model's authored gun orientation and
                         // lets the posed hand parents carry them.
-                        let palette = match anim {
+                        let posed = match anim {
                             Anim::Bones(a) => {
                                 let frame = a.frame_at(self.anim_time);
-                                let mut posed = skin.palette(&|b| {
+                                skin.palette(&|b| {
                                     a.quat_at(b, frame)
                                         .map(|q| glam::Quat::from_xyzw(q[0], q[1], q[2], q[3]))
-                                });
-                                let mut palette = Vec::with_capacity(posed.len() + 1);
-                                palette.push(glam::Mat4::IDENTITY);
-                                palette.append(&mut posed);
-                                palette
+                                })
                             }
                             Anim::Blend { source, chains } => {
                                 let mut bones: Vec<Option<(glam::Quat, glam::Vec3)>> =
@@ -1957,24 +1978,17 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                                         bones[bone] = Some(s);
                                     }
                                 }
-                                let mut palette = Vec::with_capacity(skin.parents.len() + 1);
-                                palette.push(glam::Mat4::IDENTITY);
-                                palette.extend(
-                                    skin.palette_full(&|b| bones.get(b).copied().flatten()),
-                                );
-                                palette
+                                skin.palette_full(&|b| bones.get(b).copied().flatten())
                             }
                             Anim::Tree(tree) => {
                                 let bones: Vec<Option<(glam::Quat, glam::Vec3)>> =
                                     tree.evaluate(self.anim_time, skin.parents.len());
-                                let mut palette = Vec::with_capacity(skin.parents.len() + 1);
-                                palette.push(glam::Mat4::IDENTITY);
-                                palette.extend(
-                                    skin.palette_full(&|b| bones.get(b).copied().flatten()),
-                                );
-                                palette
+                                skin.palette_full(&|b| bones.get(b).copied().flatten())
                             }
                         };
+                        let mut palette =
+                            vec![glam::Mat4::IDENTITY; self.scene.hero_joint_base as usize];
+                        palette.extend(posed);
                         renderer.set_joints(&palette);
                         // The client attaches the pistols to the FP skeleton's
                         // 44/74 hardpoints, so the selected FP pose drives
@@ -2042,7 +2056,7 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                                 };
                                 let world = char_world.or_else(|| {
                                     palette
-                                        .get(1 + bone)
+                                        .get(self.scene.hero_joint_base as usize + bone)
                                         .map(|m| *m * skin.bind_world()[bone] * local)
                                 });
                                 if let Some(world) = world {
@@ -2052,7 +2066,9 @@ pub fn windowed(args: &[String]) -> Result<(), String> {
                         }
                     }
                     renderer.render();
-                    if self.frame_no.is_multiple_of(10) {
+                    // `% 10 == 0`, not `is_multiple_of`: that stabilized in
+                    // 1.87 and the declared floor is 1.83.
+                    if self.frame_no % 10 == 0 {
                         // Exponential average: one frame's dt is one jittery
                         // sample, the average is the number worth comparing
                         // across settings changes.

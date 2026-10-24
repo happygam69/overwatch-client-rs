@@ -15,6 +15,7 @@ import ctypes
 import os
 import struct
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
@@ -65,7 +66,13 @@ class CCandidate:
         self.dll_path = self._compile(c_file, src, entry)
         self.dll = ctypes.CDLL(self.dll_path)
         self.fn = getattr(self.dll, "harness_entry")
-        self.fn.restype = ctypes.c_uint32
+        # The wrapper re-encodes the return as raw bits in a uint32_t (f32),
+        # uint64_t (f64/u64). restype MUST match: with a fixed c_uint32, a
+        # f64/u64 return was truncated to its low 32 bits and every such
+        # unit diverged (or worse, agreed on the truncated half).
+        self.fn.restype = (
+            ctypes.c_uint64 if self.ret_kind in ("f64", "u64") else ctypes.c_uint32
+        )
         self.fn.argtypes = [_CTYPES_BY_KIND[k] for k in arg_kinds]
         # Keep pointee buffers alive across the call.
         self._bufs: List[Optional[ctypes.Array]] = []
@@ -79,10 +86,19 @@ class CCandidate:
         with open(body_path, "w", encoding="utf-8") as f:
             f.write(src)
         # Wrapper: call the entry by its raw FUN_* name, return bits.
+        # The __declspec fallback keeps the same wrapper buildable on hosts
+        # where gcc does not target Windows (verification still compares
+        # against the same bytes; the dll/so naming is the harness's choice).
         call_args = self._call_args_decl()
+        compat = "\n".join([
+            "#ifndef _WIN32",
+            "#define __declspec(x)",
+            "#endif",
+            "",
+        ])
         if self.is_void:
             wrap = f"""#include <stdint.h>
-#include "ghidra_shim.h"
+{compat}#include "ghidra_shim.h"
 #include "body.c"
 __declspec(dllexport) uint32_t harness_entry({self._c_params()}) {{
     {entry}({call_args});
@@ -91,7 +107,7 @@ __declspec(dllexport) uint32_t harness_entry({self._c_params()}) {{
 """
         elif self.ret_kind == "f32":
             wrap = f"""#include <stdint.h>
-#include "ghidra_shim.h"
+{compat}#include "ghidra_shim.h"
 #include "body.c"
 __declspec(dllexport) uint32_t harness_entry({self._c_params()}) {{
     union {{ float f; uint32_t u; }} u; u.f = {entry}({call_args}); return u.u;
@@ -99,7 +115,7 @@ __declspec(dllexport) uint32_t harness_entry({self._c_params()}) {{
 """
         elif self.ret_kind == "f64":
             wrap = f"""#include <stdint.h>
-#include "ghidra_shim.h"
+{compat}#include "ghidra_shim.h"
 #include "body.c"
 __declspec(dllexport) uint64_t harness_entry({self._c_params()}) {{
     union {{ double d; uint64_t u; }} u; u.d = {entry}({call_args}); return u.u;
@@ -107,7 +123,7 @@ __declspec(dllexport) uint64_t harness_entry({self._c_params()}) {{
 """
         elif self.ret_kind == "u64":
             wrap = f"""#include <stdint.h>
-#include "ghidra_shim.h"
+{compat}#include "ghidra_shim.h"
 #include "body.c"
 __declspec(dllexport) uint64_t harness_entry({self._c_params()}) {{
     return (uint64_t){entry}({call_args});
@@ -120,6 +136,10 @@ __declspec(dllexport) uint64_t harness_entry({self._c_params()}) {{
             "-shared",
             "-O0",
             "-fno-strict-aliasing",
+            # A sibling FUN_* the decompile calls but that no include defines
+            # is a load-stage failure of the unit (the protocol's stance),
+            # not a runtime crash inside unknown code.
+            "-Werror=implicit-function-declaration",
             "-o",
             dll_path,
             wrap_path,
@@ -169,7 +189,7 @@ __declspec(dllexport) uint64_t harness_entry({self._c_params()}) {{
                     ctypes.memmove(buf, mem, len(mem))
                     base = ctypes.addressof(buf)
                     for off in a.relocs:
-                        rel = struct.unpack_from("<Q", bytes(buf), off)[0]
+                        rel = struct.unpack_from("<Q", buf, off)[0]
                         struct.pack_into("<Q", buf, off, base + rel)
                 else:
                     buf = (ctypes.c_uint8 * len(mem)).from_buffer_copy(mem)
@@ -191,3 +211,38 @@ __declspec(dllexport) uint64_t harness_entry({self._c_params()}) {{
                 buf = self._bufs[i]
                 after[i] = bytes(bytearray(buf))
         return CandidateResult(ok=True, ret_bits=int(ret), pointee_after=after, fault=None)
+
+    def close(self) -> None:
+        """Unload the library so a per-unit or per-mutant work dir can be
+        deleted (a loaded DLL/so pins its file on Windows)."""
+        dll = getattr(self, "dll", None)
+        if dll is None:
+            return
+        handle = getattr(dll, "_handle", None)
+        if handle is None:
+            return
+        # Drop the ctypes objects that pin the module before freeing.
+        # Keep a local reference to the raw handle; FreeLibrary needs it
+        # pointer-sized (c_void_p), not the default c_int, on Win64.
+        self.fn = None
+        self.dll = None
+        try:
+            if sys.platform == "win32":
+                kernel32 = ctypes.windll.kernel32
+                kernel32.FreeLibrary.argtypes = [ctypes.c_void_p]
+                kernel32.FreeLibrary.restype = ctypes.c_int
+                kernel32.FreeLibrary(ctypes.c_void_p(handle))
+            else:
+                import _ctypes
+
+                _ctypes.dlclose(handle)
+        except Exception:
+            pass
+        # Encourage CPython to drop any remaining CDLL internals so the
+        # OS refcount can hit zero and Windows will allow the unlink.
+        try:
+            import gc
+
+            gc.collect()
+        except Exception:
+            pass

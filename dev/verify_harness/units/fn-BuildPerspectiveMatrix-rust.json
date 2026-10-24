@@ -1,0 +1,31 @@
+{
+  "id": "fn/BuildPerspectiveMatrix-rust",
+  "title": "tier-2: build a 4x4 projection matrix from a descriptor (reverse-Z aware)",
+  "address": { "v2b": "0x7ff7c6d95a70" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "build_perspective_matrix",
+  "candidateLoader": "rust",
+  "args": [
+    { "name": "desc", "kind": "ptr", "ptr_len": 160 },
+    { "name": "out", "kind": "ptr", "ptr_len": 64 },
+    { "name": "reverse", "kind": "u64" }
+  ],
+  "returns": "void",
+  "argFactory": "perspective_matrix_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 90,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "allowedImageReads": ["0x7ff7c7c9aae4", "0x7ff7c7ca17a0"]
+  },
+  "notes": [
+    "Zero named callees; pure leaf at 0x142075a70 (Overwatch.exe / current build).",
+    "param_3 != 0 selects the reverse-Z near/far mapping (negated m22/m32).",
+    "The out matrix is 16 floats, column-major, all slots written.",
+    "Float op order matches the decompile so bit patterns agree with the oracle.",
+    "Return value is the out pointer; declared void so arena vs host addresses are not compared.",
+    "allowedImageReads: 0x7ff7c7c9aae4 = 1.0f literal, 0x7ff7c7ca17a0 = -0.0f (XORPS sign mask). Both are .rdata compiler constants the decompile already inlines; not game globals."
+  ]
+}

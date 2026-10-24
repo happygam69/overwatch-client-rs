@@ -1,0 +1,70 @@
+{
+  "id": "fn/OrthonormalizeCameraBasis-state",
+  "title": "tier-2 shipped code + state mode: orthonormalize a basis inside a preloaded snapshot",
+  "address": {
+    "v2b": "0x7ff7c6d89c60"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "orthonormalize_camera_basis",
+  "candidateLoader": "cargo",
+  "args": [
+    {
+      "name": "basis",
+      "kind": "ptr",
+      "ptr_len": 48
+    }
+  ],
+  "returns": "void",
+  "argFactory": "orthonormalize_state_fixture",
+  "state": {
+    "base": "0x200000000000",
+    "hex": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 90,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "allowedImageReads": [
+      "0x7ff7c7c9aad0",
+      "0x7ff7c7c9aae4",
+      "0x7ff7c7c9aaf0",
+      "0x7ff7c7c9aaf8",
+      "0x7ff7c7ca4b18",
+      "0x7ff7c7ca8df4",
+      "0x7ff7c7facdd0",
+      "0x7ff7c7facdd8",
+      "0x7ff7c7facde0",
+      "0x7ff7c7facde8",
+      "0x7ff7c80b0e20",
+      "0x7ff7c80b0e28",
+      "0x7ff7c80b0e40",
+      "0x7ff7c80b0e48"
+    ]
+  },
+  "notes": [
+    "STATE-MODE pilot. The basis pointee is a slice of a 0x200-byte snapshot at guest 0x200000000000+0x100; the whole snapshot is the state channel, compared after every call.",
+    "The candidate is the same shipped function as fn/OrthonormalizeCameraBasis-cargo; this unit proves the state preload/compare plumbing and the probe's guest-pointer translation.",
+    "The state region is declared by the `state` block, so reads inside it are not 'undeclared global reads'; all other image reads are listed in allowedImageReads.",
+    "Build binding: camera.rs + verify_probe.rs + git revision."
+  ],
+  "acknowledgedGaps": [],
+  "knownEquivalentMutants": [
+    {
+      "kind": "boundary -1",
+      "line": 56,
+      "rationale": "The assert checks desc.len() >= 0x30. The state fixture always supplies 48 bytes at the guest slice, so lowering the bound to 0x2f cannot change any observable result for this unit; a 47-byte slice is outside the declared ptr_len."
+    },
+    {
+      "kind": "cmp-flip >=to>",
+      "line": 76,
+      "rationale": "The 0.008 unit-length boundary is a single f32 bit pattern. The fixture's nearest measures are 0.001999 and 0.0201; neither lands on it. Only an input with |len2-1| exactly 0.008 could observe the difference, and the oracle's own comiss/jae uses the same IEEE relation."
+    },
+    {
+      "kind": "cmp-flip >to>=",
+      "line": 76,
+      "rationale": "The |dot| > 0.004 gate is also a single f32 boundary. The fixture pins dot values just inside (0.003) and just outside (0.005); neither is exactly 0.004. Only an input whose |dot| is the exact f32 0.004 could observe the difference, and the oracle uses the same IEEE jae/jbe relation."
+    }
+  ]
+}

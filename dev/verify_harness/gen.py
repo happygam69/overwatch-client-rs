@@ -8,6 +8,7 @@ so both sides of the differential always see identical bytes.
 
 from __future__ import annotations
 
+import math
 import random
 import struct
 from dataclasses import dataclass
@@ -46,6 +47,75 @@ F32_EDGE_POOL = [
 # Raw bit patterns worth probing: all-ones (negative NaN / -1), exp-only.
 F32_EDGE_BITS = [0xFFFFFFFF, 0x7FFFFFFF, 0x7F800000, 0xFF800000, 0x00000001]
 
+# f64 doubles live in a range f32 pools cannot reach: DBL_MAX, DBL_MIN,
+# the double denormal, the 2^53 integrality boundary. The old generator
+# drew f64 args from _draw_f32, so an f64 unit never saw any of these.
+F64_EDGE_POOL = [
+    0.0,
+    -0.0,
+    1.0,
+    -1.0,
+    0.5,
+    2.0,
+    3.0,
+    0.05,
+    600.0,
+    4503599627370496.0,        # 2^53: last exactly-representable integer
+    4503599627370497.0,        # 2^53+1: rounds back to 2^53
+    2.2250738585072014e-308,   # DBL_MIN (smallest normal)
+    5e-324,                    # smallest denormal
+    1.7976931348623157e308,    # DBL_MAX
+    -1.7976931348623157e308,
+    1e-300,
+    1e300,
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+]
+
+F64_EDGE_BITS = [
+    0xFFFFFFFFFFFFFFFF,  # -NaN
+    0x7FFFFFFFFFFFFFFF,  # +NaN
+    0x7FF0000000000000,  # +inf
+    0xFFF0000000000000,  # -inf
+    0x0000000000000001,  # denormal
+    0x8000000000000000,  # -0.0
+]
+
+# u64 draws were getrandbits(32): a 64-bit slot never saw a value with the
+# high half set, nor the conventional handle/sentinel edges.
+U64_EDGE_VALUES = [
+    0,
+    1,
+    2,
+    0x7FFFFFFF,
+    0x80000000,
+    0xFFFFFFFF,
+    0x1_0000_0000,
+    0xFFFF_FFFF_FFFF_FFFF,
+    0x7FFF_FFFF_FFFF_FFFF,
+    0x8000_0000_0000_0000,
+    0xDEAD_BEEF_CAFE_F00D,
+]
+
+# Pair sweep pool: the old sweep took F32_EDGE_POOL[:8], which contains no
+# NaN and no inf - for the two-f32 wrap shape, the (NaN, x) and (inf, x)
+# pairs that killed the minss/maxss bug class were never generated.
+F32_PAIR_POOL = [
+    0.0,
+    -0.0,
+    1.0,
+    -1.0,
+    2.0,
+    0.004,
+    600.0,
+    3.4028235e38,
+    1.4e-45,
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+]
+
 
 @dataclass
 class UnitArg:
@@ -67,6 +137,32 @@ def _draw_f32(rng: random.Random) -> float:
     if pick == 4:
         return float(rng.randint(-8, 8))
     return struct.unpack("<f", struct.pack("<I", rng.getrandbits(32)))[0]
+
+
+def _draw_f64(rng: random.Random) -> float:
+    pick = rng.randrange(5)
+    if pick == 0:
+        return rng.choice(F64_EDGE_POOL)
+    if pick == 1:
+        return struct.unpack("<d", struct.pack("<Q", rng.choice(F64_EDGE_BITS)))[0]
+    if pick == 2:
+        return rng.uniform(-1e6, 1e6)
+    if pick == 3:
+        # Log-uniform magnitude sweep: hits denormal..huge more usefully
+        # than a linear uniform over a human-scale window.
+        return math.copysign(10.0 ** rng.uniform(-38, 308), rng.uniform(-1, 1))
+    return struct.unpack("<d", struct.pack("<Q", rng.getrandbits(64)))[0]
+
+
+def _draw_u64(rng: random.Random) -> int:
+    pick = rng.randrange(4)
+    if pick == 0:
+        return rng.choice(U64_EDGE_VALUES)
+    if pick == 1:
+        return rng.getrandbits(64)
+    if pick == 2:
+        return rng.getrandbits(32)
+    return rng.randint(0, 64)
 
 
 def _draw_ptr_mem(rng: random.Random, length: int) -> bytes:
@@ -105,9 +201,9 @@ def generate_args(specs: Sequence[UnitArg], seed: int, i: int) -> List[ArgSpec]:
         if s.kind == "f32":
             out.append(ArgSpec(kind="f32", value=_draw_f32(rng)))
         elif s.kind == "f64":
-            out.append(ArgSpec(kind="f64", value=_draw_f32(rng)))
+            out.append(ArgSpec(kind="f64", value=_draw_f64(rng)))
         elif s.kind == "u64":
-            out.append(ArgSpec(kind="u64", bits=rng.getrandbits(32)))
+            out.append(ArgSpec(kind="u64", bits=_draw_u64(rng)))
         elif s.kind.startswith("ptr"):
             out.append(ArgSpec(kind="ptr", mem=_draw_ptr_mem(rng, s.ptr_len)))
         else:
@@ -140,10 +236,12 @@ def focused_f32_edge_cases(specs: Sequence[UnitArg]) -> List[List[ArgSpec]]:
                     row.append(ArgSpec(kind="ptr", mem=b"\x00" * t.ptr_len))
             cases.append(row)
     # And one all-edge-pairs sweep for two-f32 signatures (the wrap shape).
+    # The pool includes NaN/inf: the minss/maxss bug class only shows up on
+    # (NaN, x) and (inf, x) pairs, which F32_EDGE_POOL[:8] never produced.
     f32_idx = [j for j, t in enumerate(specs) if t.kind == "f32"]
     if len(f32_idx) == 2:
-        for a in F32_EDGE_POOL[:8]:
-            for b in F32_EDGE_POOL[:8]:
+        for a in F32_PAIR_POOL:
+            for b in F32_PAIR_POOL:
                 row = []
                 for j, t in enumerate(specs):
                     if t.kind == "f32":

@@ -39,7 +39,11 @@ fn python(script: &str, args: &[&str]) -> bool {
     let mut all: Vec<String> = vec![format!("dev/{script}")];
     all.extend(args.iter().map(|a| a.to_string()));
     let all: Vec<&str> = all.iter().map(String::as_str).collect();
-    run(script, "python", &all, None)
+    // Windows names its interpreter `python`; most Linux distributions ship
+    // only `python3`. Try both so the gate runs on either.
+    let ok = run(&format!("{script} (python)"), "python", &all, None)
+        || run(&format!("{script} (python3)"), "python3", &all, None);
+    ok
 }
 
 fn verify(fast: bool) -> bool {

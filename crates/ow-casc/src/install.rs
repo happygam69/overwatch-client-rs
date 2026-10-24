@@ -358,8 +358,10 @@ fn discover_support_keyring(root: &Path) -> Option<PathBuf> {
 }
 
 fn config_path(root: &Path, key: &str) -> PathBuf {
-    // config files live two levels deep, named by their own first four hex digits
-    if key.len() < 4 {
+    // Config files live two levels deep, named by their own first four hex
+    // digits. ASCII-checked before slicing: a config key with a multi-byte
+    // character takes the flat path instead of panicking.
+    if key.len() < 4 || !key.is_ascii() {
         return root.join("data").join("casc").join("config").join(key);
     }
     root.join("data")
@@ -467,7 +469,12 @@ fn parse_keyring(text: &str) -> BTreeMap<u64, [u8; 16]> {
                 continue;
             };
             let hex_id = if hex_id.len() > 16 {
-                &hex_id[hex_id.len() - 16..]
+                // `.get`, not slicing: a non-ASCII id must fall through to
+                // the parse failure below, not panic on a char boundary.
+                match hex_id.get(hex_id.len() - 16..) {
+                    Some(tail) => tail,
+                    None => continue,
+                }
             } else {
                 hex_id
             };
@@ -499,7 +506,9 @@ fn parse_keyring(text: &str) -> BTreeMap<u64, [u8; 16]> {
 }
 
 fn parse_key(hex: &str) -> Option<[u8; 16]> {
-    if hex.len() != 32 {
+    // ASCII before the two-byte slicing below: a multi-byte character is a
+    // parse failure, not a panic.
+    if hex.len() != 32 || !hex.is_ascii() {
         return None;
     }
     let mut out = [0u8; 16];

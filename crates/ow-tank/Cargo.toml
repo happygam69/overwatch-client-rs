@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Overwatch asset semantics: GUID typing, content manifest, class map"
 
 [dependencies]
@@ -14,5 +15,5 @@ cbc.workspace = true
 sha1.workspace = true
 ow-casc.workspace = true
 ow-stu.workspace = true
-glam = "0.29"
+glam.workspace = true
 

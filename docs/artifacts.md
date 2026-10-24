@@ -43,9 +43,9 @@ Session bases: 124815 `0x7ff67c0c0000`, 113932 `0x7ff658ff0000`,
 | `pagepak/keystream_meta.json` | coverage, sources, disk `.text` layout, the equality-across-sessions note |
 | `page_crypt_survey.csv` | per-page cipher survey from the battery |
 | `dev/ks_linear.py`, `dev/ks_key_test.py`, `dev/ks_hash_test.py` | keystream tests (BM complexity; standard cipher/hash schemes - all negative) |
-| `offline_recover/module_offline.bin` | full PE at preferred base `0x140000000` with recovered `.text`/`.pdata`; imported as the Ghidra program `Overwatch.exe` (151,260 functions) |
+| `offline_recover/module_offline.bin` | full PE at preferred base `0x140000000` with recovered `.text` and the install's plaintext `.pdata`; imported as the Ghidra program `Overwatch.exe` (151,260 functions) |
 | `offline_recover/text.bin`, `text.csv` | recovered `.text` and per-page `w`/score/mode |
-| `offline_recover/pdata.bin`, `pdata.csv` | plaintext `.pdata` and per-page table |
+| `offline_recover/pdata.bin`, `pdata.csv` | the install's plaintext `.pdata` (copied) and per-page table |
 | `offline_recover/REPORT.md`, `*.json` | validation, confidence, ambiguous page and run time |
 | `dev/offline_page_recover.py` | offline Plan A tool |
 

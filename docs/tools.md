@@ -58,6 +58,7 @@ The table below is the same set by task, with the Rust probes.
 | `dev/imm_scan.py` | finds 4/8-byte immediate constants in `.text` |
 | `dev/xref_rva.py`, `dev/find_refs.py`, `dev/refs_image.py` | finds code references to given RVAs or addresses |
 | `dev/pdata_lookup.py` | `.pdata` function bounds for RVAs |
+| `dev/field_index.py` | struct-aware field-access index over `.pdata`/Ghidra function ranges; follows biased bases and separates mover component, character body and dmBody |
 | `dev/stub_extract.py`, `dev/stub_filter.py` | extracts/filters the class-factory stub table |
 | `dev/ldr_*.py` family | loader scans: band functions, xrefs, `.gxfg`, loop shapes (each one is in `dev/INDEX.md`) |
 | `dev/pe_probe.py`, `dev/mkpe.py` | identify a module dump; wrap captured regions as a PE |

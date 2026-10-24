@@ -19,6 +19,11 @@
 
 use std::io::{self, BufRead, Write};
 
+// Clean-room rewrites live in rust_rewrites/ so each function is a
+// self-contained file the harness can point at. include! pastes the
+// source in at compile time; there is no module path to configure.
+include!("rust_rewrites/OrthonormalizeCameraBasis.rs");
+
 fn minss(a: f32, b: f32) -> f32 {
     // SSE MINSS: unordered or a >= b -> second source. C/Rust `<` is
     // false on NaN, so `if a < b { a } else { b }` matches exactly.
@@ -61,6 +66,118 @@ fn anim_time_wrap(range: *const f32, t: f32) -> f32 {
             maxss(minss(t, max), min)
         }
     }
+}
+
+/// Projection descriptor field loads, byte-offset exact (same offsets the
+/// decompile uses). Returns NaN if the load is misaligned - the harness
+/// always hands a suitably sized buffer.
+#[inline]
+unsafe fn desc_f32(desc: *const u8, off: usize) -> f32 {
+    f32::from_le_bytes([
+        *desc.add(off),
+        *desc.add(off + 1),
+        *desc.add(off + 2),
+        *desc.add(off + 3),
+    ])
+}
+
+/// BuildPerspectiveMatrix (0x142075a70): leaf. Reads a projection
+/// descriptor, writes a 4x4 matrix (16 floats) to `out`. `reverse` != 0
+/// selects the reverse-Z style near/far mapping (negated terms). The
+/// float op order matches the decompile exactly so bit patterns agree.
+/// Returns `out` (ignored by units that declare `returns: void`).
+unsafe fn build_perspective_matrix(desc: *const u8, out: *mut f32, reverse: u64) -> *mut f32 {
+    let f05c = desc_f32(desc, 0x5c);
+    let f060 = desc_f32(desc, 0x60);
+    let f064 = desc_f32(desc, 100); // *(param_1 + 100) == +0x64
+    let f068 = desc_f32(desc, 0x68);
+    let f06c = desc_f32(desc, 0x6c);
+    let f070 = desc_f32(desc, 0x70);
+    let f074 = desc_f32(desc, 0x74);
+    let f078 = desc_f32(desc, 0x78);
+    let f07c = desc_f32(desc, 0x7c);
+    let f080 = desc_f32(desc, 0x80);
+    let f084 = desc_f32(desc, 0x84);
+    let f088 = desc_f32(desc, 0x88);
+    let f08c = desc_f32(desc, 0x8c);
+    let f090 = desc_f32(desc, 0x90);
+    let f094 = desc_f32(desc, 0x94);
+    let f098 = desc_f32(desc, 0x98);
+    let f04c = desc_f32(desc, 0x4c);
+    let f050 = desc_f32(desc, 0x50);
+    let f054 = desc_f32(desc, 0x54);
+    let f058 = desc_f32(desc, 0x58);
+
+    let a = f05c;
+    let b = f060 - a;
+    let c = f094 - f08c;
+    let d = f090 - f098;
+    let inv_b = 1.0f32 / b;
+    let e = f054;
+
+    *out.add(1) = 0.0;
+    *out.add(2) = 0.0;
+    *out.add(3) = 0.0;
+    *out.add(4) = 0.0;
+    *out = ((a + a) / c) * e;
+    let f = f058;
+    *out.add(6) = 0.0;
+    *out.add(7) = 0.0;
+    *out.add(5) = ((a + a) / d) * f;
+
+    let mut m20 = ((f054 - 1.0) - f04c) - (f08c + f094) / c;
+    *out.add(8) = m20;
+    let mut m21 = (f050 - (f058 - 1.0)) - (f090 + f098) / d;
+    *out.add(9) = m21;
+
+    let m22 = if reverse == 0 {
+        f060 / b
+    } else {
+        -(inv_b * a)
+    };
+    *out.add(10) = m22;
+    *out.add(11) = 1.0;
+    *out.add(12) = 0.0;
+    *out.add(13) = 0.0;
+
+    let mut f060b = f060;
+    if reverse == 0 {
+        f060b = -f060;
+    }
+    *out.add(15) = 0.0;
+    *out.add(14) = f060b * a * inv_b;
+
+    m20 = f064 / ((f084 - f07c) * f074) + m20;
+    *out.add(8) = m20;
+    m21 = f068 / ((f088 - f080) * f078) + m21;
+    *out.add(9) = m21;
+
+    *out.add(8) = (f06c + f06c) / c + m20;
+    *out.add(9) = (f070 + f070) / d + m21;
+
+    out
+}
+
+/// InitProjectionDescriptor (0x142075230): leaf. Seeds the descriptor's
+/// default scales to 1.0f and clears the near/far/skew slots. Returns the
+/// same pointer (units declare `returns: void` so the pointer value is
+/// not compared across arena vs host).
+unsafe fn init_projection_descriptor(desc: *mut u8) -> *mut u8 {
+    // Matches the decompile's dword/qword stores at the same offsets.
+    for off in [0x40u32, 0x4c, 0x5c, 0x64, 0x6c] {
+        // +0x40 is a dword 0; +0x4c/+0x5c/+0x64/+0x6c are qword 0.
+        let n = if off == 0x40 { 4 } else { 8 };
+        for i in 0..n {
+            *desc.add((off + i) as usize) = 0;
+        }
+    }
+    for off in [0x54usize, 0x58, 0x74, 0x78] {
+        let bits = 1.0f32.to_le_bytes();
+        for i in 0..4 {
+            *desc.add(off + i) = bits[i];
+        }
+    }
+    desc
 }
 
 /// The decompile as Ghidra first emitted it: IEEE-ordered sequential ifs
@@ -142,6 +259,59 @@ fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), St
             };
             let r = f(buf.as_ptr() as *const f32, t);
             Ok((format!("{:08x}", r.to_bits()), vec![buf]))
+        }
+        "build_perspective_matrix" => {
+            if args.len() != 3 {
+                return Err(format!("expected 3 args, got {}", args.len()));
+            }
+            let desc = match &args[0] {
+                Arg::Ptr(b, r) if r.is_empty() => b.clone(),
+                Arg::Ptr(_, r) if !r.is_empty() => return Err("desc has relocs".into()),
+                _ => return Err("arg0 must be ptr".into()),
+            };
+            let mut out = match &args[1] {
+                Arg::Ptr(b, r) if r.is_empty() => b.clone(),
+                Arg::Ptr(_, r) if !r.is_empty() => return Err("out has relocs".into()),
+                _ => return Err("arg1 must be ptr".into()),
+            };
+            if out.len() < 64 {
+                out.resize(64, 0);
+            }
+            let reverse = match &args[2] {
+                Arg::U64(v) => *v,
+                _ => return Err("arg2 must be u64".into()),
+            };
+            unsafe {
+                build_perspective_matrix(desc.as_ptr(), out.as_mut_ptr() as *mut f32, reverse);
+            }
+            // void return: ret bits unused; out is the memory channel.
+            Ok(("-".to_string(), vec![desc, out]))
+        }
+        "init_projection_descriptor" => {
+            if args.len() != 1 {
+                return Err(format!("expected 1 arg, got {}", args.len()));
+            }
+            let mut desc = match &args[0] {
+                Arg::Ptr(b, r) if r.is_empty() => b.clone(),
+                Arg::Ptr(_, r) if !r.is_empty() => return Err("desc has relocs".into()),
+                _ => return Err("arg0 must be ptr".into()),
+            };
+            unsafe {
+                init_projection_descriptor(desc.as_mut_ptr());
+            }
+            Ok(("-".to_string(), vec![desc]))
+        }
+        "orthonormalize_camera_basis" => {
+            if args.len() != 1 {
+                return Err(format!("expected 1 arg, got {}", args.len()));
+            }
+            let mut desc = match &args[0] {
+                Arg::Ptr(b, r) if r.is_empty() => b.clone(),
+                Arg::Ptr(_, r) if !r.is_empty() => return Err("desc has relocs".into()),
+                _ => return Err("arg0 must be ptr".into()),
+            };
+            orthonormalize_camera_basis(&mut desc);
+            Ok(("-".to_string(), vec![desc]))
         }
         other => Err(format!("unknown entry {}", other)),
     }

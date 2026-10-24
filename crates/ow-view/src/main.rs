@@ -869,6 +869,15 @@ impl ApplicationHandler for App {
         };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(false) => {
+                // Alt-tab must not leave a held key held: the OS delivers no
+                // key-up for a press that happened before focus went away, so
+                // the camera would keep drifting after the switch back. The
+                // play harness clears the same way.
+                renderer.keys.clear();
+                renderer.dragging = false;
+                renderer.last_mouse = None;
+            }
             WindowEvent::Resized(size) => renderer.resize(size.width, size.height),
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {

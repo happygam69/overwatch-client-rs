@@ -76,8 +76,9 @@ Binary/example entry points live in `crates/ow-tank/src/bin` (`hero`,
    is 11% of it, and `.pdata` (the function table of the whole client) is
    fully readable. `module_after_stripped.bin` is the same image rebased
    `-0x10000` for the headless import. For the **current** build, the complete
-   Plan A image is the Ghidra program `Overwatch.exe` (every `.text` page,
-   preferred base `0x140000000`).
+   Plan A image is the Ghidra program `Overwatch.exe` (every `.text` page
+   recovered; `.pdata` is the install's plaintext table), preferred base
+   `0x140000000`.
 4. **Ghidra headless** (`E:/ghidra/hproj*`, script
    `McpDecompile.java`): import the stripped image, decompile function
    ranges listed in an args file, export `.c` into `D:/ow-dumps`.

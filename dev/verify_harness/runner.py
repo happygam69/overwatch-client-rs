@@ -17,17 +17,20 @@ A unit is `verified` only when all five pass. `inconclusive` is not a pass.
 from __future__ import annotations
 
 import json
+import math
 import os
+import shutil
 import struct
-import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from emu_oracle import EmuOracle, ArgSpec, bits_f32, f32_bits
 from gen import UnitArg, generate_args, focused_f32_edge_cases
 from ledger import (
+    HARNESS_VERSION,
     LedgerEntry,
     check_entry,
     load_ledger,
@@ -42,7 +45,64 @@ import mutate as mutate_mod
 # delta equals the exe RVA (v2b - 0x7ff7c4d20000 == exe - 0x140000000), so
 # unit addresses stay in the v2b frame and the offset math is unchanged.
 DEFAULT_IMAGE = r"D:\ow-dumps\offline_recover\module_offline.bin"
+# The dumps are gitignored; on this machine they live under dev/data. The
+# fallback is the same offline recovery image, never a different build.
+LOCAL_IMAGE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "dev",
+    "data",
+    "offline_recover",
+    "module_offline.bin",
+)
 DEFAULT_BASE = 0x7FF7C4D20000
+
+
+_WARNED_IMAGES: set = set()
+
+
+def resolve_image(path: str) -> str:
+    if os.path.exists(path):
+        return path
+    if os.path.exists(LOCAL_IMAGE):
+        if path not in _WARNED_IMAGES:
+            _WARNED_IMAGES.add(path)
+            _warn(f"image {path} not found; using the same recovery image at {LOCAL_IMAGE}")
+        return LOCAL_IMAGE
+    return path
+
+SHIM_PATH = os.path.join(os.path.dirname(__file__), "ghidra_shim.h")
+
+# Unit descriptor keys this harness understands. A typo'd key ("argfactory",
+# "candidateLoader ":"rust ") would otherwise be silently ignored and the
+# unit would quietly verify with a weaker surface - warn loudly instead.
+_KNOWN_UNIT_KEYS = {
+    "id", "title", "address", "image", "c_file", "entry", "args",
+    "returns", "options", "base", "knownEquivalentMutants",
+    "acknowledgedGaps", "notes", "argFactory", "candidateLoader", "state",
+    "scaffold",
+}
+_KNOWN_ARG_KEYS = {"name", "kind", "ptr_len"}
+_KNOWN_OPTION_KEYS = {
+    "iterations", "coverageThreshold", "mutationCount", "mutationKillRate",
+    "seed", "allowedImageReads",
+}
+_ARG_KINDS = ("f32", "f64", "u64")
+_RET_KINDS = ("f32", "f64", "u64", "void")
+
+
+@dataclass
+class StateSpec:
+    """A controlled memory snapshot for a stateful unit.
+
+    The snapshot is written at ``base`` before every oracle call, the whole
+    region is compared after the call (the state channel), and the region is
+    restored before the next call. ``data`` is the snapshot bytes; the file it
+    came from is part of the surfaces digest.
+    """
+
+    base: int
+    data: bytes
+    source: str = ""
 
 
 @dataclass
@@ -65,8 +125,20 @@ class Unit:
     # unit; structured inputs (linked structs) need it.
     arg_factory: Optional[str] = None
     # Candidate loader: "c" compiles the decompile (tier 1); "rust" runs
-    # rust_probe.rs through the subprocess protocol (tier 2).
+    # rust_probe.rs through the subprocess protocol (tier 2, legacy);
+    # "cargo" builds crates/ow-sim/src/bin/verify_probe.rs and runs the real
+    # crate functions (tier 2, shipped path).
     candidate_loader: str = "c"
+    # v2b addresses of compiler literal-pool constants the decompile
+    # already inlined (e.g. 1.0f, -0.0f for XORPS). Reads of these are
+    # not "undeclared global state"; the candidate hardcodes the same
+    # value. Declared per unit so the exception is visible, not silent.
+    allowed_image_reads: List[int] = field(default_factory=list)
+    # Inclusive ranges of allowed image reads, for state/global blocks. The
+    # unit's own state region is added automatically.
+    allowed_read_ranges: List[Tuple[int, int]] = field(default_factory=list)
+    # Preloaded state snapshot, if the unit is stateful.
+    state: Optional[StateSpec] = None
 
 
 @dataclass
@@ -78,42 +150,135 @@ class Divergence:
     detail: str = ""
 
 
+def _warn(msg: str) -> None:
+    print(f"  WARNING: {msg}", file=sys.stderr)
+
+
 def load_unit(path: str) -> Unit:
     with open(path, "r", encoding="utf-8") as f:
         d = json.load(f)
-    args = [UnitArg(**a) for a in d["args"]]
+    unknown = sorted(set(d) - _KNOWN_UNIT_KEYS)
+    if unknown:
+        _warn(f"unit {d.get('id', path)}: unknown keys {unknown} are ignored (typo?)")
+    try:
+        args = []
+        for a in d["args"]:
+            bad = sorted(set(a) - _KNOWN_ARG_KEYS)
+            if bad:
+                _warn(f"unit {d.get('id', path)}: arg {a.get('name')!r} has unknown keys {bad}")
+            kind = a["kind"]
+            if not (kind in _ARG_KINDS or kind.startswith("ptr")):
+                raise ValueError(
+                    f"unknown arg kind {kind!r} (expected f32/f64/u64 or ptr)"
+                )
+            args.append(UnitArg(**{k: a[k] for k in ("name", "kind") if k in a},
+                                 ptr_len=a.get("ptr_len", 0)))
+        ret_kind = d.get("returns", "f32")
+        if ret_kind not in _RET_KINDS:
+            raise ValueError(f"unknown returns {ret_kind!r} (expected one of {_RET_KINDS})")
+        v2b_raw = d["address"]["v2b"]
+        address_v2b = int(v2b_raw, 16)
+    except (KeyError, ValueError, TypeError) as e:
+        raise ValueError(f"unit {path}: malformed descriptor: {e}") from e
     # Unit paths are repo-relative; resolve against the repo root (two levels
     # up from dev/verify_harness/).
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     def abspath(p: str) -> str:
         return p if os.path.isabs(p) else os.path.join(repo_root, p)
+    base_raw = d.get("base", DEFAULT_BASE)
+    base = int(base_raw, 16) if isinstance(base_raw, str) else int(base_raw)
     # c_file is tier-1 only; rust units carry candidateLoader and omit it.
     c_file = d.get("c_file", "")
+    opts = d.get("options", {})
+    unknown_opts = sorted(set(opts) - _KNOWN_OPTION_KEYS)
+    if unknown_opts:
+        _warn(f"unit {d.get('id', path)}: unknown options {unknown_opts} are ignored (typo?)")
+    allowed_reads_raw = opts.get("allowedImageReads", []) or []
+    allowed_image_reads: List[int] = []
+    allowed_read_ranges: List[Tuple[int, int]] = []
+    try:
+        for a in allowed_reads_raw:
+            if isinstance(a, str) and "-" in a:
+                lo, hi = a.split("-", 1)
+                allowed_read_ranges.append((int(lo, 16), int(hi, 16)))
+            elif isinstance(a, (list, tuple)) and len(a) == 2:
+                allowed_read_ranges.append((int(a[0], 16) if isinstance(a[0], str) else int(a[0]),
+                                            int(a[1], 16) if isinstance(a[1], str) else int(a[1])))
+            else:
+                allowed_image_reads.append(int(a, 16) if isinstance(a, str) else int(a))
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"unit {path}: bad allowedImageReads: {e}") from e
+    state = None
+    st = d.get("state")
+    if st is not None:
+        try:
+            sbase = int(st["base"], 16) if isinstance(st["base"], str) else int(st["base"])
+            if "hex" in st:
+                data = bytes.fromhex(st["hex"])
+                source = "inline"
+            else:
+                spath = abspath(st["image"])
+                with open(spath, "rb") as f:
+                    data = f.read()
+                source = spath
+            if "size" in st:
+                data = data[: int(st["size"])]
+            if not data:
+                raise ValueError("empty snapshot")
+            state = StateSpec(base=sbase, data=data, source=source)
+        except (KeyError, OSError, ValueError, TypeError) as e:
+            raise ValueError(f"unit {path}: bad state block: {e}") from e
     return Unit(
         id=d["id"],
         title=d.get("title", ""),
-        address_v2b=int(d["address"]["v2b"], 16),
+        address_v2b=address_v2b,
         c_file=abspath(c_file) if c_file else "",
         entry=d["entry"],
         args=args,
-        ret_kind=d.get("returns", "f32"),
-        options=d.get("options", {}),
-        image=abspath(d.get("image", DEFAULT_IMAGE)),
-        base=int(d.get("base", hex(DEFAULT_BASE)), 16),
+        ret_kind=ret_kind,
+        options=opts,
+        image=resolve_image(abspath(d.get("image", DEFAULT_IMAGE))),
+        base=base,
         known_equivalent_mutants=d.get("knownEquivalentMutants", []),
         acknowledged_gaps=d.get("acknowledgedGaps", []),
         notes=d.get("notes", []),
         arg_factory=d.get("argFactory"),
         candidate_loader=d.get("candidateLoader", "c"),
+        allowed_image_reads=allowed_image_reads,
+        allowed_read_ranges=allowed_read_ranges,
+        state=state,
     )
 
 
 def _args_sha(unit: Unit) -> str:
+    """Digest of everything that determines the INPUT SIDE: the declared
+    surface, the fixture module that builds the structured inputs, and (for
+    tier-1) the shim header the candidate compiles against. Editing any of
+    them invalidates the verdict - the fixture IS the corpus."""
     payload = json.dumps(
         [{"name": a.name, "kind": a.kind, "ptr_len": a.ptr_len} for a in unit.args],
         sort_keys=True,
     ).encode()
-    return sha256_bytes(payload)
+    parts = [sha256_bytes(payload)]
+    if unit.arg_factory:
+        fac_path = os.path.join(os.path.dirname(__file__), unit.arg_factory + ".py")
+        if os.path.exists(fac_path):
+            parts.append(sha256_file(fac_path))
+        else:
+            _warn(f"unit {unit.id}: argFactory module file not found for digest: {fac_path}")
+    if unit.state is not None:
+        payload = f"{unit.state.base:#x}:{len(unit.state.data)}".encode()
+        parts.append(sha256_bytes(payload))
+        if unit.state.source and unit.state.source != "inline":
+            if os.path.exists(unit.state.source):
+                parts.append(sha256_file(unit.state.source))
+            else:
+                _warn(f"unit {unit.id}: state snapshot file not found for digest")
+        else:
+            parts.append(sha256_bytes(unit.state.data))
+    if unit.candidate_loader not in ("rust", "cargo") and os.path.exists(SHIM_PATH):
+        parts.append(sha256_file(SHIM_PATH))
+    return sha256_bytes(b"".join(p.encode() for p in parts))
 
 
 def _options_sha(unit: Unit) -> str:
@@ -121,16 +286,139 @@ def _options_sha(unit: Unit) -> str:
 
 
 def _bits_equal(a: int, b: int, ret_kind: str) -> bool:
-    """The equivalence relation. f32: NaN equal to NaN, +0 distinct from -0,
+    """The equivalence relation. NaN equal to NaN (f32 and f64: NaN payloads
+    differ across codegen paths and carry no contract), +0 distinct from -0,
     everything else bit-exact. Printed normalisations: none silent."""
-    if ret_kind != "f32":
-        return a == b
-    fa, fb = bits_f32(a), bits_f32(b)
-    import math
-
-    if math.isnan(fa) and math.isnan(fb):
+    if a == b:
         return True
-    return a == b
+    if ret_kind == "f32":
+        fa, fb = bits_f32(a), bits_f32(b)
+        return math.isnan(fa) and math.isnan(fb)
+    if ret_kind == "f64":
+        mask = (1 << 64) - 1
+        fa = struct.unpack("<d", struct.pack("<Q", a & mask))[0]
+        fb = struct.unpack("<d", struct.pack("<Q", b & mask))[0]
+        return math.isnan(fa) and math.isnan(fb)
+    return False
+
+
+def _args_key(args: Sequence[ArgSpec]) -> str:
+    """Stable identity of one input. The oracle is verified deterministic
+    (stage 2) and stateless (arena/stack/registers reset per call), so a
+    cached CallResult for this key IS the result of another call with it."""
+    return json.dumps(
+        [
+            [a.kind, a.mem.hex(), repr(a.value), a.bits, a.arena_offset,
+             getattr(a, "guest", None), list(a.relocs)]
+            for a in args
+        ]
+    )
+
+
+def _oracle_call_cached(
+    oracle: EmuOracle,
+    v2b_addr: int,
+    args: Sequence[ArgSpec],
+    ret_kind: str,
+    cache: Dict[str, Any],
+) -> Any:
+    key = _args_key(args)
+    r = cache.get(key)
+    if r is None:
+        r = oracle.call(v2b_addr, args, ret_kind=ret_kind)
+        cache[key] = r
+    return r
+
+
+def _mem_channel(
+    o_pointee_after: bytes,
+    cand_pointee_after: Dict[int, bytes],
+    args: Sequence[ArgSpec],
+) -> Optional[Tuple[str, str, str]]:
+    """Return (oracle_hex, candidate_hex, detail) when the memory channel
+    disagrees, else None. Reloc slots hold the pointee's own base address
+    (arena vs host), which necessarily differs between the two sides; mask
+    them so only the data the callee wrote is compared."""
+    cand_bytes = b"".join(cand_pointee_after[k] for k in sorted(cand_pointee_after))
+    o_after = bytearray(o_pointee_after)
+    c_after = bytearray(cand_bytes)
+    pos = 0
+    for a in args:
+        if a.kind != "ptr":
+            continue
+        for off in a.relocs:
+            s = pos + off
+            o_after[s : s + 8] = b"\x00" * 8
+            c_after[s : s + 8] = b"\x00" * 8
+        pos += len(a.mem)
+    if bytes(o_after) == bytes(c_after):
+        return None
+    diff_at = next(
+        (i for i, (x, y) in enumerate(zip(o_after, c_after)) if x != y),
+        min(len(o_after), len(c_after)),
+    )
+    return (
+        bytes(o_after).hex(),
+        bytes(c_after).hex(),
+        f"pointee bytes differ after the call (first at byte {diff_at})",
+    )
+
+
+def _state_channel(
+    o_after: Optional[bytes],
+    c_after: Optional[bytes],
+    unit: Unit,
+    args: Sequence[ArgSpec],
+) -> Optional[Tuple[str, str, str]]:
+    """Compare the whole preloaded state region after the call.
+
+    Declared reloc slots inside the state hold a pointer to the state itself;
+    the oracle and the probe use different host addresses there, so those
+    8-byte slots are masked exactly as the pointee channel masks them. Any
+    other difference is a state divergence.
+    """
+    if unit.state is None:
+        return None
+    if o_after is None or c_after is None:
+        return ("<missing>", "<missing>", "state channel missing on one side")
+    o = bytearray(o_after)
+    c = bytearray(c_after)
+    if len(o) != len(c):
+        return (o_after.hex(), c_after.hex(), "state region length differs")
+    for a in args:
+        if a.kind != "ptr" or getattr(a, "guest", None) is None:
+            continue
+        base_off = a.guest - unit.state.base
+        for off in a.relocs:
+            s = base_off + off
+            if 0 <= s and s + 8 <= len(o):
+                o[s : s + 8] = b"\x00" * 8
+                c[s : s + 8] = b"\x00" * 8
+    if bytes(o) == bytes(c):
+        return None
+    diff_at = next(
+        (i for i, (x, y) in enumerate(zip(o, c)) if x != y),
+        min(len(o), len(c)),
+    )
+    return (
+        bytes(o).hex(),
+        bytes(c).hex(),
+        f"state bytes differ after the call (first at state+0x{diff_at:x})",
+    )
+
+
+def _read_allowed(unit: Unit, addr: int, size: int = 1) -> bool:
+    if addr in unit.allowed_image_reads:
+        return True
+    if (
+        unit.state is not None
+        and unit.state.base <= addr
+        and addr + size <= unit.state.base + len(unit.state.data)
+    ):
+        # The state region is declared by the unit's `state` block; every read
+        # in it is part of the controlled struct, not an undeclared global.
+        return True
+    return any(lo <= addr and addr + size - 1 <= hi for lo, hi in unit.allowed_read_ranges)
 
 
 def run_unit(
@@ -138,6 +426,7 @@ def run_unit(
     work_dir: Optional[str] = None,
     skip_mutation: bool = False,
     verbose: bool = True,
+    mutant_workers: int = 4,
 ) -> LedgerEntry:
     def log(msg: str) -> None:
         if verbose:
@@ -152,14 +441,24 @@ def run_unit(
 
     oracle_sha = "unloaded"
     # The candidate artifact the ledger binds to: the decompile for tier 1,
-    # the probe source for tier 2.
-    if unit.candidate_loader == "rust":
+    # the probe source for tier 2 rustc, the crate function source + crate
+    # revision for the shipped cargo probe.
+    candidate_sources: List[str] = []
+    crate_rev = ""
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if unit.candidate_loader == "cargo":
+        from candidate_rust import candidate_binding, entry_sources
+
+        cand_sha, candidate_sources, crate_rev = candidate_binding(unit.entry)
+        cand_path = os.path.join(repo_root, entry_sources(unit.entry)[0])
+    elif unit.candidate_loader == "rust":
         from candidate_rust import PROBE_SRC
 
         cand_path = PROBE_SRC
+        cand_sha = sha256_file(cand_path) if os.path.exists(cand_path) else "missing"
     else:
         cand_path = unit.c_file
-    cand_sha = sha256_file(cand_path) if os.path.exists(cand_path) else "missing"
+        cand_sha = sha256_file(cand_path) if os.path.exists(cand_path) else "missing"
     opt_sha = _options_sha(unit)
     surf_sha = _args_sha(unit)
 
@@ -172,9 +471,12 @@ def run_unit(
             candidate_sha256=cand_sha,
             options_sha256=opt_sha,
             surfaces_sha256=surf_sha,
+            harness_version=HARNESS_VERSION,
             equivalent_mutants=unit.known_equivalent_mutants,
             acknowledged_gaps=unit.acknowledged_gaps,
             notes=list(unit.notes) + list(kw_notes),
+            candidate_sources=list(candidate_sources),
+            crate_rev=crate_rev,
             **kw,
         )
 
@@ -183,17 +485,30 @@ def run_unit(
     if not os.path.exists(unit.image):
         log(f"  FAIL: image not found: {unit.image}")
         return entry("inconclusive", notes=["image missing: " + unit.image])
-    if unit.candidate_loader == "rust":
-        from candidate_rust import PROBE_SRC
+    if unit.candidate_loader == "cargo":
+        from candidate_rust import CARGO_PROBE_SRC
 
-        if not os.path.exists(PROBE_SRC):
-            log(f"  FAIL: rust probe source not found: {PROBE_SRC}")
-            return entry("inconclusive", notes=[f"rust probe missing: {PROBE_SRC}"])
+        if not os.path.exists(CARGO_PROBE_SRC):
+            log(f"  FAIL: cargo probe source not found: {CARGO_PROBE_SRC}")
+            return entry("inconclusive", notes=[f"cargo probe missing: {CARGO_PROBE_SRC}"])
+        if not os.path.exists(cand_path):
+            log(f"  FAIL: candidate source not found: {cand_path}")
+            return entry("inconclusive", notes=[f"candidate source missing: {cand_path}"])
+    elif unit.candidate_loader == "rust":
+        if not os.path.exists(cand_path):
+            log(f"  FAIL: rust probe source not found: {cand_path}")
+            return entry("inconclusive", notes=[f"rust probe missing: {cand_path}"])
     elif not os.path.exists(unit.c_file):
         log(f"  FAIL: decompile not found: {unit.c_file}")
         return entry("inconclusive", notes=["c_file missing: " + unit.c_file])
 
     oracle = EmuOracle(unit.image, base=unit.base)
+    if unit.state is not None:
+        try:
+            oracle.set_state(unit.state.base, unit.state.data)
+        except ValueError as e:
+            log(f"  FAIL: state preload: {e}")
+            return entry("inconclusive", notes=[f"state preload failed: {e}"])
     try:
         fn_bytes = oracle.load_function(unit.address_v2b)
     except ValueError as e:
@@ -208,11 +523,24 @@ def run_unit(
     if prev is not None:
         freshness = check_entry(prev, oracle_sha, cand_sha, opt_sha, surf_sha)
         if freshness == "stale" and prev.status == "verified":
-            log("  NOTE: previous verdict is stale (inputs changed); re-verifying")
+            log("  NOTE: previous verdict is stale (inputs or harness changed); re-verifying")
 
+    own_workdir = work_dir is None
     work_dir = work_dir or tempfile.mkdtemp(prefix=f"verify_{unit.id.replace('/', '_')}_")
+    candidate = None
+    # Install the coverage tracker BEFORE the first oracle.call. Unicorn's
+    # CODE hooks become unreliable if added after call() has cycled its
+    # MEM hooks (the handle table is rebuilt); measuring coverage of the
+    # compared runs requires the tracker to be in place from the start.
+    from coverage import BranchTracker
+
     try:
-        if unit.candidate_loader == "rust":
+        tracker = BranchTracker(oracle, unit.address_v2b)
+    except Exception as e:
+        log(f"  INCONCLUSIVE: coverage tracking failed: {e}")
+        return entry("inconclusive", notes=[f"coverage tracking failed: {e}"])
+    try:
+        if unit.candidate_loader in ("rust", "cargo"):
             from candidate_rust import RustCandidate
 
             candidate = RustCandidate(
@@ -220,8 +548,11 @@ def run_unit(
                 arg_kinds=[a.kind if a.kind != "ptr" else "ptr" for a in unit.args],
                 ret_kind=unit.ret_kind,
                 work_dir=work_dir,
+                loader=unit.candidate_loader,
+                state_base=unit.state.base if unit.state is not None else None,
+                state_bytes=unit.state.data if unit.state is not None else None,
             )
-            log(f"  candidate rust probe: {candidate.exe}")
+            log(f"  candidate {unit.candidate_loader} probe: {candidate.exe}")
         else:
             from candidate_c import CCandidate
 
@@ -245,278 +576,317 @@ def run_unit(
         mod = importlib.import_module(unit.arg_factory)
         factory = mod.make_args
 
-    # ---- Stage 2: determinism --------------------------------------------
-    log("[2/5] determinism")
-    if factory is not None:
-        det_args = factory(0)
-    else:
-        det_args = generate_args(unit.args, seed, 0)
-    r1 = oracle.call(unit.address_v2b, det_args, ret_kind=unit.ret_kind)
-    r2 = oracle.call(unit.address_v2b, det_args, ret_kind=unit.ret_kind)
-    if not r1.ok or not r2.ok:
-        log(f"  FAIL: oracle fault on determinism probe: {r1.fault or r2.fault}")
-        return entry("invalid", notes=[f"oracle fault: {r1.fault or r2.fault}"])
-    if r1.ret_bits != r2.ret_bits or r1.pointee_after != r2.pointee_after:
-        log("  FAIL: oracle disagrees with itself on identical input")
-        return entry("invalid", notes=["oracle nondeterministic on identical input"])
-    log("  ok")
-
-    # ---- Stage 3: differential -------------------------------------------
-    log(f"[3/5] differential ({iterations} iterations + edge pool)")
-    divergences: List[Divergence] = []
-    undeclared_reads: List[Tuple[int, int]] = []
-    undeclared_writes: List[Tuple[int, int]] = []
-    corpus_args: List[List[ArgSpec]] = []
-
-    if factory is not None:
-        # A structured unit's inputs come only from its factory; the generic
-        # random corpus would build invalid linked structures.
-        cases: List[List[ArgSpec]] = []
-        for i in range(iterations + 64):
-            cases.append(factory(i))
-    else:
-        cases = list(focused_f32_edge_cases(unit.args))
-        for i in range(iterations):
-            cases.append(generate_args(unit.args, seed, i))
-
-    for idx, args in enumerate(cases):
-        o = oracle.call(unit.address_v2b, args, ret_kind=unit.ret_kind)
-        if not o.ok:
-            log(f"  FAIL: oracle fault at iteration {idx}: {o.fault}")
-            return entry("inconclusive", notes=[f"oracle fault at {idx}: {o.fault}"])
-        if o.reads_outside:
-            undeclared_reads.extend(o.reads_outside)
-        if o.out_of_arena_writes:
-            undeclared_writes.extend(o.out_of_arena_writes)
-
-        c = candidate.call(args)
-        if not c.ok:
-            divergences.append(
-                Divergence(idx, "fault", "ok", f"candidate fault: {c.fault}")
-            )
-        else:
-            if unit.ret_kind != "void" and not _bits_equal(
-                o.ret_bits, c.ret_bits, unit.ret_kind
-            ):
-                divergences.append(
-                    Divergence(
-                        idx,
-                        "ret",
-                        f"{o.ret_bits:#x} ({_fmt_ret(o.ret_bits, unit.ret_kind)})",
-                        f"{c.ret_bits:#x} ({_fmt_ret(c.ret_bits, unit.ret_kind)})",
-                    )
-                )
-            # Memory mutation channel: pointee bytes after the call.
-            # Reloc slots hold the pointee's own base address (arena vs
-            # host), which necessarily differs between the two sides; mask
-            # them so only the data the callee wrote is compared.
-            cand_after = b"".join(c.pointee_after[k] for k in sorted(c.pointee_after))
-            o_after = bytearray(o.pointee_after)
-            c_after = bytearray(cand_after)
-            pos = 0
-            for a in args:
-                if a.kind != "ptr":
-                    continue
-                for off in a.relocs:
-                    s = pos + off
-                    o_after[s : s + 8] = b"\x00" * 8
-                    c_after[s : s + 8] = b"\x00" * 8
-                pos += len(a.mem)
-            if bytes(o_after) != bytes(c_after):
-                divergences.append(
-                    Divergence(
-                        idx,
-                        "mem",
-                        bytes(o_after).hex(),
-                        bytes(c_after).hex(),
-                        "pointee bytes differ after the call",
-                    )
-                )
-        corpus_args.append(args)
-        if divergences:
-            # Keep going a little to collect a couple more examples, then stop.
-            if len(divergences) >= 3:
-                break
-
-    if undeclared_reads:
-        uniq = sorted(set(undeclared_reads))[:8]
-        msg = (
-            f"oracle reads outside declared args/stack at "
-            f"{', '.join(f'{a:#x}+{s}' for a, s in uniq)} - unit needs a "
-            "wider fixture or is not verifiable by emulation alone"
-        )
-        log(f"  INCONCLUSIVE: {msg}")
-        return entry("inconclusive", notes=[msg])
-    if undeclared_writes:
-        uniq = sorted(set(undeclared_writes))[:8]
-        msg = (
-            f"oracle writes outside the arena at "
-            f"{', '.join(f'{a:#x}+{s}' for a, s in uniq)}"
-        )
-        log(f"  INCONCLUSIVE: {msg}")
-        return entry("inconclusive", notes=[msg])
-
-    if divergences:
-        log(f"  DIVERGENT: {len(divergences)} channel disagreements")
-        for d in divergences[:5]:
-            log(f"    iter {d.iteration} [{d.channel}] oracle={d.oracle} cand={d.candidate}")
-        return entry(
-            "divergent",
-            divergences=[d.__dict__ for d in divergences],
-        )
-    log(f"  ok ({len(cases)} cases, every channel)")
-
-    # ---- Stage 4: coverage ------------------------------------------------
-    log("[4/5] coverage (oracle, basic-block)")
     try:
-        from coverage import measure_branch_coverage
+        # ---- Stage 2: determinism ----------------------------------------
+        log("[2/5] determinism")
+        if factory is not None:
+            det_args = factory(0)
+        else:
+            det_args = generate_args(unit.args, seed, 0)
+        cache: Dict[str, Any] = {}
+        tracker.begin_call()
+        r1 = _oracle_call_cached(oracle, unit.address_v2b, det_args, unit.ret_kind, cache)
+        # The second run must be a REAL second run - a cache hit would make
+        # the determinism claim true by construction.
+        tracker.begin_call()
+        r2 = oracle.call(unit.address_v2b, det_args, ret_kind=unit.ret_kind)
+        if not r1.ok or not r2.ok:
+            log(f"  FAIL: oracle fault on determinism probe: {r1.fault or r2.fault}")
+            return entry("invalid", notes=[f"oracle fault: {r1.fault or r2.fault}"])
+        if r1.ret_bits != r2.ret_bits or r1.pointee_after != r2.pointee_after:
+            log("  FAIL: oracle disagrees with itself on identical input")
+            return entry("invalid", notes=["oracle nondeterministic on identical input"])
+        if r1.state_after != r2.state_after:
+            log("  FAIL: oracle state channel disagrees with itself on identical input")
+            return entry("invalid", notes=["oracle state nondeterministic on identical input"])
+        log("  ok")
 
-        cov = measure_branch_coverage(oracle, unit.address_v2b, corpus_args, unit.ret_kind)
-    except Exception as e:
-        log(f"  INCONCLUSIVE: coverage failed: {e}")
-        return entry("inconclusive", notes=[f"coverage failed: {e}"])
-    log(f"  branch coverage {cov.coverage:.1f}% ({cov.hit}/{cov.total} branches)")
-    if cov.coverage < cov_gate:
-        gaps = ", ".join(f"{a:#x}" for a in cov.missed[:8])
-        log(f"  INCONCLUSIVE: coverage {cov.coverage:.1f}% < gate {cov_gate}%")
-        return entry(
-            "inconclusive",
-            coverage=cov.coverage,
-            notes=[f"coverage {cov.coverage:.1f}% < gate {cov_gate}%; missed {gaps}"],
-        )
+        # ---- Stage 3: differential ---------------------------------------
+        log(f"[3/5] differential ({iterations} iterations + edge pool)")
+        divergences: List[Divergence] = []
+        undeclared_reads: List[Tuple[int, int]] = []
+        undeclared_writes: List[Tuple[int, int]] = []
+        corpus_args: List[List[ArgSpec]] = []
 
-    # ---- Stage 5: mutation ------------------------------------------------
-    if skip_mutation:
-        log("[5/5] mutation SKIPPED (not a verified path)")
-        return entry(
-            "inconclusive",
-            coverage=cov.coverage,
-            notes=["mutation skipped; a unit is not verified without it"],
-        )
+        if factory is not None:
+            # A structured unit's inputs come only from its factory; the generic
+            # random corpus would build invalid linked structures.
+            cases: List[List[ArgSpec]] = []
+            for i in range(iterations + 64):
+                cases.append(factory(i))
+        else:
+            cases = list(focused_f32_edge_cases(unit.args))
+            for i in range(iterations):
+                cases.append(generate_args(unit.args, seed, i))
 
-    log(f"[5/5] mutation ({mutation_count} mutants, kill gate {kill_gate:.0%})")
-    if unit.candidate_loader == "rust":
-        from candidate_rust import PROBE_SRC, RustCandidate
+        # Coverage is measured on THESE runs (stage 4 analyses the tracker;
+        # no second pass over the corpus). The tracker was installed before
+        # stage 2 so Unicorn's CODE hook is live for every oracle.call.
 
-        base_path = PROBE_SRC
-    else:
-        from candidate_c import CCandidate
-
-        base_path = unit.c_file
-    with open(base_path, "r", encoding="utf-8") as f:
-        base_src = f.read()
-
-    mutants = mutate_mod.generate_mutants(base_src, unit.entry, count=mutation_count)
-    killed = 0
-    scored = 0
-    survivors: List[Any] = []
-    for m in mutants:
-        if any(
-            m.kind == eq.get("kind") and m.line == eq.get("line")
-            for eq in unit.known_equivalent_mutants
-        ):
-            log(f"  skip mutant {m.kind}@{m.line} (declared equivalent)")
-            continue
-        scored += 1
+        # Compiler literal-pool constants the unit has declared (and the
+        # decompile already inlined). A read of one of these is not
+        # undeclared global state: the candidate hardcodes the same value.
         try:
-            if unit.candidate_loader == "rust":
-                mc = RustCandidate(
-                    entry=unit.entry,
-                    arg_kinds=[a.kind if a.kind != "ptr" else "ptr" for a in unit.args],
-                    ret_kind=unit.ret_kind,
-                    work_dir=tempfile.mkdtemp(prefix="mutant_"),
-                    source_override=m.source,
-                )
-            else:
-                mc = CCandidate(
-                    c_file=unit.c_file,
-                    entry=unit.entry,
-                    arg_kinds=[a.kind if a.kind != "ptr" else "ptr" for a in unit.args],
-                    ret_kind=unit.ret_kind,
-                    work_dir=tempfile.mkdtemp(prefix="mutant_"),
-                    source_override=m.source,
-                )
-        except RuntimeError as e:
-            # A mutant that does not compile is a killed mutant only if the
-            # mutation is meant to be behaviour-changing; report and count as
-            # killed (the harness cannot run a broken build, and the original
-            # still verified, so the detection power claim stands for the
-            # mutants that do build).
-            log(f"  mutant {m.kind}@{m.line} does not compile (counted killed): {e}")
-            killed += 1
-            continue
-        try:
-            detected = False
-            # Mutation corpus: a subset is enough to decide kill/survive, and
-            # each surviving mutant pays for every case, so keep it small.
-            for idx, args in enumerate(cases[: min(len(cases), 48)]):
-                o = oracle.call(unit.address_v2b, args, ret_kind=unit.ret_kind)
-                c = mc.call(args)
+            for idx, args in enumerate(cases):
+                tracker.begin_call()
+                o = _oracle_call_cached(oracle, unit.address_v2b, args, unit.ret_kind, cache)
+                if not o.ok:
+                    log(f"  FAIL: oracle fault at iteration {idx}: {o.fault}")
+                    return entry("inconclusive", notes=[f"oracle fault at {idx}: {o.fault}"])
+                if o.reads_outside:
+                    undeclared_reads.extend(
+                        r for r in o.reads_outside if not _read_allowed(unit, r[0], r[1])
+                    )
+                if o.out_of_arena_writes:
+                    undeclared_writes.extend(o.out_of_arena_writes)
+
+                c = candidate.call(args)
                 if not c.ok:
-                    detected = True
+                    divergences.append(
+                        Divergence(idx, "fault", "ok", f"candidate fault: {c.fault}")
+                    )
+                else:
+                    if unit.ret_kind != "void" and not _bits_equal(
+                        o.ret_bits, c.ret_bits, unit.ret_kind
+                    ):
+                        divergences.append(
+                            Divergence(
+                                idx,
+                                "ret",
+                                f"{o.ret_bits:#x} ({_fmt_ret(o.ret_bits, unit.ret_kind)})",
+                                f"{c.ret_bits:#x} ({_fmt_ret(c.ret_bits, unit.ret_kind)})",
+                            )
+                        )
+                    mem = _mem_channel(o.pointee_after, c.pointee_after, args)
+                    if mem is not None:
+                        divergences.append(Divergence(idx, "mem", mem[0], mem[1], mem[2]))
+                    st = _state_channel(
+                        getattr(o, "state_after", None),
+                        getattr(c, "state_after", None),
+                        unit,
+                        args,
+                    )
+                    if st is not None:
+                        divergences.append(Divergence(idx, "state", st[0], st[1], st[2]))
+                corpus_args.append(args)
+                if len(divergences) >= 3:
+                    # Enough counterexamples to act on; stop.
                     break
-                if unit.ret_kind != "void" and not _bits_equal(
-                    o.ret_bits, c.ret_bits, unit.ret_kind
-                ):
-                    detected = True
-                    break
-                m_after = bytearray(b"".join(c.pointee_after[k] for k in sorted(c.pointee_after)))
-                o_after = bytearray(o.pointee_after)
-                pos = 0
-                for a in args:
-                    if a.kind != "ptr":
-                        continue
-                    for off in a.relocs:
-                        s = pos + off
-                        o_after[s : s + 8] = b"\x00" * 8
-                        m_after[s : s + 8] = b"\x00" * 8
-                    pos += len(a.mem)
-                if bytes(o_after) != bytes(m_after):
-                    detected = True
-                    break
-            if detected:
-                killed += 1
-            else:
-                survivors.append(m)
-                log(f"  SURVIVOR: {m.kind}@{m.line}: {m.excerpt[:60]}")
-        finally:
-            # RustCandidate owns a subprocess; CCandidate has no close.
-            close = getattr(mc, "close", None)
-            if close is not None:
-                close()
 
-    kill_rate = (killed / scored) if scored else 0.0
-    log(f"  kill rate {kill_rate:.0%} ({killed}/{scored})")
-    close_main = getattr(candidate, "close", None)
-    if survivors:
-        log("  survivors must be fixed or declared observationally equivalent")
-        for s in survivors:
-            log(f"    {s.kind}@{s.line}: {s.excerpt[:70]}")
-    if kill_rate < kill_gate:
-        if close_main is not None:
-            close_main()
+            if undeclared_reads:
+                uniq = sorted(set(undeclared_reads))[:8]
+                msg = (
+                    f"oracle reads outside declared args/stack at "
+                    f"{', '.join(f'{a:#x}+{s}' for a, s in uniq)} - unit needs a "
+                    "wider fixture or is not verifiable by emulation alone"
+                )
+                log(f"  INCONCLUSIVE: {msg}")
+                return entry("inconclusive", notes=[msg])
+            if undeclared_writes:
+                uniq = sorted(set(undeclared_writes))[:8]
+                msg = (
+                    f"oracle writes outside the arena at "
+                    f"{', '.join(f'{a:#x}+{s}' for a, s in uniq)}"
+                )
+                log(f"  INCONCLUSIVE: {msg}")
+                return entry("inconclusive", notes=[msg])
+
+            if divergences:
+                log(f"  DIVERGENT: {len(divergences)} channel disagreements")
+                for d in divergences[:5]:
+                    log(f"    iter {d.iteration} [{d.channel}] oracle={d.oracle} cand={d.candidate}")
+                    if d.detail:
+                        log(f"      {d.detail}")
+                return entry(
+                    "divergent",
+                    divergences=[d.__dict__ for d in divergences],
+                )
+            log(f"  ok ({len(cases)} cases, every channel)")
+
+            # ---- Stage 4: coverage -------------------------------------------
+            log("[4/5] coverage (oracle, both branch edges of the compared runs)")
+            cov = tracker.result()
+        finally:
+            tracker.close()
+
+        log(f"  branch coverage {cov.coverage:.1f}% ({cov.hit}/{cov.total} branches)")
+        if cov.coverage < cov_gate:
+            gaps = ", ".join(f"{a:#x}" for a in cov.missed[:8])
+            log(f"  INCONCLUSIVE: coverage {cov.coverage:.1f}% < gate {cov_gate}%")
+            return entry(
+                "inconclusive",
+                coverage=cov.coverage,
+                notes=[f"coverage {cov.coverage:.1f}% < gate {cov_gate}%; missed {gaps}"],
+            )
+
+        # ---- Stage 5: mutation -------------------------------------------
+        if skip_mutation:
+            log("[5/5] mutation SKIPPED (not a verified path)")
+            return entry(
+                "inconclusive",
+                coverage=cov.coverage,
+                notes=["mutation skipped; a unit is not verified without it"],
+            )
+
+        log(f"[5/5] mutation ({mutation_count} mutants, kill gate {kill_gate:.0%})")
+        with open(cand_path, "r", encoding="utf-8") as f:
+            base_src = f.read()
+
+        from candidate_rust import mutation_entry
+
+        mutants = mutate_mod.generate_mutants(
+            base_src,
+            mutation_entry(unit.entry) if unit.candidate_loader == "cargo" else unit.entry,
+            count=mutation_count,
+            base_dir=os.path.dirname(cand_path) or ".",
+        )
+        active = [
+            m
+            for m in mutants
+            if not any(
+                m.kind == eq.get("kind") and m.line == eq.get("line")
+                for eq in unit.known_equivalent_mutants
+            )
+        ]
+        for m in mutants:
+            if m not in active:
+                log(f"  skip mutant {m.kind}@{m.line} (declared equivalent)")
+
+        # Build every mutant up front, concurrently - compilation is a
+        # subprocess and does not touch the oracle, so it parallelises; the
+        # differential itself runs serially below (one emulator).
+        def _build(m):
+            mdir = tempfile.mkdtemp(prefix="mutant_")
+            try:
+                if unit.candidate_loader in ("rust", "cargo"):
+                    from candidate_rust import RustCandidate
+
+                    mc = RustCandidate(
+                        entry=unit.entry,
+                        arg_kinds=[a.kind if a.kind != "ptr" else "ptr" for a in unit.args],
+                        ret_kind=unit.ret_kind,
+                        work_dir=mdir,
+                        source_override=m.source,
+                        source_path=cand_path if unit.candidate_loader == "cargo" else None,
+                        loader=unit.candidate_loader,
+                        state_base=unit.state.base if unit.state is not None else None,
+                        state_bytes=unit.state.data if unit.state is not None else None,
+                    )
+                else:
+                    from candidate_c import CCandidate
+
+                    mc = CCandidate(
+                        c_file=unit.c_file,
+                        entry=unit.entry,
+                        arg_kinds=[a.kind if a.kind != "ptr" else "ptr" for a in unit.args],
+                        ret_kind=unit.ret_kind,
+                        work_dir=mdir,
+                        source_override=m.source,
+                    )
+                return (m, mc, mdir, None)
+            except RuntimeError as e:
+                return (m, None, mdir, e)
+
+        workers = max(1, min(mutant_workers, len(active)))
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                builds = list(pool.map(_build, active))
+        else:
+            builds = [_build(m) for m in active]
+
+        killed = 0
+        scored = 0
+        survivors: List[Any] = []
+        for m, mc, mdir, err in builds:
+            scored += 1
+            if err is not None:
+                # A mutant that does not compile is a killed mutant: the
+                # harness cannot run a broken build, and the original still
+                # verified, so the detection-power claim stands for the
+                # mutants that do build. Count it in BOTH numerator and
+                # denominator so the kill rate stays in [0, 1].
+                log(f"  mutant {m.kind}@{m.line} does not compile (counted killed): {err}")
+                killed += 1
+                shutil.rmtree(mdir, ignore_errors=True)
+                continue
+            try:
+                detected = False
+                # Mutation corpus: a subset is enough to decide
+                # kill/survive. The first 48 are the pinned specials
+                # (factories put discriminating cases at the front) plus
+                # the focused edges; oracle results come from the cache -
+                # identical inputs were already executed and stage 2
+                # proved the oracle agrees with itself.
+                mut_cases = cases[: min(len(cases), 48)]
+                for idx, args in enumerate(mut_cases):
+                    o = cache.get(_args_key(args))
+                    if o is None:  # defensive; every case ran in stage 3
+                        o = oracle.call(unit.address_v2b, args, ret_kind=unit.ret_kind)
+                        cache[_args_key(args)] = o
+                    c = mc.call(args)
+                    if not c.ok:
+                        detected = True
+                        break
+                    if unit.ret_kind != "void" and not _bits_equal(
+                        o.ret_bits, c.ret_bits, unit.ret_kind
+                    ):
+                        detected = True
+                        break
+                    if _mem_channel(o.pointee_after, c.pointee_after, args) is not None:
+                        detected = True
+                        break
+                    if _state_channel(
+                        getattr(o, "state_after", None),
+                        getattr(c, "state_after", None),
+                        unit,
+                        args,
+                    ) is not None:
+                        detected = True
+                        break
+                if detected:
+                    killed += 1
+                else:
+                    survivors.append(m)
+                    log(f"  SURVIVOR: {m.kind}@{m.line}: {m.excerpt[:60]}")
+            finally:
+                close = getattr(mc, "close", None)
+                if close is not None:
+                    close()
+                shutil.rmtree(mdir, ignore_errors=True)
+
+        kill_rate = (killed / scored) if scored else 0.0
+        log(f"  kill rate {kill_rate:.0%} ({killed}/{scored})")
+        if survivors:
+            log("  survivors must be fixed or declared observationally equivalent")
+            for s in survivors:
+                log(f"    {s.kind}@{s.line}: {s.excerpt[:70]}")
+        if kill_rate < kill_gate:
+            return entry(
+                "inconclusive",
+                coverage=cov.coverage,
+                mutation_kill_rate=kill_rate,
+                mutants_killed=killed,
+                mutants_total=scored,
+                notes=[
+                    f"mutation kill rate {kill_rate:.0%} < gate {kill_gate:.0%}; "
+                    f"{len(survivors)} survivor(s)"
+                ],
+            )
+
+        log("  VERIFIED")
         return entry(
-            "inconclusive",
+            "verified",
             coverage=cov.coverage,
             mutation_kill_rate=kill_rate,
             mutants_killed=killed,
             mutants_total=scored,
-            notes=[
-                f"mutation kill rate {kill_rate:.0%} < gate {kill_gate:.0%}; "
-                f"{len(survivors)} survivor(s)"
-            ],
         )
-
-    log("  VERIFIED")
-    if close_main is not None:
-        close_main()
-    return entry(
-        "verified",
-        coverage=cov.coverage,
-        mutation_kill_rate=kill_rate,
-        mutants_killed=killed,
-        mutants_total=scored,
-    )
+    finally:
+        close = getattr(candidate, "close", None)
+        if close is not None:
+            close()
+        if own_workdir:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def _fmt_ret(bits: int, kind: str) -> str:

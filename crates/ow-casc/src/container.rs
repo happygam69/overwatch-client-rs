@@ -127,6 +127,16 @@ impl Store {
         }
         let file = archives.get_mut(&location.archive).expect("just inserted");
         file.seek(SeekFrom::Start(location.offset))?;
+        // The entry claims this many bytes; a truncated archive must not turn
+        // the claim into a multi-GB zeroed allocation before `read_exact` can
+        // reject it.
+        let available = file.metadata()?.len().saturating_sub(location.offset);
+        if u64::from(location.size) > available {
+            return Err(Error::Parse(format!(
+                "data.{:03}: record at {:#x} claims {} B but the archive has {available} B left",
+                location.archive, location.offset, location.size
+            )));
+        }
         let mut buf = vec![0u8; location.size as usize];
         file.read_exact(&mut buf)?;
         Ok(buf)
@@ -377,12 +387,17 @@ impl Store {
             let Ok(blob) = self.open_ekey(&ekey) else {
                 continue;
             };
-            for at in 0..blob.len().saturating_sub(32) {
-                if &blob[at + 16..at + 32] == ckey {
-                    let mut ekey = [0u8; 16];
-                    ekey.copy_from_slice(&blob[at..at + 16]);
-                    out.push((i, ekey));
-                    break;
+            // The last valid 32-byte window starts at `len - 32`; an
+            // exclusive range stopped one short of it and never matched the
+            // manifest's final entry.
+            if blob.len() >= 32 {
+                for at in 0..=blob.len() - 32 {
+                    if &blob[at + 16..at + 32] == ckey {
+                        let mut ekey = [0u8; 16];
+                        ekey.copy_from_slice(&blob[at..at + 16]);
+                        out.push((i, ekey));
+                        break;
+                    }
                 }
             }
         }
@@ -703,7 +718,14 @@ fn parse_archive_index(bytes: &[u8]) -> Result<Vec<([u8; 16], u64, u32, Option<u
     }
     let per_entry = key_bytes + size_bytes + offset_bytes;
     let per_page = page_size + key_bytes + checksum_size;
-    let page_count = (footer_at - dynamic) / per_page;
+    // The footer sits at `len - checksumSize - 12`, so in terms of the
+    // footer's position the reference's page count is
+    // `(footerAt - checksumSize) / perPage` — the same expression
+    // `PageIndex::open` below uses. (Applying the reference's `DynamicSize`
+    // to the footer's position instead of the file length came out one page
+    // short — the last page of every file was dropped, and a single-page
+    // index read as empty; measured 2026-10-17, fixed 2026-10-24.)
+    let page_count = (footer_at - checksum_size) / per_page;
     let entry_count = page_size / per_entry;
     let mut out = Vec::new();
     for page in 0..page_count {
@@ -800,9 +822,9 @@ impl std::fmt::Display for CdnRoute {
 /// `pageCount` follows the reference's `GetTableParameters`, `(length -
 /// DynamicSize) / (pageSize + keyBytes + checksumSize)` with `DynamicSize =
 /// 12 + 2 * checksumSize`; in terms of the footer's position that is
-/// `(footerAt - checksumSize) / perPage`. (The full-file parser above computes
-/// `(footerAt - DynamicSize) / perPage`, which is one page short on every file
-/// — measured 2026-10-17, see `STATUS-handoff.md`.)
+/// `(footerAt - checksumSize) / perPage`. The full-file parser above uses the
+/// same expression (it spent a while applying `DynamicSize` to the footer's
+/// position, which is one page short on every file — measured 2026-10-17).
 struct PageIndex {
     file: fs::File,
     page_size: u64,
@@ -1013,7 +1035,9 @@ fn load_bucket_index(install: &Install) -> Result<HashMap<[u8; 9], Location>> {
             if !name.ends_with(".idx") {
                 continue;
             }
-            let bucket = u8::from_str_radix(&name[0..2], 16).ok();
+            // `.get` instead of slicing: a name whose second byte is mid-UTF-8
+            // must skip, not panic the whole index load.
+            let bucket = name.get(0..2).and_then(|p| u8::from_str_radix(p, 16).ok());
             if bucket.is_none() || bucket == Some(0xff) {
                 continue;
             }
@@ -1041,7 +1065,9 @@ fn load_bucket_index(install: &Install) -> Result<HashMap<[u8; 9], Location>> {
 }
 
 fn parse_hex_key(hex: &str) -> Result<[u8; 16]> {
-    if hex.len() != 32 {
+    // `is_ascii` before the two-byte slicing below: a key with a multi-byte
+    // character is an error, not a panic.
+    if hex.len() != 32 || !hex.is_ascii() {
         return Err(Error::Parse(format!("key {hex:?} is not 16 bytes")));
     }
     let mut out = [0u8; 16];
@@ -1204,5 +1230,42 @@ mod tests {
         let e = index.loose_lookup(&key(1)).expect_err("must refuse");
         assert!(e.to_string().contains("not a loose-file index"), "{e}");
         fs::remove_file(&path).ok();
+    }
+
+    /// The whole-file parser (`parse_archive_index`) must agree with
+    /// `PageIndex::open` on the page count: a single-page file parses to one
+    /// entry, not zero, and the final page of a multi-page file is present.
+    /// (It spent a while one page short; the on-demand reader was corrected
+    /// and this parser was not, which this test pins.)
+    #[test]
+    fn parse_archive_index_matches_page_index_page_count() {
+        // A single entry, no offset bytes: the one-page case.
+        let parsed = parse_archive_index(&build(&[(key(9), 109_878_111, 0, 0)], 0))
+            .expect("single-page loose index parses");
+        assert_eq!(parsed.len(), 1, "one entry, not zero: {parsed:?}");
+        assert_eq!(parsed[0].0, key(9));
+        assert_eq!(parsed[0].1, 0, "loose entries carry no offset");
+        assert_eq!(parsed[0].2, 109_878_111);
+        assert_eq!(parsed[0].3, None);
+
+        // More than one page of group entries, offset_bytes = 6: every
+        // entry — including the last page's — must come out. Keys start at
+        // 1: an all-zero ekey is the terminator.
+        let mut entries: Vec<([u8; 16], u32, u16, u32)> = Vec::new();
+        for i in 1u8..=80 {
+            entries.push((
+                key(i),
+                100 + u32::from(i),
+                700 + u16::from(i),
+                0x1000 * u32::from(i),
+            ));
+        }
+        let parsed = parse_archive_index(&build(&entries, 6)).expect("multi-page group index");
+        assert_eq!(parsed.len(), entries.len(), "no entry may be dropped");
+        let last = parsed.last().expect("non-empty");
+        assert_eq!(last.0, key(80), "the final page's last entry is present");
+        assert_eq!(last.1, u64::from(0x1000u32 * 80));
+        assert_eq!(last.2, 180);
+        assert_eq!(last.3, Some(780));
     }
 }

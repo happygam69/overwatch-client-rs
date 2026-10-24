@@ -1,0 +1,5 @@
+# The xtask pattern: `cargo xtask ...` runs the project's own commands
+# (`crates/xtask`), so `cargo xtask verify` works for anyone who clones the
+# repository without a global cargo alias.
+[alias]
+xtask = "run -p xtask --"

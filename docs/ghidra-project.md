@@ -18,7 +18,7 @@ names the program (or the capture) it was read from.
 
 | program | base | what it is | what it answers |
 |---|---|---|---|
-| `Overwatch.exe` | `0x140000000` (preferred PE base) | **the complete image of the current build** (2.25.0.1): all **12,076 `.text` pages** and the `.pdata` table recovered offline from the disk ciphertext (Plan A), imported 2026-10-23 and auto-analysed; **151,260 functions** | **every page of the current build**, and **every current-build name** in `docs/function-names.csv` (migrated here 2026-10-24). Addresses are RVAs: `0x140000000 + (v2b - 0x7ff7c4d20000)`. Read code here; its data is the PE's own at the preferred base, not a session's (see below) |
+| `Overwatch.exe` | `0x140000000` (preferred PE base) | **the complete image of the current build** (2.25.0.1): all **12,076 `.text` pages** recovered from the disk ciphertext, plus the install's **plaintext `.pdata`** (201,246 entries, byte-identical at RVA `0x450b000`), imported 2026-10-23 and auto-analysed; **151,260 functions** | **every page of the current build**, and **every current-build name** in `docs/function-names.csv` (migrated here 2026-10-24). Addresses are RVAs: `0x140000000 + (v2b - 0x7ff7c4d20000)`. Read code here; its data is the PE's own at the preferred base, not a session's (see below) |
 | `module_v2full.bin` | `0x7ff7c4d20000` (v2b) | the 12 October flatten, build **2.25.0.0** - the build the docs' addresses belong to | the basis of the docs' findings: every `v2b` address in `docs/formats/` resolves here. It is the *old* build: the client has since updated (see the build note below) |
 | `module_mapped.bin` | `0x7ff649000000` | **the pointer image**: the range capture's mapped code regions, at that session's base | chasing pointers in the range session: a pointer read here resolves inside this program |
 | `module_heap.bin` | `0x161b0000000` | the same capture's heap regions | runtime structures: the material chain, the FP component, class descriptors - and the heap side of the pointers |
@@ -115,12 +115,44 @@ python dev/pointer_check.py <image-a> <image-b>   # how much the data differs
   `0x140000000 + RVA` first. Doc citations that name it resolve in its
   image on disk (v2b frame).
 - **`Overwatch.exe`** comes from `D:/ow-dumps/offline_recover/module_offline.bin`:
-  a PE at the preferred base `0x140000000` with all **12,076 `.text` pages**
-  recovered from the disk ciphertext plus the plaintext `.pdata` (201,246
-  entries); the recovered `.text` hashes to
-  `60fe7a796f23ddf62da9be8bded4c81d9942eda200458d2920aff9ed3fd531af`.
-  No live capture was used; report:
+  a flat PE at the preferred base `0x140000000`, with all **12,076 `.text`
+  pages** recovered from the disk ciphertext and the install's **own plaintext
+  `.pdata`** (201,246 entries) copied at its RVA. The recovered `.text` hashes
+  to `60fe7a796f23ddf62da9be8bded4c81d9942eda200458d2920aff9ed3fd531af`.
+  The `.pdata`, `.rdata` and `.data` sections are not recovered data: they are
+  the install's plaintext sections, and `.pdata` is byte-identical to the
+  install's table. No live capture was used; report:
   `D:/ow-dumps/offline_recover/REPORT.md`.
+
+## The install's section table
+
+The current install (`E:\Overwatch\_retail_\Overwatch.exe`,
+2.25.0.1.154504) has eight sections, and `.pdata` is present and **plaintext**:
+
+| section | VA | virtual size | raw offset | raw size |
+|---|---|---|---|---|
+| `.text` | `0x1000` | `0x2f2b3d3` | `0x400` | `0x2f2b400` |
+| `.rdata` | `0x2f2d000` | `0x918f58` | `0x2f2b800` | `0x919000` |
+| `.data` | `0x3846000` | `0xcc43bc` | `0x3844800` | `0x333600` |
+| `.pdata` | `0x450b000` | `0x24d968` | `0x3b77e00` | `0x24da00` |
+| `_RDATA` | `0x4759000` | `0x202e0` | `0x3dc5800` | `0x20400` |
+| `.rodata` | `0x477a000` | `0x1260` | `0x3de5c00` | `0x1400` |
+| `.rsrc` | `0x477c000` | `0xd0b0` | `0x3de7000` | `0xd200` |
+| `.reloc` | `0x478a000` | `0xad18c` | `0x3df4200` | `0xad200` |
+
+The `.pdata` table has **201,246** `RUNTIME_FUNCTION` entries, first entry
+`begin 0x1000 end 0x106b`, and hashes to
+`a7452021bac23e0a226db73218d6687e8d52ae4abccc83da50722fa8340a3a59`.
+The offline image's `.pdata` is **byte-identical** — but the offline image is
+flat (`file offset == RVA`), so read it at RVA `0x450b000`, not at the PE
+header's raw offset `0x3b77e00` (that location holds unrelated data). The
+harness (`coverage.py`) and the scaffolder already use the RVA. `dev/pdata_lookup.py`
+reads the install exe at the raw offset, which is correct.
+
+Only `.text` is encrypted on disk; `.rdata`, `.data` and `.pdata` are
+plaintext. This is why the complete offline image can recover every function
+extent without a capture. The "no `.pdata`" note elsewhere applies to the old
+2.25.0.0 **merged** captures, not to the current install.
 
 ## Named functions
 
@@ -152,6 +184,16 @@ Two wrinkles worth knowing:
   `ldr/loader_xor_regions.exe` wrap, never a flat warm image (the flat
   `ldr-warm` program was deleted 2026-10-24; the image is still at
   `D:/ow-dumps/loader_after_diff.bin`).
+
+Two project-local scripts help with the mover discovery and are original work,
+not game content:
+
+- `docs/ghidra/DumpFunctionRanges.java <start> <end> <csv>` writes Ghidra's
+  resolved function entries and bodies. Use its entries for decompilation:
+  `.pdata` begins can be chained/fragmented and are not always the real entry.
+- `docs/ghidra/ResizePdataFunction.java <begin> <end>` removes the inner
+  fragments of one `.pdata` function and sets the body to the authoritative
+  extent. Use it only on a range read from `.pdata`; save the program after.
 
 ## Address conventions
 
