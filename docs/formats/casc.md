@@ -76,6 +76,36 @@ The row to use is the active one whose product matches the game. For Overwatch
 the product is `pro`, and for a retail Windows install the version reads
 `2.23.0.3.151177`.
 
+### Two layouts: the install root and the game folder
+
+There are two directory shapes, and the client treats them differently:
+
+* **Install root:** `.build.info` and `data/casc` in the same folder. This is
+  what the project opens by default (`E:\Overwatch`).
+* **Game folder:** a subfolder such as `_retail_` with `.flavor.info` and the
+  executable; `.build.info` and `data/casc` are one level up. On the reference
+  machine, `_retail_/.flavor.info` is exactly
+  `Product Flavor!STRING:0` + `pro`, and the client reads
+  `_retail_/../.build.info`.
+
+The client's `BuildInfoLoadFromInstall` (`0x14248f2a0`) builds
+`<install>/../.build.info` whenever `.flavor.info` exists. Its
+`BuildInfoSelectRow` (`0x1424aec30`) then picks the **first active row whose
+Product equals the flavor**. With no flavor it requires every row's Product to
+be equal and returns the **last active** row; a mixed-product table has no
+answer.
+
+The row layout is fixed by the descriptor table at `0x143471150`: **Product is
+at +0**, Branch at +8, Active at +0x10, Build Key at +0x11, and so on. The
+first field is therefore Product, not Branch — that is why the `.flavor.info`
+value is `pro`.
+
+`ow-casc` implements both layouts and the same selection rule
+(`install.rs::resolve_layout` / `select_build_info`), including the
+`<install>/../.build.info` path. Opening either `E:\Overwatch` or
+`E:\Overwatch\_retail_` now yields the same 1,147,814-key store on the
+reference install.
+
 ## Config files
 
 `key = value value ...` lines, `#` starts a comment. Values are lists.
@@ -553,7 +583,7 @@ Read in the `Overwatch.exe` Ghidra program: build `2.25.0.1.154504`, base
 | Salsa20 | `Salsa20StateInit` `0x1424e3230`; `Salsa20Xor` `0x1424e32c0` | emulated both client functions with key `01..10`, nonce `10..17` and a non-zero 64-bit counter; the 128-byte output matches standard Salsa20/20. The counter-0 case is pinned in `blte.rs` as `matches_the_client_state_layout_with_every_word_nonzero` |
 | empty file | `DynamicContainerRead` `0x1424f48d0` | a 30-byte record returns a zero-length range without opening BLTE |
 | `encoding` pair | `BuildConfigParse` `0x1424ccc00` | `vals[0]` is the content key, `vals[1]` the encoding key; only the latter names an artifact |
-| build-info row | `BuildInfoSelectRow` `0x1424aec30` | selects an active row by its first field (the flavor); with no flavor it returns the last active row |
+| build-info row | `BuildInfoSelectRow` `0x1424aec30`; descriptor table `0x143471150` | Product is row +0, Branch +8, Active +0x10; with a flavor it is the first active row matching Product, with no flavor the last active row if all Products agree |
 
 The Salsa20 check used the client's own code under Ghidra's emulator, not a
 reimplementation: the ECRYPT vector alone only covers a zero nonce and one
@@ -569,13 +599,6 @@ non-zero key byte, while the all-non-zero vector covers every state word.
   `N`, 385 `E`, and 290 whose first chunk was beyond the 256-byte read
   window).
 * `A` (ARC4) and `F` (frame) chunks are still not implemented.
-
-* `.flavor.info` is not read by `ow-casc`. When it exists the client builds
-  `<install>/../.build.info`, reads that table, and selects the active row whose
-  first field matches the flavor (`BuildInfoLoadFromInstall`, `0x14248f2a0`;
-  `BuildInfoSelectRow`, `0x1424aec30`). On this install the file is absent and
-  the one-row choice is the same; on a multi-branch flavor install the path
-  and the row could differ.
 * The client accepts encoding key widths 1..16; `ow-casc` implements the
   16/16 layout this product writes.
 

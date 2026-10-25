@@ -369,15 +369,15 @@ block paths, the bucket entry layout, the 30-byte header, the encoding
 header/section order, and the dynamic index's file-header and rolling
 entry-block hashes were checked against the client's own functions and now
 match (`docs/formats/casc.md`). The hash implementation matches all sixteen
-`.idx` files. Still different: LZ4 mode `4` (`BlteBlockReadLz4`, `0x1424d6e50`),
-frame type `0x10` (`BlteFrameHeaderParse`, `0x1424a90e0`), ARC4 `A` and frame
-`F` chunks, and `.flavor.info` row selection (`BuildInfoSelectRow`,
-`0x1424aec30`). A 20,000-record sample found no `4`, `0x10`, `A` or `F`.
+`.idx` files, and the `.flavor.info` / `../.build.info` layout and row
+selection are implemented and unit-tested. Still different: LZ4 mode `4`
+(`BlteBlockReadLz4`, `0x1424d6e50`), frame type `0x10`
+(`BlteFrameHeaderParse`, `0x1424a90e0`), and ARC4 `A` / frame `F` chunks. A
+20,000-record sample found no `4`, `0x10`, `A` or `F`.
 
 **What would settle it.** LZ4/`0x10`/ARC4/F need a build that uses them; a scan
 of every first-chunk mode across all 1.1 M records would say whether this
-install ever does. `.flavor.info` needs a multi-branch install to test; on the
-one-row reference install the choice is already the same.
+install ever does.
 
 **Next anchor.** `crates/ow-casc/src/index.rs`, `blte.rs`, `encoding.rs`;
 `docs/formats/casc.md`; the named functions above in `Overwatch.exe`.

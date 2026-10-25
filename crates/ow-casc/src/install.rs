@@ -171,6 +171,76 @@ impl BuildInfo {
     }
 }
 
+/// Resolve the directory that holds `data/casc`, and the product flavor.
+///
+/// Two layouts exist in the wild:
+///
+/// * The install root itself holds `.build.info` and `data/casc` (the path
+///   the project usually opens).
+/// * A game subfolder (for example `_retail_`) holds `.flavor.info` and the
+///   executable; `.build.info` and `data/casc` are one level up. The client's
+///   `BuildInfoLoadFromInstall` (`0x14248f2a0`) builds
+///   `<install>/../.build.info` whenever `.flavor.info` is present, so that is
+///   the layout this function resolves.
+fn resolve_layout(given: &Path) -> Result<(PathBuf, Option<String>)> {
+    let flavor = read_flavor(&given.join(".flavor.info"));
+    if flavor.is_some() {
+        // The client always goes one level up when `.flavor.info` exists,
+        // even if a local `.build.info` is also present.
+        if let Some(parent) = given.parent() {
+            if parent.join(".build.info").is_file() {
+                return Ok((parent.to_path_buf(), flavor));
+            }
+        }
+        return Err(Error::NotAnInstall(given.to_path_buf()));
+    }
+    if given.join(".build.info").is_file() {
+        return Ok((given.to_path_buf(), None));
+    }
+    Err(Error::NotAnInstall(given.to_path_buf()))
+}
+
+/// The first field of the first row of a `.flavor.info` table.
+///
+/// The file is the same `!TYPE:WIDTH` table shape as `.build.info`; the
+/// reference install's `_retail_/.flavor.info` is `Product Flavor!STRING:0`
+/// followed by `pro`.
+fn read_flavor(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    let mut lines = text.lines();
+    lines.next()?; // header
+    let row = lines.find(|line| !line.trim().is_empty())?;
+    let value = row.split('|').next()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// The client's row choice (`BuildInfoSelectRow`, `0x1424aec30`).
+///
+/// The first field of a row is **Product** (descriptor offset 0; Branch is
+/// at +8, Active at +0x10). With a flavor, the client returns the first
+/// active row whose Product equals it. Without a flavor it requires every
+/// row to carry the same Product and returns the **last active** row;
+/// a mixed-product table has no answer and the client returns null.
+fn select_build_info(rows: &[BuildInfo], flavor: Option<&str>) -> Result<BuildInfo> {
+    let selected = match flavor {
+        Some(flavor) => rows.iter().find(|row| row.active && row.product == flavor),
+        None => {
+            let product = &rows
+                .first()
+                .ok_or_else(|| Error::Parse("empty .build.info".into()))?
+                .product;
+            if rows.iter().all(|row| &row.product == product) {
+                rows.iter().rev().find(|row| row.active)
+            } else {
+                None
+            }
+        }
+    };
+    selected
+        .cloned()
+        .ok_or_else(|| Error::Parse("no usable branch row".into()))
+}
+
 /// An opened installation.
 pub struct Install {
     root: PathBuf,
@@ -207,7 +277,8 @@ impl Install {
         root: impl AsRef<Path>,
         discovered: Option<&Path>,
     ) -> Result<Install> {
-        let root = root.as_ref().to_path_buf();
+        let given = root.as_ref().to_path_buf();
+        let (root, flavor) = resolve_layout(&given)?;
         let build_info_path = root.join(".build.info");
         let casc = root.join("data").join("casc");
         if !build_info_path.is_file() || !casc.is_dir() {
@@ -215,14 +286,7 @@ impl Install {
         }
 
         let rows = BuildInfo::parse(&fs::read_to_string(&build_info_path)?)?;
-        // Prefer the active retail branch; fall back to the newest version.
-        let build_info = rows
-            .iter()
-            .find(|r| r.active && r.product == "pro")
-            .or_else(|| rows.iter().find(|r| r.active))
-            .or_else(|| rows.first())
-            .cloned()
-            .ok_or_else(|| Error::Parse("no usable branch row".into()))?;
+        let build_info = select_build_info(&rows, flavor.as_deref())?;
 
         // Remote fetching is opt-in and decided before any config is read, so
         // a config that is absent locally can come from the CDN too. With
@@ -516,4 +580,76 @@ fn parse_key(hex: &str) -> Option<[u8; 16]> {
         *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(product: &str, branch: &str, active: bool) -> BuildInfo {
+        BuildInfo {
+            branch: branch.to_string(),
+            active,
+            build_key: String::new(),
+            cdn_key: String::new(),
+            keyring_key: None,
+            version: String::new(),
+            product: product.to_string(),
+            cdn_path: String::new(),
+            cdn_hosts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn flavor_selects_the_first_active_row_for_that_product() {
+        let rows = [
+            row("prodev", "eu", true),
+            row("pro", "eu", false),
+            row("pro", "us", true),
+            row("pro", "eu", true),
+        ];
+        // The inactive `eu` row at index 1 is skipped; the first active `pro`
+        // row is the `us` one.
+        let picked = select_build_info(&rows, Some("pro")).expect("pro row");
+        assert_eq!(picked.branch, "us");
+        assert!(picked.active);
+        assert_eq!(picked.product, "pro");
+    }
+
+    #[test]
+    fn without_a_flavor_the_last_active_row_wins_but_products_must_agree() {
+        let rows = [
+            row("pro", "eu", true),
+            row("pro", "us", true),
+            row("pro", "kr", false),
+        ];
+        let picked = select_build_info(&rows, None).expect("same product");
+        assert_eq!(picked.branch, "us");
+
+        let mixed = [row("pro", "eu", true), row("prodev", "us", true)];
+        assert!(select_build_info(&mixed, None).is_err());
+    }
+
+    #[test]
+    fn flavor_file_and_parent_build_info_are_resolved() {
+        let root = std::env::temp_dir().join(format!(
+            "ow-casc-layout-{}-{}",
+            std::process::id(),
+            "flavor"
+        ));
+        let sub = root.join("_retail_");
+        fs::create_dir_all(&sub).expect("create temp tree");
+        fs::write(root.join(".build.info"), "Branch!STRING:0\n").expect("build info");
+        fs::write(sub.join(".flavor.info"), "Product Flavor!STRING:0\npro\n").expect("flavor info");
+
+        let (resolved, flavor) = resolve_layout(&sub).expect("resolves");
+        assert_eq!(resolved, root);
+        assert_eq!(flavor.as_deref(), Some("pro"));
+
+        let (resolved, flavor) = resolve_layout(&root).expect("resolves local");
+        assert_eq!(resolved, root);
+        assert_eq!(flavor, None);
+
+        fs::remove_dir_all(&root).ok();
+    }
 }

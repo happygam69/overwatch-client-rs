@@ -31,9 +31,13 @@ work queue in `docs/open-questions.md`.
   32-bit hash (`0x142512c60`) for the file header and the rolling entry block.
   Verified against all sixteen `.idx` files: every stored hash matches. A
   corrupt segment is rejected instead of resolving to arbitrary bytes.
-- **Still different:** LZ4 `4` chunks, frame type `0x10`, ARC4/frame chunks,
-  and `.flavor.info` row selection. The first three do not occur in the
-  20,000-record sample; the last is recorded in `docs/formats/casc.md`.
+- **The flavor layout is exact.** `_retail_/.flavor.info` is
+  `Product Flavor!STRING:0` + `pro`; the client reads
+  `_retail_/../.build.info` and picks the first active row whose **Product**
+  (row +0, not Branch at +8) equals the flavor. `install.rs` now resolves both
+  layouts and uses the same rule, with unit tests.
+- **Still different:** LZ4 `4` chunks, frame type `0x10`, and ARC4/frame
+  chunks. None occurs in the 20,000-record sample.
 
 ## 2026-10-25 - Local locations, CDN routes and metadata caches are separated
 
