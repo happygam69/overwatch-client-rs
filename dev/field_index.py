@@ -301,6 +301,11 @@ def main(argv=None) -> int:
         "rdx": capstone.x86.X86_REG_RDX,
         "r8": capstone.x86.X86_REG_R8,
         "r9": capstone.x86.X86_REG_R9,
+        "rbx": capstone.x86.X86_REG_RBX,
+        "r12": capstone.x86.X86_REG_R12,
+        "r13": capstone.x86.X86_REG_R13,
+        "rdi": capstone.x86.X86_REG_RDI,
+        "rsi": capstone.x86.X86_REG_RSI,
     }
     seeds = []
     for name in args.seed.split(","):

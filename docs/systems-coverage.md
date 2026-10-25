@@ -17,7 +17,7 @@ are in [`open-questions.md`](open-questions.md).
 | 6 | Weapons, ballistics, volley | file side and class surface read; volley literals labelled; damage stays supplied | `formats/weapons.md` |
 | 7 | Entity/component system | router mapped and fully paired (descriptors, sizes, fields, parents); TankLib naming only | `history/systems-plan.md` (Phase 4) |
 | 8 | Character mover (data) | parameters read; horizontal/vertical arithmetic measured from keyed traces and verified | `formats/character-controller.md` |
-| 9 | Mover update path | advance and invoker read in the current build (`0x140ca7f30`, `0x1407ffc50`); the velocity-ramp writer is an **open read task** (image complete, no obfuscation claim) | `formats/character-controller.md` |
+| 9 | Mover update path | advance and invoker read in the current build (`0x140ca7f30`, `0x1407ffc50`); the per-frame step/wish path is an **open read task**; `+0xc0` is a static offset, not a stored velocity | `formats/character-controller.md` |
 | 10 | Domino physics | solver chain, integration order and dt read (1/30 s steps, commanded step count) | `formats/domino.md` |
 | 11 | UI, menus, HUD | ImGui (docking) statically linked; window-list pass read | `formats/ui-menu.md` |
 | 12 | Input | var registry and the input->command-frame path read (mouse scale, aim assist, force-input mode); handler update and camera handoff open | `formats/camera.md`, `formats/input-camera-audio.md` |

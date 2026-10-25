@@ -44,7 +44,7 @@ themselves live outside this folder, under `D:/ow-dumps`.
 | `fast_rec.py` | High-rate ramp capture: 200 Hz samples of the player node on flat ground. | 85 |
 | `faultsync_correlate.py` | Offline fault-sync flip attribution check (no live touch). | 78 |
 | `faultsync_resolve.py` | Resolve the RVA watchlist to session-absolute addresses (offline, no live touch). | 48 |
-| `field_index.py` | Field-access index over the complete client image. | 383 |
+| `field_index.py` | Field-access index over the complete client image. | 388 |
 | `find_anim_decoder.py` | Find code that reads the animation clip header, by the loads it must make. | 107 |
 | `find_broadphase.py` | Find the physics world through its broadphase trees. | 343 |
 | `find_chunk_runs.py` | Find runs of map chunk GUIDs in a memory capture. | 76 |

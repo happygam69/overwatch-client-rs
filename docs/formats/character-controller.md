@@ -12,10 +12,14 @@
   object's plaintext vtable slot 15; `MoverInvoker` (`0x1407ffc50`) is the
   caller that stores the new position and dispatches on contact normals. The
   component registration is `FUN_14017a680` (hash `0x6EFDBD73`, id `0x26`).
-- **The ramp itself: still an open read task.** The advance reads a
-  velocity-like quad at `+0xc0..0xcc`; the function that *writes* it with the
-  accel/friction law is not yet located. `Overwatch.exe` is the complete,
-  plaintext image, so this is a discovery gap, not an obfuscation claim.
+- **The ramp itself: still an open read task.** The complete-image field
+  index finds no per-frame writer for `+0xc0..0xcc`; it is
+  constructor-initialized, so it is a **static local offset** unless a writer
+  is reached through a base the index does not track. The per-frame motion is
+  in the wish vector at `+0x1140` and the transform at `+0x1a90`; the advance's
+  `param_5`/`param_6` scales turn that into the step. `Overwatch.exe` is the
+  complete, plaintext image, so this is a discovery gap, not an obfuscation
+  claim.
 - **Open:** crouch timing on a keyed trace, the steep-slide rule, the ramp's
   own expression, and the operator's feel check.
 
@@ -286,11 +290,12 @@ contact normals at `[state+0x200]` (0x20-byte elements), and dispatches the
 handler for the selected contact. It is advance + collision notification, not
 the input-to-velocity ramp.
 
-`MoverAdvance` reads the velocity-like quad at `+0xc0..0xcc` and has two
-paths:
+`MoverAdvance` reads a **static local offset** at `+0xc0..0xcc`
+(constructor-initialized; the field index finds no per-frame writer) and has
+two paths:
 
-* **plain body:** `out_i = (a * X_i + pos_i) * b + off_i`, with `X` the quad
-  at `+0xc0..0xcc`;
+* **plain body:** `out_i = (a * X_i + pos_i) * b + off_i`, with `X` the
+  **static local offset** at `+0xc0..0xcc`;
 * **character:** the collision sweep, using the walk-state bytes at
   `+0x1a79`/`+0x1a7c`, the step state and the body/session handle at
   `+0x35b`.
@@ -323,11 +328,15 @@ not always the real entry and the decompiler can start mid-function
 (`FUN_1407875e0` is the standing example). `docs/ghidra/DumpFunctionRanges.java`
 exports Ghidra's resolved entries for `dev/field_index.py`.
 
-The field index shows that the obvious stores to the character body's
-`+0xc0` are constructors, bulk copies and the component data applier, not a
-ramp. The state-modifier evaluator's `param_1 + 0xc0` is **byte +0x600**
-because `param_1` is a `longlong *`; the decompiler's pointer type must be
-read literally. The apparent "decompiler-hostile" handlers are plaintext
+The field index finds **no per-frame writer** for the character body's
+`+0xc0`: the only stores are constructors and bulk copies. It is therefore a
+**static local offset** (unless a writer is reached through a base the index
+does not track), not a stored velocity; the old "velocity-like quad" label
+came from the advance's formula, not from a writer. The per-frame motion is in
+the wish vector at `+0x1140` and the transform at `+0x1a90`, with the advance's
+`param_5`/`param_6` scales. The state-modifier evaluator's `param_1 + 0xc0` is
+**byte +0x600** because `param_1` is a `longlong *`; it does not touch the
+body's `+0xc0`. The apparent "decompiler-hostile" handlers are plaintext
 jump tables / state dispatchers, not encrypted code, and the page bytes match
 the warm images.
 

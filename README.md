@@ -48,8 +48,9 @@ Verified against the retail install `2.25.0.0.154088`. **The client has since up
 * **Movement:** the mover is trace-measured and gated by `trace_diff` - speeds,
   acceleration, friction, gravity, jump, crouch, air control and slope
   following. The advance and invoker are read in the current build; the
-  velocity-ramp *writer* is still unlocated (the image is complete and
-  plaintext), so the arithmetic is the measured replacement.
+  per-frame step/wish path is still unlocated, and the `+0xc0` field is a
+  static local offset rather than a stored velocity. The arithmetic is the
+  measured replacement.
 * **Combat:** health/armour/shield pools, weapon intervals, volley counts,
   projectile speed/gravity/lifetime and hitscan traces. Damage is supplied by
   you because the install does not expose it; damage order and armour

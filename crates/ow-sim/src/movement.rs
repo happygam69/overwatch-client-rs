@@ -67,8 +67,9 @@
 //!   *steep*-slide case (|v| = 4.6895 m/s, not a slot) stays unmodelled.
 //!
 //! The mover control's *code* (plan question Q3) is **not read yet**: the
-//! advance and invoker are read in the current build, but the writer of the
-//! velocity quad is still not located. `Overwatch.exe` is the complete,
+//! advance and invoker are read in the current build, but the per-frame step
+//! path is still not located; the `+0xc0` field the advance reads is a static
+//! local offset, not a stored velocity. `Overwatch.exe` is the complete,
 //! plaintext image, so that is a discovery gap, not an obfuscation claim.
 //! The constants above are trace-measured rates; the client's expression is
 //! the open task (`docs/formats/character-controller.md`). The physics the
@@ -125,7 +126,7 @@ pub const GRAVITY: f32 = 17.37;
 /// frame (0.1267069 m of extra displacement over a partial first frame at
 /// dt = 0.032309), so the rate is 121.4. The measurement is one frame pair
 /// (+/-0.7); 121.4 is 1.2% above 120, which is within that band.
-// FIT-MOV-01: mover rates: fitted to keyed traces (the writer is not yet located)
+// FIT-MOV-01: mover rates: fitted to keyed traces (the per-frame step path is not yet located)
 pub const ACCEL: f32 = 121.4;
 /// Horizontal friction toward zero when no direction is held, in metres per
 /// second squared. **Measured**: the decrement is a *constant* 2.345 m/s per

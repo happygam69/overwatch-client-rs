@@ -126,12 +126,13 @@ What this means in practice:
 - **Movement:** trace-measured mover arithmetic, verified by `trace_diff`;
   crouch/air/slope rules measured. The mover component, advance and invoker
   are read in the current build (`RegisterMoverComponent` `0x14017a680`,
-  `MoverAdvance` `0x140ca7f30`, `MoverInvoker` `0x1407ffc50`); the velocity-ramp
-  writer is still unlocated. The install's `.pdata` is plaintext and complete;
-  the remaining issue is Ghidra's fragmented function boundaries and the
-  state-table/statescript data, not missing code. `dev/field_index.py` is the
-  struct-aware finder. The mover verification unit is a scaffold until the
-  ramp is read.
+  `MoverAdvance` `0x140ca7f30`, `MoverInvoker` `0x1407ffc50`); the per-frame
+  step/wish path is still unlocated, and the `+0xc0` field is a static local
+  offset (constructors only), not a stored velocity. The install's `.pdata` is
+  plaintext and complete; the remaining issue is Ghidra's fragmented function
+  boundaries and the state-table/statescript data, not missing code.
+  `dev/field_index.py` is the struct-aware finder. The mover verification unit
+  is a scaffold until the ramp is read.
 - **Combat:** pools, fire intervals, volley figures, projectile motion,
   hitscan. Damage is supplied; damage order/armour mitigation are assumed.
 - **Scene/view:** real map geometry, hero models, skeletons, skinning, texture

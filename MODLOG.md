@@ -42,11 +42,12 @@ work queue in `docs/open-questions.md`.
   ranges, follows `mov`/`lea` aliases so a biased base is reported at its real
   field offset, and keeps the mover component, character body and dmBody as
   separate profiles. `docs/ghidra/DumpFunctionRanges.java` exports Ghidra's
-  resolved entries for it. Initial finding: the obvious `+0xc0` stores are
-  constructors, bulk copies and the component data applier; the state
-  modifier's `param_1 + 0xc0` is byte `+0x600`. The ramp is not a raw store in
-  the `.pdata` functions scanned; the next data sources are the state modifier
-  table and the movement statescript graph.
+  resolved entries for it. Initial finding: the `+0xc0` stores in the complete
+  image are only constructors and bulk copies, so `+0xc0` is a static local
+  offset, not a per-frame velocity; the state modifier's `param_1 + 0xc0` is
+  byte `+0x600`. The ramp is not a raw store in the scanned functions; the next
+  data sources are the wish/transform path, the state modifier table and the
+  movement statescript graph.
 
 ## 2026-10-24 - Repair pass: parser bugs, robustness, harness consistency
 

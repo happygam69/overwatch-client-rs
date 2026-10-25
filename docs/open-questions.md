@@ -259,9 +259,10 @@ slide is not modelled.
 ## 7b. The mover velocity-ramp writer (FIT-MOV-01)
 
 **Question.** `MoverAdvance` (`0x140ca7f30`, base vtable
-`0x1431101e8` slot 15) reads the velocity-like quad at `+0xc0..0xcc`;
-`MoverInvoker` (`0x1407ffc50`) integrates it. Which function *writes* that
-quad with the accel/friction/air-control law?
+`0x1431101e8` slot 15) integrates a **static local offset** at
+`+0xc0..0xcc` with the wish/transform; `MoverInvoker` (`0x1407ffc50`) stores
+the result. Which function turns the wish vector (`+0x1140`) and transform
+(`+0x1a90`) into that per-frame step?
 
 **What is known.** The component is `RegisterMoverComponent` (`0x14017a680`,
 hash `0x6EFDBD73`, id `0x26`); its interface vtables are plaintext in the
@@ -272,10 +273,12 @@ plaintext and complete; Ghidra's function boundaries are fragmented in
 places, so use Ghidra's entry points (`docs/ghidra/DumpFunctionRanges.java`)
 for decompilation, not a `.pdata` begin alone. `dev/field_index.py` is the
 struct-aware finder: it separates the mover component, the character body and
-dmBody, and follows biased bases. The obvious `+0xc0` stores are constructors,
-bulk copies and the component data applier, not a ramp. The state modifier's
-`param_1 + 0xc0` is byte `+0x600` (the decompiler's `longlong *` type), so the
-state table's field IDs must be mapped to byte offsets before it is read.
+dmBody, and follows biased bases. The `+0xc0` stores in the complete image are
+only constructors and bulk copies, so `+0xc0` is a **static local offset**, not
+a stored velocity; the per-frame motion is the wish vector and transform. The
+state modifier's `param_1 + 0xc0` is byte `+0x600` (the decompiler's
+`longlong *` type), so the state table's field IDs must be mapped to byte
+offsets before it is read.
 
 **What would settle it.** Read the state modifier table (`[body+0x10e]`,
 0x38-byte records) and/or the movement statescript graph with `ow-tank`'s
