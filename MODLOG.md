@@ -39,7 +39,8 @@ work queue in `docs/open-questions.md`.
   `Product Flavor!STRING:0` + `pro`; the client reads
   `_retail_/../.build.info` and picks the first active row whose **Product**
   (row +0, not Branch at +8) equals the flavor. `install.rs` now resolves both
-  layouts and uses the same rule, with unit tests.
+  layouts and uses the same rule, with unit tests. The Active boolean parser
+  (`0x1424d8800`) also accepts `true`/`yes`/`on`/`enable`/`enabled`.
 - **Full-install scan (1,148,620 entries).** 1,146,325 are a 30-byte header
   plus BLTE, 1,488 are header-only, 806 are raw duplicates, and **one** is an
   orphan whose payload is not BLTE (key prefix `590388b317f5a5e93f`, 10,739 B;

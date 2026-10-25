@@ -148,7 +148,7 @@ impl BuildInfo {
             }
             out.push(BuildInfo {
                 branch: row.get("Branch").copied().unwrap_or("").to_string(),
-                active: row.get("Active").copied() == Some("1"),
+                active: row.get("Active").copied().map(parse_bool).unwrap_or(false),
                 build_key: row.get("Build Key").copied().unwrap_or("").to_string(),
                 cdn_key: row.get("CDN Key").copied().unwrap_or("").to_string(),
                 keyring_key: row
@@ -205,6 +205,16 @@ fn resolve_layout(given: &Path) -> Result<(PathBuf, Option<String>)> {
 /// The file is the same `!TYPE:WIDTH` table shape as `.build.info`; the
 /// reference install's `_retail_/.flavor.info` is `Product Flavor!STRING:0`
 /// followed by `pro`.
+/// The client's boolean parser (`0x1424d8800`) accepts these true spellings;
+/// everything else writes zero. The decimal `1` is what `.build.info` uses,
+/// but a build is free to write any of them.
+fn parse_bool(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on" | "enable" | "enabled"
+    )
+}
+
 fn read_flavor(path: &Path) -> Option<String> {
     let text = fs::read_to_string(path).ok()?;
     let mut lines = text.lines();
@@ -598,6 +608,19 @@ mod tests {
             cdn_path: String::new(),
             cdn_hosts: Vec::new(),
         }
+    }
+
+    #[test]
+    fn build_info_boolean_spellings_match_the_client() {
+        let text = "Branch!STRING:0|Active!DEC:1|Product!STRING:0\n\
+                    eu|true|pro\n\
+                    us|0|pro\n\
+                    kr|enabled|pro\n";
+        let rows = BuildInfo::parse(text).expect("parses");
+        assert_eq!(
+            rows.iter().map(|r| r.active).collect::<Vec<_>>(),
+            vec![true, false, true]
+        );
     }
 
     #[test]

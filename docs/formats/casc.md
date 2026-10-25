@@ -98,7 +98,9 @@ answer.
 The row layout is fixed by the descriptor table at `0x143471150`: **Product is
 at +0**, Branch at +8, Active at +0x10, Build Key at +0x11, and so on. The
 first field is therefore Product, not Branch — that is why the `.flavor.info`
-value is `pro`.
+value is `pro`. The Active column is parsed by `0x1424d8800`, which accepts
+`1`, `true`, `yes`, `on`, `enable` and `enabled` (case-insensitive) as true;
+everything else writes zero.
 
 `ow-casc` implements both layouts and the same selection rule
 (`install.rs::resolve_layout` / `select_build_info`), including the
@@ -608,7 +610,7 @@ Read in the `Overwatch.exe` Ghidra program: build `2.25.0.1.154504`, base
 | empty file | `DynamicContainerRead` `0x1424f48d0` | a 30-byte record returns a zero-length range without opening BLTE |
 | `encoding` pair | `BuildConfigParse` `0x1424ccc00` | `vals[0]` is the content key, `vals[1]` the encoding key; only the latter names an artifact |
 | keyring | `0x1424cebd0`; `0x14248f040`; `0x14248efd0` | `key-<id>` parses the id as 8 bytes and the key as 16; the id is a little-endian u64, so the written hex is byte-swapped |
-| build-info row | `BuildInfoSelectRow` `0x1424aec30`; descriptor table `0x143471150` | Product is row +0, Branch +8, Active +0x10; with a flavor it is the first active row matching Product, with no flavor the last active row if all Products agree |
+| build-info row | `BuildInfoSelectRow` `0x1424aec30`; descriptor table `0x143471150`; boolean parser `0x1424d8800` | Product is row +0, Branch +8, Active +0x10; with a flavor it is the first active row matching Product, with no flavor the last active row if all Products agree. Active accepts `1`/`true`/`yes`/`on`/`enable`/`enabled` |
 
 The Salsa20 check used the client's own code under Ghidra's emulator, not a
 reimplementation: the ECRYPT vector alone only covers a zero nonce and one
