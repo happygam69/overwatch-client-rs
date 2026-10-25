@@ -625,6 +625,14 @@ non-zero key byte, while the all-non-zero vector covers every state word.
 * `A` (ARC4) and `F` (frame) chunks are still not implemented.
 * The client accepts encoding key widths 1..16; `ow-casc` implements the
   16/16 layout this product writes.
+* A bucket can be split across several `data/0X........idx` segments; the
+  client opens the segment number named by its container header, while
+  `ow-casc` scans and merges every `.idx` file for that bucket. This install
+  has exactly one segment per bucket (16 files), so the two agree here.
+* The `indices/*.index` page formula (`PageIndex`) is derived from the
+  reference's `CDNIndexHandler` and from the measured footers, **not** from
+  the client's decompiled CDN handler. The local read path does not use it;
+  with `OW_CDN` off, no behaviour depends on it.
 
 ## Known gaps
 

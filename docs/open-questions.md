@@ -381,7 +381,9 @@ every one of the 1,147,131 BLTE headers is type `0x0F`.
 **What would settle it.** LZ4/`0x10`/ARC4/F need a build that uses them. This
 install does not, so no test vector exists here; implementing them would need
 a build that emits them (or a synthetic container checked against the
-client's decoder).
+client's decoder). Separately, the CDN `indices/*.index` page formula is still
+derived from the reference and measured footers, not from the client's
+decompiled CDN handler; verify it before relying on `OW_CDN` for exactness.
 
 **Next anchor.** `crates/ow-casc/src/index.rs`, `blte.rs`, `encoding.rs`;
 `docs/formats/casc.md`; the named functions above in `Overwatch.exe`.
