@@ -220,3 +220,5 @@ Overwatch.exe,0x1424af8b0,0x7ff7c71cf8b0,FlavorInfoCreate,Creates and loads the 
 Overwatch.exe,0x14248f2a0,0x7ff7c71af2a0,BuildInfoLoadFromInstall,"Builds the .build.info path, loads it and selects the row for .flavor.info's Product Flavor"
 Overwatch.exe,0x1424b0130,0x7ff7c71d0130,CdnPathFormat,"Formats data/, patch/ or config/ plus a key and .index into a CDN path"
 Overwatch.exe,0x1424d0120,0x7ff7c71f0120,IndexDirectoryScan,Scans a directory of 32-hex .index files into a 9-byte-key hash table
+Overwatch.exe,0x142512c60,0x7ff7c7232c60,DynamicIndexHash,32-bit file-header and rolling entry-block hash of a dynamic index segment; called by DynamicIndexSegmentParse
+Overwatch.exe,0x142513230,0x7ff7c7233230,DynamicIndexKeyHash,"32-bit hash of a 19-byte key-to-entry record, compared with the record's first word | 0x80000000"

@@ -27,10 +27,13 @@ work queue in `docs/open-questions.md`.
 - **`encoding = <ckey> <ekey>`** is one file: `BuildConfigParse` (`0x1424ccc00`)
   stores both, but only the encoding key names an artifact. `ensure_encoding`
   now tries that one first and reports the other as its content key.
+- **The index hashes are exact.** `index.rs` now implements the client's
+  32-bit hash (`0x142512c60`) for the file header and the rolling entry block.
+  Verified against all sixteen `.idx` files: every stored hash matches. A
+  corrupt segment is rejected instead of resolving to arbitrary bytes.
 - **Still different:** LZ4 `4` chunks, frame type `0x10`, ARC4/frame chunks,
-  the index section/entry hashes, and `.flavor.info` row selection. The first
-  three do not occur in the 20,000-record sample; the last two are recorded in
-  `docs/formats/casc.md`.
+  and `.flavor.info` row selection. The first three do not occur in the
+  20,000-record sample; the last is recorded in `docs/formats/casc.md`.
 
 ## 2026-10-25 - Local locations, CDN routes and metadata caches are separated
 

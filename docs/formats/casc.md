@@ -161,11 +161,17 @@ Sixteen files, `<bucket:02X>*.idx`. Each begins with a 32-byte header:
 extra-bytes or offset-bits bytes; a v8 file with the same widths is read
 identically. `ow-casc/src/index.rs` follows that rule.
 
-The section header's second word is a 32-bit hash of the 16-byte file header,
-and the entry block's second word is a hash of the 18-byte entries. The client
-verifies both (`0x14250fcf0`); `ow-casc` does not, so a corrupt index is
-rejected by the client and may be read by us. This is recorded in the known
-gaps, not treated as a format difference for valid files.
+The section header's second word is a 32-bit hash of the section body (the
+16-byte file header for the usual `sectionSize = 16`), and the entry block's
+second word is a rolling hash over the 18-byte entries. The client verifies
+both before using the segment (`0x14250fcf0`, calling `0x142512c60`).
+
+`ow-casc/src/index.rs` now implements the same hash (`hash_index`, from
+`0x142512c60`) and rejects a mismatch. The implementation was checked against
+**all sixteen** `.idx` files of the reference install: every file-header hash
+and every complete entry-block rolling hash matches the stored value. A corrupt
+index is therefore rejected exactly as the client rejects it, rather than
+silently resolving to arbitrary bytes.
 
 Then a block header (`i32` byte count, `i32` hash) and that many 18-byte entries.
 The block's position is `align16(sectionSize + 0x17)`, then 8 bytes of its own
@@ -539,6 +545,7 @@ Read in the `Overwatch.exe` Ghidra program: build `2.25.0.1.154504`, base
 | index entry fields | `DynamicIndexDecodeEntries` `0x1425209a0` | 5-byte big-endian location from entry bytes 9..14, 4-byte little-endian size from bytes 14..18 |
 | bucket selection | `DynamicKeyStateLookup` `0x142501b40` | XOR of the nine key bytes, `(x ^ (x >> 4)) & 0xf`, then the per-bucket table |
 | segment parse | `DynamicIndexSegmentParse` `0x14250fcf0` | section/file headers, version floor 7, widths 4/5/9, 18-byte entries, key-to-entry table |
+| index hashes | `0x142512c60` | 32-bit file-header hash and rolling entry hash; all sixteen `.idx` files match the stored values |
 | encoding header | `EncodingHeaderParse` `0x142498920` | `EN`, version 1, byte 17 zero, page sizes/counts and espec non-zero |
 | encoding sections | `EncodingSectionsRead` `0x1424d1c60` | header, espec, both indexes, both body arrays — the order `encoding.rs` uses |
 | BLTE frame header | `BlteFrameHeaderParse` `0x1424a90e0` | type `0x0f`, header size `12 + 24·count`, chunks start at the header size, no hash between the table and chunk 0 |
@@ -562,8 +569,7 @@ non-zero key byte, while the all-non-zero vector covers every state word.
   `N`, 385 `E`, and 290 whose first chunk was beyond the 256-byte read
   window).
 * `A` (ARC4) and `F` (frame) chunks are still not implemented.
-* The section-header and entry-block hashes are verified by the client and
-  not by `ow-casc`; a corrupt index can therefore be accepted here.
+
 * `.flavor.info` is not read by `ow-casc`. When it exists the client builds
   `<install>/../.build.info`, reads that table, and selects the active row whose
   first field matches the flavor (`BuildInfoLoadFromInstall`, `0x14248f2a0`;
@@ -593,6 +599,4 @@ non-zero key byte, while the all-non-zero vector covers every state word.
   reference install, but the client's block reader handles `4` and its frame
   parser handles `0x10`, so this is a real capability gap rather than a format
   that does not exist.
-* The client verifies the dynamic index's section-header and entry-block
-  hashes; `ow-casc` does not, so it may accept a corrupt index the client
-  rejects.
+

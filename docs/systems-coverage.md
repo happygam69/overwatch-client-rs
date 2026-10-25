@@ -9,7 +9,7 @@ are in [`open-questions.md`](open-questions.md).
 
 | # | system | state | where |
 |---|---|---|---|
-| 1 | CASC container, manifests, BLTE | read; core decode verified against the client (Salsa20, BLTE framing, bucket index, 30-byte header, encoding header/sections); gaps: LZ4/`0x10`/ARC4/frame modes, index hashes, `.flavor.info`; remote fetching (opt-in `OW_CDN`); local locations come only from `data/`, CDN indexes are routes, `ecache`/`pro`/`shmem` are not content | `formats/casc.md`, `formats/manifest.md` |
+| 1 | CASC container, manifests, BLTE | read; core decode verified against the client (Salsa20, BLTE framing, bucket index, 30-byte header, encoding header/sections); gaps: LZ4/`0x10`/ARC4/frame modes, `.flavor.info`; remote fetching (opt-in `OW_CDN`); local locations come only from `data/`, CDN indexes are routes, `ecache`/`pro`/`shmem` are not content | `formats/casc.md`, `formats/manifest.md` |
 | 2 | Structured data (STU v1+v2), class registry | read end to end; typed layer over the full class registry; v1 implemented (synthetic tests only) | `formats/stu.md`, `formats/entity-schema.md` |
 | 3 | Chunked assets, models, map chunks | read; skeleton/`MSTU` parsed; placeable kinds resolve, entity layout fitted | `formats/materials.md`, `formats/mstu.md`, `formats/maps-streaming.md` |
 | 4 | Materials and textures | chain read and partly joined; textures decode (BC1-7, BC6H) with an external decoder oracle; the `0x008` keyring wall limits the covered subset | `formats/materials.md` |
