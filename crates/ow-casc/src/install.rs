@@ -630,6 +630,22 @@ mod tests {
         assert!(select_build_info(&mixed, None).is_err());
     }
 
+    /// The client's `key-` config handler (`0x1424cebd0`) parses the name's
+    /// last 8 bytes with `0x14248f040` and the value's 16 bytes with
+    /// `0x14248efd0`. The id is addressed as a little-endian u64 by the BLTE
+    /// E-block lookup, so the written big-endian hex appears byte-swapped.
+    #[test]
+    fn keyring_spellings_have_opposite_byte_order() {
+        let key = parse_key("000102030405060708090a0b0c0d0e0f").expect("16-byte key");
+        let config = "key-1b3e4e1ecfb25877 = 000102030405060708090a0b0c0d0e0f\n";
+        let keys = parse_keyring(config);
+        assert_eq!(keys.get(&0x7758_b2cf_1e4e_3e1b), Some(&key));
+
+        let support = "A5F6830F5BE13A9E 000102030405060708090a0b0c0d0e0f 1\n";
+        let keys = parse_keyring(support);
+        assert_eq!(keys.get(&0xA5F6_830F_5BE1_3A9E), Some(&key));
+    }
+
     #[test]
     fn flavor_file_and_parent_build_info_are_resolved() {
         let root = std::env::temp_dir().join(format!(

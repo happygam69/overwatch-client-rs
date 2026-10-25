@@ -31,6 +31,10 @@ work queue in `docs/open-questions.md`.
   32-bit hash (`0x142512c60`) for the file header and the rolling entry block.
   Verified against all sixteen `.idx` files: every stored hash matches. A
   corrupt segment is rejected instead of resolving to arbitrary bytes.
+- **The keyring byte order is read, not assumed.** The client's `key-` config
+  handler (`0x1424cebd0`) parses the id as 8 bytes (`0x14248f040`) and the key
+  as 16 (`0x14248efd0`); the E-block lookup addresses those 8 bytes as a
+  little-endian `u64`. `install.rs` has a test for both keyring spellings.
 - **The flavor layout is exact.** `_retail_/.flavor.info` is
   `Product Flavor!STRING:0` + `pro`; the client reads
   `_retail_/../.build.info` and picks the first active row whose **Product**

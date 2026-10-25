@@ -147,6 +147,13 @@ The name's **last 16 hex digits** are the key id. They are written big-endian an
 addressed little-endian, so the parsed value is byte-swapped before use. The
 reference install's keyring holds 63 keys.
 
+This is read from the client's own `key-` config handler
+(`0x1424cebd0`): it parses the name's last **8 bytes** with `0x14248f040` and
+the value's 16 bytes with `0x14248efd0`, and the BLTE E-block lookup uses those
+8 bytes as a little-endian `u64`. So the swap is not a convention — it is the
+byte order of the address. `ow-casc/src/install.rs` has a unit test for both
+spellings.
+
 ### A second keyring flavour, with the opposite byte order
 
 The community "support" keyring, which supplies keys a build's own keyring
@@ -600,6 +607,7 @@ Read in the `Overwatch.exe` Ghidra program: build `2.25.0.1.154504`, base
 | Salsa20 | `Salsa20StateInit` `0x1424e3230`; `Salsa20Xor` `0x1424e32c0` | emulated both client functions with key `01..10`, nonce `10..17` and a non-zero 64-bit counter; the 128-byte output matches standard Salsa20/20. The counter-0 case is pinned in `blte.rs` as `matches_the_client_state_layout_with_every_word_nonzero` |
 | empty file | `DynamicContainerRead` `0x1424f48d0` | a 30-byte record returns a zero-length range without opening BLTE |
 | `encoding` pair | `BuildConfigParse` `0x1424ccc00` | `vals[0]` is the content key, `vals[1]` the encoding key; only the latter names an artifact |
+| keyring | `0x1424cebd0`; `0x14248f040`; `0x14248efd0` | `key-<id>` parses the id as 8 bytes and the key as 16; the id is a little-endian u64, so the written hex is byte-swapped |
 | build-info row | `BuildInfoSelectRow` `0x1424aec30`; descriptor table `0x143471150` | Product is row +0, Branch +8, Active +0x10; with a flavor it is the first active row matching Product, with no flavor the last active row if all Products agree |
 
 The Salsa20 check used the client's own code under Ghidra's emulator, not a
