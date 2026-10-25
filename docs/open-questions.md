@@ -370,14 +370,18 @@ header/section order, and the dynamic index's file-header and rolling
 entry-block hashes were checked against the client's own functions and now
 match (`docs/formats/casc.md`). The hash implementation matches all sixteen
 `.idx` files, and the `.flavor.info` / `../.build.info` layout and row
-selection are implemented and unit-tested. Still different: LZ4 mode `4`
+selection are implemented and unit-tested. The key-to-entry sub-index is all
+zeros in every file, so its per-record hash is not exercised. Still different:
+LZ4 mode `4`
 (`BlteBlockReadLz4`, `0x1424d6e50`), frame type `0x10`
 (`BlteFrameHeaderParse`, `0x1424a90e0`), and ARC4 `A` / frame `F` chunks. A
-20,000-record sample found no `4`, `0x10`, `A` or `F`.
+full scan of all 1,148,620 bucket entries found no `4`, `0x10`, `A` or `F`;
+every one of the 1,147,131 BLTE headers is type `0x0F`.
 
-**What would settle it.** LZ4/`0x10`/ARC4/F need a build that uses them; a scan
-of every first-chunk mode across all 1.1 M records would say whether this
-install ever does.
+**What would settle it.** LZ4/`0x10`/ARC4/F need a build that uses them. This
+install does not, so no test vector exists here; implementing them would need
+a build that emits them (or a synthetic container checked against the
+client's decoder).
 
 **Next anchor.** `crates/ow-casc/src/index.rs`, `blte.rs`, `encoding.rs`;
 `docs/formats/casc.md`; the named functions above in `Overwatch.exe`.

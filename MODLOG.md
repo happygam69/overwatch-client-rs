@@ -17,8 +17,8 @@ work queue in `docs/open-questions.md`.
   0..8 bytes, not only 4/8; `blte.rs` now matches.
 - **30-byte records are empty files.** `DynamicContainerRead` (`0x1424f48d0`)
   adds `0x1e` and returns a zero-length range; `blte::decode` now returns an
-  empty `Vec` for a header-only record. 20 such records in a 20,000-entry
-  sample (seed 3, the same sample as the header counts below).
+  empty `Vec` for a header-only record. A full scan of all 1,148,620 bucket
+  entries found 1,488 such records.
 - **Bucket entries and the encoding header match.** `DynamicIndexDecodeEntries`
   (`0x1425209a0`) decodes the 5-byte big-endian location and 4-byte
   little-endian size; `EncodingHeaderParse` (`0x142498920`) requires byte 17
@@ -36,8 +36,14 @@ work queue in `docs/open-questions.md`.
   `_retail_/../.build.info` and picks the first active row whose **Product**
   (row +0, not Branch at +8) equals the flavor. `install.rs` now resolves both
   layouts and uses the same rule, with unit tests.
+- **Full-install scan (1,148,620 entries).** 1,146,325 are a 30-byte header
+  plus BLTE, 1,488 are header-only, 806 are raw duplicates, and **one** is an
+  orphan whose payload is not BLTE (key prefix `590388b317f5a5e93f`, 10,739 B;
+  it is in neither the encoding table nor the root manifest). Every BLTE header
+  is type `0x0F`; every first chunk is `Z` (849,632), `N` (274,993) or `E`
+  (22,506). The key-to-entry sub-index is all zero in all sixteen files.
 - **Still different:** LZ4 `4` chunks, frame type `0x10`, and ARC4/frame
-  chunks. None occurs in the 20,000-record sample.
+  chunks. The full scan found none in this install.
 
 ## 2026-10-25 - Local locations, CDN routes and metadata caches are separated
 

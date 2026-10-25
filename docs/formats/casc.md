@@ -203,6 +203,12 @@ and every complete entry-block rolling hash matches the stored value. A corrupt
 index is therefore rejected exactly as the client rejects it, rather than
 silently resolving to arbitrary bytes.
 
+**The key-to-entry sub-index is empty in this install.** It starts at
+`align4k(sectionSize + entrySize + 0x1007)`; in every one of the sixteen files
+the whole remaining area is zeros, so the client's per-record
+hash (`0x142513230`) never runs. `ow-casc` does not read the sub-index, and
+there is no real vector here to verify that hash against.
+
 Then a block header (`i32` byte count, `i32` hash) and that many 18-byte entries.
 The block's position is `align16(sectionSize + 0x17)`, then 8 bytes of its own
 header; the usual `sectionSize = 16` puts the entries at 0x28:
@@ -225,14 +231,15 @@ bytes 14..18. Measured against this install, that is the only reading for which
 the encoding file's own entry size matches `encoding-size`.
 
 **A record of exactly 30 bytes stores no payload.** Its bytes are the data
-header alone: in the 20 sampled records, a fixed 14-byte marker, the key's
+header alone: in the empty records inspected, a fixed 14-byte marker, the key's
 first two bytes in reverse, `size = 30` at offset 16, and 10 further bytes.
 None of that is needed to read it as empty. The client's read path (`DynamicContainerRead`,
 `0x1424f48d0`) adds `0x1e` to the record offset and returns a zero-length range
 without opening a BLTE container. `ow-casc` returns an empty `Vec` for the same
-shape. Measured (seed 3, 20,000 entries): 20 such records; 19,957 ordinary
-30-byte headers whose `size` matches the index size; 10 zeroed headers; 13
-raw-`BLTE` duplicates.
+shape. A full scan of all 1,148,620 bucket entries found **1,488** such
+records; 1,146,325 ordinary 30-byte headers, 806 raw-`BLTE` duplicates (the
+same 806 keys described below), and one record whose bytes are neither shape
+(reported separately below).
 
 The file is preallocated, so a zero-padded tail follows the entries; the entry
 count comes from the block header, never from the file length. In the reference
@@ -257,12 +264,22 @@ A stored record is either raw `BLTE` or preceded by a 30-byte data header:
 `md5[16]`, `size u32` at offset 16, then 10 further bytes. **The header is
 skipped unconditionally; its fields are not needed to read the record.** The
 client's `DynamicContainerRead` adds `0x1e` before reading, and the BLTE
-container itself declares its frame lengths. Measured on 20,000 sampled
-records: 19,957 have a header whose `size` equals the index size, 10 have a
-**zeroed 30-byte header** with `size = 0` (the BLTE still follows at offset 30),
-13 are raw `BLTE` duplicates of a header record, and 20 are header-only empty
-files. So a reader must not trust the header's size when deciding where BLTE
-starts; it checks for `BLTE` at offset 0, otherwise at offset 30.
+container itself declares its frame lengths. **All 1,148,620 bucket entries
+were scanned (2026-10-25):** 1,146,325 are a 30-byte header followed by BLTE,
+1,488 are header-only empty files, 806 are raw `BLTE` duplicates, and one
+record is neither shape (reported below). So a reader must not trust the
+header's size when deciding where BLTE starts; it checks for `BLTE` at offset
+0, otherwise at offset 30.
+
+**The one record that is neither shape** is key prefix
+`590388b317f5a5e93f`, archive 0, offset `0x24690cd2`, 10,739 B. Its 30-byte
+header has the index size at offset 16, but the payload starts
+`50 41 02 10 10 10 10 00 01 02 01 ca ff ...` and contains the encoding
+content key `01caff700674babb...`. It has **no encoding entry and no
+root-manifest line**, so no registered asset reaches it; it is an orphan entry.
+`ow-casc` reports `not a BLTE container` if asked for it directly. The client's
+handling of this unreferenced key is not established, so no raw-file path is
+invented for it.
 
 After the magic, a big-endian `u32` frame-header size:
 
@@ -592,12 +609,11 @@ non-zero key byte, while the all-non-zero vector covers every state word.
 ### Differences that remain
 
 * Frame type `0x10` (40-byte chunk records with a 16-byte per-chunk key) is
-  parsed by the client (`BlteFrameHeaderParse`) but not by `ow-casc`. No
-  `0x10` header appeared in 20,000 sampled records.
+  parsed by the client (`BlteFrameHeaderParse`) but not by `ow-casc`. A full
+  scan of all 1,147,131 BLTE headers in this install found type `0x0F` only.
 * The client's LZ4 mode `4` (`BlteBlockReadLz4`, `0x1424d6e50`) is not
-  implemented; no `4` chunk appeared in the seed-3 sample (14,518 `Z`, 4,787
-  `N`, 385 `E`, and 290 whose first chunk was beyond the 256-byte read
-  window).
+  implemented. A full scan of every first chunk found 849,632 `Z`, 274,993
+  `N` and 22,506 `E`; no `4`, `A` or `F` chunk exists in this install.
 * `A` (ARC4) and `F` (frame) chunks are still not implemented.
 * The client accepts encoding key widths 1..16; `ow-casc` implements the
   16/16 layout this product writes.
@@ -618,8 +634,8 @@ non-zero key byte, while the all-non-zero vector covers every state word.
   (131,072 B each, 88 entries total) have no `pro/data.NNN` beside them, so
   there is no content there either.
 * `A` (ARC4) chunks, `F` (frame) chunks, LZ4 `4` chunks and frame type `0x10`
-  are not implemented. None appears in the 20,000-record sample of the
-  reference install, but the client's block reader handles `4` and its frame
-  parser handles `0x10`, so this is a real capability gap rather than a format
-  that does not exist.
+  are not implemented. A full scan of all 1,148,620 bucket entries found none
+  of them in this install, but the client's block reader handles `4` and its
+  frame parser handles `0x10`, so this is a real capability gap rather than a
+  format that does not exist.
 

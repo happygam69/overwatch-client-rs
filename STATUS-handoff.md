@@ -130,7 +130,9 @@ What this means in practice:
   encoding header/section order, the index's file-header and entry-block
   hashes, and the `.flavor.info` / `../.build.info` layout. Names are in
   `docs/function-names.csv`; the remaining gaps (LZ4 `4`, frame `0x10`,
-  ARC4/frame chunks) are listed in `docs/formats/casc.md`.
+  ARC4/frame chunks) are listed in `docs/formats/casc.md`. A full scan of all
+  1,148,620 entries found no such chunks; one orphan entry is not BLTE at all
+  and is reachable by no registered asset.
 - **Movement:** trace-measured mover arithmetic, verified by `trace_diff`;
   crouch/air/slope rules measured. The mover component, advance and invoker
   are read in the current build (`RegisterMoverComponent` `0x14017a680`,
