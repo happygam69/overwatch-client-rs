@@ -134,6 +134,16 @@ impl Store {
             .location_of(ekey)
             .ok_or_else(|| Error::KeyNotFound(hex(ekey)))?;
 
+        // The client's page reader (`DynamicContainerReadPage`, `0x1424fcd20`)
+        // rejects an archive number above 0x3fe before opening the pack. The
+        // 10-bit field can hold 0..1023, so a corrupt entry can name 1023.
+        if location.archive > 0x3fe {
+            return Err(Error::Parse(format!(
+                "data archive {} is beyond the client's 0..=1022 range",
+                location.archive
+            )));
+        }
+
         // The ordinal names a pack in `data/`. `ecache/` is deliberately not a
         // content store here: its records are chunk manifests (see
         // `load_bucket_index`).

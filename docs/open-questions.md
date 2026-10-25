@@ -388,8 +388,6 @@ client's decoder).
 
 ---
 
----
-
 ## How an entry is closed
 
 1. The answer has a number or an address, and the address names its capture.

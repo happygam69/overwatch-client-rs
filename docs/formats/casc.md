@@ -638,4 +638,9 @@ non-zero key byte, while the all-non-zero vector covers every state word.
   of them in this install, but the client's block reader handles `4` and its
   frame parser handles `0x10`, so this is a real capability gap rather than a
   format that does not exist.
+* The BLTE frame-header hash and the per-chunk MD5s are not checked by
+  `ow-casc`. The client's header parser verifies the frame header when its
+  caller supplies the hash; the normal read still checks each chunk's decoded
+  size, which `ow-casc` also does. This is a corruption-detection difference,
+  not a difference for valid content.
 
