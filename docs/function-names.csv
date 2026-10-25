@@ -185,3 +185,38 @@ Overwatch.exe,0x1407ffc50,0x7ff7c551fc50,MoverInvoker,Calls the advance, stores 
 Overwatch.exe,0x1407ff4d0,0x7ff7c551f4d0,GetMoverStateId,Returns the character body's state id at +0x1b78
 Overwatch.exe,0x1407ff4e0,0x7ff7c551f4e0,GetMoverStateDescriptor,Returns the state descriptor selected by the character body's state id
 Overwatch.exe,0x1407ff270,0x7ff7c551f270,DestructMoverBody,Releases the 0x1c00-byte character body and calls the base destructor
+Overwatch.exe,0x1424e3230,0x7ff7c7203230,Salsa20StateInit,"Fills the 64-byte Salsa20/20 state (expand 16-byte k) from a 16-byte key, an 8-byte nonce and a 64-bit block counter"
+Overwatch.exe,0x1424e32c0,0x7ff7c72032c0,Salsa20Xor,XORs a buffer with the Salsa20 keystream; dispatches to the 256-byte and 64-byte block loops
+Overwatch.exe,0x1424e3370,0x7ff7c7203370,Salsa20XorBlocks256,"Salsa20 block loop for 256 bytes or more, four blocks per iteration"
+Overwatch.exe,0x1424e3e20,0x7ff7c7203e20,Salsa20XorBlocks64,Salsa20 block loop for 64..255 bytes
+Overwatch.exe,0x1424d8720,0x7ff7c71f8720,BlteIsDirectContainer,"True only for BLTE magic with a zero frame-header size, the single implicit-chunk form"
+Overwatch.exe,0x1424d8770,0x7ff7c71f8770,BlteWriteDirectHeader,Writes the BLTE magic and a zero frame-header size
+Overwatch.exe,0x1424a90e0,0x7ff7c71c90e0,BlteFrameHeaderParse,"Validates a BLTE frame header (type 0x0f or 0x10) and its MD5, and decodes the per-chunk stored and decoded sizes"
+Overwatch.exe,0x1424a9590,0x7ff7c71c9590,BlteFrameHeaderOpen,Wrapper that opens a BLTE frame header from a buffer
+Overwatch.exe,0x1424a9670,0x7ff7c71c9670,BlteFrameHeaderOpenEx,Wrapper that opens a BLTE frame header from an explicit buffer and error flag
+Overwatch.exe,0x1424d61b0,0x7ff7c71f61b0,BlteBlockRead,"Reads one BLTE block: decrypts E, then dispatches the plaintext mode to N, Z or LZ4"
+Overwatch.exe,0x1424d7850,0x7ff7c71f7850,BlteBlockReadStored,BLTE N block reader: copies the stored bytes
+Overwatch.exe,0x1424d7ca0,0x7ff7c71f7ca0,BlteBlockReadZlib,BLTE Z block reader: inflates after the mode byte
+Overwatch.exe,0x1424d6e50,0x7ff7c71f6e50,BlteBlockReadLz4,BLTE 4 block reader: LZ4-HC block header then decompression
+Overwatch.exe,0x1424d68a0,0x7ff7c71f68a0,BlteChunkDecrypt,"Decrypts one E block with Salsa20, XORing the chunk ordinal into the IV"
+Overwatch.exe,0x142498920,0x7ff7c71b8920,EncodingHeaderParse,"Parses the 22-byte EN header: key widths, page sizes and counts, and espec block size"
+Overwatch.exe,0x1424d1b40,0x7ff7c71f1b40,EncodingHeaderRead,Reads and parses the 22-byte encoding header from the storage stream
+Overwatch.exe,0x1424d1c60,0x7ff7c71f1c60,EncodingSectionsRead,"Reads the espec block, both page indexes and both page-body arrays in the reference order"
+Overwatch.exe,0x1424f48d0,0x7ff7c72148d0,DynamicContainerRead,"Resolves a 16-byte key to a stored range, skips the 30-byte data header and reads the bytes"
+Overwatch.exe,0x1424fcd20,0x7ff7c721cd20,DynamicContainerReadPage,Reads one page-aligned range through the archive page cache
+Overwatch.exe,0x14250c8f0,0x7ff7c722c8f0,DynamicContainerOpenArchive,Opens data.%03d for an archive number taken from the virtual offset
+Overwatch.exe,0x14250e400,0x7ff7c722e400,DynamicIndexSegmentOpen,Opens one data/0X........idx segment for a bucket and segment number
+Overwatch.exe,0x14250fc60,0x7ff7c722fc60,DynamicIndexSegmentLoad,Loads a dynamic index segment through the async reader
+Overwatch.exe,0x14250fcf0,0x7ff7c722fcf0,DynamicIndexSegmentParse,"Parses a dynamic index segment: section and file headers, entry block and key-to-entry table"
+Overwatch.exe,0x1425111a0,0x7ff7c72311a0,DynamicIndexFindEntry,Binary-searches the 18-byte entries by their 9-byte key and expands the equal range
+Overwatch.exe,0x1425115d0,0x7ff7c72315d0,DynamicIndexResolveRange,Resolves a requested range against a key state's resident intervals
+Overwatch.exe,0x1425209a0,0x7ff7c72409a0,DynamicIndexDecodeEntries,"Decodes entry payloads: 5-byte big-endian location, 4-byte little-endian size"
+Overwatch.exe,0x142501b40,0x7ff7c7221b40,DynamicKeyStateLookup,Computes the 9-byte bucket hash and looks the key up in the key state
+Overwatch.exe,0x1424ccc00,0x7ff7c71ecc00,BuildConfigParse,"Parses the build config's typed keys, including the two 16-byte encoding keys"
+Overwatch.exe,0x1424ce680,0x7ff7c71ee680,CdnConfigParse,"Parses the CDN config's archives, groups, file indexes and patch variants"
+Overwatch.exe,0x1424aec30,0x7ff7c71cec30,BuildInfoSelectRow,Selects the active .build.info row by its first field (the flavor); with no flavor it returns the last active row
+Overwatch.exe,0x1424aead0,0x7ff7c71cead0,BuildInfoCreate,Creates and loads a .build.info object
+Overwatch.exe,0x1424af8b0,0x7ff7c71cf8b0,FlavorInfoCreate,Creates and loads the .flavor.info table
+Overwatch.exe,0x14248f2a0,0x7ff7c71af2a0,BuildInfoLoadFromInstall,"Builds the .build.info path, loads it and selects the row for .flavor.info's Product Flavor"
+Overwatch.exe,0x1424b0130,0x7ff7c71d0130,CdnPathFormat,"Formats data/, patch/ or config/ plus a key and .index into a CDN path"
+Overwatch.exe,0x1424d0120,0x7ff7c71f0120,IndexDirectoryScan,Scans a directory of 32-hex .index files into a 9-byte-key hash table

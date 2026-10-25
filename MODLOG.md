@@ -4,6 +4,56 @@ Newest first. Milestones only; details and addresses live in `docs/formats/`,
 current state in `STATUS-handoff.md`, fits in `docs/fitted-ledger.md`, the
 work queue in `docs/open-questions.md`.
 
+## 2026-10-25 - CASC decode checked against the client's own code
+
+- **Salsa20 is identical.** Emulated the client's `Salsa20StateInit`
+  (`0x1424e3230`) and `Salsa20Xor` (`0x1424e32c0`) with a full non-zero key
+  and nonce and a 64-bit counter: 128 bytes match standard Salsa20/20 and
+  `blte.rs` (the counter-0 vector is now a unit test). The ECRYPT vector
+  alone only covered a zero nonce.
+- **BLTE framing is identical.** `BlteFrameHeaderParse` (`0x1424a90e0`)
+  expects `12 + 24*count` and puts chunk 0 at that size; no hash sits between
+  the table and the chunk. `BlteBlockRead` (`0x1424d61b0`) accepts an E IV of
+  0..8 bytes, not only 4/8; `blte.rs` now matches.
+- **30-byte records are empty files.** `DynamicContainerRead` (`0x1424f48d0`)
+  adds `0x1e` and returns a zero-length range; `blte::decode` now returns an
+  empty `Vec` for a header-only record. 20 such records in a 20,000-entry
+  sample (seed 3, the same sample as the header counts below).
+- **Bucket entries and the encoding header match.** `DynamicIndexDecodeEntries`
+  (`0x1425209a0`) decodes the 5-byte big-endian location and 4-byte
+  little-endian size; `EncodingHeaderParse` (`0x142498920`) requires byte 17
+  zero and non-zero page counts/espec. `index.rs` and `encoding.rs` now check
+  the same things; the index version floor is 7, not exactly 7.
+- **`encoding = <ckey> <ekey>`** is one file: `BuildConfigParse` (`0x1424ccc00`)
+  stores both, but only the encoding key names an artifact. `ensure_encoding`
+  now tries that one first and reports the other as its content key.
+- **Still different:** LZ4 `4` chunks, frame type `0x10`, ARC4/frame chunks,
+  the index section/entry hashes, and `.flavor.info` row selection. The first
+  three do not occur in the 20,000-record sample; the last two are recorded in
+  `docs/formats/casc.md`.
+
+## 2026-10-25 - Local locations, CDN routes and metadata caches are separated
+
+- **`indices/` is no longer merged into local locations.** The archive-group
+  `archive` is a CDN ordinal 0..826, not a local pack 0..92, and its sizes are
+  30 B smaller than the local bucket size for 1,138,136 of 1,139,009 shared
+  keys; one 197,788 B index file's 1,326 hits span local packs 7, 8, 55, 56 and
+  91. `crates/ow-casc/src/container.rs` now reads those files only through
+  `cdn_route_of`. Measured effect: the dropped-page key `08633eb2…` is a local
+  miss again and `OW_CDN=1` fetches it (2,480 B); before, a wrong local offset
+  hid the fallback.
+- **`ecache/` is not a content store.** Its 103 bucket entries resolve into
+  `ecache/data.000`; all 87 records that carry a BLTE are chunk tables with no
+  payload (`frameHeader + 30 == record size`), the other 16 are 30-byte headers,
+  and the total payload is 0. It is no longer indexed. The key `91eedb1e…` now
+  reports "not present" instead of `chunk runs past the container`.
+- **`shmem` reader deleted.** The three 20,480 B files are named shared-memory
+  mappings (`FUN_14250d8d0`, magic `0x2ab8`, versions 4/5/6), not group
+  indexes; opening the store no longer walks `data/casc` looking for them.
+- **Diagnostic:** `look --index-stats` now reports `1,147,814` keys from 16
+  bucket files, 93 local packs, 927 index files as CDN routes. `casc.md`,
+  `systems-coverage.md` and `STATUS-handoff.md` carry the measured split.
+
 ## 2026-10-25 - The harness verifies shipped code; the mover advance is read
 
 - **Tier-2 now runs the crate, not a copy.** `crates/ow-sim/src/bin/verify_probe.rs`

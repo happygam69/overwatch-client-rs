@@ -2,8 +2,9 @@
 
 How an Overwatch installation stores bytes, and how to get them back. Every
 statement here was checked against a retail install
-(`2.23.0.3.151177`, product `pro`, branch `eu`); the checks are named so they can
-be re-run.
+(`2.23.0.3.151177`, product `pro`, branch `eu`); the `ecache`, `indices` and
+`shmem` statements were re-measured on `2.25.0.1.154504` (2026-10-25), and are
+marked with that build.
 
 ## Layout on disk
 
@@ -12,16 +13,55 @@ be re-run.
 <install>/data/casc/config/<xx>/<yy>/<key>     build, CDN, patch and keyring configs
 <install>/data/casc/data/<bucket:02X>*.idx     the bucket index
 <install>/data/casc/data/data.NNN              the stored records
-<install>/data/casc/indices/<archive-hash>.index
-<install>/data/casc/ecache/<bucket:02X>*.idx   bucket tables the client cached; merged
-<install>/data/casc/pro/                    agent-managed, not read
+<install>/data/casc/indices/<archive-hash>.index   CDN routes, not local locations
+<install>/data/casc/ecache/*.idx               cached chunk manifests, not content
+<install>/data/casc/pro/                       v8 `.idx` files; no `data.NNN`, not content
 ```
 
 `config/` files are addressed by their own key, two directory levels deep:
 `config/<key[0..2]>/<key[2..4]>/<key>`.
 
 For the reference install, `data/casc/data` is ~75 GB across 82 `data.NNN`
-archives, with 16 bucket index files and a 103 MB encoding file.
+archives, with 16 bucket index files and a 103 MB encoding file. The
+`2.25.0.1.154504` install has 93 `data.NNN` archives.
+
+### Three directories that are not a second content store
+
+Measured on `2.25.0.1.154504` (2026-10-25). They share the byte format of the
+real store just enough to look like one, which is why each was tried as one.
+
+**`ecache/`** mirrors the shape of `data/`: sixteen `.idx` files, a v7 bucket
+header, a `data.000`. Its 103 bucket entries all name archive 0 and resolve to
+`ecache/data.000` (77,538 B). But:
+
+* 87 records carry a BLTE container, and in every one the container is
+  **exactly its frame header** (`frameHeader + 30 == record size`): a chunk
+  table with no payload;
+* the other 16 records are a 30-byte header and no BLTE at all;
+* total payload bytes across the file: **0**.
+
+So an `ecache` key cannot be read as a stored record. Reading one at its
+`ecache/data.000` offset is what produces
+`malformed BLTE: chunk runs past the container`; the bytes are simply not in
+that file. The tables list 256 KiB chunks with 16-byte hashes; what consumes
+them is not established here, but whatever it is, it is not local content.
+`data.NNN` is the only local content store.
+
+**`indices/`** is the CDN's map, not the local one. The archive-group `archive`
+ordinal runs 0..826 while the local bucket `archive` is a pack ordinal 0..92;
+group/index sizes are exactly 30 B smaller than the local bucket size for
+1,138,136 of 1,139,009 shared keys (the local record header), and index offsets
+are CDN offsets. One index file is not even one pack: the 197,788 B
+`eb2a63c8267fb4316cda61a8eed9fa3f.index` has 8,097 entries whose 1,326 bucket
+hits span local packs 7, 8, 55, 56 and 91, at unrelated offsets. These files
+answer "where would the CDN serve this?" (`cdn_route_of`), never "where is it
+on disk?".
+
+**`shmem`** is not an index at all. The three files are 20,480 B, header
+`05 00 00 00 54 01 00 00` plus `Global\e:/Overwatch/data/casc/...`, the rest
+zero. There is no footer for any index parser to find. In the client,
+`FUN_14250d8d0` builds the `shmem` path, checks magic `0x2ab8` and version
+parameters 4/5/6: it is a named shared-memory mapping. It carries no content.
 
 ## `.build.info`
 
@@ -52,7 +92,13 @@ build-product = Prometheus
 ```
 
 `encoding` carries two keys: the content key first, the encoding key second.
-`root` carries one, a content key.
+`root` carries one, a content key. The client's build-config parser
+(`BuildConfigParse`, `0x1424ccc00`, `encoding` case) stores them at build-config
+`+0x1a0` and `+0x1b4`; only the encoding key names a stored artifact, and the
+two sizes in `encoding-size` are that one file's decoded and stored sizes
+(`111,058,223` and `109,882,544` on the current install). `ow-casc` reads the
+line the same way: the encoding key is tried first, and the other value is only
+a fallback for a build that writes the pair in the other order.
 
 CDN config carries `archives` (857 entries here), `file-index`,
 `archive-group`, and the patch variants. `indices/<archive-hash>.index` files are
@@ -99,7 +145,7 @@ Sixteen files, `<bucket:02X>*.idx`. Each begins with a 32-byte header:
 |---|---|
 | 0x00 | `i32` unknown (16 in the reference files) |
 | 0x04 | `i32` header hash |
-| 0x08 | `u16` version, must be 7 |
+| 0x08 | `u16` version, 7 or newer |
 | 0x0A | `u8` bucket number |
 | 0x0B | `u8` extra bytes, 0 |
 | 0x0C | `u8` size field width, 4 |
@@ -109,8 +155,21 @@ Sixteen files, `<bucket:02X>*.idx`. Each begins with a 32-byte header:
 | 0x10 | `u64` maximum addressable size |
 | 0x18 | 8 bytes of padding |
 
-Then a block header (`i32` byte count, `i32` hash) and that many 18-byte entries
-starting at 0x28:
+**The client checks only the version floor and the three widths.** Its parser
+(`DynamicIndexSegmentParse`, `0x14250fcf0` in the current build) rejects
+`version < 7` and fields other than 4/5/9, but never looks at the
+extra-bytes or offset-bits bytes; a v8 file with the same widths is read
+identically. `ow-casc/src/index.rs` follows that rule.
+
+The section header's second word is a 32-bit hash of the 16-byte file header,
+and the entry block's second word is a hash of the 18-byte entries. The client
+verifies both (`0x14250fcf0`); `ow-casc` does not, so a corrupt index is
+rejected by the client and may be read by us. This is recorded in the known
+gaps, not treated as a format difference for valid files.
+
+Then a block header (`i32` byte count, `i32` hash) and that many 18-byte entries.
+The block's position is `align16(sectionSize + 0x17)`, then 8 bytes of its own
+header; the usual `sectionSize = 16` puts the entries at 0x28:
 
 ```
 EKey[9] | location[5, big-endian] | size u32 little-endian
@@ -123,7 +182,21 @@ It was caught by resolving the encoding file's own key and comparing the size
 against the build config's `encoding-size`: `102569617 = 102569587 + 30`, the 30
 accounting for the data header.
 
-`size` counts the whole stored record including that header.
+`size` counts the whole stored record including that header. The client decodes
+the two fields in `DynamicIndexDecodeEntries` (`0x1425209a0`): a 5-byte
+big-endian value from entry bytes 9..14 and a 4-byte little-endian value from
+bytes 14..18. Measured against this install, that is the only reading for which
+the encoding file's own entry size matches `encoding-size`.
+
+**A record of exactly 30 bytes stores no payload.** Its bytes are the data
+header alone: in the 20 sampled records, a fixed 14-byte marker, the key's
+first two bytes in reverse, `size = 30` at offset 16, and 10 further bytes.
+None of that is needed to read it as empty. The client's read path (`DynamicContainerRead`,
+`0x1424f48d0`) adds `0x1e` to the record offset and returns a zero-length range
+without opening a BLTE container. `ow-casc` returns an empty `Vec` for the same
+shape. Measured (seed 3, 20,000 entries): 20 such records; 19,957 ordinary
+30-byte headers whose `size` matches the index size; 10 zeroed headers; 13
+raw-`BLTE` duplicates.
 
 The file is preallocated, so a zero-padded tail follows the entries; the entry
 count comes from the block header, never from the file length. In the reference
@@ -133,19 +206,37 @@ Bucket selection hashes the nine key bytes: XOR them all, then `(i & 0x0F) ^ (i 
 
 Entries are sorted by key, so a bucket can be binary-searched.
 
+**The index is keyed by nine bytes, not sixteen.** Two encoding keys can share
+a prefix, and this install has 806 such prefixes (1,148,620 entries for
+1,147,814 distinct keys). All 806 are the same payload stored twice: one entry
+points at the 30-byte data header and its `size` includes it, the other points
+30 bytes later at the raw `BLTE` and its `size` excludes it. Both decode to the
+same bytes, so a reader that keeps either entry is correct here; the client
+keeps both as two ranges of one key state and picks the one containing the
+requested range.
+
 ## BLTE
 
 A stored record is either raw `BLTE` or preceded by a 30-byte data header:
-`md5[16]`, `size u32` at offset 16, then 10 bytes of something that is not
-zero-padding in the reference files and is not otherwise used here. Verify the
-container by looking for `BLTE` at offset 0, and if it is absent, at offset 30.
+`md5[16]`, `size u32` at offset 16, then 10 further bytes. **The header is
+skipped unconditionally; its fields are not needed to read the record.** The
+client's `DynamicContainerRead` adds `0x1e` before reading, and the BLTE
+container itself declares its frame lengths. Measured on 20,000 sampled
+records: 19,957 have a header whose `size` equals the index size, 10 have a
+**zeroed 30-byte header** with `size = 0` (the BLTE still follows at offset 30),
+13 are raw `BLTE` duplicates of a header record, and 20 are header-only empty
+files. So a reader must not trust the header's size when deciding where BLTE
+starts; it checks for `BLTE` at offset 0, otherwise at offset 30.
 
 After the magic, a big-endian `u32` frame-header size:
 
 * `0` — one chunk covering the rest of the container, its decoded length implied.
 * non-zero — at offset 8 sit `0x0F`, a 24-bit big-endian chunk count, and then
   that many 24-byte records of `stored u32 BE`, `decoded u32 BE`, `md5[16]`.
-  Chunks begin at offset 12.
+  **Chunks begin at the frame-header size, `12 + 24·count`** — the header size
+  field counts the magic and itself, and there is no hash between the table and
+  chunk 0. `BlteFrameHeaderParse` (`0x1424a90e0`) enforces exactly
+  `headerSize == 12 + 24·count` for type `0x0F`.
 
 Each chunk starts with a one-byte mode:
 
@@ -154,6 +245,7 @@ Each chunk starts with a one-byte mode:
 | `N` | stored |
 | `Z` | zlib |
 | `E` | encrypted, see below |
+| `4` | LZ4-HC block, client-only; not implemented here |
 | `F` | recursive frame, not implemented |
 
 ### The `E` mode
@@ -161,14 +253,27 @@ Each chunk starts with a one-byte mode:
 ```
 u8  key-name length, must be 8
 u8  key name[8]                   read as a little-endian u64 to index the keyring
-u8  iv length, must be 4 or 8
-u8  iv[iv-length]                 a 4-byte IV is zero-extended to 8
+u8  iv length, 0..8
+u8  iv[iv-length]                 zero-extended to the cipher's 8 bytes
 u8  cipher, 'S' for Salsa20 ('A' for ARC4 is not implemented)
 ... ciphertext, whose plaintext begins with the real mode byte
 ```
 
 The block ordinal is XORed into the low word of the IV, so identical chunks do
-not encrypt identically on disk.
+not encrypt identically on disk. The client's block reader (`BlteBlockRead`,
+`0x1424d61b0`) rejects only `8 < iv-length`; it zero-extends a short IV exactly
+as `ow-casc/src/blte.rs` now does. Builds in the wild use 4 or 8.
+
+The E key name is a little-endian `u64`: an encrypted chunk with key name
+`9e 3a e1 5b 0f 83 f6 a5` is addressed as `0xa5f6830f5be13a9e`, which is the
+support keyring's `A5F6830F5BE13A9E` line. Measured 2026-10-25 on a real E
+chunk; this is the check that ties the two byte orders together.
+
+**End-to-end check (2026-10-25):** ekey `2fc810bb53dfd7906842b8f95846305b`
+(archive 35, offset `0x97d99de`, 16,695 B) decodes to **31,216 B** with the
+support keyring. Its first chunk is `E` with that key name, so the LE key id,
+the zero-extended 8-byte IV, the ordinal XOR and Salsa20 are all exercised on
+real bytes, not only on the synthetic vector.
 
 ### Salsa20, exactly
 
@@ -205,6 +310,14 @@ content-key page bodies  (page count * page size)
 encoding-key page index  (page count * 32)
 encoding-key page bodies (page count * page size)
 ```
+
+The client parses that header in `EncodingHeaderParse` (`0x142498920`) and
+reads the sections in the order above in `EncodingSectionsRead`
+(`0x1424d1c60`). It requires `byte 17 == 0`, both page sizes non-zero, both page
+counts non-zero and the espec block non-zero; a header failing any of those is
+rejected before a page is read. `ow-casc/src/encoding.rs` now makes the same
+checks. (The client also accepts content/encoding key widths of 1..16; this
+product writes 16/16, which is what `ow-casc` implements.)
 
 **Every page index precedes every page body.** Reading the two interleaved
 misaligns the entire file, and the failure is not obvious: page counts and sizes
@@ -381,19 +494,16 @@ offsets under 0x1000_0000 — read as one u48 offset they would instead be
 whose last key is `>= key`), then a linear scan of that page, capped by the
 footer's element count.
 
-**Known bug, recorded not fixed:** the shared full-file parser
-(`container.rs`, `parse_archive_index`) computes
-`(footerAt − (12 + 2·checksumSize)) / perPage`. Because `footerAt` already
-sits inside the file's tail, the correct numerator is `footerAt −
-checksumSize` (= `length − (12 + 2·checksumSize)`); the parser instead
-subtracts the whole 12 + 2·checksumSize from `footerAt` and is **one page
-short in every file** (`perPage` always exceeds `12 + checksumSize`).
-Measured: `indices/e8fa0643…index` (the loose file index) 138 reported vs 139
-true; the 4,148-byte smallest archive index 0 vs 1; `2f46d225…index`
-(archive group) 63,147 vs 63,148; `6d4cc37a…index` (patch group) 11,920 vs
-11,921. The CDN layer reads its own `PageIndex` with the correct arithmetic;
-fixing the shared parser changes existing lookup results and is a separate
-decision (see `STATUS-handoff.md`).
+**A page-count trap, now fixed.** The correct numerator is `footerAt −
+checksumSize` (= `length − (12 + 2·checksumSize)`), because `footerAt` already
+sits inside the file's tail. The old full-file parser (`parse_archive_index`,
+removed from `container.rs` on 2026-10-25) subtracted the whole
+`12 + 2·checksumSize` from `footerAt` and was **one page short in every file**.
+The on-demand `PageIndex` uses the correct expression. The measurements that
+exposed it are kept as the regression vector: `indices/e8fa0643…index` (loose
+file index) 138 vs 139 true; the 4,148-byte smallest archive index 0 vs 1;
+`2f46d225…index` (archive group) 63,147 vs 63,148; `6d4cc37a…index` (patch
+group) 11,920 vs 11,921.
 
 ### Live evidence (2026-10-17)
 
@@ -418,12 +528,71 @@ decision (see `STATUS-handoff.md`).
   (`169fff…`, the artifact) opens fine — the pair is ckey/ekey of one file,
   not two files, and only the ekey names an artifact.
 
+## Verified against the client (2026-10-25)
+
+Read in the `Overwatch.exe` Ghidra program: build `2.25.0.1.154504`, base
+`0x140000000`, all `.text` pages. Names are in `docs/function-names.csv`.
+
+| what | client function | what was checked |
+|---|---|---|
+| virtual offset split | `DynamicContainerRead` `0x1424f48d0`; `DynamicContainerReadPage` `0x1424fcd20`; `DynamicContainerOpenArchive` `0x14250c8f0` | the read adds `0x1e` (the 30-byte data header); archive = offset `>> 30`, in-archive offset = `& (2^30-1)`; the archive names `data.%03d` |
+| index entry fields | `DynamicIndexDecodeEntries` `0x1425209a0` | 5-byte big-endian location from entry bytes 9..14, 4-byte little-endian size from bytes 14..18 |
+| bucket selection | `DynamicKeyStateLookup` `0x142501b40` | XOR of the nine key bytes, `(x ^ (x >> 4)) & 0xf`, then the per-bucket table |
+| segment parse | `DynamicIndexSegmentParse` `0x14250fcf0` | section/file headers, version floor 7, widths 4/5/9, 18-byte entries, key-to-entry table |
+| encoding header | `EncodingHeaderParse` `0x142498920` | `EN`, version 1, byte 17 zero, page sizes/counts and espec non-zero |
+| encoding sections | `EncodingSectionsRead` `0x1424d1c60` | header, espec, both indexes, both body arrays — the order `encoding.rs` uses |
+| BLTE frame header | `BlteFrameHeaderParse` `0x1424a90e0` | type `0x0f`, header size `12 + 24·count`, chunks start at the header size, no hash between the table and chunk 0 |
+| BLTE block dispatch | `BlteBlockRead` `0x1424d61b0` | `E` header layout and IV length 0..8, then `N`, `Z` or LZ4 `4` |
+| Salsa20 | `Salsa20StateInit` `0x1424e3230`; `Salsa20Xor` `0x1424e32c0` | emulated both client functions with key `01..10`, nonce `10..17` and a non-zero 64-bit counter; the 128-byte output matches standard Salsa20/20. The counter-0 case is pinned in `blte.rs` as `matches_the_client_state_layout_with_every_word_nonzero` |
+| empty file | `DynamicContainerRead` `0x1424f48d0` | a 30-byte record returns a zero-length range without opening BLTE |
+| `encoding` pair | `BuildConfigParse` `0x1424ccc00` | `vals[0]` is the content key, `vals[1]` the encoding key; only the latter names an artifact |
+| build-info row | `BuildInfoSelectRow` `0x1424aec30` | selects an active row by its first field (the flavor); with no flavor it returns the last active row |
+
+The Salsa20 check used the client's own code under Ghidra's emulator, not a
+reimplementation: the ECRYPT vector alone only covers a zero nonce and one
+non-zero key byte, while the all-non-zero vector covers every state word.
+
+### Differences that remain
+
+* Frame type `0x10` (40-byte chunk records with a 16-byte per-chunk key) is
+  parsed by the client (`BlteFrameHeaderParse`) but not by `ow-casc`. No
+  `0x10` header appeared in 20,000 sampled records.
+* The client's LZ4 mode `4` (`BlteBlockReadLz4`, `0x1424d6e50`) is not
+  implemented; no `4` chunk appeared in the seed-3 sample (14,518 `Z`, 4,787
+  `N`, 385 `E`, and 290 whose first chunk was beyond the 256-byte read
+  window).
+* `A` (ARC4) and `F` (frame) chunks are still not implemented.
+* The section-header and entry-block hashes are verified by the client and
+  not by `ow-casc`; a corrupt index can therefore be accepted here.
+* `.flavor.info` is not read by `ow-casc`. When it exists the client builds
+  `<install>/../.build.info`, reads that table, and selects the active row whose
+  first field matches the flavor (`BuildInfoLoadFromInstall`, `0x14248f2a0`;
+  `BuildInfoSelectRow`, `0x1424aec30`). On this install the file is absent and
+  the one-row choice is the same; on a multi-branch flavor install the path
+  and the row could differ.
+* The client accepts encoding key widths 1..16; `ow-casc` implements the
+  16/16 layout this product writes.
+
 ## Known gaps
 
 * The 62 trailing bytes of the encoding file, and the 10 bytes after the data
   header's size field, are unidentified. Neither is needed to read data.
-* `ecache/` **is** read — the container merges bucket `.idx` tables from both
-  `data/` and `ecache/`, so a key the client has cached locally resolves
-  without the network. `pro/` is untouched; a normal read never visits it.
-* `A` (ARC4) chunks and `F` (frame) chunks are not implemented. Neither appears
-  in the reference install's gameplay assets.
+* `ecache/` is **not** a content store and is not indexed: its records are
+  chunk manifests with no payload (measured above). A key that exists only
+  there is not locally readable; the CDN route is the honest answer.
+* `indices/*.index` are read only by `cdn_route_of`, on demand. They are never
+  merged into local locations: their ordinals, offsets and sizes belong to the
+  CDN.
+* `shmem` is a named shared-memory mapping (`FUN_14250d8d0`, magic `0x2ab8`),
+  not a group index; the reader does not open it.
+* `pro/` is untouched; a normal read never visits it. Its 16 v8 `.idx` files
+  (131,072 B each, 88 entries total) have no `pro/data.NNN` beside them, so
+  there is no content there either.
+* `A` (ARC4) chunks, `F` (frame) chunks, LZ4 `4` chunks and frame type `0x10`
+  are not implemented. None appears in the 20,000-record sample of the
+  reference install, but the client's block reader handles `4` and its frame
+  parser handles `0x10`, so this is a real capability gap rather than a format
+  that does not exist.
+* The client verifies the dynamic index's section-header and entry-block
+  hashes; `ow-casc` does not, so it may accept a corrupt index the client
+  rejects.

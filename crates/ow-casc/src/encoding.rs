@@ -91,8 +91,19 @@ impl<'a> EncodingFile<'a> {
         let n_es_pages = u32::from_be_bytes([data[13], data[14], data[15], data[16]]) as usize;
         let espec_size = u32::from_be_bytes([data[18], data[19], data[20], data[21]]) as usize;
 
+        // The client's header parser (`FUN_142498920`) requires byte 17 to be
+        // zero and every one of the two page sizes, two page counts and the
+        // espec block to be non-zero. A file that fails those is rejected
+        // before any page is touched; matching that keeps a corrupt header
+        // from turning into an empty table that silently resolves nothing.
+        if data[17] != 0 {
+            return Err(Error::Malformed("header byte 17 is not zero"));
+        }
         if ck_page_kb == 0 || es_page_kb == 0 {
             return Err(Error::Malformed("zero page size"));
+        }
+        if n_ck_pages == 0 || n_es_pages == 0 || espec_size == 0 {
+            return Err(Error::Malformed("empty page table or espec block"));
         }
 
         let ck_page_size = ck_page_kb * 1024;
@@ -206,5 +217,58 @@ impl<'a> EncodingFile<'a> {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn header() -> Vec<u8> {
+        let mut h = vec![0u8; HEADER_SIZE];
+        h[0..2].copy_from_slice(b"EN");
+        h[2] = 1;
+        h[3] = 16;
+        h[4] = 16;
+        h[5..7].copy_from_slice(&4u16.to_be_bytes());
+        h[7..9].copy_from_slice(&4u16.to_be_bytes());
+        h[9..13].copy_from_slice(&1u32.to_be_bytes());
+        h[13..17].copy_from_slice(&1u32.to_be_bytes());
+        h[18..22].copy_from_slice(&1u32.to_be_bytes());
+        h
+    }
+
+    /// A minimal well-formed file: one 4 KiB page on each side, a one-byte
+    /// espec block, and zero-count page bodies (a zero count ends a page).
+    fn minimal_file() -> Vec<u8> {
+        let h = header();
+        let ck_index = HEADER_SIZE + 1;
+        let ck_bodies = ck_index + PAGE_INDEX_ENTRY;
+        let es_index = ck_bodies + 4096;
+        let es_bodies = es_index + PAGE_INDEX_ENTRY;
+        let mut out = vec![0u8; es_bodies + 4096];
+        out[..HEADER_SIZE].copy_from_slice(&h);
+        out
+    }
+
+    #[test]
+    fn rejects_the_header_shapes_the_client_rejects() {
+        assert!(EncodingFile::parse(&minimal_file()).is_ok());
+
+        let mut bad = minimal_file();
+        bad[17] = 1;
+        assert!(EncodingFile::parse(&bad).is_err());
+
+        let mut bad = minimal_file();
+        bad[9..13].copy_from_slice(&0u32.to_be_bytes());
+        assert!(EncodingFile::parse(&bad).is_err());
+
+        let mut bad = minimal_file();
+        bad[18..22].copy_from_slice(&0u32.to_be_bytes());
+        assert!(EncodingFile::parse(&bad).is_err());
+
+        let mut bad = minimal_file();
+        bad[2] = 2;
+        assert!(EncodingFile::parse(&bad).is_err());
     }
 }

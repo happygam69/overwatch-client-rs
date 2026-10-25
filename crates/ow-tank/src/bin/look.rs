@@ -213,14 +213,16 @@ fn main() -> std::process::ExitCode {
 
     if args.iter().any(|a| a == "--index-stats") {
         let _ = data.registry();
-        let (buckets, from_archives, added) = ow_casc::container::index_stats();
+        let stats = data.store().stats();
         println!(
-            "index: {buckets} bucket entries, {from_archives} read from per-archive indexes,              {added} of them new (keys the bucket tables did not have); {} total",
-            data.store().key_count()
+            "index: {} keys from {} bucket files in data/",
+            stats.keys, stats.bucket_files
         );
-        for line in ow_casc::container::shmem_report() {
-            println!("  shmem: {line}");
-        }
+        println!("  local packs: {} in data/", stats.data_packs);
+        println!(
+            "  CDN routes: {} index files in indices/ (not local locations)",
+            stats.cdn_indexes
+        );
         return std::process::ExitCode::SUCCESS;
     }
 
@@ -331,7 +333,7 @@ fn main() -> std::process::ExitCode {
             if raw.is_empty() {
                 "absent".to_string()
             } else {
-                format!("present in manifest(s) {raw:?} — the page lookup is what misses")
+                format!("present in manifest(s) {raw:?}")
             }
         );
         match data.store().ekeys_per_manifest(&record.content_key) {

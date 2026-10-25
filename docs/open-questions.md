@@ -13,7 +13,7 @@ a measured number, not when it has a plausible guess. A guess becomes a row in
 a new capture either. Plan A recovered all `.text` from the installed
 executable's disk ciphertext; `.pdata` is already plaintext in that executable
 and was copied verbatim. The project holds the complete image as the Ghidra
-program `Overwatch.exe` (151,260 functions). Questions 2-11 are
+program `Overwatch.exe` (151,260 functions). Questions 2-13 are
 analysis/measurement work over code and function extents we now fully hold.
 
 ---
@@ -166,7 +166,7 @@ they stand: `AnimWritesOrientationPosition` and `DecodeCameraNodeTypeNames`
 are comment-only stubs (need a Ghidra re-decompile first);
 `DispatchFpCameraSlotTime` has an indirect call and an unrecovered jumptable.
 The second rung (`AnimFovHelper` `0x7ff7c5700f50`, `AnimDragSpring`
-`0x7ff7c53ab620`, `FpViewmodelEventSort` `0x7ff7c5a47410`, …) has 1-3 named
+`0x7ff7c53ab620`, `FpViewmodelEventSort` `0x7ff7c5a47410`, вЂ¦) has 1-3 named
 callees whose bodies sit in the same mapped image; the oracle's emulator can
 follow them if the fixture provides the globals they read, and the
 reads-outside-args check will name any undeclared state dependency.
@@ -356,6 +356,35 @@ foreign bytes.
 `module_v2full.bin` in `D:/ow-dumps`; `dev/live_page_diff.py` /
 `dev/warm_poll.py --all-regions` output files list which run produced each
 page.
+
+---
+
+## 13. CASC: the decode gaps left after the client check
+
+**Question.** Which parts of the client's container reader are still not
+implemented, and does any of them matter for this install?
+
+**What is known (2026-10-25).** Salsa20, the BLTE frame header, the `N`/`Z`/`E`
+block paths, the bucket entry layout, the 30-byte header and the encoding
+header/section order were checked against the client's own functions and now
+match (`docs/formats/casc.md`). Still different: LZ4 mode `4`
+(`BlteBlockReadLz4`, `0x1424d6e50`), frame type `0x10`
+(`BlteFrameHeaderParse`, `0x1424a90e0`), ARC4 `A` and frame `F` chunks, the
+dynamic index's section/entry hashes (`0x14250fcf0` verifies both), and
+`.flavor.info` row selection (`BuildInfoSelectRow`, `0x1424aec30`). A
+20,000-record sample found no `4`, `0x10`, `A` or `F`.
+
+**What would settle it.** Implement the hash first: it is the only gap that can
+change the answer for a *present* install (a corrupt index). LZ4/`0x10`/ARC4/F
+need a build that uses them; a scan of every first-chunk mode across all 1.1 M
+records would say whether this install ever does. `.flavor.info` needs a
+multi-branch install to test; on the one-row reference install the choice is
+already the same.
+
+**Next anchor.** `crates/ow-casc/src/index.rs`, `blte.rs`, `encoding.rs`;
+`docs/formats/casc.md`; the named functions above in `Overwatch.exe`.
+
+---
 
 ---
 

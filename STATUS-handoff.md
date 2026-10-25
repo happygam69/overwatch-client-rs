@@ -122,7 +122,14 @@ What this means in practice:
 
 - **Container/data:** CASC, BLTE, manifests, content registry, both STU
   versions, typed class registry and field readers, shader groups and code
-  blobs.
+  blobs. Local locations come only from `data/*.idx`; `indices/` answers CDN
+  routes, and `ecache`/`pro`/`shmem` hold no content (measured 2026-10-25).
+  The core decode was checked against the client's own functions on
+  2026-10-25: Salsa20 (emulated), BLTE framing and block modes, bucket entry
+  layout, the 30-byte header (including header-only empty files), and the
+  encoding header/section order. Names are in `docs/function-names.csv`;
+  the remaining gaps (LZ4 `4`, frame `0x10`, index hashes, `.flavor.info`)
+  are listed in `docs/formats/casc.md`.
 - **Movement:** trace-measured mover arithmetic, verified by `trace_diff`;
   crouch/air/slope rules measured. The mover component, advance and invoker
   are read in the current build (`RegisterMoverComponent` `0x14017a680`,

@@ -67,6 +67,14 @@ struct Chunk {
 
 /// Decode a stored payload (data header and all) into plaintext bytes.
 pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>> {
+    // A record whose payload is empty is stored as the 30-byte data header
+    // and nothing else. The client reads that as a zero-length file: in
+    // `DynamicContainerRead` the header is skipped (`+ 0x1e`) and a
+    // zero-length request succeeds without ever opening a BLTE container.
+    // Measured: 20 such records in a 20,000-entry sample of this install.
+    if data.len() == DATA_HEADER_SIZE && !data.starts_with(&BLTE_MAGIC) {
+        return Ok(Vec::new());
+    }
     let blte = strip_data_header(data)?;
     if blte.len() < 8 {
         return Err(Error::Malformed("truncated container"));
@@ -192,9 +200,12 @@ fn decrypt_chunk(
 
     let iv_len = *body.get(p).ok_or(Error::Malformed("truncated iv length"))? as usize;
     p += 1;
-    if iv_len != 4 && iv_len != 8 {
+    // The client accepts any IV up to 8 bytes (`FUN_1424d61b0` rejects only
+    // `8 < len`), zero-extending it into the 8-byte nonce. Builds in the wild
+    // use 4 or 8; accepting the whole range is the matching behaviour.
+    if iv_len > 8 {
         return Err(Error::Malformed(
-            "encrypted chunk iv is neither 4 nor 8 bytes",
+            "encrypted chunk iv is longer than 8 bytes",
         ));
     }
     let iv_slice = body
@@ -335,6 +346,26 @@ mod tests {
         assert_eq!(got, expected.replace(['\n', ' '], ""));
     }
 
+    /// The ECRYPT vector has a zero nonce and one non-zero key byte, so it
+    /// does not exercise most state words. This vector is the output of the
+    /// client's own `Salsa20StateInit`/`Salsa20Xor` under Ghidra's emulator
+    /// with key `01..10`, nonce `10..17`, counter 0 and 128 zero bytes; it
+    /// pins every key, nonce and constant word.
+    #[test]
+    fn matches_the_client_state_layout_with_every_word_nonzero() {
+        let key: [u8; 16] = core::array::from_fn(|i| (i + 1) as u8);
+        let nonce = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17];
+        let stream = salsa20(&key, &nonce, &[0u8; 128]);
+        let got: String = stream.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            got,
+            "6655b5ece02c1f27eae19661e68d39b6a9d2e2581e7dc624ff0b1ed83185e648\
+             57107cd186f82f50e4fbe28881df243bb6f61c0716ca613bebbe319339c637c7\
+             5c81b569d1b11156314bf040649b9ca133f8a4abc4704248def7d7ac23c27fe7\
+             204577e0fa45b754944b68bfc2727e4ca88c7a26a4a82f62385b66239d1b907b"
+        );
+    }
+
     #[test]
     fn stripping_a_data_header_is_idempotent() {
         let bare = b"BLTE\0\0\0\0rest";
@@ -348,5 +379,111 @@ mod tests {
     #[test]
     fn rejects_a_non_blte_payload() {
         assert!(strip_data_header(b"not a container at all").is_err());
+    }
+
+    /// A record that is only the 30-byte data header is a zero-length file,
+    /// not a malformed container. The client's read path skips the header and
+    /// succeeds with a zero-byte range; this is the shape of 20 records in a
+    /// 20,000-entry sample of the reference install.
+    #[test]
+    fn a_header_only_record_decodes_to_no_bytes() {
+        let mut record = vec![0u8; DATA_HEADER_SIZE];
+        record[16..20].copy_from_slice(&(DATA_HEADER_SIZE as u32).to_le_bytes());
+        assert_eq!(decode(&record, &BTreeMap::new()).unwrap(), Vec::<u8>::new());
+    }
+
+    /// Multi-chunk layout: the frame header is 12 bytes plus 24 per chunk and
+    /// the chunks start immediately after it. There is no hash between the
+    /// table and the first chunk; the client's parser expects
+    /// `header_size == 12 + 24 * count` and reads chunk 0 at `header_size`.
+    #[test]
+    fn multi_chunk_container_starts_chunks_at_the_frame_header_size() {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let plain: [&[u8]; 2] = [b"hello", b"world"];
+        let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
+        z.write_all(plain[1]).unwrap();
+        let zbody = z.finish().unwrap();
+
+        let chunk0 = {
+            let mut c = vec![b'N'];
+            c.extend_from_slice(plain[0]);
+            c
+        };
+        let chunk1 = {
+            let mut c = vec![b'Z'];
+            c.extend_from_slice(&zbody);
+            c
+        };
+        let chunks = [&chunk0, &chunk1];
+
+        let header_size = 12 + 24 * chunks.len();
+        let mut blte = Vec::new();
+        blte.extend_from_slice(b"BLTE");
+        blte.extend_from_slice(&(header_size as u32).to_be_bytes());
+        blte.push(0x0F);
+        blte.extend_from_slice(&[0, 0, chunks.len() as u8]);
+        for (i, chunk) in chunks.iter().enumerate() {
+            blte.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
+            blte.extend_from_slice(&(plain[i].len() as u32).to_be_bytes());
+            blte.extend_from_slice(&[0u8; 16]); // per-chunk hash, not checked
+        }
+        assert_eq!(blte.len(), header_size);
+        for chunk in &chunks {
+            blte.extend_from_slice(chunk);
+        }
+
+        let mut record = vec![0u8; DATA_HEADER_SIZE];
+        record[16..20].copy_from_slice(&(blte.len() as u32 + 30).to_le_bytes());
+        record.extend_from_slice(&blte);
+
+        assert_eq!(decode(&record, &BTreeMap::new()).unwrap(), b"helloworld");
+    }
+
+    /// The `E` header's IV length is a byte, and the client accepts any value
+    /// up to 8 (zero-extending it). Chunk `n` XORs `n` into the first IV word.
+    #[test]
+    fn encrypted_chunk_with_a_short_iv_uses_the_chunk_ordinal() {
+        let key = [0x11u8; 16];
+        let key_id = u64::from_le_bytes(*b"KEYNAME!");
+        let keyring = BTreeMap::from([(key_id, key)]);
+
+        let index = 1u32;
+        let iv = [0xAAu8, 0xBB]; // 2-byte IV, zero-extended to 8
+        let mut nonce = [0u8; 8];
+        nonce[..2].copy_from_slice(&iv);
+        let low = u32::from_le_bytes([nonce[0], nonce[1], nonce[2], nonce[3]]) ^ index;
+        nonce[..4].copy_from_slice(&low.to_le_bytes());
+
+        let plain = b"Npayload";
+        let cipher = salsa20(&key, &nonce, plain);
+        let mut block = vec![b'E', 8];
+        block.extend_from_slice(b"KEYNAME!");
+        block.push(iv.len() as u8);
+        block.extend_from_slice(&iv);
+        block.push(b'S');
+        block.extend_from_slice(&cipher);
+
+        // Chunk 0 is a stored block so the encrypted chunk's ordinal is 1.
+        let dummy = b"Nx";
+        let header_size = 12 + 24 * 2;
+        let mut blte = Vec::new();
+        blte.extend_from_slice(b"BLTE");
+        blte.extend_from_slice(&(header_size as u32).to_be_bytes());
+        blte.push(0x0F);
+        blte.extend_from_slice(&[0, 0, 2]);
+        // The decoded size counts the block after the mode byte is removed.
+        for (stored, decoded) in [(dummy.len(), 1), (block.len(), plain.len() - 1)] {
+            blte.extend_from_slice(&(stored as u32).to_be_bytes());
+            blte.extend_from_slice(&(decoded as u32).to_be_bytes());
+            blte.extend_from_slice(&[0u8; 16]);
+        }
+        blte.extend_from_slice(dummy);
+        blte.extend_from_slice(&block);
+
+        let decoded = decode(&blte, &keyring).unwrap();
+        assert_eq!(decoded, b"xpayload");
     }
 }

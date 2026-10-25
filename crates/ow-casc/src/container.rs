@@ -74,6 +74,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Store {
     install: Install,
     buckets: HashMap<[u8; 9], Location>,
+    /// Bucket files read, for the diagnostic.
+    bucket_files: usize,
+    /// Open pack files, keyed by archive ordinal (`data/data.NNN`).
     archives: RefCell<HashMap<u32, fs::File>>,
     /// The decoded encoding **manifests**: this build config names more than
     /// one (`encoding = <a> <b>`), and an asset's content key can be in either.
@@ -87,10 +90,11 @@ pub struct Store {
 
 impl Store {
     pub fn open(install: Install) -> Result<Store> {
-        let buckets = load_bucket_index(&install)?;
+        let (buckets, bucket_files) = load_bucket_index(&install)?;
         Ok(Store {
             install,
             buckets,
+            bucket_files,
             archives: RefCell::new(HashMap::new()),
             encoding: RefCell::new(None),
             encoding_report: RefCell::new(Vec::new()),
@@ -106,6 +110,19 @@ impl Store {
         self.buckets.len()
     }
 
+    /// What the local index layer found, for `look --index-stats`.
+    ///
+    /// `indices/*.index` are counted but never turned into locations: they
+    /// describe the CDN, with its own archive numbering and offsets.
+    pub fn stats(&self) -> StoreStats {
+        StoreStats {
+            keys: self.buckets.len(),
+            bucket_files: self.bucket_files,
+            data_packs: pack_count(&self.install.data_dir()),
+            cdn_indexes: index_file_count(&self.install.indices_dir()),
+        }
+    }
+
     pub fn location_of(&self, ekey: &[u8]) -> Option<Location> {
         let key: [u8; 9] = ekey.get(0..9)?.try_into().ok()?;
         self.buckets.get(&key).copied()
@@ -117,6 +134,9 @@ impl Store {
             .location_of(ekey)
             .ok_or_else(|| Error::KeyNotFound(hex(ekey)))?;
 
+        // The ordinal names a pack in `data/`. `ecache/` is deliberately not a
+        // content store here: its records are chunk manifests (see
+        // `load_bucket_index`).
         let path = self
             .install
             .data_dir()
@@ -133,7 +153,7 @@ impl Store {
         let available = file.metadata()?.len().saturating_sub(location.offset);
         if u64::from(location.size) > available {
             return Err(Error::Parse(format!(
-                "data.{:03}: record at {:#x} claims {} B but the archive has {available} B left",
+                "data.{:03}: record at {:#x} claims {} B but the pack has {available} B left",
                 location.archive, location.offset, location.size
             )));
         }
@@ -291,19 +311,21 @@ impl Store {
         }
     }
 
-    /// Load and keep every decoded encoding manifest the build config names.
+    /// Load the decoded encoding manifest the build config names.
     ///
-    /// A build-config line is **`<content key> <encoding key>`** — the reference's
-    /// `BuildConfig.GetFileRecord` reads `vals[0]` into `ContentKey` and
-    /// `vals[1]` into `EncodingKey`. Reading both as encoding keys (which is what
-    /// this did) resolves whichever happens to be directly indexable and loses
-    /// the other: on this install the second encoding manifest loaded and the
-    /// **first** never did, so half the build's content keys looked like they
-    /// were "not in this installation".
+    /// A build-config line is **`<content key> <encoding key>`**: the
+    /// reference's `BuildConfig.GetFileRecord` reads `vals[0]` into
+    /// `ContentKey` and `vals[1]` into `EncodingKey` (`BuildConfigParse`,
+    /// `0x1424ccc00`, the `encoding` case, stores them at build-config
+    /// `+0x1a0` and `+0x1b4`).
+    /// Only the encoding key names a stored artifact; the content key is the
+    /// same file's content identity. On this install the two sizes in
+    /// `encoding-size` (`111,058,223 109,882,544`) are exactly the decoded
+    /// and stored sizes of that one file.
     ///
-    /// So: try the value as an encoding key first, then as a content key
-    /// (through the table already loaded — the halves resolve each other), and
-    /// repeat until no manifest is added.
+    /// The encoding key is therefore tried first. The other value is only a
+    /// fallback, for a build that writes the pair in the other order (or a
+    /// one-value line); it is never loaded as a second table.
     fn ensure_encoding(&self) -> Result<()> {
         if self.encoding.borrow().is_some() {
             return Ok(());
@@ -316,42 +338,40 @@ impl Store {
             .ok_or_else(|| Error::Parse("build config has no encoding key".into()))?;
         let mut blobs: Vec<Vec<u8>> = Vec::new();
         let mut report = Vec::new();
-        let mut pending: Vec<String> = values;
-        let mut progressed = true;
-        while progressed && !pending.is_empty() {
-            progressed = false;
-            let mut still = Vec::new();
-            for value in pending {
-                let Ok(key) = parse_hex_key(&value) else {
-                    report.push(format!("{value}: not a key"));
-                    continue;
-                };
-                if let Ok(blob) = self.open_ekey(&key) {
+        let mut opened: Option<&String> = None;
+
+        // The reference reads the second value as the encoding key. For a
+        // one-value line that value is all there is.
+        let order: Vec<&String> = if values.len() >= 2 {
+            vec![&values[1], &values[0]]
+        } else {
+            values.iter().collect()
+        };
+        for value in &order {
+            let Ok(key) = parse_hex_key(value) else {
+                report.push(format!("{value}: not a key"));
+                continue;
+            };
+            match self.open_ekey(&key) {
+                Ok(blob) => {
                     report.push(format!(
                         "{value}: opened as an encoding key, {} B",
                         blob.len()
                     ));
                     blobs.push(blob);
-                    progressed = true;
-                    continue;
+                    opened = Some(value);
+                    break;
                 }
-                if !blobs.is_empty() {
-                    if let Ok(blob) = self.open_ckey_using(&key, &blobs) {
-                        report.push(format!(
-                            "{value}: opened as a content key through the table, {} B",
-                            blob.len()
-                        ));
-                        blobs.push(blob);
-                        progressed = true;
-                        continue;
-                    }
-                }
-                still.push(value);
+                Err(_) => report.push(format!("{value}: not an encoding key")),
             }
-            pending = still;
         }
-        for value in pending {
-            report.push(format!("{value}: could not be opened"));
+        if values.len() >= 2 && !blobs.is_empty() && opened != Some(&values[0]) {
+            // Say what the other half is, so the diagnostic cannot be read as
+            // "a second manifest failed to open".
+            report.push(format!(
+                "{}: content key of the same encoding file",
+                values[0]
+            ));
         }
         if blobs.is_empty() {
             return Err(Error::Parse("no encoding manifest could be read".into()));
@@ -507,265 +527,6 @@ impl Store {
         }
         Ok(None)
     }
-}
-
-/// Scan the sixteen bucket files into one map, then the per-archive indexes.
-///
-/// Both index families exist in a modern install and they are **not** the same
-/// set of files:
-///
-/// * `data/*.idx` — the sixteen legacy bucket tables, keyed by the first nine
-///   bytes of an encoding key.
-/// * `indices/<archive-hash>.index` — one modern index per archive, keyed by the
-///   full 16-byte key, written when the client updates or streams content.
-///
-/// Reading only the bucket tables reports content the install plainly has as
-/// "not present in this installation" — which is what made hero materials look
-/// unreadable. The reference reads both (`CDNIndexHandler.OpenIndexFile`).
-fn load_archive_indexes(install: &Install, map: &mut HashMap<[u8; 9], Location>) -> Result<usize> {
-    let Some(cdn) = &install.cdn_config else {
-        return Ok(0);
-    };
-    let archives: Vec<String> = cdn.get("archives").map(|v| v.to_vec()).unwrap_or_default();
-    if archives.is_empty() {
-        return Ok(0);
-    }
-    let dir = install.data_dir();
-    let base = dir.parent().unwrap_or(&dir).join("indices");
-    let mut added = 0usize;
-    for hash in &archives {
-        let path = base.join(format!("{hash}.index"));
-        let Ok(bytes) = fs::read(&path) else { continue };
-        let Ok(entries) = parse_archive_index(&bytes) else {
-            continue;
-        };
-        // Which **local** archive is this? The index file is named by the CDN's
-        // archive hash, while the local files are `data.000`…`data.092` in their
-        // own contiguous numbering (the CDN lists 826 archives this install does
-        // not have), so the number cannot be read off the list order. It is
-        // learned instead: entries that the bucket tables already know name the
-        // archive they live in, and an index file covers exactly one archive.
-        let local = entries
-            .iter()
-            .find_map(|(ekey, _, _, _)| {
-                let mut key = [0u8; 9];
-                key.copy_from_slice(&ekey[..9]);
-                map.get(&key).map(|l| l.archive)
-            })
-            .or_else(|| {
-                (archives.len() == local_archive_count(install))
-                    .then(|| archives.iter().position(|h| h == hash).unwrap_or(0) as u32)
-            });
-        let Some(archive) = local else { continue };
-        for (ekey, offset, size, _) in entries {
-            let mut key = [0u8; 9];
-            key.copy_from_slice(&ekey[..9]);
-            // Only fill what the bucket tables do not already know: those are
-            // the entries whose archive number is *verified* by the matching
-            // above, and overwriting them would risk a wrong location.
-            map.entry(key).or_insert(Location {
-                archive,
-                offset,
-                size,
-            });
-            added += 1;
-        }
-    }
-    Ok(added)
-}
-
-/// Read the client's writable layer: every `shmem` file under `data/casc`.
-///
-/// A `shmem` is a **group index** — the same page and footer layout as an
-/// archive index, with `offsetBytes = 6` (a 2-byte archive index followed by a
-/// 4-byte offset) so each entry names its own archive. It is where the client
-/// writes content it streams or patches locally, which is why a file can be on
-/// disk, work in the game, and be invisible to a reader that only opens the
-/// read-only bucket tables and archive indexes.
-fn load_shmem(install: &Install, map: &mut HashMap<[u8; 9], Location>) -> Result<usize> {
-    let mut found = 0usize;
-    let mut candidates = vec![install.data_dir().join("shmem")];
-    let casc = install
-        .data_dir()
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| install.data_dir());
-    let mut stack = vec![(casc, 0usize)];
-    while let Some((dir, depth)) = stack.pop() {
-        if depth > 3 {
-            continue;
-        }
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push((path, depth + 1));
-                continue;
-            }
-            if path.file_name().and_then(|n| n.to_str()) == Some("shmem") {
-                candidates.push(path);
-            }
-        }
-    }
-    candidates.sort();
-    candidates.dedup();
-    let mut report = Vec::new();
-    for path in candidates {
-        let Ok(bytes) = fs::read(&path) else { continue };
-        let Ok(entries) = parse_archive_index(&bytes) else {
-            report.push(format!("{}: not a group index", path.display()));
-            continue;
-        };
-        let mut added = 0usize;
-        for (ekey, offset, size, archive) in entries {
-            let Some(archive) = archive else { continue };
-            let mut key = [0u8; 9];
-            key.copy_from_slice(&ekey[..9]);
-            // The writable layer is the client's newest word on a file: it wins.
-            map.insert(
-                key,
-                Location {
-                    archive: u32::from(archive),
-                    offset,
-                    size,
-                },
-            );
-            added += 1;
-        }
-        report.push(format!("{}: {added} entries", path.display()));
-        found += added;
-    }
-    SHMEM_REPORT.with(|r| r.borrow_mut().clone_from(&report));
-    Ok(found)
-}
-
-thread_local! {
-    /// What each `shmem` read produced, for a diagnostic to print.
-    pub static SHMEM_REPORT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-}
-
-/// One line per `shmem` file that was read.
-pub fn shmem_report() -> Vec<String> {
-    SHMEM_REPORT.with(|r| r.borrow().clone())
-}
-
-/// How many `data.NNN` archives exist locally.
-fn local_archive_count(install: &Install) -> usize {
-    let Ok(entries) = fs::read_dir(install.data_dir()) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(|n| n.starts_with("data.") && !n.ends_with(".idx"))
-                .unwrap_or(false)
-        })
-        .count()
-}
-
-/// Parse one `indices/<archive-hash>.index`.
-///
-/// The format, from the reference's `CDNIndexHandler` (footer, then pages of
-/// entries, then the last-key array, the page checksums and the footer's own
-/// checksums):
-///
-/// ```text
-/// page 0 .. page n-1      pageSize bytes each: [ekey 16][size u32 BE][offset u32 BE]
-/// n * 16                  the last encoding key of each page
-/// n * checksumSize        per-page checksums
-/// footer 12               version, 0, 0, pageSizeKB, offsetBytes, sizeBytes,
-///                         keyBytes, checksumSize, numElements (u32 LE)
-/// checksumSize * 2        the footer's checksums
-/// ```
-///
-/// The footer sits at `len - checksumSize - 12`, and `checksumSize` is found by
-/// trying 16 down to 8: only one position yields a footer whose own checksum
-/// size matches, which is how the format is self-describing.
-fn parse_archive_index(bytes: &[u8]) -> Result<Vec<([u8; 16], u64, u32, Option<u16>)>> {
-    const FOOTER_SIZE: usize = 12;
-    let len = bytes.len();
-    if len < FOOTER_SIZE + 16 {
-        return Err(Error::Parse("archive index too small".into()));
-    }
-    let mut footer = None;
-    for checksum_size in (8usize..=16).rev() {
-        let at = match len.checked_sub(checksum_size + FOOTER_SIZE) {
-            Some(at) => at,
-            None => continue,
-        };
-        let f = &bytes[at..at + FOOTER_SIZE];
-        if f[0] != 1 || f[1] != 0 || f[2] != 0 || f[7] as usize != checksum_size {
-            continue;
-        }
-        footer = Some((at, f));
-        break;
-    }
-    let Some((footer_at, f)) = footer else {
-        return Err(Error::Parse("no archive-index footer".into()));
-    };
-    let page_size = f[3] as usize * 1024;
-    let offset_bytes = f[4] as usize;
-    let size_bytes = f[5] as usize;
-    let key_bytes = f[6] as usize;
-    let checksum_size = f[7] as usize;
-    let dynamic = FOOTER_SIZE + checksum_size * 2;
-    if key_bytes != 16 || page_size == 0 || footer_at < dynamic {
-        return Err(Error::Parse("archive index header is not supported".into()));
-    }
-    let per_entry = key_bytes + size_bytes + offset_bytes;
-    let per_page = page_size + key_bytes + checksum_size;
-    // The footer sits at `len - checksumSize - 12`, so in terms of the
-    // footer's position the reference's page count is
-    // `(footerAt - checksumSize) / perPage` — the same expression
-    // `PageIndex::open` below uses. (Applying the reference's `DynamicSize`
-    // to the footer's position instead of the file length came out one page
-    // short — the last page of every file was dropped, and a single-page
-    // index read as empty; measured 2026-10-17, fixed 2026-10-24.)
-    let page_count = (footer_at - checksum_size) / per_page;
-    let entry_count = page_size / per_entry;
-    let mut out = Vec::new();
-    for page in 0..page_count {
-        let start = page * page_size;
-        for i in 0..entry_count {
-            let at = start + i * per_entry;
-            let Some(slice) = bytes.get(at..at + per_entry) else {
-                break;
-            };
-            let mut ekey = [0u8; 16];
-            ekey.copy_from_slice(&slice[..16]);
-            if ekey == [0u8; 16] {
-                break;
-            }
-            // All fields are stored big-endian. A *group* index (the client's
-            // writable `shmem` layer) uses six bytes after the size: a 2-byte
-            // archive index then a 4-byte offset, so the entry names its own
-            // archive instead of relying on any list order.
-            let mut size = 0u32;
-            for b in &slice[16..16 + size_bytes] {
-                size = (size << 8) | u32::from(*b);
-            }
-            let tail = &slice[16 + size_bytes..per_entry];
-            let (archive, offset_bytes_here) = if offset_bytes == 6 {
-                let mut index = 0u16;
-                for b in &tail[..2] {
-                    index = (index << 8) | u16::from(*b);
-                }
-                (Some(index), 4)
-            } else {
-                (None, offset_bytes)
-            };
-            let mut offset = 0u64;
-            for b in &tail[tail.len() - offset_bytes_here..] {
-                offset = (offset << 8) | u64::from(*b);
-            }
-            out.push((ekey, offset, size, archive));
-        }
-    }
-    Ok(out)
 }
 
 /// Which route the CDN would use for a key the local store cannot resolve.
@@ -993,75 +754,93 @@ impl PageIndex {
     }
 }
 
-thread_local! {
-    /// (bucket entries, entries read from archive indexes, entries the archive
-    /// indexes added) — for a diagnostic to print, so a silently empty parse is
-    /// visible rather than assumed.
-    pub static INDEX_STATS: RefCell<(usize, usize, usize)> = const { RefCell::new((0, 0, 0)) };
+/// What the local store holds, for the `--index-stats` diagnostic. Counts,
+/// never content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreStats {
+    /// Encoding keys in the `data/` bucket tables.
+    pub keys: usize,
+    /// Bucket `.idx` files read.
+    pub bucket_files: usize,
+    /// `data/data.NNN` archives on disk.
+    pub data_packs: usize,
+    /// `indices/*.index` files on disk. These are **CDN routes**, not local
+    /// locations: their archive ordinals and offsets do not name a local pack.
+    pub cdn_indexes: usize,
 }
 
-/// What the index layer found: bucket entries, archive-index entries, and how
-/// many the archive indexes added beyond the buckets.
-pub fn index_stats() -> (usize, usize, usize) {
-    INDEX_STATS.with(|s| *s.borrow())
-}
-
-/// Scan the sixteen bucket files into one map.
+/// Scan the sixteen `data/*.idx` bucket files into one map.
 ///
-/// Every file whose name begins with a bucket number is read, so a bucket split
-/// across several files still resolves.
-fn load_bucket_index(install: &Install) -> Result<HashMap<[u8; 9], Location>> {
+/// `ecache/` is deliberately **not** read here. Measured on build
+/// `2.25.0.1.154504`: its 103 bucket entries resolve to `ecache/data.000`,
+/// where all 87 records that carry a BLTE are chunk tables with no payload
+/// (`frameHeader + 30 == record size` for every one) and the other 16 are
+/// 30-byte headers with no BLTE. The content is not in that file, so treating
+/// an `ecache` key as a local location turned a clean CDN fallback into
+/// `chunk runs past the container`.
+///
+/// `indices/<archive-hash>.index` is also not read here. Those files describe
+/// the CDN (archive ordinals 0..826, CDN offsets, sizes that exclude the local
+/// 30-byte header); merging them into local locations produced wrong reads and
+/// suppressed the CDN fallback. `cdn_route_of` reads them on demand instead.
+fn load_bucket_index(install: &Install) -> Result<(HashMap<[u8; 9], Location>, usize)> {
     let mut buckets = HashMap::new();
-    let data_dir = install.data_dir();
-    // Two directories hold bucket tables: `data/` for the archives and
-    // `ecache/` for the *config* content (root, install and encoding manifests
-    // and other encrypted config). Both are read; a config file indexed only in
-    // `ecache/` is otherwise invisible, and one of this build's two encoding
-    // manifests is exactly that.
-    let mut dirs = vec![data_dir.clone()];
-    if let Some(parent) = data_dir.parent() {
-        dirs.push(parent.join("ecache"));
-    }
-    for dir in dirs {
-        let Ok(entries) = fs::read_dir(&dir) else {
+    let mut bucket_files = 0usize;
+    let dir = install.data_dir();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if !name.ends_with(".idx") {
-                continue;
-            }
-            // `.get` instead of slicing: a name whose second byte is mid-UTF-8
-            // must skip, not panic the whole index load.
-            let bucket = name.get(0..2).and_then(|p| u8::from_str_radix(p, 16).ok());
-            if bucket.is_none() || bucket == Some(0xff) {
-                continue;
-            }
-            for (ekey, location) in index::parse_bucket_file(&path, bucket)? {
-                buckets.insert(ekey, location);
-            }
+        if !name.ends_with(".idx") {
+            continue;
+        }
+        // `.get` instead of slicing: a name whose second byte is mid-UTF-8
+        // must skip, not panic the whole index load.
+        let bucket = name.get(0..2).and_then(|p| u8::from_str_radix(p, 16).ok());
+        if bucket.is_none() || bucket == Some(0xff) {
+            continue;
+        }
+        bucket_files += 1;
+        for (ekey, location) in index::parse_bucket_file(&path, bucket)? {
+            buckets.insert(ekey, location);
         }
     }
     if buckets.is_empty() {
         return Err(Error::Parse(format!(
             "no .idx bucket files found in {}",
-            data_dir.display()
+            dir.display()
         )));
     }
-    // The modern per-archive indexes, which is where updated and streamed
-    // content lives. A failure here is not fatal: an old install has none.
-    let before = buckets.len();
-    let from_archives = load_archive_indexes(install, &mut buckets).unwrap_or(0);
-    let from_shmem = load_shmem(install, &mut buckets).unwrap_or(0);
-    let _ = from_shmem;
-    INDEX_STATS.with(|s| {
-        *s.borrow_mut() = (before, from_archives, buckets.len() - before.min(before));
-    });
-    Ok(buckets)
+    Ok((buckets, bucket_files))
+}
+
+/// `data.NNN` files in the store.
+fn pack_count(dir: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .map(|n| n.starts_with("data.") && !n.ends_with(".idx"))
+                .unwrap_or(false)
+        })
+        .count()
+}
+
+/// `*.index` files in `indices/`.
+fn index_file_count(dir: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("index"))
+        .count()
 }
 
 fn parse_hex_key(hex: &str) -> Result<[u8; 16]> {
@@ -1230,42 +1009,5 @@ mod tests {
         let e = index.loose_lookup(&key(1)).expect_err("must refuse");
         assert!(e.to_string().contains("not a loose-file index"), "{e}");
         fs::remove_file(&path).ok();
-    }
-
-    /// The whole-file parser (`parse_archive_index`) must agree with
-    /// `PageIndex::open` on the page count: a single-page file parses to one
-    /// entry, not zero, and the final page of a multi-page file is present.
-    /// (It spent a while one page short; the on-demand reader was corrected
-    /// and this parser was not, which this test pins.)
-    #[test]
-    fn parse_archive_index_matches_page_index_page_count() {
-        // A single entry, no offset bytes: the one-page case.
-        let parsed = parse_archive_index(&build(&[(key(9), 109_878_111, 0, 0)], 0))
-            .expect("single-page loose index parses");
-        assert_eq!(parsed.len(), 1, "one entry, not zero: {parsed:?}");
-        assert_eq!(parsed[0].0, key(9));
-        assert_eq!(parsed[0].1, 0, "loose entries carry no offset");
-        assert_eq!(parsed[0].2, 109_878_111);
-        assert_eq!(parsed[0].3, None);
-
-        // More than one page of group entries, offset_bytes = 6: every
-        // entry — including the last page's — must come out. Keys start at
-        // 1: an all-zero ekey is the terminator.
-        let mut entries: Vec<([u8; 16], u32, u16, u32)> = Vec::new();
-        for i in 1u8..=80 {
-            entries.push((
-                key(i),
-                100 + u32::from(i),
-                700 + u16::from(i),
-                0x1000 * u32::from(i),
-            ));
-        }
-        let parsed = parse_archive_index(&build(&entries, 6)).expect("multi-page group index");
-        assert_eq!(parsed.len(), entries.len(), "no entry may be dropped");
-        let last = parsed.last().expect("non-empty");
-        assert_eq!(last.0, key(80), "the final page's last entry is present");
-        assert_eq!(last.1, u64::from(0x1000u32 * 80));
-        assert_eq!(last.2, 180);
-        assert_eq!(last.3, Some(780));
     }
 }
