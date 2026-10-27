@@ -314,6 +314,19 @@ by `FUN_141fd5820` (`0x141fd5820`):
   reports an out-of-range span instead of reading past the buffer; on a valid
   install this cannot change a result.
 
+The search is a verified harness unit: `fn/BundleLookup`
+(`dev/verify_harness/units/fn-BundleLookup.json`) compares the shipped
+`ow_tank::bundle::offset_of` and the client-contract wrapper
+`bundle::entry_lookup` with `BundleEntryLookup` at `0x141fd5820`. It passes 364
+synthetic differential cases on every channel, 100% branch coverage (29/29
+reachable branches of 35 sites; six sites declare one structurally dead edge)
+and kills 12/12 mutants. The read settled the bounds: the client walks `0` to
+`count - 1`, not the usual half-open `[0, count)`, and takes the midpoint as
+`(lo + hi) >> 1`. The old half-open walk agreed on every GUID-sorted install
+table but returns a different answer on an unsorted one, so `offset_of` now
+takes the client's walk operation for operation. The unit does not prove the
+producer of the directory blob below.
+
 #### The bundle directory (format read, producer open)
 
 The client does not scan bundles per request; it keeps a per-type directory

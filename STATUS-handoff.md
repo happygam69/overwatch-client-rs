@@ -39,8 +39,10 @@ claim. `ow-sim` is parked reference code.
   (acknowledged gap, gate 0), so the row stays in `ow-tank-1to1.md` section B.
 - **Bundle assets:** the CMF record byte's bit 7 selects the encoded store or
   a type-`0x09C` bundle; the entry lookup is read from `FUN_141fd5820`
-  (`0x141fd5820`) and implemented in `ow-tank::bundle`. All 305 type-`0x09F`
-  map headers open: 42 from the store, 263 from bundles.
+  (`0x141fd5820`), implemented in `ow-tank::bundle`, and is a verified unit
+  (`fn/BundleLookup`: 364 synthetic cases, 100% branch coverage, 12/12
+  mutants). All 305 type-`0x09F` map headers open: 42 from the store, 263 from
+  bundles.
 - **Map resolver:** `ow-tank::mapresolve` follows a header's paired mode and
   variation arrays, the variation's type-`0x002` scene map, the map asset's
   stored chunk references and the 31 synthesised chunks. The practice range
@@ -51,8 +53,10 @@ claim. `ow-sim` is parked reference code.
   submesh draws, 55 placeholders, 148 flat fills and 3 no-sRGB entries.
 - **Other verified client functions:** `AnimTimeWrap`,
   `BuildPerspectiveMatrix`, `InitProjectionDescriptor`,
-  `OrthonormalizeCameraBasis` (stateful) and `MapChunkGuid` (`fn/ChunkGuid`,
-  the first `ow-tank` tier-2 unit). The build-154504 key/IV units
+  `OrthonormalizeCameraBasis` (stateful), `MapChunkGuid` (`fn/ChunkGuid`,
+  the first `ow-tank` tier-2 unit) and `BundleEntryLookup`
+  (`fn/BundleLookup`, the second `ow-tank` tier-2 unit: 100% coverage,
+  12/12 mutants). The build-154504 key/IV units
   (`fn/CmfKey154504`, `fn/CmfIv154504`) pass differential and mutation but
   keep an acknowledged coverage gap. `CurveKeySampleDual` is inconclusive at
   75% coverage; the two `ow-sim` units cannot run while `ow-sim` is parked.

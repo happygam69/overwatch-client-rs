@@ -38,6 +38,13 @@
 //! name through its inline/heap layout, hashes it with the same `sha1` crate
 //! the manifest decryption path uses, and passes the digest to the shipped
 //! function.
+//!
+//! The `bundle_lookup` entry reads the client's tagged handle object (64
+//! bytes: `+0` payload pointer, `+8` tag dword) and the payload that follows
+//! it from one pointee buffer, then calls `ow_tank::bundle::entry_lookup`.
+//! That function returns the client's `payload + offset` as a guest address,
+//! so the fixture passes the payload's guest base in the client's dead first
+//! argument slot (RCX) and the probe returns the same guest value.
 
 use std::io::{self, BufRead, Write};
 
@@ -241,6 +248,52 @@ fn cmf_iv_154504_entry(
     Ok(("-".to_string(), vec![name_obj, header, iv.to_vec()]))
 }
 
+/// The handle object is 64 bytes: `+0` payload pointer, `+8` tag dword.
+const BUNDLE_OBJECT_LEN: usize = 0x40;
+
+/// `BundleEntryLookup` (`0x141fd5820`): `(directory*, handle, u64 GUID)`.
+///
+/// The client's first argument (RCX) is dead, so the fixture puts the payload's
+/// guest address there. The handle (RDX) masks to a 64-byte object whose `+0`
+/// qword is the payload pointer and whose `+8` dword carries the tag; the GUID
+/// is in R8. The probe receives that object followed by the payload as one
+/// pointee buffer (R9, also dead) and calls the shipped
+/// `ow_tank::bundle::entry_lookup`. The return is the client's guest address
+/// (`payload + offset`) or `0`; no host pointer crosses the wire.
+fn bundle_lookup_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let guest_base = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg0 must be u64".into()),
+    };
+    let handle = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg1 must be u64".into()),
+    };
+    let guid = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg2 must be u64".into()),
+    };
+    let region = match it.next() {
+        Some(Arg::Ptr(b, _, None)) if b.len() >= BUNDLE_OBJECT_LEN => b,
+        _ => return Err("arg3 must be an object-and-payload region".into()),
+    };
+    let object_tag = u32::from_le_bytes(region[8..12].try_into().unwrap());
+    // The region is the handle object followed by the payload. A real bundle
+    // payload is at least the 5-byte header, so an object-only region is the
+    // client's null payload pointer.
+    let payload = if region.len() > BUNDLE_OBJECT_LEN {
+        Some(&region[BUNDLE_OBJECT_LEN..])
+    } else {
+        None
+    };
+    let ret = ow_tank::bundle::entry_lookup(handle, object_tag, payload, guid, guest_base);
+    Ok((format!("{:x}", ret), vec![region]))
+}
+
 fn handle_call(
     entry: &str,
     args: Vec<Arg>,
@@ -252,6 +305,8 @@ fn handle_call(
         // crates/ow-tank/src/manifest.rs
         "cmf_key_154504" => cmf_key_154504_entry(args, state),
         "cmf_iv_154504" => cmf_iv_154504_entry(args, state),
+        // crates/ow-tank/src/bundle.rs
+        "bundle_lookup" => bundle_lookup_entry(args),
         other => Err(format!("unknown-entry-{}", other)),
     }
 }

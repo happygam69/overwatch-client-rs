@@ -160,14 +160,23 @@ impl<'a> Bundle<'a> {
 
     /// The entry's offset, or `None` when the table has no such GUID.
     ///
-    /// Same search as the client's: a lower-bound binary search over the
-    /// GUID-sorted table, then an equality check. Offset `0` is the client's
-    /// "absent" value and is reported as `None` here too.
+    /// This is the client's search (`BundleEntryLookup`, `0x141fd5820`)
+    /// operation for operation: the bounds are the first and the **last**
+    /// entry index (`0` and `count - 1`), not the usual half-open pair, and
+    /// the midpoint is the arithmetic mean of those two indices. A count of
+    /// `0` returns before any entry is read. On a GUID-sorted table this is a
+    /// lower bound; on an unsorted table it is the same walk the client takes,
+    /// which is why the table has to be GUID-sorted. Offset `0` is the
+    /// client's "absent" value and is reported as `None` here too.
     pub fn offset_of(&self, guid: u64) -> Option<u32> {
+        if self.count == 0 {
+            return None;
+        }
+        let last = self.count - 1;
         let mut lo = 0usize;
-        let mut hi = self.count;
+        let mut hi = last;
         while lo < hi {
-            let mid = (lo + hi) / 2;
+            let mid = (lo + hi) >> 1;
             let (at, _) = self.entry(mid)?;
             if at < guid {
                 lo = mid + 1;
@@ -176,11 +185,10 @@ impl<'a> Bundle<'a> {
             }
         }
         let (found, offset) = self.entry(lo)?;
-        if found == guid && offset != 0 {
-            Some(offset)
-        } else {
-            None
+        if found != guid || offset == 0 {
+            return None;
         }
+        Some(offset)
     }
 
     /// The asset's bytes: `payload[offset .. offset + size]`.
@@ -208,6 +216,52 @@ impl<'a> Bundle<'a> {
     /// The whole payload, for diagnostics.
     pub fn payload(&self) -> &'a [u8] {
         self.payload
+    }
+}
+
+/// The client's `BundleEntryLookup` (`0x141fd5820`) as a pure function.
+///
+/// The client's public argument is a tagged bundle request handle: its low six
+/// bits are a tag and the rest masks to a 64-byte-aligned object whose `+0`
+/// qword is the bundle payload and whose `+8` dword carries the tag. A handle
+/// of `u64::MAX`, a handle that masks to zero, a tag mismatch or a null
+/// payload pointer each return `0` before the search.
+///
+/// `object_tag` is the object's `+8` dword; `payload` is the bytes the `+0`
+/// pointer names, or `None` when that pointer is null. `payload_base` is the
+/// guest address the payload occupies. The client returns `payload + offset`,
+/// a pointer; this returns that guest address, and `0` for the client's
+/// "absent". The client's first argument (the bundle directory pointer) is not
+/// read by the function and is not part of this contract.
+pub fn entry_lookup(
+    handle: u64,
+    object_tag: u32,
+    payload: Option<&[u8]>,
+    guid: u64,
+    payload_base: u64,
+) -> u64 {
+    if handle == u64::MAX {
+        return 0;
+    }
+    if handle & !0x3f == 0 {
+        return 0;
+    }
+    if ((handle as u32) ^ object_tag) & 0x3f != 0 {
+        return 0;
+    }
+    let Some(payload) = payload else {
+        return 0;
+    };
+    match Bundle::parse(payload) {
+        Ok(bundle) => match bundle.offset_of(guid) {
+            Some(offset) => payload_base.wrapping_add(u64::from(offset)),
+            None => 0,
+        },
+        // The client's width gate and its "the table runs past the payload"
+        // case both land here: a width other than 1, 2 or 4 makes the client
+        // return 0 before it reads an entry, and an out-of-bounds table is
+        // outside the client's contract (it does not bound-check).
+        Err(_) => 0,
     }
 }
 
@@ -401,6 +455,69 @@ mod tests {
         assert_eq!(parsed.offset_of(0x30), Some(6));
         assert_eq!(parsed.offset_of(0x31), None);
         assert_eq!(parsed.offset_of(0x0F), None);
+    }
+
+    #[test]
+    fn unsorted_table_takes_the_clients_walk() {
+        // The client's bounds are 0 and count - 1. On `[2, 1]` looking for 2
+        // it examines no index at all and reads entry 0: a hit. The previous
+        // half-open [0, count) search examined index 1, moved past the end
+        // and returned absent. A bundle is GUID-sorted by contract; the walk
+        // still has to be the client's.
+        let payload = bundle(4, &[(2, 0x11), (1, 0x22)]);
+        let parsed = Bundle::parse(&payload).unwrap();
+        assert_eq!(parsed.offset_of(2), Some(0x11));
+        assert_eq!(parsed.offset_of(1), None);
+    }
+
+    #[test]
+    fn the_first_duplicate_wins_and_its_zero_offset_is_absent() {
+        // A lower bound returns the first of equal GUIDs, so a later
+        // duplicate's offset cannot rescue an offset-0 first row.
+        let payload = bundle(4, &[(0x10, 0x20), (0x20, 0), (0x20, 0x30), (0x30, 0x40)]);
+        let parsed = Bundle::parse(&payload).unwrap();
+        assert_eq!(parsed.offset_of(0x20), None);
+        assert_eq!(parsed.offset_of(0x30), Some(0x40));
+    }
+
+    #[test]
+    fn one_entry_and_empty_tables_are_the_clients_edges() {
+        let empty = bundle(2, &[]);
+        assert_eq!(Bundle::parse(&empty).unwrap().offset_of(0), None);
+        let one = bundle(1, &[(u64::MAX, 0x7f)]);
+        let parsed = Bundle::parse(&one).unwrap();
+        assert_eq!(parsed.offset_of(u64::MAX), Some(0x7f));
+        assert_eq!(parsed.offset_of(0), None);
+        assert_eq!(parsed.offset_of(u64::MAX - 1), None);
+    }
+
+    #[test]
+    fn entry_lookup_models_the_tagged_handle_guard() {
+        let payload = bundle(2, &[(0x10, 0x40), (0x20, 0x50)]);
+        let tag = 0x21u32;
+        let handle = 0x0000_0002_0000_0000u64 | u64::from(tag);
+        let object_tag = tag | 0xffff_ffc0;
+        assert_eq!(
+            entry_lookup(handle, object_tag, Some(&payload), 0x20, 0x1000),
+            0x1050
+        );
+        assert_eq!(
+            entry_lookup(handle, object_tag, Some(&payload), 0x30, 0x1000),
+            0
+        );
+        assert_eq!(
+            entry_lookup(u64::MAX, object_tag, Some(&payload), 0x20, 0x1000),
+            0
+        );
+        assert_eq!(
+            entry_lookup(u64::from(tag), object_tag, Some(&payload), 0x20, 0x1000),
+            0
+        );
+        assert_eq!(
+            entry_lookup(handle, tag ^ 1, Some(&payload), 0x20, 0x1000),
+            0
+        );
+        assert_eq!(entry_lookup(handle, object_tag, None, 0x20, 0x1000), 0);
     }
 
     #[test]

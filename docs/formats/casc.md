@@ -351,7 +351,9 @@ A bundle's payload (a type-`0x09C` record's decoded bytes) is read by
 `count` entries of `u64 GUID` + `width`-byte offset. The entries are GUID-sorted
 and the client binary-searches them; offset `0` means "not here". The table
 stores no length — an asset's length is its CMF record's `size`.
-`docs/formats/maps.md` has the full account and the install counts.
+`docs/formats/maps.md` has the full account and the install counts. The search
+is the verified unit `fn/BundleLookup` (oracle `BundleEntryLookup` at
+`0x141fd5820`): 364 synthetic cases, 100% branch coverage and 12/12 mutants.
 
 The key/IV derivation is per build and uses a 512-byte table. The implemented
 CMF derivations are builds `150851`, `154088` and `154504`: AES-256, CBC, no

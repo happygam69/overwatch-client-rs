@@ -12,9 +12,10 @@ different run; it is not evidence. Code whose only citation is a capture is
 
 **"Verified" has one meaning here:** a differential-harness unit passes all
 five stages against the client's bytes. As of this commit the harness ledger
-has 16 units and **three target `ow-tank`**: `fn/ChunkGuid` (section D) and
-`fn/CmfKey154504` / `fn/CmfIv154504` (section B; differential and mutation
-pass, but the coverage stage cannot measure the body). `casc` targets
+has 17 units and **four target `ow-tank`**: `fn/ChunkGuid` and
+`fn/BundleLookup` (section D) and `fn/CmfKey154504` / `fn/CmfIv154504`
+(section B; differential and mutation pass, but the coverage stage cannot
+measure the body). `casc` targets
 `ow-casc`; the legacy probe and `ow-sim` targets are not shipped `ow-tank`
 code. Every row in sections A–C is therefore not 1 to 1 in the strict sense,
 even where the code is read, implemented and exact on the install.
@@ -40,12 +41,13 @@ These are the strongest `ow-tank` results. They are exact on the operator's
 install and have client addresses. `fn/CmfKey154504` and `fn/CmfIv154504`
 pass the differential and mutation stages, but their coverage stage cannot
 measure the client's body (an acknowledged gap), so the manifest row stays
-here under the closing rule. The other rows have no differential unit.
+here under the closing rule. The map-resolver and material rows have no
+differential unit; the manifest row has two, but their coverage stage cannot
+measure the body.
 
 | area | client address | what is proven today | what is missing |
 |---|---|---|---|
 | Map resolver | `0x14143b5c0`, `0x141ff5c80` | 34/34 chunks, 1,358 placeables, 229 models, 550 entities; bit-exact bounds | counts and bounds are regression pins, not a client trace; no harness unit |
-| Bundle entry lookup | `0x141fd5820`, `0x141fd4a50` | 305/305 map headers open (42 store, 263 bundle) | unit tests use synthetic bytes; no real-bundle duplicate/absent/offset-zero assertion; no harness unit |
 | Manifest build 154504 | `0x142e48a20`, `0x142e48700`, table `0x1436100c0` | `fn/CmfKey154504` and `fn/CmfIv154504` pass 364 synthetic differential cases each on every channel (all 32 key bytes, all 16 IV bytes, table `0x00`/`0xFF`, build and data-count extremes, digest bytes `0x00`/`0xFF` at all 20 indices); 1/1 and 5/5 mutants killed; the install manifest still decrypts to 1,301,598 records | the coverage stage cannot measure the real body (the linear sweep desynchronises at the overlapping-instruction opaque-predicate prologue), so both units set the coverage gate to 0 with an acknowledged gap; the key table may come from `OW_KEYTABLE`/TACTLib, and the test does not assert the installed exe supplied it; builds 154088 and 150851 are untested |
 | Material data join | `0x141b88cb0`, `0x141b894d0`, `0x141b7b9d0` | model → look → material → data → texture chain opens on the install | the client's runtime material application and sampler are unread; the viewer is not the renderer |
 
@@ -64,11 +66,24 @@ here under the closing rule. The other rows have no differential unit.
 | area | unit | client address | result |
 |---|---|---|---|
 | Chunk-GUID formula | `dev/verify_harness/units/fn-ChunkGuid.json` (`fn/ChunkGuid`) | `MapChunkGuid` at `0x141b32e20`, kind table `0x1439aa320` | verified: 364 differential cases, every channel; 100% coverage (0/0 branches); 3/3 viable mutants killed |
+| Bundle entry lookup | `dev/verify_harness/units/fn-BundleLookup.json` (`fn/BundleLookup`) | `BundleEntryLookup` at `0x141fd5820` (`0x141fd4a50` is the caller) | verified: 364 differential cases, every channel; 100% coverage (29/29 reachable branches of 35 sites, six structurally dead edges declared); 12/12 mutants killed |
 
 The unit's probe reads the kind from the same table slot the client indexes
 and calls the shipped `ow_tank::mapguid::chunk_guid(map, kind)`. The oracle
 reads the identical fixture table bytes, so the formula itself — the kind
 shift, the map mask and the base OR — is what the unit proves.
+
+`fn/BundleLookup` calls the shipped `ow_tank::bundle::entry_lookup` and
+`Bundle::offset_of` through the same probe. It covers the client's tagged
+handle guard, the width gate and all three entry widths, counts 0/1/2/3/8,
+first/middle/last hits, absent before/between/after, duplicate GUIDs, offset
+`0`, GUID `0` and `u64::MAX`, unsorted tables and a table ending on the
+payload's last byte. The client returns `payload + offset`; the fixture passes
+its payload's guest base and the probe returns `guest_base + offset`, so both
+sides compare one guest `u64`. The read also found a real divergence: the
+shipped search used half-open bounds `[0, count)` while the client walks
+`0..count - 1`; both agree on a GUID-sorted install table and differ on an
+unsorted one, so the search now follows the client's walk exactly.
 
 ## Closing a row
 

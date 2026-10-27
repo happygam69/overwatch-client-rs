@@ -1,0 +1,83 @@
+{
+  "id": "fn/BundleLookup",
+  "title": "tier-2 shipped code: bundle entry search against BundleEntryLookup (0x141fd5820)",
+  "address": {
+    "v2b": "0x7ff7c6cf5820"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "bundle_lookup",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "guest_base",
+      "kind": "u64"
+    },
+    {
+      "name": "handle",
+      "kind": "u64"
+    },
+    {
+      "name": "guid",
+      "kind": "u64"
+    },
+    {
+      "name": "region",
+      "kind": "ptr",
+      "ptr_len": 256
+    }
+  ],
+  "returns": "u64",
+  "argFactory": "bundle_lookup_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100.0,
+    "mutationCount": 12,
+    "mutationKillRate": 1.0,
+    "seed": 4241,
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c6cf5905",
+        "edge": "0x7ff7c6cf58f0",
+        "why": "width-4 path, reached only when lo < last. At loop exit lo == hi, and the last bound update must have been hi = mid (an update to lo = mid + 1 would leave lo > hi), so guids[lo] >= target and the 'guid < target -> return 0' edge cannot execute from the function entry."
+      },
+      {
+        "site": "0x7ff7c6cf59bd",
+        "edge": "0x7ff7c6cf58f0",
+        "why": "width-2 path, same lo < last invariant and proof as the width-4 site."
+      },
+      {
+        "site": "0x7ff7c6cf5a7d",
+        "edge": "0x7ff7c6cf58f0",
+        "why": "width-1 path, same lo < last invariant and proof as the width-4 site."
+      },
+      {
+        "site": "0x7ff7c6cf58d7",
+        "edge": "0x7ff7c6cf58f0",
+        "why": "width-4 lo < 0 test after the loop. lo is an unsigned index that starts at 0 and only ever becomes mid + 1 with mid <= last <= 0x7ffffffe for a non-negative i32 count, so its signed value is never negative. Negative counts are outside the unit's contract (the client's count gate compares count * stride with 0 and then indexes with count - 1)."
+      },
+      {
+        "site": "0x7ff7c6cf5987",
+        "edge": "0x7ff7c6cf58f0",
+        "why": "width-2 path, same non-negative-index proof as the width-4 site."
+      },
+      {
+        "site": "0x7ff7c6cf5a47",
+        "edge": "0x7ff7c6cf58f0",
+        "why": "width-1 path, same non-negative-index proof as the width-4 site."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/bundle.rs, built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the bundle_lookup entry. The ledger binds the verdict to bundle.rs + the probe source + the git revision.",
+    "Oracle is BundleEntryLookup at exe 0x141fd5820 (v2b 0x7ff7c6cf5820; the offline image keeps RVA == file offset). Signature: (directory*, u64 handle, u64 GUID); the directory pointer in RCX is never read, the handle is RDX and the GUID is R8. It returns a pointer in RAX, not an out-parameter, and has no frame or callees.",
+    "The handle is the client's tagged bundle request handle: handle == u64::MAX and (handle & ~0x3f) == 0 return 0; the object at handle & ~0x3f must have a +8 dword whose low six bits equal the handle's low six bits; object +0 is the payload pointer and a null pointer returns 0. The fixture builds that object in the arena's first 64 bytes and the payload immediately after it.",
+    "Return adapter: the client returns payload + offset, a pointer into its own address space. The fixture passes the payload's guest base (ARENA_BASE + 0x40) in the client's dead RCX slot and the probe returns guest_base + offset (or 0), so both sides compare the same guest u64. The probe's bundle_lookup discards the handle's address bits; it only carries the handle's tag to the shipped entry_lookup, which is the same check the client performs.",
+    "The search is crates/ow-tank/src/bundle.rs offset_of: bounds 0 and count - 1 (not a half-open [0, count)), midpoint (lo + hi) >> 1, lower bound then an exact GUID equality, then the width-byte offset. Offset 0 is the client's absent value. entry_lookup adds the client's handle guard, the width gate (a width other than 1, 2 or 4 returns 0 before any entry read) and the null payload pointer check.",
+    "The fixture is synthetic: widths 1/2/4 (and 0/3 to prove the width gate), counts 0/1/2/3/8, first/middle/last found rows, absent before/between/after, duplicate GUIDs (the lower bound is the first equal row, and a zero offset there is absent), unsorted tables that follow the client's walk rather than a linear scan, offset 0, GUID 0, u64::MAX, and tables whose last row ends at the payload's final byte. No install bytes and no offset into the install are used.",
+    "Unsorted behaviour is the reason the shipped search was changed: the old half-open [0, count) walk returns absent for [2, 1] looking for 2 while the client reads entry 0 and returns its offset. A bundle is GUID-sorted on the install, so the old code was exact on real data but not on the client's bytes.",
+    "The differential covers the client's handle guard, all three width paths, both post-loop shapes, the loop's repeat and exit, and the offset-0 test. The three 'lo < last and GUID < target' edges and the three 'lo < 0' edges are structurally dead and declared in unreachableBranches; every other branch is hit by both edges."
+  ],
+  "acknowledgedGaps": []
+}

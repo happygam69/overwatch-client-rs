@@ -67,6 +67,7 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "chunk_guid": ["crates/ow-tank/src/mapguid.rs"],
     "cmf_key_154504": ["crates/ow-tank/src/manifest.rs"],
     "cmf_iv_154504": ["crates/ow-tank/src/manifest.rs"],
+    "bundle_lookup": ["crates/ow-tank/src/bundle.rs"],
 }
 
 # The mutation stage rewrites the *Rust function body*, so a probe entry that
@@ -81,6 +82,8 @@ ENTRY_MUTATION: Dict[str, str] = {
     "chunk_guid": "chunk_guid",
     "cmf_key_154504": "key_154504",
     "cmf_iv_154504": "iv_154504",
+    # The entry is a thin wrapper; the search the unit proves is `offset_of`.
+    "bundle_lookup": "offset_of",
 }
 
 

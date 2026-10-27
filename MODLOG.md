@@ -4,6 +4,25 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-27 - The bundle entry lookup is harness-verified
+
+- Added `fn/BundleLookup` to `dev/verify_harness`: oracle `BundleEntryLookup`
+  at `0x141fd5820`, candidate `crates/ow-tank/src/bundle.rs` through
+  `crates/ow-tank/src/bin/verify_probe.rs`. 364 synthetic differential cases on
+  every channel, 100% branch coverage (29/29 reachable branches of 35 sites,
+  six structurally dead edges declared) and 12/12 mutants killed.
+- The read settled the search: bounds `0` and `count - 1` (not a half-open
+  pair), midpoint `(lo + hi) >> 1`, a lower bound and then an exact GUID
+  equality, and offset `0` as "absent". The old half-open walk agreed on every
+  GUID-sorted install table but diverges on an unsorted one, so `offset_of` now
+  takes the client's walk operation for operation.
+- The unit also proves the client's argument contract: the caller passes a
+  tagged handle, not a payload pointer. `bundle::entry_lookup` models the
+  handle guard, the width gate and the null payload check; the probe returns
+  `guest_base + offset` so both sides compare one guest `u64`. The fixture is
+  synthetic; no install bytes are used. The directory blob's producer is still
+  open, so `docs/ow-tank-1to1.md` keeps that producer row in section A.
+
 ## 2026-10-27 - Build-154504 key and IV are harness units
 
 - Added `fn/CmfKey154504` and `fn/CmfIv154504` to `dev/verify_harness`:
