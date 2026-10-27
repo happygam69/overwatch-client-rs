@@ -2,12 +2,10 @@
 resolver = "2"
 members = [
     "crates/ow-casc",
+    "crates/ow-scene",
+    "crates/ow-client",
     "crates/ow-stu",
     "crates/ow-tank",
-    "crates/ow-sim",
-    "crates/ow-scene",
-    "crates/ow-view",
-    "crates/ow-game",
     "crates/xtask",
 ]
 
@@ -23,19 +21,17 @@ description = "Clean-room Rust reimplementation of the Overwatch client, verifie
 # The readers mirror the shapes the client itself uses: wide argument lists,
 # deeply nested option types and index loops over parallel arrays. The
 # rewrites clippy suggests make those shapes harder to match against the
-# capture, so the lint is off rather than the code.
+# client's code, so the lint is off rather than the code.
 too_many_arguments = "allow"
 type_complexity = "allow"
 needless_range_loop = "allow"
 
 [workspace.dependencies]
 ow-casc = { path = "crates/ow-casc" }
+ow-scene = { path = "crates/ow-scene" }
+ow-client = { path = "crates/ow-client" }
 ow-stu = { path = "crates/ow-stu" }
 ow-tank = { path = "crates/ow-tank" }
-ow-scene = { path = "crates/ow-scene" }
-ow-sim = { path = "crates/ow-sim" }
-ow-view = { path = "crates/ow-view" }
-ow-game = { path = "crates/ow-game" }
 
 # Cryptography and compression used by the container and manifest layers.
 aes = "0.8"

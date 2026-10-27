@@ -3,10 +3,10 @@
 //! `STUFirstPersonComponent` (`0x9D28963F`) lives on the hero's gameplay
 //! entity and carries the per-hero view-model/camera parameters: an offset
 //! struct, the view-model entity reference, the drag spring and four
-//! scalars. The values are **read** (`docs/formats/animation.md`
-//! 2026-10-20 (12)); which scalar the client uses as the FP-pass FOV, eye
-//! height or scale is still unread, so consumers must treat the numbers as
-//! data and the mapping as a hypothesis (`docs/fitted-ledger.md`).
+//! scalars. The values are **read** (`docs/formats/animation.md`); which
+//! scalar the client uses as the FP-pass FOV, eye height or scale is still
+//! unread, so consumers must treat the numbers as data and the mapping as
+//! open (`docs/deviations.md`).
 //!
 //! This module only parses the component. The viewer exposes the mapping as
 //! explicit flags (`--fp-fov`, `--fp-eye`) until the consumer is read.

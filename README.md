@@ -1,197 +1,124 @@
 # overwatch-client-rs
 
-[![ci](https://github.com/happygam69/overwatch-client-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/happygam69/overwatch-client-rs/actions/workflows/ci.yml)
+A clean-room Rust reimplementation of the Overwatch client's gameplay:
+movement, combat, the view model and the camera. It reads data from the
+operator's own installation and behaviour from the complete current-build
+`Overwatch.exe` image. Nothing from the game ships here.
 
-A clean-room Rust reimplementation of the Overwatch client, built from your own
-installed copy. It reads the game's files from the install you already own and
-reimplements - piece by piece, and only as far as it has been verified against
-the client - the parts that matter for gameplay: movement, combat, the map, the
-view model and the camera. What is exact, what is measured, and what is still a
-fitted stand-in is written down rather than glossed over
-(`docs/fitted-ledger.md`, `docs/systems-coverage.md`); this is a research
-reconstruction in progress, not a finished game.
+**The rule: 1 to 1 or not at all.** A gameplay feature is implemented only when
+the client's own code or value has been read and the Rust result is proven
+identical. There is no "close enough" gameplay system. If the client's
+expression has not been read, the feature is listed as open and is not
+implemented. The current non-1:1 code is legacy debt in
+[`docs/deviations.md`](docs/deviations.md); it is being removed.
 
 **This repository contains no Blizzard content.** No art, models, sounds, maps,
-textures, locale data, extracted tables or decompiled code - only original Rust
+textures, locale data, extracted tables or decompiled code — only original Rust
 source and documentation. The tools open the installed game read-only and never
 modify it. See [CREDITS.md](CREDITS.md).
 
-## How the behaviour is established
+## Sources
 
-The game is too large to recover from files alone: the executable's code is
-encrypted at rest, pages are decrypted lazily, and much of the behaviour lives
-in engine code and generated graphs rather than in the assets.
-
-* **Files give structure.** Formats, registries, schemas, geometry and values
-  are read from the install and checked by tests that fail if the reading is
-  wrong. Findings live in `docs/formats/`.
-* **The decompiled client gives behaviour.** Ghidra is run over your own
-  memory captures and the complete image recovered offline from your
-  installed executable. Only addresses and conclusions are written
-  down, never disassembly or decompiled code. `docs/provenance.md` defines the evidence
-  classes; `docs/fitted-ledger.md` lists every place where a behaviour is
-  fitted, assumed, tier 3 or a stand-in.
-* **Neither substitutes for the other.** A file question that cannot be settled
-  from files moves to a capture; a capture reading that is unsure is re-derived
-  from the same capture rather than believed.
+- **Behaviour** comes from one place: the complete `Overwatch.exe` Ghidra
+  image (base `0x140000000`, every `.text` page, the install's plaintext
+  `.pdata`). Findings are recorded as an address and a conclusion, never as
+  disassembly. `docs/ghidra-project.md` is the entry point.
+- **Data** comes from the operator's installation: formats, registries,
+  geometry, values. Findings live in `docs/formats/` and are checked by tests
+  that read the install.
+- Only the current image and the operator's installation are sources.
 
 ## Status
 
-Verified against the retail install `2.25.0.0.154088`. **The client has since updated itself to `2.25.0.1.154504`** - the code moved, so old-build addresses in the docs stay in the old build's frame. The project holds both: the **complete current-build code image** (`Overwatch.exe`, all `.text` recovered offline) and the old-build image the docs' addresses were read in (`docs/capture-coverage.md`).
+**The one client launches the real practice range.** `ow-client` and `ow-scene`
+are workspace members; `ow-sim` remains parked reference code. The default
+launch selects the practice header by its `m_mapName`
+(`Maps\TrainingRoom\Training Room - Practice`), takes the first variation whose
+paired mode's display name is exactly `Practice Range`, and loads the 34 chunks
+the client's map loader requests for that variation's scene map
+`0x080000000f69002e`.
 
-**Works**
+- **Read in the current image:** the mover advance/invoker path, the Domino
+  tick driver, the camera surface and projection builders, the FP camera pose
+  path, the animation sampler and clip runtime, the statescript executor, the
+  manifest's bundle flag and bundle entry lookup, and the map-to-chunk loader.
+- **Working today:** the map header → variation → scene map → chunk resolver
+  (`ow-tank::mapresolve`), and the default client rendering the practice range.
+  The practice scene requests and opens 34/34 chunks, walks 1,358 placeables
+  (229 model-group references, 550 entity references), and places 2,449 model
+  instances from the model groups' 304 groups.
+- **Open:** the client function that selects a variation for a requested game
+  mode (the practice-range launch is a data query, not a claim that the caller
+  is read), the streaming policy, the client's producer of the bundle
+  directory, character collision, the mover's input→velocity ramp, the
+  per-frame camera look, the FP retarget, the Pose2d VM, the weapon fire loop,
+  damage application and the client material application (55 placeholder draws
+  remain diagnostics).
+- **Data-side reads:** CASC/BLTE, STU v2, entities and health pools,
+  model/skeleton/clip decoding, weapon graphs, map chunks, and the
+  bundle-aware material/texture chain. All 305 map headers are readable: 42
+  from the encoded store and 263 from bundles, as the client reads them.
 
-* **Container and data:** CASC/encoding/BLTE, manifests and the content
-  registry; both STU versions (v1 synthetic-tested only) and the typed class
-  registry (classes, fields, defaults, arrays, maps, assets); the shader
-  groups (`0x085`), code blobs (`0x087`) and the material chain.
-* **Movement:** the mover is trace-measured and gated by `trace_diff` - speeds,
-  acceleration, friction, gravity, jump, crouch, air control and slope
-  following. The advance and invoker are read in the current build; the
-  per-frame step/wish path is still unlocated, and the `+0xc0` field is a
-  static local offset rather than a stored velocity. The arithmetic is the
-  measured replacement.
-* **Combat:** health/armour/shield pools, weapon intervals, volley counts,
-  projectile speed/gravity/lifetime and hitscan traces. Damage is supplied by
-  you because the install does not expose it; damage order and armour
-  mitigation are assumptions.
-* **Scene and view:** real map geometry, hero models, skeletons, skinning and
-  the shipped texture formats; `ow-view` is a direct `wgpu`/`winit` viewer with
-  offscreen shots and the `--play` harness.
-* **View model and camera:** the first-person model, its own render pass with
-  the client's near/far (`0.01 / 1638.4 m`), the read **103° horizontal** world
-  FOV (70.53° vertical at 16:9; the FP path uses the same), a zero-rest drag
-  spring from `STUFirstPersonComponent` (`64 / 16 / -1`; constants read, form
-  fitted) and the opt-in fitted look filter (`--cam-look-inverse 0.1`). The
-  world camera near/far are read: `0.1 / 16384 m`, with the first-person pair
-  one tenth; the mouse scale `K` is read from the executable's `.rdata`.
-* **First-person animation:** the clip feed and the real `STUAnimBlendTree`
-  are evaluated (`--anim auto`; category 5 -> c71, category 9 -> c50; Pose2d
-  layers at their slot weights; the per-child >0.5 sampler gate); the FP
-  retarget's dropped-ancestor fold is measured and implemented. The 2026-10-23
-  Ghidra check found the authored idle but **not an exact client pose**: the
-  reference→model retarget, animated FP camera pose, FP weapon source,
-  per-channel sampler and the real `+0x1350` spring are still different.
-* **Content surfaces:** skin themes, customizable skin themes, voice
-  conversations, progression unlocks, loot boxes, stats and catalogs (6 of 9
-  surfaces readable on this install).
-* **Replay and sound metadata:** the `phl`/`prp` container, header and hero
-  roster; Wwise metadata and WEM headers.
-* **Capture pipeline:** `dev/live_page_diff.py` (read-only, protection-aware)
-  and `dev/warm_poll.py` (fallback); merged images are kept outside the repo.
-
-**Open / blocked**
-
-* **First-person animation:** the Pose2d dataflow VM (driver inputs and layer
-  weights) and the reference-skeleton/rest data behind the 2.395x shoulder rows
-  are unread; at the authored defaults the tree output is the base clip (c71).
-* **The first-person camera transform:** the FP near/far, the per-hero
-  `STUFirstPersonComponent` values (offset, spring, four scalars) and the live
-  component layout are read; the type-0x35 consumer and its per-frame slots are
-  identified, but the per-frame offset/scalar application is not. The FP camera
-  pose is read as a separate path: `UpdateFirstPersonCameraPose` builds it from
-  the FP animation basis/position and `ApplyFirstPersonCamera` applies it
-  (`docs/formats/camera.md`). Which component scalar feeds its FOV is still
-  unread, so the FP drop/back framing stays explicitly fitted
-  (`--fp-cam-drop`, `--fp-cam-back`).
-* **World camera near/far and FOV are read** (`0.1 / 16384 m`; FP one tenth;
-  103° horizontal -> 70.53° vertical at 16:9). The FP FOV is the same; the
-  per-frame look application and the FP camera pose (drop/back) remain open or
-  fitted. The perspective-matrix builder is read (row-major, left-handed,
-  depth 0..1); the view's `A x B` x row and the projection's negative x scale
-  cancel.
-* **Materials:** the model-to-look-to-texture chain works where the keyring has
-  the keys; several hero body materials and many map props remain blocked.
-* **Per-shot damage**, the steep-slide rule, the v1 STU path, the replay frame
-  payload (Zstd) and Wwise audio decoding remain open or declared.
-* **Bots and abilities** are test stand-ins: boxes/markers, no client AI.
-
-The detailed ledger is `docs/systems-coverage.md` and
-`docs/fitted-ledger.md`.
+The rebuild order is [`docs/rebuild-plan.md`](docs/rebuild-plan.md).
 
 ## Running it
 
 ```sh
 export OW_INSTALL='E:\Overwatch'                        # folder with .build.info
-export OW_TACTLIB='path/to/TACTLib/TACTLib'             # per-build manifest key table
+export OW_EXE='E:\Overwatch\_retail_\Overwatch.exe'     # optional; found under OW_INSTALL anyway
+export OW_TACTLIB='path/to/TACTLib/TACTLib'             # older-build manifest key tables
 export OW_OWLIB='path/to/OWLib'                         # optional, STU class names
 export OW_SUPPORT_KEYRING='path/to/Overwatch.keyring'   # optional
 
-cargo xtask verify                                      # the gate: fmt, clippy, tests, index, ledger
-cargo xtask verify --fast                               # the same, without the install-reading tests
-cargo run --release -p ow-view -- list                  # map chunks worth drawing
-cargo run --release -p ow-view -- --play --hero 3 --anim auto
+cargo xtask verify                                      # fmt, clippy, tests, index, deviations
+cargo xtask verify --fast                               # without the install-reading tests
+
+cargo run --release -p ow-client                        # the practice range
+cargo run --release -p ow-client -- --list-maps         # headers and variation modes
+cargo run --release -p ow-client -- --shot out.png --width 1280 --height 720
+cargo run --release -p ow-client -- --tour out --count 4
+cargo run -p ow-tank --bin look -- --why 0x0790000000000688  # the practice header
+cargo run -p ow-tank --bin look -- --why 0x080000000f69002e  # its scene map
 ```
 
-Useful harness flags:
-
-* `--no-map` - the sandbox course instead of map chunks (the default for
-  `--play` when no chunks are named).
-* `--hero N --hero-only` - inspect one hero's model; `--pose bone:x:45`
-  articulates it.
-* `--view-model [--first-person]` - place the hero's first-person model, in
-  front of the camera or at the player's transform.
-* `--anim <guid|auto>` - play an animation clip; `auto` resolves the FP idle
-  through a heuristic over the client's blend set (it still plays one clip,
-  while the true idle item is a 5-clip blend).
-* `--fp-cam-drop` / `--fp-cam-back` - tune the fitted FP pass framing.
-* `--cam-look-inverse 0.1` - enable the fitted look filter (default exact).
-* `--vm-k` / `--vm-c` / `--vm-g` - override the view-model drag spring.
-* `--play-th <seconds>` - headless harness for scripted checks.
-
-Live capture (read-only, your decision - the game must be running):
-
-```sh
-python dev/live_page_diff.py --wait --out D:/ow-dumps/live_page_diff --all-modules
-```
-
-Press Enter to mark a phase; a line starting with `\` stops. The tool writes
-4 KB pages plus `warm.csv` and `encrypted.csv` outside the repo. The fallback
-is `python dev/warm_poll.py --wait --all-regions`.
+`--chunks`/`--chunks-from` remain explicit chunk diagnostics; they are not the
+default and a chunk list is not a map. `--no-map` is the explicit stand-in
+course for viewer work.
 
 Data probes:
 
 ```sh
-cargo run -p ow-tank --example blendset_probe -- 3    # true FP items, clips, curves, retarget params
+cargo run -p ow-tank --example blendset_probe -- 3    # FP items, clips, slots, tree
 cargo run -p ow-tank --bin look -- --help             # asset/material probe
 cargo run -p ow-tank --bin anim -- --help             # clip probe
 ```
 
 ## Layout
 
-```
+```text
 crates/ow-casc   container: build info, config, keyring, buckets, BLTE, encoding, root
 crates/ow-stu    structured data, typed STU reads, class registry
-crates/ow-tank   game semantics: GUIDs, manifests, entities, weapons, graphs, animation, chunks
-crates/ow-sim    movement/combat simulation and trace verification
-crates/ow-scene  map geometry and model assembly for the renderer
-crates/ow-view   the wgpu viewer and the play harness
-crates/ow-game   the Bevy shell around the simulation
-crates/xtask    the project's own commands: `cargo xtask verify` is the gate
-docs/formats/    verified layouts and decompiled-behaviour findings
-docs/open-questions.md       the work queue: what is open and what would settle it
-docs/fitted-ledger.md       every fitted/assumed/tier-3/stand-in implementation
-docs/systems-coverage.md    every client system, state and next anchor
-docs/provenance.md          evidence classes and method
-dev/                        the analysis tools (tracked); their output is not
+crates/ow-tank   game semantics: GUIDs, manifests, entities, weapons, graphs, animation, maps, mapresolve
+crates/ow-scene  map geometry from the resolver's chunks and the models they place
+crates/ow-client the one launchable client: renderer, HUD, free camera
+crates/ow-sim    parked reference: the read body/camera arithmetic (not built)
+crates/xtask     the project's own commands; `cargo xtask verify` is the gate
+docs/            current findings, plans and open questions
+dev/             read-only analysis and verification tools (tracked); output is not
 ```
-
-Captures and merged images live outside the repo, under `D:/ow-dumps`; nothing
-from the install is committed.
 
 ## Licence
 
-MIT or Apache-2.0, at your option. That covers this code only - not the game,
+MIT or Apache-2.0, at your option. That covers this code only — not the game,
 its data, or anything either of them produces.
 
 ## Contributing
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md) and `AGENTS.md` (the project's
-working contract). The short version: one gate decides whether a change is
-done —
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). The
+short version: one gate decides whether a change is done —
 
 ```sh
 cargo xtask verify --fast   # what CI runs; drop --fast once you have an install
 ```
 
-— and the work queue is `docs/open-questions.md`, next thing at the top.
+— and the work queue is [`docs/open-questions.md`](docs/open-questions.md).

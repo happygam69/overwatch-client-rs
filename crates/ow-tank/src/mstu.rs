@@ -13,7 +13,7 @@
 //! `offset + size == payload length`).
 //!
 //! Evidence class: *install* (via `cargo test --test mstu_real -- --nocapture`)
-//! cross-checked against the *decompiled* reader. See `docs/formats/mstu.md`.
+//! cross-checked against the *decompiled* reader. See `docs/formats/stu.md`.
 
 use std::fmt;
 

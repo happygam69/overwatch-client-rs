@@ -22,6 +22,7 @@ never a silent pass.
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import shutil
@@ -40,20 +41,29 @@ REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 # The legacy rustc probe (selftest / old units).
 PROBE_SRC = os.path.join(HERE, "rust_probe.rs")
 
-# The shipped-code probe.
+# The default shipped-code crate/probe. A unit may name another crate with its
+# `candidateCrate` / `candidateProbe` fields; the ENTRY_SOURCES table below
+# still has to name the source files whose edits must invalidate the verdict.
+DEFAULT_CRATE = "ow-sim"
+DEFAULT_PROBE = "crates/ow-sim/src/bin/verify_probe.rs"
+
 OW_SIM_ROOT = os.path.join(REPO_ROOT, "crates", "ow-sim")
-OW_SIM_MANIFEST = os.path.join(OW_SIM_ROOT, "Cargo.toml")
 CARGO_PROBE_SRC = os.path.join(OW_SIM_ROOT, "src", "bin", "verify_probe.rs")
-PROBE_BIN = "verify_probe"
 
 # Which source file implements each probe entry. The ledger's candidate digest
 # covers the file(s) listed here plus the probe itself and the crate revision.
-# A new entry must add itself here; an unknown entry falls back to the whole
-# crate root, which is conservative (more source in the digest, not less).
+# A new entry must add itself here. An unknown entry falls back to the named
+# crate's lib.rs; that does not digest the function's own file, so a cargo unit
+# outside this table is unfinished, not verified.
 ENTRY_SOURCES: Dict[str, List[str]] = {
     "orthonormalize_camera_basis": ["crates/ow-sim/src/camera.rs"],
     "move_toward": ["crates/ow-sim/src/movement.rs"],
     "controller_advance": ["crates/ow-sim/src/movement.rs"],
+    "salsa20_xor": ["crates/ow-casc/src/blte.rs"],
+    "salsa20_state_init": ["crates/ow-casc/src/blte.rs"],
+    "dynamic_index_hash": ["crates/ow-casc/src/index.rs"],
+    "dynamic_index_key_hash": ["crates/ow-casc/src/index.rs"],
+    "encoding_header_parse": ["crates/ow-casc/src/encoding.rs"],
 }
 
 # The mutation stage rewrites the *Rust function body*, so a probe entry that
@@ -61,6 +71,10 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
 # the function whose lines mutate.py should edit.
 ENTRY_MUTATION: Dict[str, str] = {
     "controller_advance": "advance",
+    "salsa20_xor": "salsa20",
+    "dynamic_index_hash": "hash_index",
+    "dynamic_index_key_hash": "key_hash",
+    "encoding_header_parse": "write_header_fields",
 }
 
 
@@ -88,15 +102,19 @@ def _git_rev() -> str:
     return "unknown"
 
 
-def entry_sources(entry: str) -> List[str]:
+def entry_sources(entry: str, crate: str = DEFAULT_CRATE) -> List[str]:
     """Repo-relative source files that implement ``entry``."""
     paths = ENTRY_SOURCES.get(entry)
     if paths is None:
-        return ["crates/ow-sim/src/lib.rs"]
+        return [f"crates/{crate}/src/lib.rs"]
     return list(paths)
 
 
-def candidate_binding(entry: str) -> Tuple[str, List[str], str]:
+def candidate_binding(
+    entry: str,
+    crate: str = DEFAULT_CRATE,
+    probe: Optional[str] = None,
+) -> Tuple[str, List[str], str]:
     """Digest of the candidate artifact, its source list, and the crate rev.
 
     The digest is over the *function's own source file(s)*, the probe source
@@ -105,7 +123,9 @@ def candidate_binding(entry: str) -> Tuple[str, List[str], str]:
     """
     import hashlib
 
-    rel = entry_sources(entry)
+    if probe is None:
+        probe = f"crates/{crate}/src/bin/verify_probe.rs"
+    rel = entry_sources(entry, crate)
     h = hashlib.sha256()
     resolved: List[str] = []
     for r in rel:
@@ -115,8 +135,9 @@ def candidate_binding(entry: str) -> Tuple[str, List[str], str]:
             with open(p, "rb") as f:
                 h.update(f.read())
         h.update(b"\0")
-    if os.path.exists(CARGO_PROBE_SRC):
-        with open(CARGO_PROBE_SRC, "rb") as f:
+    probe_path = probe if os.path.isabs(probe) else os.path.join(REPO_ROOT, probe)
+    if os.path.exists(probe_path):
+        with open(probe_path, "rb") as f:
             h.update(f.read())
     h.update(b"\0")
     rev = _git_rev()
@@ -140,7 +161,8 @@ class RustCandidate:
     the legacy standalone ``rust_probe.rs``. ``source_override`` is used only
     by the mutation stage; for cargo it is paired with ``source_path`` and the
     whole crate is copied to a temporary directory so the real source is never
-    edited in place.
+    edited in place. ``crate_dir`` / ``cargo_probe`` select the shipped crate
+    and probe; they default to ow-sim's.
     """
 
     def __init__(
@@ -156,6 +178,8 @@ class RustCandidate:
         state_base: Optional[int] = None,
         state_bytes: Optional[bytes] = None,
         call_timeout: float = DEFAULT_CALL_TIMEOUT,
+        crate_dir: Optional[str] = None,
+        cargo_probe: Optional[str] = None,
     ):
         self.entry = entry
         self.arg_kinds = list(arg_kinds)
@@ -166,6 +190,13 @@ class RustCandidate:
         self.state_mode = state_base is not None
         self.state_base = state_base
         self.state_bytes = state_bytes or b""
+        self.crate_dir = (
+            os.path.abspath(crate_dir) if crate_dir else OW_SIM_ROOT
+        )
+        self.cargo_probe = (
+            os.path.abspath(cargo_probe) if cargo_probe else CARGO_PROBE_SRC
+        )
+        self.probe_bin = os.path.splitext(os.path.basename(self.cargo_probe))[0]
         work_dir = work_dir or tempfile.mkdtemp(prefix="verify_rust_")
         os.makedirs(work_dir, exist_ok=True)
         if loader == "cargo":
@@ -217,9 +248,8 @@ class RustCandidate:
             q.put(line)
         q.put("")  # EOF sentinel
 
-    @staticmethod
-    def _cargo_bin_path(target_dir: str) -> str:
-        name = PROBE_BIN + (".exe" if os.name == "nt" else "")
+    def _cargo_bin_path(self, target_dir: str) -> str:
+        name = self.probe_bin + (".exe" if os.name == "nt" else "")
         return os.path.join(target_dir, "release", name)
 
     def _build_rustc(self, src: str, work_dir: str) -> str:
@@ -238,9 +268,17 @@ class RustCandidate:
     ) -> str:
         """Build the real-crate probe; a mutant gets a temporary crate copy."""
         if source_override is None:
-            manifest = OW_SIM_MANIFEST
-            target_dir = os.environ.get("CARGO_TARGET_DIR") or os.path.join(
+            manifest = os.path.join(self.crate_dir, "Cargo.toml")
+            if not os.path.exists(manifest):
+                raise RuntimeError(f"cargo crate manifest not found: {manifest}")
+            # A per-crate target directory: two crates can each ship a
+            # `verify_probe` binary, and one shared output path would let a
+            # stale build of the other crate's probe answer a call.
+            base_target = os.environ.get("CARGO_TARGET_DIR") or os.path.join(
                 REPO_ROOT, "target"
+            )
+            target_dir = os.path.join(
+                base_target, "verify_probe", os.path.basename(self.crate_dir)
             )
             cmd = [
                 "cargo",
@@ -249,8 +287,10 @@ class RustCandidate:
                 "--offline",
                 "--manifest-path",
                 manifest,
+                "--target-dir",
+                target_dir,
                 "--bin",
-                PROBE_BIN,
+                self.probe_bin,
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True)
             if proc.returncode != 0:
@@ -266,35 +306,24 @@ class RustCandidate:
         if not source_path:
             raise RuntimeError("cargo mutant needs the source file it mutates")
         crate_dir = os.path.join(work_dir, "crate")
-        # ow-sim is deliberately dependency-free and has no build.rs; the
-        # copy is the whole candidate. If it grows either, extend this copy
-        # rather than mutating the checkout in place.
         shutil.copytree(
-            OW_SIM_ROOT,
+            self.crate_dir,
             crate_dir,
             ignore=shutil.ignore_patterns("target", "*.pdb"),
         )
-        # The copy is outside the workspace, so replace the inherited
-        # package fields with concrete ones. ow-sim has no dependencies.
-        with open(os.path.join(crate_dir, "Cargo.toml"), "w", encoding="utf-8") as f:
-            f.write(
-                "[package]\n"
-                'name = "ow-sim"\n'
-                'version = "0.1.0"\n'
-                'edition = "2021"\n'
-                "\n"
-                "[lib]\n"
-                'path = "src/lib.rs"\n'
-                "\n"
-                "[[bin]]\n"
-                f'name = "{PROBE_BIN}"\n'
-                'path = "src/bin/verify_probe.rs"\n'
-            )
-        # source_path is repo-relative (e.g. crates/ow-sim/src/camera.rs);
+        # The copy is outside the workspace, so it needs a workspace root that
+        # supplies the `workspace = true` package fields, lints and the
+        # dependencies the crate actually uses. Writing that root is what lets
+        # a crate with registry dependencies (ow-casc -> flate2) be mutated;
+        # the old loader assumed a dependency-free crate.
+        self._write_mutant_workspace(work_dir, crate_dir)
+        # source_path is repo-relative (e.g. crates/ow-casc/src/blte.rs);
         # translate it into the copy.
-        rel = os.path.relpath(source_path, OW_SIM_ROOT)
+        rel = os.path.relpath(source_path, self.crate_dir)
         if rel.startswith(".."):
-            raise RuntimeError(f"mutant source outside ow-sim: {source_path}")
+            raise RuntimeError(
+                f"mutant source outside {os.path.basename(self.crate_dir)}: {source_path}"
+            )
         dst = os.path.join(crate_dir, rel)
         with open(dst, "w", encoding="utf-8") as f:
             f.write(source_override)
@@ -305,11 +334,11 @@ class RustCandidate:
             "--release",
             "--offline",
             "--manifest-path",
-            os.path.join(crate_dir, "Cargo.toml"),
+            os.path.join(work_dir, "Cargo.toml"),
             "--target-dir",
             target_dir,
             "--bin",
-            PROBE_BIN,
+            self.probe_bin,
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
@@ -321,6 +350,88 @@ class RustCandidate:
         if not os.path.exists(exe):
             raise RuntimeError(f"cargo mutant built but not found: {exe}")
         return exe
+
+    @staticmethod
+    def _toml_value(v) -> str:
+        """A TOML value for the scalar/inline-table forms a manifest uses."""
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, str):
+            return json.dumps(v)
+        if isinstance(v, (int, float)):
+            return repr(v)
+        if isinstance(v, list):
+            return "[" + ", ".join(RustCandidate._toml_value(x) for x in v) + "]"
+        if isinstance(v, dict):
+            body = ", ".join(
+                f"{k} = {RustCandidate._toml_value(x)}" for k, x in v.items()
+            )
+            return "{ " + body + " }"
+        raise TypeError(f"unsupported TOML value: {v!r}")
+
+    @classmethod
+    def _write_mutant_workspace(cls, work_dir: str, crate_dir: str) -> None:
+        """Write a standalone workspace root for the temporary crate copy.
+
+        The crate's manifest uses `workspace = true` for its package fields,
+        its lints and (for ow-casc) its dependencies. A copy outside the repo
+        cannot see the real workspace root, so reproduce the parts it needs.
+        Only the workspace dependencies the crate actually references are
+        copied; a path dependency would point outside the temporary tree and
+        is refused rather than silently broken.
+        """
+        import tomllib
+
+        with open(os.path.join(REPO_ROOT, "Cargo.toml"), "rb") as f:
+            root = tomllib.load(f)
+        with open(os.path.join(crate_dir, "Cargo.toml"), "rb") as f:
+            crate = tomllib.load(f)
+        ws = root.get("workspace", {})
+        used = set()
+        for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+            for name, value in crate.get(section, {}).items():
+                if isinstance(value, dict) and value.get("workspace") is True:
+                    used.add(name)
+        deps = {
+            name: value
+            for name, value in ws.get("dependencies", {}).items()
+            if name in used
+        }
+        for name, value in deps.items():
+            if isinstance(value, dict) and "path" in value:
+                raise RuntimeError(
+                    f"mutant build: workspace dependency {name!r} is a path "
+                    "dependency; extend _write_mutant_workspace to copy it"
+                )
+        lines = [
+            "[workspace]",
+            'resolver = "2"',
+            'members = ["crate"]',
+            "",
+        ]
+
+        def dump_table(prefix: str, table: dict) -> None:
+            scalars = {k: v for k, v in table.items() if not isinstance(v, dict)}
+            if scalars:
+                lines.append(f"[{prefix}]")
+                for k, v in scalars.items():
+                    lines.append(f"{k} = {cls._toml_value(v)}")
+                lines.append("")
+            for k, v in table.items():
+                if isinstance(v, dict):
+                    dump_table(f"{prefix}.{k}", v)
+
+        if ws.get("package"):
+            dump_table("workspace.package", ws["package"])
+        if ws.get("lints"):
+            dump_table("workspace.lints", ws["lints"])
+        if deps:
+            lines.append("[workspace.dependencies]")
+            for name, value in deps.items():
+                lines.append(f"{name} = {cls._toml_value(value)}")
+            lines.append("")
+        with open(os.path.join(work_dir, "Cargo.toml"), "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
 
     def _roundtrip(self, line: str) -> str:
         assert self.proc.stdin and self.proc.stdout
@@ -356,7 +467,11 @@ class RustCandidate:
                         if getattr(a, "guest", None) is not None
                         else "-"
                     )
-                    parts += ["ptr", a.mem.hex(), relocs, guest]
+                    # `-` is the empty byte string: an empty hex field would
+                    # disappear under whitespace splitting, which made a
+                    # zero-length pointee unrepresentable on the wire.
+                    mem_hex = a.mem.hex() if a.mem else "-"
+                    parts += ["ptr", mem_hex, relocs, guest]
                 else:
                     # The legacy rust_probe.rs speaks the two-field ptr form.
                     parts += ["ptr", a.mem.hex(), relocs]
@@ -389,7 +504,7 @@ class RustCandidate:
                 return RustCandidateResult(
                     ok=False, ret_bits=0, pointee_after={}, fault="missing pointee in response"
                 )
-            after[i] = bytes.fromhex(toks[oi])
+            after[i] = b"" if toks[oi] == "-" else bytes.fromhex(toks[oi])
             oi += 1
         state_after = None
         if self.state_mode:

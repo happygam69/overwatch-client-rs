@@ -3,8 +3,6 @@
 //! The content manifest maps a GUID to bytes and says nothing about grouping.
 //! The package manifest is the grouping: every asset belongs to a package, and
 //! a package is a thing that is loaded as a unit -- a map, a hero, a game mode.
-//! That is what makes it useful here: one chunk of the practice range was
-//! recovered from a running game, and its package names the rest of the map.
 //!
 //! ```text
 //! header          u64 build version, four u32, i32 package count,

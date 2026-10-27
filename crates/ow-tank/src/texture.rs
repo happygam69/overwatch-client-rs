@@ -25,7 +25,7 @@
 //! the anchor tables are tables, not derivable code: they are the ones the BC7
 //! specification defines, taken from the public-domain `bc7decomp` reference
 //! (Rich Geldreich) and re-checked against an independent decoder — see
-//! `docs/formats/rendering.md` § "BC7".
+//! `docs/formats/materials.md` § "BC7".
 //!
 //! BC6H is the high-dynamic-range member of the family (skyboxes, light
 //! probes): fourteen modes, half-float output, and endpoint values that are
@@ -38,7 +38,7 @@
 //! both variants and over 21 real install assets — 0 differing channels in
 //! every sweep. `texture2ddecoder` is the second opinion but a weak one (8-bit
 //! clamped, and it saturates on a few real pixels), so it is reported rather
-//! than trusted; see `docs/formats/rendering.md` § "BC6H". The partition
+//! than trusted; see `docs/formats/materials.md` § "BC6H". The partition
 //! table it uses is the first half of BC7's; the note above `BC6H_MODES`
 //! explains why sharing that is safe.
 
@@ -137,7 +137,7 @@ impl Format {
             // 7 to 6260, values reaching the largest finite half, negative
             // values in up to 49% of a mode's channels, and a neighbour
             // difference 3 to 5 orders of magnitude larger. See
-            // `docs/formats/rendering.md` § "BC6H".
+            // `docs/formats/materials.md` § "BC6H".
             94 | 95 => Format::Bc6h { signed: false },
             96 => Format::Bc6h { signed: true },
             27..=29 => Format::Rgba8,
@@ -1746,7 +1746,7 @@ pub static BC6H_MODES: [Bc6hMode; 14] = [
     // cross-decoder check settles it too: `bcdec` reads it as blue, and our
     // decode is bit-identical to `bcdec` over all fourteen modes in both
     // variants — had this bit been green's, those blocks would differ. See
-    // `docs/formats/rendering.md` § "BC6H".
+    // `docs/formats/materials.md` § "BC6H".
     Bc6hMode {
         number: 26,
         transformed: true,
@@ -2863,7 +2863,7 @@ mod tests {
     /// decode *uses* the shape is `a_bc6h_partition_index_changes_the_decode`
     /// and `a_bc6h_shape_moves_pixels_between_the_two_regions` below, and that
     /// it matches other decoders on real encoder output is measured — see
-    /// `docs/formats/rendering.md` § "BC6H".
+    /// `docs/formats/materials.md` § "BC6H".
     #[test]
     fn bc6h_shares_the_first_half_of_the_bc7_partition_table() {
         for i in 0..32usize {
@@ -3248,7 +3248,7 @@ mod tests {
     /// indistinguishable *at that pixel*; they are not indistinguishable as
     /// tiles, which is why the tile is what is compared. (`bcdec` does exactly
     /// the same arithmetic here, so this is the format's behaviour and not ours:
-    /// see the cross-decoder numbers in `docs/formats/rendering.md`.)
+    /// see the cross-decoder numbers in `docs/formats/materials.md`.)
     #[test]
     fn all_fourteen_bc6h_modes_decode_through_their_own_arithmetic() {
         let black = [0u16, 0, 0, 0x3C00];

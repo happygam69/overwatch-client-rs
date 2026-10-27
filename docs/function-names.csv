@@ -1,229 +1,242 @@
 program,address,doc_address,name,role
-module_v2full.bin,0x7ff7c4ff0060,0x2d0060,ViewmodelVtableInit,A static initialiser: stores the view-model class vtable pointer and guards a one-shot setup
-Overwatch.exe,0x1420feca0,0x7ff7c6e84610,AnimSamplerRule,The per-child sampler gate: vec4 lanes; winner-take-all above weight 0.5
-module_v2full.bin,0x7ff7c7a38c40,0x7ff7c7a38c40,DmBodyDescriptorInit,Fills a static descriptor with literal stores
-module_v2full.bin,0x7ff7c7a38cbf,0x7ff7c7a38cbf,DmBodyFieldArrayFill,Writes the field array of that descriptor
-Overwatch.exe,0x142cc3050,0x7ff7c7a4c150,DmWorldInvDt0Writer,The writer of dmWorld.m_inv_dt0 (+0x198)
-Overwatch.exe,0x142cc3630,0x7ff7c7a4c730,DmWorldSubstepDriver,The substep driver of the solver chain
-Overwatch.exe,0x142cbeb70,0x7ff7c7a47c70,DmWorldConstruct,The dmWorld constructor
-Overwatch.exe,0x142cbdc60,0x7ff7c7a46d60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0)
-module_v2full.bin,0x7ff7c7a4cce0,0x7ff7c7a4cce0,DmWorldClearForces,"ClearForces: decodes the handle, returns behind the +0x15c gate, and walks the bodies zeroing force (0x130) and torque (0x140)"
-ldr/loader_xor_regions.exe,0x1814380e0,0x14380e0,PageXorApplier,The candidate page-XOR applier: the pad-base arms; the VirtualProtect indcalls; the byte and dword xor leaves; the and 0x3fff window mask
-ldr/loader_xor_regions.exe,0x181015a94,0x1015a94,PageXorApplierCaller,The caller of the applier; returns at 0x1015a99
-ldr/loader_xor_regions.exe,0x1810c1e20,0x10c1e20,PadBXorFamily,The second pad-base family: the 4-byte-granular and 0x3ffc mask; called from 0x8a4ad0
-ldr/loader_xor_regions.exe,0x1810b72f0,0x10b72f0,PadCXorFamily,The third pad-base region
-Overwatch.exe,0x140d2f060,0xd2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; checks it against the type descriptor; resolves the view-model entity and its model; calls the bind; registers the first-person config vars
-Overwatch.exe,0x140d2faa0,0xd4faa0,FpViewmodelBind,The bind: stores the view-model entity and model references and resets the view-model state; it does not read m_position or the four scalars
-Overwatch.exe,0x140d31bf0,0xd31bf0,FpViewmodelUpdateA,Per-frame update (view-model vtable slot +0xe0): walks the six 0x110-stride animation slots and runs the event player on each
-Overwatch.exe,0x140d322f0,0xd322f0,FpViewmodelUpdateB,Per-frame update (view-model vtable slot +0xe8): the second of the two per-frame slots
-Overwatch.exe,0x140d29c60,0xd29c60,FpViewmodelEventPlayer,The animation event/state player: dispatches event masks against the slot's event list
-Overwatch.exe,0x140d27410,0xd27410,FpViewmodelEventSort,Sorts the 0x50-byte event records by their short priority
-Overwatch.exe,0x141b88f10,FUN_7ff7c68f1de0,MrnmHandler,"The MRNM chunk handler and its deserializer are one function: copies the header and copies the material values (materials.md) while building the runtime parent-indexed tables (0xA0/0xF8/0x18 strides, used-bone mask, roots at -1) (animation.md)"
-Overwatch.exe,0x140b909d0,FUN_7ff7c58df9b0,CurveKeySampleDual,The shared curve pipeline's dual (two-source) sample stage feeding blend/replace
-Overwatch.exe,0x141e2d5c0,FUN_7ff7c6ba3a70,ClipRuntimeConstruct,The clip runtime record's constructor
-Overwatch.exe,0x140d2a250,FUN_00d2a250,AnimEventMaskDispatch,Current-build animation event player helper: dispatches event masks 0x100/0x200/0x400/0x800 against the slot's event list (RVA 0xd2a250)
-Overwatch.exe,0x140d3a020,FUN_00d3a020,FpViewmodelEventPlayerB,Current-build: the second event/state player the per-frame view-model updates call (RVA 0xd3a020)
-Overwatch.exe,0x1421530b0,FUN_7ff7c6eda1c0,StatescriptVarPoolConstruct,Constructs the runtime variable pool (pool 0x68 -> holder 0x240 with the 16x0x20 slot table -> instance >=0x15B0)
-Overwatch.exe,0x142155280,FUN_7ff7c6edc380,StatescriptApplyPass,The apply pass: walks the instance's elements and applies each record's default
-Overwatch.exe,0x142157910,FUN_7ff7c6edea10,StatescriptSlotResolve,Resolves an element by its id in the runtime
-Overwatch.exe,0x140a264c0,FUN_7ff7c5770230,StatescriptDriveWalk,The per-frame script walk: slot 100 (+0x320) of the host class; walks the script-instance array and runs element slots 43/44 around a parameter push
-Overwatch.exe,0x142141f70,FUN_7ff7c6ec9070,StatescriptNodePush,The parameter push: walks the element list and dispatches by node type index through the trampoline
-Overwatch.exe,0x140a9ba70,FUN_7ff7c57e77b0,StatescriptSlot43Executor,Element vtable slot 43 (+0x158): the executor step that sets the busy counter
-Overwatch.exe,0x1421f6ae0,FUN_7ff7c6f7e310,StatescriptGraphMaterialize,"The graph materializer: walks the 0x10-byte node records {key, flags, kind, target} in order"
-Overwatch.exe,0x1421ea960,FUN_7ff7c6f72190,WorldQueryByClass,"The world query a resolved reference lands in (world, u16 class id, 0x9e)"
-Overwatch.exe,0x141943290,FUN_7ff7c66aa450,TypeIndexByHash,Maps the first-person component's class hash 0x9d28963f to type index 0x35
-Overwatch.exe,0x140be3700,FUN_7ff7c5933ec0,LobbyLog,"The shared lobby logger entry: (client, level, message, system-name string)"
-Overwatch.exe,0x141b7b9d0,FUN_7ff7c68e4560,MaterialAssetLookup,"The material-asset lookup (registry, keyA, keyB); falls into the no-return assert path on a miss"
-Overwatch.exe,0x141b839b0,FUN_7ff7c68ec880,MaterialKeyBind,The u64-array material binding: resolves keys -> indices clamped by the u64-value count
-Overwatch.exe,0x141b8a1d0,FUN_7ff7c68f30a0,MaterialSlotBind,The slot binder: sets the container's slot count and binds each material through the record's u16 at +4
-Overwatch.exe,0x141b8ca70,FUN_7ff7c68f5940,MaterialParamApply,"The material-parameter applier: resolves the material descriptor, scans the model's key/value records, stores the min/max times"
-Overwatch.exe,0x141b88cb0,FUN_7ff64ba31b80,MdlcMaterialRead,"The MDLC chunk deserializer: the material list (copies the header, memcpy's the material values)"
-Overwatch.exe,0x141b894d0,FUN_7ff64ba323a0,MsklTableBuild,The mskl chunk deserializer: packs the 6-byte chain records into the table blob
-Overwatch.exe,0x141b88e50,FUN_7ff64ba31d20,MoclRead,The MOCL chunk deserializer: the occlusion/limits table
-Overwatch.exe,0x142cd9c90,FUN_7ff756242d00,ConstraintDispatch,The per-constraint dispatcher (cases 1-9) inside the solve
-Overwatch.exe,0x142d07170,FUN_7ff7562702a0,RotationInertiaSolve,A 4x4 rotation-inertia solver in the conditioned sweep (verified not the integrator)
-Overwatch.exe,0x142cdf710,FUN_7ff7c7a68840,DmResidualQuery,The residual query the step entry loops on (threshold 0.5 at DAT_7ff7c7d0c068)
-Overwatch.exe,0x14208c070,FUN_7ff7c6e0fb50,DmTickKeeper,"The tick's keeper: zeroes the pending budget, clears the pending flag, recurses into children whose time is behind"
-Overwatch.exe,0x140cbacc0,FUN_7ff7c5a12c50,MoverStateMachine,"The per-frame character state machine: flags, timer, state id, the +0x1a79 state byte, the local vector and the ground probe"
-Overwatch.exe,0x140ca5940,FUN_7ff7c59fd050,MoverWishUpdate,"The wish-vector update wrapper: reads +0x1140, converts through the frame-conversion helper, applies the difference"
-Overwatch.exe,0x141c5f5e0,FUN_7ff7c69cc160,TypeRegistrationCore,The type-registration core: allocates the per-flag registration tables
-Overwatch.exe,0x141d2ea50,FUN_7ff7c6a9d590,PsoDebugPanelDraw,The draw callback of the PSO debug panel object
-Overwatch.exe,0x141b4cba0,0x1b4cba0,GetDefaultFarZ,Reads the DefaultFarZ settings variable and falls back to 16384.0 when disabled
-Overwatch.exe,0x141b4cbc0,0x1b4cbc0,GetDefaultNearZ,Reads the DefaultNearZ settings variable and falls back to 0.1 when disabled
-Overwatch.exe,0x1404c2890,0x4c2890,RegisterDefaultFarZ,Registers DefaultFarZ with its 16384.0 default and 100/20000 limits
-Overwatch.exe,0x1404bd630,0x4bd630,RegisterHorizontalFov,Registers HorizontalFOV with its 103.0/70.0 limits
-Overwatch.exe,0x14057a140,0x57a140,SetCameraPlaneValue,Sets one camera projection plane (0 angle 1 near 2 far) and returns the previous value
-Overwatch.exe,0x14079a450,0x79a450,ComputeMouseLookDelta,Converts scaled mouse counts into yaw/pitch deltas with the invert-pitch sign
-Overwatch.exe,0x14079b900,0x79b900,ComputeAimAssistedLookDelta,Computes the look delta and adds the view-target aim-assist delta
-Overwatch.exe,0x14096c290,0x96c290,RegisterFirstPersonClipPlanes,Registers camera.FirstPersonNearZ/FarZ at one tenth of the world clip planes
-Overwatch.exe,0x14096eab0,0x96eab0,DispatchFpCameraSlotTime,Dispatches the first-person camera slot event by round(time*1000)
-Overwatch.exe,0x14067db60,0x7ff7c539db60,ApplyFirstPersonOffsetTransform,Applies the firstPerson Offset/rotation overrides to the first-person model transform
-Overwatch.exe,0x140609100,0x609100,InputPollMouseAndGamepad,Polls the mouse and gamepad look counts timestamp and mouse scale
-Overwatch.exe,0x14060a570,0x7ff7c532a570,EvaluateForceInputMode,Evaluates the input.ForceInputMode override and returns the selected input mode
-Overwatch.exe,0x140f44ed0,0xf4ed0,MergeReplayCameraViewTelemetry,MergeFrom for the ReplayCameraView ProTelemetry message; not the in-game replay camera
-Overwatch.exe,0x142069710,0x2069710,InitCameraViewParams,Initialises a camera view struct with vtable matrices 35 deg half-FOV and near/far
-Overwatch.exe,0x140ab3110,0x7ff7c57d3110,PlayerCameraControllerUpdate,Reads the player camera component and distance then sets the camera mode and view
-Overwatch.exe,0x14214dcc0,0x7ff7c6e6dcc0,GetPlayerComponentByIndex,Returns a player component from the indexed component array
-Overwatch.exe,0x1420a50d0,0x7ff7c6dc50d0,SetCameraMode,Selects the new camera mode and stores the FP/3P blend
-Overwatch.exe,0x1420a5410,0x7ff7c6dc5410,SelectCameraMode,Resolves the camera mode transition from the distance and current mode
-Overwatch.exe,0x1420a52a0,0x7ff7c6dc52a0,SetCameraView,Stores the view on the camera component
-Overwatch.exe,0x14096bef0,0x7ff7c568bef0,SelectFirstPersonCamera,Chooses and attaches the first-person camera component from the candidate lists
-Overwatch.exe,0x14206cfd0,0x7ff7c6d8cfd0,GetCameraComponent,Returns the camera component attached to a view
-Overwatch.exe,0x14206d3c0,0x7ff7c6d8d3c0,AttachCameraComponent,Attaches a camera component to a view and copies the view snapshot
-Overwatch.exe,0x1420a4b90,0x7ff7c6dc4b90,ResetCameraComponent,Resets the camera component state
-Overwatch.exe,0x14206db20,0x7ff7c6d8db20,UpdateCameraView,Per-frame base view update: transition and component update and modifiers and final descriptor
-Overwatch.exe,0x1420a4bb0,0x7ff7c6dc4bb0,UpdateCameraComponent,Applies the camera component FOV and mode update and shake state
-Overwatch.exe,0x1420a39c0,0x7ff7c6dc39c0,InterpolateCameraTransition,Blends position and orientation and distance and FOV over the transition timer
-Overwatch.exe,0x1420a53c0,0x7ff7c6dc53c0,UpdateCameraRecord,Runs the camera record pose builder for one update
-Overwatch.exe,0x14206ea60,0x7ff7c6d8ea60,UpdateCameraModifiers,Iterates the view modifier records and writes the final camera descriptor
-Overwatch.exe,0x14206e400,0x7ff7c6d8e400,BuildThirdPersonCameraPose,Computes the third-person eye from the pivot and distance and forward axis
-Overwatch.exe,0x14206e0a0,0x7ff7c6d8e0a0,ApplyThirdPersonCameraTrace,Copies the third-person descriptor and runs the collision trace
-Overwatch.exe,0x14206e1a0,0x7ff7c6d8e1a0,TraceThirdPersonCamera,Tests the third-person camera against the world and applies the pull-in correction
-Overwatch.exe,0x1420b0f40,0x7ff7c6dd0f40,SolveThirdPersonCameraCollision,Four-ray near-plane cast that clamps the third-person distance
-Overwatch.exe,0x140997b90,0x7ff7c56b7b90,UpdateFirstPersonCameraPose,Builds the first-person camera pose and near clip and FOV from the owner
-Overwatch.exe,0x140997940,0x7ff7c56b7940,IsFirstPersonCameraActive,Returns whether the first-person camera owner is active
-Overwatch.exe,0x140997840,0x7ff7c56b7840,GetFirstPersonCameraDeltaTime,Returns the first-person camera delta time
-Overwatch.exe,0x1420a50c0,0x7ff7c6dc50c0,SetCameraFov,Stores the camera component vertical FOV
-Overwatch.exe,0x1420a3340,0x7ff7c6dc3340,ConstructCameraComponent,Constructs the base camera component with the 70 degree default FOV
-Overwatch.exe,0x140997640,0x7ff7c56b7640,ConstructFirstPersonCamera,Constructs the level-1 first-person camera component
-Overwatch.exe,0x140997c90,0x7ff7c56b7c90,BuildFirstPersonCameraVariant,Constructs the level-2 first-person camera component
-Overwatch.exe,0x1420e4aa0,0x7ff7c6e04aa0,ConstructThirdPersonSpringCamera,Constructs the third-person spring camera
-Overwatch.exe,0x14206d0f0,0x7ff7c6d8d0f0,PushCameraModifier,Appends a camera modifier record to the view
-Overwatch.exe,0x14206d310,0x7ff7c6d8d310,ComputeCameraPositionFromComponent,Computes the camera position from the component position and forward offset
-Overwatch.exe,0x14206d250,0x7ff7c6d8d250,SetCameraScreenOffset,Stores the camera screen offset
-Overwatch.exe,0x14206d2c0,0x7ff7c6d8d2c0,ResetCameraAnimationOwner,Clears the camera animation owner
-Overwatch.exe,0x14206d840,0x7ff7c6d8d840,SetCameraTransform,Applies the camera transform subobject
-Overwatch.exe,0x142040b40,0x7ff7c6d60b40,TickRegisteredCameraViews,Calls every registered view apply slot with the manager delta time
-Overwatch.exe,0x142028370,0x7ff7c6d48370,AddCameraView,Appends a view to the camera manager view array
-Overwatch.exe,0x142032060,0x7ff7c6d52060,DispatchCameraRequest,Dispatches a camera-system request
-Overwatch.exe,0x142036ac6,0x7ff7c6d56ac6,ProcessCameraRequest,Processes one camera-system request
-Overwatch.exe,0x14203c4e0,0x7ff7c6d5c4e0,UpdateCameraSystem,Runs the camera system update stage
-Overwatch.exe,0x14203cc30,0x7ff7c6d5cc30,AdvanceCameraSystemStage2,Runs the second camera system update stage
-Overwatch.exe,0x1406b9db0,0x7ff7c53d9db0,ResolveCameraModeComponent,Resolves the component for a camera mode from the mode table
-Overwatch.exe,0x14096c5b0,0x7ff7c568c5b0,ApplyFirstPersonCamera,Per-frame first-person view apply: FOV blend and clip planes and pose matrix
-Overwatch.exe,0x14096cb30,0x7ff7c568cb30,EvaluateFirstPersonCameraAnimation,Evaluates the FP animation and writes the three camera offset values
-Overwatch.exe,0x140adea00,0x7ff7c57fea00,EvaluateFirstPersonAnimationNode,Applies the FP animation weight to an animation node
-Overwatch.exe,0x140064a30,0x7ff7c4d84a30,CacheFirstPersonFarPlane,Caches one tenth of the world far plane for first person
-Overwatch.exe,0x140064a50,0x7ff7c4d84a50,CacheFirstPersonNearPlane,Caches one tenth of the world near plane for first person
-Overwatch.exe,0x1404c2980,0x7ff7c51e2980,RegisterDefaultNearZ,Registers DefaultNearZ
-Overwatch.exe,0x141b30fc0,0x7ff7c6850fc0,GetHorizontalFov,Returns the HorizontalFOV setting
-Overwatch.exe,0x1406796c0,0x7ff7c53996c0,RegisterFirstPersonSettings,Registers the firstPerson settings group
-Overwatch.exe,0x14067f6e0,0x7ff7c539f6e0,RegisterLocalHitEffectsSettings,Registers the localhiteffects settings group
-Overwatch.exe,0x14060ada0,0x7ff7c532ada0,RegisterInputSettings,Registers the input settings group
-Overwatch.exe,0x142069a20,0x7ff7c6d89a20,ValidateAndNormalizeCameraDescriptor,Normalizes and validates the camera basis and FOV
-Overwatch.exe,0x142069c60,0x7ff7c6d89c60,OrthonormalizeCameraBasis,Orthonormalizes the camera basis rows
-Overwatch.exe,0x14206afe0,0x7ff7c6d8afe0,BuildViewMatricesFromCameraDescriptor,Builds the camera-to-world and world-to-view matrices
-Overwatch.exe,0x142075630,0x7ff7c6d95630,SetPerspectiveProjection,Sets the perspective projection from the view rectangle and half FOVs
-Overwatch.exe,0x142075a70,0x7ff7c6d95a70,BuildPerspectiveMatrix,Builds the left-handed row-major perspective matrix
-Overwatch.exe,0x14206a4a0,0x7ff7c6d8a4a0,RebuildProjection,Rebuilds the projection after a view parameter change
-Overwatch.exe,0x14206b2d0,0x7ff7c6d8b2d0,SetViewHalfFovs,Sets the view half-FOV pair
-Overwatch.exe,0x14206afb0,0x7ff7c6d8afb0,SetViewOutputRect,Sets the view output rectangle
-Overwatch.exe,0x14206a2b0,0x7ff7c6d8a2b0,SetPerspectiveViewRect,Sets the view rectangle and enables perspective projection
-Overwatch.exe,0x14206b4a0,0x7ff7c6d8b4a0,SetVerticalFovFull,Sets the vertical full FOV and rebuilds projection
-Overwatch.exe,0x14206b500,0x7ff7c6d8b500,ProjectWorldPoint,Projects a world point through the view and projection matrices
-Overwatch.exe,0x142075230,0x7ff7c6d95230,InitProjectionDescriptor,Initializes the projection descriptor
-Overwatch.exe,0x142075270,0x7ff7c6d95270,BuildFrustumPlanes,Builds the projection frustum planes
-Overwatch.exe,0x142075550,0x7ff7c6d95550,SetOrthoProjection,Sets an orthographic projection
-Overwatch.exe,0x1420754a0,0x7ff7c6d954a0,SetExplicitBoundsProjection,Sets an explicit-bounds projection
-Overwatch.exe,0x1406d2610,0x7ff7c53f2610,ApplyCameraTransform,Applies a camera basis and position to the view matrices
-Overwatch.exe,0x14206eee0,0x7ff7c6d8eee0,ApplyCameraViewOffset,Applies the camera shake and positional offset to the view
-Overwatch.exe,0x1421318b0,0x7ff7c6e518b0,AddVerticalFovOffset,Adds the vertical FOV offset to the camera descriptor
-Overwatch.exe,0x1420b0a80,0x7ff7c6dd0a80,ProjectPointThroughBasis,Projects a point through a constructed camera basis
-Overwatch.exe,0x1420b0b20,0x7ff7c6dd0b20,ProjectPointThroughView,Projects a point through a view
-Overwatch.exe,0x14206a5f0,0x7ff7c6d8a5f0,SetViewRectFromInts,Sets the view output rectangle from integer bounds
-Overwatch.exe,0x1405a0e70,0x7ff7c52c0e70,RefreshCameraViewRect,Refreshes the view output rectangle from the viewport
-Overwatch.exe,0x1404c2ab0,0x7ff7c51e2ab0,DecodeCameraNodeTypeNames,Decodes the 53 animation node type names
-Overwatch.exe,0x140599740,0x7ff7c52b9740,RegisterCameraConfigVariables,Registers the camera and 3P animation config variables
-Overwatch.exe,0x14059c6e0,0x7ff7c52bc6e0,UpdateCameraAnimationState,Per-frame camera animation update
-Overwatch.exe,0x14059d730,0x7ff7c52bd730,SampleCameraAnimationOffset,Samples the authored camera offset from the animation graph
-Overwatch.exe,0x14059c350,0x7ff7c52bc350,StopCameraAnimationState,Stops and clears the camera animation state
-Overwatch.exe,0x14079ff00,0x7ff7c54bff00,ApplyInputSettingsToState,Applies sensitivity and invert and aim-assist settings to the input state
-Overwatch.exe,0x1409e1b50,0x7ff7c5701b50,BuildLocalHitEffectEntry,Builds a local hit-effect render entry
-Overwatch.exe,0x1409e20c0,0x7ff7c57020c0,UpdateLocalHitEffectEnable,Updates the local hit-effect enable flag
-Overwatch.exe,0x1421cd360,0x7ff7c6eed360,RegisterComponentTypeDescriptor,Registers a component type descriptor
-Overwatch.exe,0x14130d0b0,0x7ff7c602d0b0,ConstructFirstPersonComponent,Constructs the first-person STU component
-Overwatch.exe,0x141312f30,0x7ff7c6032f30,FirstPersonComponentFieldDefault,Returns the first-person component field default
-Overwatch.exe,0x141c25110,0x7ff7c6945110,RegisterStaticValueObject,Registers a static value object
-Overwatch.exe,0x141c5bfc0,0x7ff7c697bfc0,RegisterFloatValueRecord,Registers a float value record
-Overwatch.exe,0x1407dced0,0x7ff7c54fced0,ConstructSequenceCameraView,Constructs the sequence camera view object
-Overwatch.exe,0x1407dd390,0x7ff7c54fd390,AllocateSequenceCameraView,Allocates and constructs the sequence camera view
-Overwatch.exe,0x1407dcdc0,0x7ff7c54fcdc0,DestroySequenceCameraView,Destroys the sequence camera view
-Overwatch.exe,0x1407dcd50,0x7ff7c54fcd50,DestroySequenceViewTable,Destroys the sequence view table member
-Overwatch.exe,0x1406b81d0,0x7ff7c53d81d0,TickSequenceCameraView,Per-frame sequence camera view state machine
-Overwatch.exe,0x1406b7cc0,0x7ff7c53d7cc0,ResetSequenceCameraViewState,Resets the sequence camera view state subobject
-Overwatch.exe,0x1406b8660,0x7ff7c53d8660,ResetSequenceCameraViewList,Resets the sequence camera view list
-Overwatch.exe,0x1406ba460,0x7ff7c53da460,BeginSequenceCameraViewTransition,Copies a request into the committed sequence camera fields
-Overwatch.exe,0x1406bd310,0x7ff7c53dd310,CreateSequenceCameraViewTarget,Creates and polls the sequence camera target
-Overwatch.exe,0x1406bcc10,0x7ff7c53dcc10,UpdateSequenceCameraViewTarget,Resolves the target and updates the sequence camera view
-Overwatch.exe,0x1406be230,0x7ff7c53de230,LookupSequenceCameraViewSequence,Looks up the sequence id for the current target
-Overwatch.exe,0x1406bbe90,0x7ff7c53dbe90,StopSequenceCameraView,Stops the sequence camera view and releases its targets
-Overwatch.exe,0x1406baf30,0x7ff7c53daf30,UpdateSequenceCameraViewFrameCounter,Updates the sequence camera view frame counter
-Overwatch.exe,0x1407dd3c0,0x7ff7c54fd3c0,GetActiveSequenceCameraView,Returns the active sequence camera view under the spinlock
-Overwatch.exe,0x1407dd410,0x7ff7c54fd410,LookupSequenceViewTableSlot,Looks up a sequence view table slot by handle
-Overwatch.exe,0x1407dd790,0x7ff7c54fd790,GetSequenceCameraViewSlotIndex,Returns the sequence camera view world slot index
-Overwatch.exe,0x1406ba170,0x7ff7c53da170,UpdateSequenceCameraViewState3,Updates sequence camera view state 3
-Overwatch.exe,0x1406bdd40,0x7ff7c53ddd40,UpdateSequenceCameraViewState4,Updates sequence camera view state 4
-Overwatch.exe,0x1406bd560,0x7ff7c53dd560,UpdateSequenceCameraViewState5,Updates sequence camera view state 5
-Overwatch.exe,0x1406bc160,0x7ff7c53dc160,UpdateSequenceCameraViewState6,Updates sequence camera view state 6
-Overwatch.exe,0x1406bc420,0x7ff7c53dc420,UpdateSequenceCameraViewState7,Updates sequence camera view state 7
-Overwatch.exe,0x1406bc790,0x7ff7c53dc790,UpdateSequenceCameraViewState8,Updates sequence camera view state 8
-Overwatch.exe,0x1406b8bd0,0x7ff7c53d8bd0,UpdateSequenceCameraViewMode4,Updates sequence camera view mode 4
-Overwatch.exe,0x1406b8d80,0x7ff7c53d8d80,UpdateSequenceCameraViewMode5,Updates sequence camera view mode 5
-Overwatch.exe,0x1407dd760,0x7ff7c54fd760,AdvanceSequenceCameraViewState,Advances the sequence camera view state
-Overwatch.exe,0x1407dd800,0x7ff7c54fd800,ReleaseSequenceCameraViewObserver,Releases the sequence camera view observer slot
-Overwatch.exe,0x1406b7840,0x7ff7c53d7840,GetSequenceCameraViewActor,Returns the sequence camera view actor for the current thread
-Overwatch.exe,0x1406b9f30,0x7ff7c53d9f30,GetSpecialSequenceCameraEntity,Returns the special camera entity for the current thread
-Overwatch.exe,0x14017a680,0x7ff7c4e9a680,RegisterMoverComponent,Registers STUCharacterMoverComponent (type hash 0x6EFDBD73, component id 0x26, size 0x130)
-Overwatch.exe,0x14111b120,0x7ff7c5e3b120,ConstructMoverComponent,Installs the mover component's three plaintext interface vtables and base state
-Overwatch.exe,0x14111b4b0,0x7ff7c5e3b4b0,SetMoverComponentDefaults,Writes the mover component's default scalars, including the jump-struct defaults
-Overwatch.exe,0x140ca9730,0x7ff7c59c9730,ConstructMoverBody,Derived character-body constructor: looks up component id 0x26 and binds the mover component
-Overwatch.exe,0x140ca37d0,0x7ff7c59c37d0,ConstructMoverBase,Base 0x1b70-byte character-body constructor; installs the base vtables and subobjects
-Overwatch.exe,0x140ca4310,0x7ff7c59c4310,DestructMoverBase,Releases the character-body subobjects and the physics session
-Overwatch.exe,0x140ca4a50,0x7ff7c59c4a50,FreeMoverBase,Frees the 0x1b70-byte character-body base object
-Overwatch.exe,0x140ca7f30,0x7ff7c59c7f30,MoverAdvance,Per-frame position integrator: character collision sweep, or the plain-body (a*X+pos)*b+off formula
-Overwatch.exe,0x1407ffc50,0x7ff7c551fc50,MoverInvoker,Calls the advance, stores the new position at +0x1b80, and dispatches on contact normals
-Overwatch.exe,0x1407ff4d0,0x7ff7c551f4d0,GetMoverStateId,Returns the character body's state id at +0x1b78
-Overwatch.exe,0x1407ff4e0,0x7ff7c551f4e0,GetMoverStateDescriptor,Returns the state descriptor selected by the character body's state id
-Overwatch.exe,0x1407ff270,0x7ff7c551f270,DestructMoverBody,Releases the 0x1c00-byte character body and calls the base destructor
-Overwatch.exe,0x1424e3230,0x7ff7c7203230,Salsa20StateInit,"Fills the 64-byte Salsa20/20 state (expand 16-byte k) from a 16-byte key, an 8-byte nonce and a 64-bit block counter"
-Overwatch.exe,0x1424e32c0,0x7ff7c72032c0,Salsa20Xor,XORs a buffer with the Salsa20 keystream; dispatches to the 256-byte and 64-byte block loops
-Overwatch.exe,0x1424e3370,0x7ff7c7203370,Salsa20XorBlocks256,"Salsa20 block loop for 256 bytes or more, four blocks per iteration"
-Overwatch.exe,0x1424e3e20,0x7ff7c7203e20,Salsa20XorBlocks64,Salsa20 block loop for 64..255 bytes
-Overwatch.exe,0x1424d8720,0x7ff7c71f8720,BlteIsDirectContainer,"True only for BLTE magic with a zero frame-header size, the single implicit-chunk form"
-Overwatch.exe,0x1424d8770,0x7ff7c71f8770,BlteWriteDirectHeader,Writes the BLTE magic and a zero frame-header size
-Overwatch.exe,0x1424a90e0,0x7ff7c71c90e0,BlteFrameHeaderParse,"Validates a BLTE frame header (type 0x0f or 0x10) and its MD5, and decodes the per-chunk stored and decoded sizes"
-Overwatch.exe,0x1424a9590,0x7ff7c71c9590,BlteFrameHeaderOpen,Wrapper that opens a BLTE frame header from a buffer
-Overwatch.exe,0x1424a9670,0x7ff7c71c9670,BlteFrameHeaderOpenEx,Wrapper that opens a BLTE frame header from an explicit buffer and error flag
-Overwatch.exe,0x1424d61b0,0x7ff7c71f61b0,BlteBlockRead,"Reads one BLTE block: decrypts E, then dispatches the plaintext mode to N, Z or LZ4"
-Overwatch.exe,0x1424d7850,0x7ff7c71f7850,BlteBlockReadStored,BLTE N block reader: copies the stored bytes
-Overwatch.exe,0x1424d7ca0,0x7ff7c71f7ca0,BlteBlockReadZlib,BLTE Z block reader: inflates after the mode byte
-Overwatch.exe,0x1424d6e50,0x7ff7c71f6e50,BlteBlockReadLz4,BLTE 4 block reader: LZ4-HC block header then decompression
-Overwatch.exe,0x1424d68a0,0x7ff7c71f68a0,BlteChunkDecrypt,"Decrypts one E block with Salsa20, XORing the chunk ordinal into the IV"
-Overwatch.exe,0x142498920,0x7ff7c71b8920,EncodingHeaderParse,"Parses the 22-byte EN header: key widths, page sizes and counts, and espec block size"
-Overwatch.exe,0x1424d1b40,0x7ff7c71f1b40,EncodingHeaderRead,Reads and parses the 22-byte encoding header from the storage stream
-Overwatch.exe,0x1424d1c60,0x7ff7c71f1c60,EncodingSectionsRead,"Reads the espec block, both page indexes and both page-body arrays in the reference order"
-Overwatch.exe,0x1424f48d0,0x7ff7c72148d0,DynamicContainerRead,"Resolves a 16-byte key to a stored range, skips the 30-byte data header and reads the bytes"
-Overwatch.exe,0x1424fcd20,0x7ff7c721cd20,DynamicContainerReadPage,Reads one page-aligned range through the archive page cache
-Overwatch.exe,0x14250c8f0,0x7ff7c722c8f0,DynamicContainerOpenArchive,Opens data.%03d for an archive number taken from the virtual offset
-Overwatch.exe,0x14250e400,0x7ff7c722e400,DynamicIndexSegmentOpen,Opens one data/0X........idx segment for a bucket and segment number
-Overwatch.exe,0x14250fc60,0x7ff7c722fc60,DynamicIndexSegmentLoad,Loads a dynamic index segment through the async reader
-Overwatch.exe,0x14250fcf0,0x7ff7c722fcf0,DynamicIndexSegmentParse,"Parses a dynamic index segment: section and file headers, entry block and key-to-entry table"
-Overwatch.exe,0x1425111a0,0x7ff7c72311a0,DynamicIndexFindEntry,Binary-searches the 18-byte entries by their 9-byte key and expands the equal range
-Overwatch.exe,0x1425115d0,0x7ff7c72315d0,DynamicIndexResolveRange,Resolves a requested range against a key state's resident intervals
-Overwatch.exe,0x1425209a0,0x7ff7c72409a0,DynamicIndexDecodeEntries,"Decodes entry payloads: 5-byte big-endian location, 4-byte little-endian size"
-Overwatch.exe,0x142501b40,0x7ff7c7221b40,DynamicKeyStateLookup,Computes the 9-byte bucket hash and looks the key up in the key state
-Overwatch.exe,0x1424ccc00,0x7ff7c71ecc00,BuildConfigParse,"Parses the build config's typed keys, including the two 16-byte encoding keys"
-Overwatch.exe,0x1424ce680,0x7ff7c71ee680,CdnConfigParse,"Parses the CDN config's archives, groups, file indexes and patch variants"
-Overwatch.exe,0x1424aec30,0x7ff7c71cec30,BuildInfoSelectRow,Selects the active .build.info row by its first field (the flavor); with no flavor it returns the last active row
-Overwatch.exe,0x1424aead0,0x7ff7c71cead0,BuildInfoCreate,Creates and loads a .build.info object
-Overwatch.exe,0x1424af8b0,0x7ff7c71cf8b0,FlavorInfoCreate,Creates and loads the .flavor.info table
-Overwatch.exe,0x14248f2a0,0x7ff7c71af2a0,BuildInfoLoadFromInstall,"Builds the .build.info path, loads it and selects the row for .flavor.info's Product Flavor"
-Overwatch.exe,0x1424b0130,0x7ff7c71d0130,CdnPathFormat,"Formats data/, patch/ or config/ plus a key and .index into a CDN path"
-Overwatch.exe,0x1424d0120,0x7ff7c71f0120,IndexDirectoryScan,Scans a directory of 32-hex .index files into a 9-byte-key hash table
-Overwatch.exe,0x142512c60,0x7ff7c7232c60,DynamicIndexHash,32-bit file-header and rolling entry-block hash of a dynamic index segment; called by DynamicIndexSegmentParse
-Overwatch.exe,0x142513230,0x7ff7c7233230,DynamicIndexKeyHash,"32-bit hash of a 19-byte key-to-entry record, compared with the record's first word | 0x80000000"
-Overwatch.exe,0x1424cebd0,0x7ff7c71eebd0,ConfigKeyEntryParse,Handles a config line whose key starts with key-: creates an 8-byte id and 16-byte key entry
-Overwatch.exe,0x14248f040,0x7ff7c71af040,ParseHexKeyId,Parses 16 hex digits into an 8-byte key id in written byte order
-Overwatch.exe,0x14248efd0,0x7ff7c71aefd0,ParseHexKey,Parses 32 hex digits into a 16-byte key in written byte order
-Overwatch.exe,0x1424d8800,0x7ff7c71f8800,ParseBoolString,"Boolean config parser: 1/true/yes/on/enable/enabled are true, case-insensitive"
-Overwatch.exe,0x1424ae6c0,0x7ff7c71ce6c0,BuildInfoParseField,Parses one build-info field into its row offset using the descriptor's parser
+Overwatch.exe,0x140064a30,0x140064a30,CacheFirstPersonFarPlane,Caches one tenth of the world far plane for first person
+Overwatch.exe,0x140064a50,0x140064a50,CacheFirstPersonNearPlane,Caches one tenth of the world near plane for first person
+Overwatch.exe,0x14017a680,0x14017a680,RegisterMoverComponent,"Registers STUCharacterMoverComponent: type hash 0x6EFDBD73, id 0x26, size 0x130"
+Overwatch.exe,0x1404bd630,0x1404bd630,RegisterHorizontalFov,Registers HorizontalFOV with its 103.0/70.0 limits
+Overwatch.exe,0x1404c2890,0x1404c2890,RegisterDefaultFarZ,Registers DefaultFarZ with its 16384.0 default and 100/20000 limits
+Overwatch.exe,0x1404c2980,0x1404c2980,RegisterDefaultNearZ,Registers DefaultNearZ
+Overwatch.exe,0x1404c2ab0,0x1404c2ab0,DecodeCameraNodeTypeNames,Decodes the 53 animation node type names
+Overwatch.exe,0x14057a140,0x14057a140,SetCameraPlaneValue,Sets one camera projection plane (0 angle 1 near 2 far) and returns the previous value
+Overwatch.exe,0x140599740,0x140599740,RegisterCameraConfigVariables,Registers the camera and 3P animation config variables
+Overwatch.exe,0x14059c350,0x14059c350,StopCameraAnimationState,Stops and clears the camera animation state
+Overwatch.exe,0x14059c6e0,0x14059c6e0,UpdateCameraAnimationState,Per-frame camera animation update
+Overwatch.exe,0x14059d730,0x14059d730,SampleCameraAnimationOffset,Samples the authored camera offset from the animation graph
+Overwatch.exe,0x1405a0e70,0x1405a0e70,RefreshCameraViewRect,Refreshes the view output rectangle from the viewport
+Overwatch.exe,0x140609100,0x140609100,InputPollMouseAndGamepad,Polls the mouse and gamepad look counts timestamp and mouse scale
+Overwatch.exe,0x14060a570,0x14060a570,EvaluateForceInputMode,Evaluates the input.ForceInputMode override and returns the selected input mode
+Overwatch.exe,0x14060ada0,0x14060ada0,RegisterInputSettings,Registers the input settings group
+Overwatch.exe,0x1406796c0,0x1406796c0,RegisterFirstPersonSettings,Registers the firstPerson settings group
+Overwatch.exe,0x14067db60,0x14067db60,ApplyFirstPersonOffsetTransform,Applies the firstPerson Offset/rotation overrides to the first-person model transform
+Overwatch.exe,0x14067f6e0,0x14067f6e0,RegisterLocalHitEffectsSettings,Registers the localhiteffects settings group
+Overwatch.exe,0x1406b7840,0x1406b7840,GetSequenceCameraViewActor,Returns the sequence camera view actor for the current thread
+Overwatch.exe,0x1406b7cc0,0x1406b7cc0,ResetSequenceCameraViewState,Resets the sequence camera view state subobject
+Overwatch.exe,0x1406b81d0,0x1406b81d0,TickSequenceCameraView,Per-frame sequence camera view state machine
+Overwatch.exe,0x1406b8660,0x1406b8660,ResetSequenceCameraViewList,Resets the sequence camera view list
+Overwatch.exe,0x1406b8bd0,0x1406b8bd0,UpdateSequenceCameraViewMode4,Updates sequence camera view mode 4
+Overwatch.exe,0x1406b8d80,0x1406b8d80,UpdateSequenceCameraViewMode5,Updates sequence camera view mode 5
+Overwatch.exe,0x1406b9db0,0x1406b9db0,ResolveCameraModeComponent,Resolves the component for a camera mode from the mode table
+Overwatch.exe,0x1406b9f30,0x1406b9f30,GetSpecialSequenceCameraEntity,Returns the special camera entity for the current thread
+Overwatch.exe,0x1406ba170,0x1406ba170,UpdateSequenceCameraViewState3,Updates sequence camera view state 3
+Overwatch.exe,0x1406ba460,0x1406ba460,BeginSequenceCameraViewTransition,Copies a request into the committed sequence camera fields
+Overwatch.exe,0x1406baf30,0x1406baf30,UpdateSequenceCameraViewFrameCounter,Updates the sequence camera view frame counter
+Overwatch.exe,0x1406bbe90,0x1406bbe90,StopSequenceCameraView,Stops the sequence camera view and releases its targets
+Overwatch.exe,0x1406bc160,0x1406bc160,UpdateSequenceCameraViewState6,Updates sequence camera view state 6
+Overwatch.exe,0x1406bc420,0x1406bc420,UpdateSequenceCameraViewState7,Updates sequence camera view state 7
+Overwatch.exe,0x1406bc790,0x1406bc790,UpdateSequenceCameraViewState8,Updates sequence camera view state 8
+Overwatch.exe,0x1406bcc10,0x1406bcc10,UpdateSequenceCameraViewTarget,Resolves the target and updates the sequence camera view
+Overwatch.exe,0x1406bd310,0x1406bd310,CreateSequenceCameraViewTarget,Creates and polls the sequence camera target
+Overwatch.exe,0x1406bd560,0x1406bd560,UpdateSequenceCameraViewState5,Updates sequence camera view state 5
+Overwatch.exe,0x1406bdd40,0x1406bdd40,UpdateSequenceCameraViewState4,Updates sequence camera view state 4
+Overwatch.exe,0x1406be230,0x1406be230,LookupSequenceCameraViewSequence,Looks up the sequence id for the current target
+Overwatch.exe,0x1406d2610,0x1406d2610,ApplyCameraTransform,Applies a camera basis and position to the view matrices
+Overwatch.exe,0x14079a450,0x14079a450,ComputeMouseLookDelta,Converts scaled mouse counts into yaw/pitch deltas with the invert-pitch sign
+Overwatch.exe,0x14079b900,0x14079b900,ComputeAimAssistedLookDelta,Computes the look delta and adds the view-target aim-assist delta
+Overwatch.exe,0x14079ff00,0x14079ff00,ApplyInputSettingsToState,Applies sensitivity and invert and aim-assist settings to the input state
+Overwatch.exe,0x1407dcd50,0x1407dcd50,DestroySequenceViewTable,Destroys the sequence view table member
+Overwatch.exe,0x1407dcdc0,0x1407dcdc0,DestroySequenceCameraView,Destroys the sequence camera view
+Overwatch.exe,0x1407dced0,0x1407dced0,ConstructSequenceCameraView,Constructs the sequence camera view object
+Overwatch.exe,0x1407dd390,0x1407dd390,AllocateSequenceCameraView,Allocates and constructs the sequence camera view
+Overwatch.exe,0x1407dd3c0,0x1407dd3c0,GetActiveSequenceCameraView,Returns the active sequence camera view under the spinlock
+Overwatch.exe,0x1407dd410,0x1407dd410,LookupSequenceViewTableSlot,Looks up a sequence view table slot by handle
+Overwatch.exe,0x1407dd760,0x1407dd760,AdvanceSequenceCameraViewState,Advances the sequence camera view state
+Overwatch.exe,0x1407dd790,0x1407dd790,GetSequenceCameraViewSlotIndex,Returns the sequence camera view world slot index
+Overwatch.exe,0x1407dd800,0x1407dd800,ReleaseSequenceCameraViewObserver,Releases the sequence camera view observer slot
+Overwatch.exe,0x1407ff270,0x1407ff270,DestructMoverBody,Frees the 0x1c00-byte character body
+Overwatch.exe,0x1407ffc50,0x1407ffc50,MoverInvoker,"Calls the advance, stores the new position at +0x1b80 and dispatches contact normals"
+Overwatch.exe,0x14096bef0,0x14096bef0,SelectFirstPersonCamera,Chooses and attaches the first-person camera component from the candidate lists
+Overwatch.exe,0x14096c290,0x14096c290,RegisterFirstPersonClipPlanes,Registers camera.FirstPersonNearZ/FarZ at one tenth of the world clip planes
+Overwatch.exe,0x14096c5b0,0x14096c5b0,ApplyFirstPersonCamera,Per-frame first-person view apply: FOV blend and clip planes and pose matrix
+Overwatch.exe,0x14096cb30,0x14096cb30,EvaluateFirstPersonCameraAnimation,Evaluates the FP animation and writes the three camera offset values
+Overwatch.exe,0x14096eab0,0x14096eab0,DispatchFpCameraSlotTime,Dispatches the first-person camera slot event by round(time*1000)
+Overwatch.exe,0x140997640,0x140997640,ConstructFirstPersonCamera,Constructs the level-1 first-person camera component
+Overwatch.exe,0x140997840,0x140997840,GetFirstPersonCameraDeltaTime,Returns the first-person camera delta time
+Overwatch.exe,0x140997940,0x140997940,IsFirstPersonCameraActive,Returns whether the first-person camera owner is active
+Overwatch.exe,0x140997b90,0x140997b90,UpdateFirstPersonCameraPose,Builds the first-person camera pose and near clip and FOV from the owner
+Overwatch.exe,0x140997c90,0x140997c90,BuildFirstPersonCameraVariant,Constructs the level-2 first-person camera component
+Overwatch.exe,0x1409e1b50,0x1409e1b50,BuildLocalHitEffectEntry,Builds a local hit-effect render entry
+Overwatch.exe,0x1409e20c0,0x1409e20c0,UpdateLocalHitEffectEnable,Updates the local hit-effect enable flag
+Overwatch.exe,0x140a264c0,0x140a264c0,StatescriptDriveWalk,The per-frame script walk: slot 100 (+0x320) of the host class; walks the script-instance array and runs element slots 43/44 around a parameter push
+Overwatch.exe,0x140a9ba70,0x140a9ba70,StatescriptSlot43Executor,Element vtable slot 43 (+0x158): the executor step that sets the busy counter
+Overwatch.exe,0x140ab3110,0x140ab3110,PlayerCameraControllerUpdate,Reads the player camera component and distance then sets the camera mode and view
+Overwatch.exe,0x140adea00,0x140adea00,EvaluateFirstPersonAnimationNode,Applies the FP animation weight to an animation node
+Overwatch.exe,0x140b909d0,0x140b909d0,CurveKeySampleDual,The shared curve pipeline's dual (two-source) sample stage feeding blend/replace
+Overwatch.exe,0x140be3700,0x140be3700,LobbyLog,"The shared lobby logger entry: (client, level, message, system-name string)"
+Overwatch.exe,0x140ca37d0,0x140ca37d0,ConstructMoverBase,Builds the 0x1b70-byte mover base subobject and installs the base vtable 0x1431101e8
+Overwatch.exe,0x140ca5940,0x140ca5940,MoverWishUpdate,"The wish-vector update wrapper: reads +0x1140, converts through the frame-conversion helper, applies the difference"
+Overwatch.exe,0x140ca7f30,0x140ca7f30,MoverAdvance,The per-frame position integrator: integrates the static local offset at +0xc0 with the wish vector and transform
+Overwatch.exe,0x140ca9730,0x140ca9730,ConstructMoverBody,Looks up component id 0x26 and binds the mover component to the character body
+Overwatch.exe,0x140cb74a0,0x140cb74a0,BuildMoverPhysicsCommand,Builds the mover command flags from the body state and the movement gate
+Overwatch.exe,0x140cbacc0,0x140cbacc0,MoverStateMachine,"The per-frame character state machine: flags, timer, state id, the +0x1a79 state byte, the local vector and the ground probe"
+Overwatch.exe,0x140cbcbe0,0x140cbcbe0,ApplyStateModifiers,Per-frame state-modifier evaluator: applies the mover body 0x38-byte records at +0x870 to the movement parameter block at +0x5d0..+0x67c
+Overwatch.exe,0x140cc03d0,0x140cc03d0,SubmitMoverPhysicsCommand,Builds the mover physics command and dispatches it to the Domino character controller
+Overwatch.exe,0x140d27410,0x140d27410,FpViewmodelEventSort,Sorts the 0x50-byte event records by their short priority
+Overwatch.exe,0x140d29c60,0x140d29c60,FpViewmodelEventPlayer,The animation event/state player: dispatches event masks against the slot's event list
+Overwatch.exe,0x140d2a250,0x140d2a250,AnimEventMaskDispatch,Current-build animation event player helper: dispatches event masks 0x100/0x200/0x400/0x800 against the slot's event list (RVA 0xd2a250)
+Overwatch.exe,0x140d2f060,0x140d2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; checks it against the type descriptor; resolves the view-model entity and its model; calls the bind; registers the first-person config vars
+Overwatch.exe,0x140d2faa0,0x140d2faa0,FpViewmodelBind,The bind: stores the view-model entity and model references and resets the view-model state; it does not read m_position or the four scalars
+Overwatch.exe,0x140d31bf0,0x140d31bf0,FpViewmodelUpdateA,Per-frame update (view-model vtable slot +0xe0): walks the six 0x110-stride animation slots and runs the event player on each
+Overwatch.exe,0x140d322f0,0x140d322f0,FpViewmodelUpdateB,Per-frame update (view-model vtable slot +0xe8): the second of the two per-frame slots
+Overwatch.exe,0x140d3a020,0x140d3a020,FpViewmodelEventPlayerB,Current-build: the second event/state player the per-frame view-model updates call (RVA 0xd3a020)
+Overwatch.exe,0x140f44ed0,0x140f44ed0,MergeReplayCameraViewTelemetry,MergeFrom for the ReplayCameraView ProTelemetry message; not the in-game replay camera
+Overwatch.exe,0x14130d0b0,0x14130d0b0,ConstructFirstPersonComponent,Constructs the first-person STU component
+Overwatch.exe,0x141312f30,0x141312f30,FirstPersonComponentFieldDefault,Returns the first-person component field default
+Overwatch.exe,0x141943290,0x141943290,TypeIndexByHash,Maps the first-person component's class hash 0x9d28963f to type index 0x35
+Overwatch.exe,0x141b30fc0,0x141b30fc0,GetHorizontalFov,Returns the HorizontalFOV setting
+Overwatch.exe,0x141b4cba0,0x141b4cba0,GetDefaultFarZ,Reads the DefaultFarZ settings variable and falls back to 16384.0 when disabled
+Overwatch.exe,0x141b4cbc0,0x141b4cbc0,GetDefaultNearZ,Reads the DefaultNearZ settings variable and falls back to 0.1 when disabled
+Overwatch.exe,0x141b7b9d0,0x141b7b9d0,MaterialAssetLookup,"The material-asset lookup (registry, keyA, keyB); falls into the no-return assert path on a miss"
+Overwatch.exe,0x141b839b0,0x141b839b0,MaterialKeyBind,The u64-array material binding: resolves keys -> indices clamped by the u64-value count
+Overwatch.exe,0x141b88cb0,0x141b88cb0,MdlcMaterialRead,"The MDLC chunk deserializer: the material list (copies the header, memcpy's the material values)"
+Overwatch.exe,0x141b88e50,0x141b88e50,MoclRead,The MOCL chunk deserializer: the occlusion/limits table
+Overwatch.exe,0x141b88f10,0x141b88f10,MrnmHandler,"The MRNM chunk handler and its deserializer are one function: copies the header and copies the material values (materials.md) while building the runtime parent-indexed tables (0xA0/0xF8/0x18 strides, used-bone mask, roots at -1) (animation.md)"
+Overwatch.exe,0x141b894d0,0x141b894d0,MsklTableBuild,The mskl chunk deserializer: packs the 6-byte chain records into the table blob
+Overwatch.exe,0x141b8a1d0,0x141b8a1d0,MaterialSlotBind,The slot binder: sets the container's slot count and binds each material through the record's u16 at +4
+Overwatch.exe,0x141b8ca70,0x141b8ca70,MaterialParamApply,"The material-parameter applier: resolves the material descriptor, scans the model's key/value records, stores the min/max times"
+Overwatch.exe,0x141c25110,0x141c25110,RegisterStaticValueObject,Registers a static value object
+Overwatch.exe,0x141c5bfc0,0x141c5bfc0,RegisterFloatValueRecord,Registers a float value record
+Overwatch.exe,0x141c5f5e0,0x141c5f5e0,TypeRegistrationCore,The type-registration core: allocates the per-flag registration tables
+Overwatch.exe,0x141d2ea50,0x141d2ea50,PsoDebugPanelDraw,The draw callback of the PSO debug panel object
+Overwatch.exe,0x141e2d5c0,0x141e2d5c0,ClipRuntimeConstruct,The clip runtime record's constructor
+Overwatch.exe,0x142028370,0x142028370,AddCameraView,Appends a view to the camera manager view array
+Overwatch.exe,0x142032060,0x142032060,DispatchCameraRequest,Dispatches a camera-system request
+Overwatch.exe,0x142036ac6,0x142036ac6,ProcessCameraRequest,Processes one camera-system request
+Overwatch.exe,0x14203c4e0,0x14203c4e0,UpdateCameraSystem,Runs the camera system update stage
+Overwatch.exe,0x14203cc30,0x14203cc30,AdvanceCameraSystemStage2,Runs the second camera system update stage
+Overwatch.exe,0x142040b40,0x142040b40,TickRegisteredCameraViews,Calls every registered view apply slot with the manager delta time
+Overwatch.exe,0x142069710,0x142069710,InitCameraViewParams,Initialises a camera view struct with vtable matrices 35 deg half-FOV and near/far
+Overwatch.exe,0x142069a20,0x142069a20,ValidateAndNormalizeCameraDescriptor,Normalizes and validates the camera basis and FOV
+Overwatch.exe,0x142069c60,0x142069c60,OrthonormalizeCameraBasis,Orthonormalizes the camera basis rows
+Overwatch.exe,0x14206a2b0,0x14206a2b0,SetPerspectiveViewRect,Sets the view rectangle and enables perspective projection
+Overwatch.exe,0x14206a4a0,0x14206a4a0,RebuildProjection,Rebuilds the projection after a view parameter change
+Overwatch.exe,0x14206a5f0,0x14206a5f0,SetViewRectFromInts,Sets the view output rectangle from integer bounds
+Overwatch.exe,0x14206afb0,0x14206afb0,SetViewOutputRect,Sets the view output rectangle
+Overwatch.exe,0x14206afe0,0x14206afe0,BuildViewMatricesFromCameraDescriptor,Builds the camera-to-world and world-to-view matrices
+Overwatch.exe,0x14206b2d0,0x14206b2d0,SetViewHalfFovs,Sets the view half-FOV pair
+Overwatch.exe,0x14206b4a0,0x14206b4a0,SetVerticalFovFull,Sets the vertical full FOV and rebuilds projection
+Overwatch.exe,0x14206b500,0x14206b500,ProjectWorldPoint,Projects a world point through the view and projection matrices
+Overwatch.exe,0x14206cfd0,0x14206cfd0,GetCameraComponent,Returns the camera component attached to a view
+Overwatch.exe,0x14206d0f0,0x14206d0f0,PushCameraModifier,Appends a camera modifier record to the view
+Overwatch.exe,0x14206d250,0x14206d250,SetCameraScreenOffset,Stores the camera screen offset
+Overwatch.exe,0x14206d2c0,0x14206d2c0,ResetCameraAnimationOwner,Clears the camera animation owner
+Overwatch.exe,0x14206d310,0x14206d310,ComputeCameraPositionFromComponent,Computes the camera position from the component position and forward offset
+Overwatch.exe,0x14206d3c0,0x14206d3c0,AttachCameraComponent,Attaches a camera component to a view and copies the view snapshot
+Overwatch.exe,0x14206d840,0x14206d840,SetCameraTransform,Applies the camera transform subobject
+Overwatch.exe,0x14206db20,0x14206db20,UpdateCameraView,Per-frame base view update: transition and component update and modifiers and final descriptor
+Overwatch.exe,0x14206e0a0,0x14206e0a0,ApplyThirdPersonCameraTrace,Copies the third-person descriptor and runs the collision trace
+Overwatch.exe,0x14206e1a0,0x14206e1a0,TraceThirdPersonCamera,Tests the third-person camera against the world and applies the pull-in correction
+Overwatch.exe,0x14206e400,0x14206e400,BuildThirdPersonCameraPose,Computes the third-person eye from the pivot and distance and forward axis
+Overwatch.exe,0x14206ea60,0x14206ea60,UpdateCameraModifiers,Iterates the view modifier records and writes the final camera descriptor
+Overwatch.exe,0x14206eee0,0x14206eee0,ApplyCameraViewOffset,Applies the camera shake and positional offset to the view
+Overwatch.exe,0x142075230,0x142075230,InitProjectionDescriptor,Initializes the projection descriptor
+Overwatch.exe,0x142075270,0x142075270,BuildFrustumPlanes,Builds the projection frustum planes
+Overwatch.exe,0x1420754a0,0x1420754a0,SetExplicitBoundsProjection,Sets an explicit-bounds projection
+Overwatch.exe,0x142075550,0x142075550,SetOrthoProjection,Sets an orthographic projection
+Overwatch.exe,0x142075630,0x142075630,SetPerspectiveProjection,Sets the perspective projection from the view rectangle and half FOVs
+Overwatch.exe,0x142075a70,0x142075a70,BuildPerspectiveMatrix,Builds the left-handed row-major perspective matrix
+Overwatch.exe,0x14208c070,0x14208c070,DmTickKeeper,"The tick's keeper: zeroes the pending budget, clears the pending flag, recurses into children whose time is behind"
+Overwatch.exe,0x1420a3340,0x1420a3340,ConstructCameraComponent,Constructs the base camera component with the 70 degree default FOV
+Overwatch.exe,0x1420a39c0,0x1420a39c0,InterpolateCameraTransition,Blends position and orientation and distance and FOV over the transition timer
+Overwatch.exe,0x1420a4b90,0x1420a4b90,ResetCameraComponent,Resets the camera component state
+Overwatch.exe,0x1420a4bb0,0x1420a4bb0,UpdateCameraComponent,Applies the camera component FOV and mode update and shake state
+Overwatch.exe,0x1420a50c0,0x1420a50c0,SetCameraFov,Stores the camera component vertical FOV
+Overwatch.exe,0x1420a50d0,0x1420a50d0,SetCameraMode,Selects the new camera mode and stores the FP/3P blend
+Overwatch.exe,0x1420a52a0,0x1420a52a0,SetCameraView,Stores the view on the camera component
+Overwatch.exe,0x1420a53c0,0x1420a53c0,UpdateCameraRecord,Runs the camera record pose builder for one update
+Overwatch.exe,0x1420a5410,0x1420a5410,SelectCameraMode,Resolves the camera mode transition from the distance and current mode
+Overwatch.exe,0x1420b0a80,0x1420b0a80,ProjectPointThroughBasis,Projects a point through a constructed camera basis
+Overwatch.exe,0x1420b0b20,0x1420b0b20,ProjectPointThroughView,Projects a point through a view
+Overwatch.exe,0x1420b0f40,0x1420b0f40,SolveThirdPersonCameraCollision,Four-ray near-plane cast that clamps the third-person distance
+Overwatch.exe,0x1420e4aa0,0x1420e4aa0,ConstructThirdPersonSpringCamera,Constructs the third-person spring camera
+Overwatch.exe,0x1420feca0,0x1420feca0,AnimSamplerRule,The per-child sampler gate: vec4 lanes; winner-take-all above weight 0.5
+Overwatch.exe,0x1421318b0,0x1421318b0,AddVerticalFovOffset,Adds the vertical FOV offset to the camera descriptor
+Overwatch.exe,0x142141f70,0x142141f70,StatescriptNodePush,The parameter push: walks the element list and dispatches by node type index through the trampoline
+Overwatch.exe,0x14214dcc0,0x14214dcc0,GetPlayerComponentByIndex,Returns a player component from the indexed component array
+Overwatch.exe,0x1421530b0,0x1421530b0,StatescriptVarPoolConstruct,Constructs the runtime variable pool (pool 0x68 -> holder 0x240 with the 16x0x20 slot table -> instance >=0x15B0)
+Overwatch.exe,0x142155280,0x142155280,StatescriptApplyPass,The apply pass: walks the instance's elements and applies each record's default
+Overwatch.exe,0x142157910,0x142157910,StatescriptSlotResolve,Resolves an element by its id in the runtime
+Overwatch.exe,0x1421cd360,0x1421cd360,RegisterComponentTypeDescriptor,Registers a component type descriptor
+Overwatch.exe,0x1421ea960,0x1421ea960,WorldQueryByClass,"The world query a resolved reference lands in (world, u16 class id, 0x9e)"
+Overwatch.exe,0x1421f6ae0,0x1421f6ae0,StatescriptGraphMaterialize,"The graph materializer: walks the 0x10-byte node records {key, flags, kind, target} in order"
+Overwatch.exe,0x14248efd0,0x14248efd0,ParseHexKey,Parses 32 hex digits into a 16-byte key in written byte order
+Overwatch.exe,0x14248f040,0x14248f040,ParseHexKeyId,Parses 16 hex digits into an 8-byte key id in written byte order
+Overwatch.exe,0x14248f2a0,0x14248f2a0,BuildInfoLoadFromInstall,"Builds the .build.info path, loads it and selects the row for .flavor.info's Product Flavor"
+Overwatch.exe,0x142498920,0x142498920,EncodingHeaderParse,"Parses the 22-byte EN header: key widths, page sizes and counts, and espec block size"
+Overwatch.exe,0x1424a90e0,0x1424a90e0,BlteFrameHeaderParse,"Validates a BLTE frame header (type 0x0f or 0x10) and its MD5, and decodes the per-chunk stored and decoded sizes"
+Overwatch.exe,0x1424a9590,0x1424a9590,BlteFrameHeaderOpen,Wrapper that opens a BLTE frame header from a buffer
+Overwatch.exe,0x1424a9670,0x1424a9670,BlteFrameHeaderOpenEx,Wrapper that opens a BLTE frame header from an explicit buffer and error flag
+Overwatch.exe,0x1424ae6c0,0x1424ae6c0,BuildInfoParseField,Parses one build-info field into its row offset using the descriptor's parser
+Overwatch.exe,0x1424aead0,0x1424aead0,BuildInfoCreate,Creates and loads a .build.info object
+Overwatch.exe,0x1424aec30,0x1424aec30,BuildInfoSelectRow,Selects the active .build.info row by its first field (the flavor); with no flavor it returns the last active row
+Overwatch.exe,0x1424af8b0,0x1424af8b0,FlavorInfoCreate,Creates and loads the .flavor.info table
+Overwatch.exe,0x1424b0130,0x1424b0130,CdnPathFormat,"Formats data/, patch/ or config/ plus a key and .index into a CDN path"
+Overwatch.exe,0x1424ccc00,0x1424ccc00,BuildConfigParse,"Parses the build config's typed keys, including the two 16-byte encoding keys"
+Overwatch.exe,0x1424ce680,0x1424ce680,CdnConfigParse,"Parses the CDN config's archives, groups, file indexes and patch variants"
+Overwatch.exe,0x1424cebd0,0x1424cebd0,ConfigKeyEntryParse,Handles a config line whose key starts with key-: creates an 8-byte id and 16-byte key entry
+Overwatch.exe,0x1424d0120,0x1424d0120,IndexDirectoryScan,Scans a directory of 32-hex .index files into a 9-byte-key hash table
+Overwatch.exe,0x1424d1b40,0x1424d1b40,EncodingHeaderRead,Reads and parses the 22-byte encoding header from the storage stream
+Overwatch.exe,0x1424d1c60,0x1424d1c60,EncodingSectionsRead,"Reads the espec block, both page indexes and both page-body arrays in the reference order"
+Overwatch.exe,0x1424d61b0,0x1424d61b0,BlteBlockRead,"Reads one BLTE block: decrypts E, then dispatches the plaintext mode to N, Z or LZ4"
+Overwatch.exe,0x1424d68a0,0x1424d68a0,BlteChunkDecrypt,"Decrypts one E block with Salsa20, XORing the chunk ordinal into the IV"
+Overwatch.exe,0x1424d6e50,0x1424d6e50,BlteBlockReadLz4,BLTE 4 block reader: LZ4-HC block header then decompression
+Overwatch.exe,0x1424d7850,0x1424d7850,BlteBlockReadStored,BLTE N block reader: copies the stored bytes
+Overwatch.exe,0x1424d7ca0,0x1424d7ca0,BlteBlockReadZlib,BLTE Z block reader: inflates after the mode byte
+Overwatch.exe,0x1424d8720,0x1424d8720,BlteIsDirectContainer,"True only for BLTE magic with a zero frame-header size, the single implicit-chunk form"
+Overwatch.exe,0x1424d8770,0x1424d8770,BlteWriteDirectHeader,Writes the BLTE magic and a zero frame-header size
+Overwatch.exe,0x1424d8800,0x1424d8800,ParseBoolString,"Boolean config parser: 1/true/yes/on/enable/enabled are true, case-insensitive"
+Overwatch.exe,0x1424e3230,0x1424e3230,Salsa20StateInit,"Fills the 64-byte Salsa20/20 state (expand 16-byte k) from a 16-byte key, an 8-byte nonce and a 64-bit block counter"
+Overwatch.exe,0x1424e32c0,0x1424e32c0,Salsa20Xor,XORs a buffer with the Salsa20 keystream; dispatches to the 256-byte and 64-byte block loops
+Overwatch.exe,0x1424e3370,0x1424e3370,Salsa20XorBlocks256,"Salsa20 block loop for 256 bytes or more, four blocks per iteration"
+Overwatch.exe,0x1424e3e20,0x1424e3e20,Salsa20XorBlocks64,Salsa20 block loop for 64..255 bytes
+Overwatch.exe,0x1424f48d0,0x1424f48d0,DynamicContainerRead,"Resolves a 16-byte key to a stored range, skips the 30-byte data header and reads the bytes"
+Overwatch.exe,0x1424fcd20,0x1424fcd20,DynamicContainerReadPage,Reads one page-aligned range through the archive page cache
+Overwatch.exe,0x142501b40,0x142501b40,DynamicKeyStateLookup,Computes the 9-byte bucket hash and looks the key up in the key state
+Overwatch.exe,0x14250c8f0,0x14250c8f0,DynamicContainerOpenArchive,Opens data.%03d for an archive number taken from the virtual offset
+Overwatch.exe,0x14250e400,0x14250e400,DynamicIndexSegmentOpen,Opens one data/0X........idx segment for a bucket and segment number
+Overwatch.exe,0x14250fc60,0x14250fc60,DynamicIndexSegmentLoad,Loads a dynamic index segment through the async reader
+Overwatch.exe,0x14250fcf0,0x14250fcf0,DynamicIndexSegmentParse,"Parses a dynamic index segment: section and file headers, entry block and key-to-entry table"
+Overwatch.exe,0x1425111a0,0x1425111a0,DynamicIndexFindEntry,Binary-searches the 18-byte entries by their 9-byte key and expands the equal range
+Overwatch.exe,0x1425115d0,0x1425115d0,DynamicIndexResolveRange,Resolves a requested range against a key state's resident intervals
+Overwatch.exe,0x142512c60,0x142512c60,DynamicIndexHash,32-bit file-header and rolling entry-block hash of a dynamic index segment; called by DynamicIndexSegmentParse
+Overwatch.exe,0x142513230,0x142513230,DynamicIndexKeyHash,"32-bit hash of a 19-byte key-to-entry record, compared with the record's first word | 0x80000000"
+Overwatch.exe,0x1425209a0,0x1425209a0,DynamicIndexDecodeEntries,"Decodes entry payloads: 5-byte big-endian location, 4-byte little-endian size"
+Overwatch.exe,0x142cbcee0,0x142cbcee0,RunCharacterControllerSweep,Runs the character controller collision sweep for the desired position
+Overwatch.exe,0x142cbd1b0,0x142cbd1b0,SetCharacterControllerVelocity,Forwards a 4-float velocity to the character controller
+Overwatch.exe,0x142cbdc60,0x142cbdc60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0)
+Overwatch.exe,0x142cbeb70,0x142cbeb70,DmWorldConstruct,The dmWorld constructor
+Overwatch.exe,0x142cc3050,0x142cc3050,DmWorldInvDt0Writer,The writer of dmWorld.m_inv_dt0 (+0x198)
+Overwatch.exe,0x142cc3630,0x142cc3630,DmWorldSubstepDriver,The substep driver of the solver chain
+Overwatch.exe,0x142cd9c90,0x142cd9c90,ConstraintDispatch,The per-constraint dispatcher (cases 1-9) inside the solve
+Overwatch.exe,0x142cdf710,0x142cdf710,DmResidualQuery,The residual query the step entry loops on (threshold 0.5 at DAT_7ff7c7d0c068)
+Overwatch.exe,0x142cf5770,0x142cf5770,SubmitCharacterControllerCommand,Submits a command to every controller bound to the handle
+Overwatch.exe,0x142d07170,0x142d07170,RotationInertiaSolve,A 4x4 rotation-inertia solver in the conditioned sweep (verified not the integrator)
+Overwatch.exe,0x142e48a20,0x142e48a20,CmfKey154504,"Derives the 32-byte AES key for build 154504 from the 512-byte table at 0x1436100c0 (seed table[0x120], step 3)"
+Overwatch.exe,0x142e48700,0x142e48700,CmfIv154504,"Derives the 16-byte IV for build 154504 from SHA-1(name), 16*build, the data count and the same table"
+Overwatch.exe,0x141feee80,0x141feee80,CmfCryptoInit,"Reads the clear CMF header, accepts format version 27 and builds the AES-256-CBC key/IV through the two routines above"
+Overwatch.exe,0x141fd4a50,0x141fd4a50,AssetRequestBundleAware,"Requests an asset; a bundle-hosted record (query flag 0x200) goes to the bundle directory, everything else to the encoded store"
+Overwatch.exe,0x141fd5160,0x141fd5160,BundleDirectoryLookup,"Finds the bundle holding a GUID in the per-type directory: type block, group sorted-GUID binary search, then the group's bundle request handle"
+Overwatch.exe,0x141fd53a0,0x141fd53a0,BundleDirectoryRequestAssets,"Walks the bundle directory's groups, relocating its base-relative pointers and requesting every asset each group lists"
+Overwatch.exe,0x141fd5820,0x141fd5820,BundleEntryLookup,"Reads a bundle's entry table (i32 count, u8 width, GUID-sorted u64 GUID plus a width-byte offset) and returns payload+offset; offset 0 is absent"
+Overwatch.exe,0x141fef610,0x141fef610,ManifestQueryAsset,"Answers a GUID query with size, class byte, flags (bit 9 = bundle-hosted), content key and manifest, mapping in-memory flag bit 16 to result bit 9"
+Overwatch.exe,0x141feff80,0x141feff80,ManifestApplyPatchRecords,"Merges patch records into the manifest and copies the raw record byte's bit 7 to in-memory flag bit 16"
+Overwatch.exe,0x14031c580,0x14031c580,RegisterStuMapHeader,"Registers STUMapHeader: class 0x02514B6A, size 0x240, 29 fields, at 0x143eebf70"
+Overwatch.exe,0x14143b5c0,0x14143b5c0,RegisterStuMapHeaderFields,"Registers STUMapHeader's field offsets: m_map +0xA0, m_supportedGameModes +0xD0, m_C0CA4671 +0xE0, m_D97BC44F +0xF0, m_53DFAF05 +0x100, m_78715D57 +0x110, m_364ADD04 +0x150, m_mapName +0x170"
+Overwatch.exe,0x14143bbe5,0x14143bbe5,RegisterStuMapHeaderTail,"Registers the remaining STUMapHeader fields (m_9289BADC +0x120 through m_44D13CC2 +0x238)"
+Overwatch.exe,0x14142dbf0,0x14142dbf0,RegisterStuMapVariation,"Registers STU_7FB10A24: m_2A9103F4 +0xB0, m_364ADD04 +0xC0, m_BF231F12 +0xD0 (the variation's scene map)"
+Overwatch.exe,0x14142ee0c,0x14142ee0c,RegisterStuMapVariationMode,"Registers STU_71B2D30A, the per-mode variation entry: m_gameMode +0x8, m_A9253C68 +0x38"
+Overwatch.exe,0x141ff33f0,0x141ff33f0,RegisterMapAssetJobs,"Registers the type-0x002 map-asset job template and the type-0x0BC chunk-asset job template"
+Overwatch.exe,0x141ff5c80,0x141ff5c80,LoadMapAssetChunks,"Map-asset job: requests +0x1B8, the +0x1B0/+0x1B4 GUID list, +0x1C0, +0x1C8, then chunk-table slots 0x1F, 0x20, 0x23 and 1..=0x1C"
+Overwatch.exe,0x141ff54e0,0x141ff54e0,FinishMapChunkAsset,"Chunk-asset completion: dispatches on the GUID's chunk-table slot, including the stored kinds 0x10, 0x11, 0x12 and 0x23"
+Overwatch.exe,0x141ff58b0,0x141ff58b0,ReleaseMapAssetChunks,"Releases the map asset's stored and synthesised chunk handles"
+Overwatch.exe,0x142e48da0,0x142e48da0,MapAssetDependencies,"Builds the type-0x002 map asset's dependency/type list"
+Overwatch.exe,0x141b32e70,0x141b32e70,ChunkSlotForGuid,"Maps a chunk GUID's kind byte to its slot in the 0x24-entry chunk-kind table"
+Overwatch.exe,0x141b32e20,0x141b32e20,MapChunkGuid,"Synthesises a chunk GUID: 0x0DD0000000000000 | (kind << 32) | (map & 0xFFFFFFFF)"

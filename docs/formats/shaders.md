@@ -1,27 +1,16 @@
-# Shaders: the asset containers (`0x085` groups, `0x087` code, `0x086` instances)
+# Shaders: the asset containers
 
-Shader *behaviour* — the bytecode — stays out of scope by design
-(`docs/roadmap.md`). The asset containers are ordinary files, and they are now
-read: a group names the code blobs and sources a pipeline tier uses; a code
-blob is a gzip stream; an instance binds a code GUID to constant buffers,
-shader resources, sampler states and a vertex layout. A material asset points
-at a shader group and a shader source (`docs/formats/materials.md`), so this
-is the next hop of that chain.
-
-Evidence classes: *install* for the group and code layouts (read off
-`E:\Overwatch`, build 2.25.0.0.154088, by `cargo test -p ow-tank --release
---test shader_real` and `cargo run -p ow-tank --release --bin shader`);
-*decompiled* for the instance layout (TankLib `teShaderInstance.cs`),
-validated against **nothing** — this install's registry holds **zero**
-type-`0x086` assets.
+Shader *behaviour* — the bytecode — is out of scope for the gameplay rewrite.
+The asset containers are ordinary files and are read: a group names the code
+blobs and sources a pipeline tier uses; a code blob is a gzip stream; an
+instance binds a code GUID to constant buffers, resources, sampler states and a
+vertex layout. A material asset points at a shader group and a shader source
+(`formats/materials.md`), so this is the next hop of that chain.
 
 ## Group (`0x085`)
 
-Header 184 bytes; `N = u32` at `0x64`; eight arrays follow it, each starting
-exactly where the previous ended. Verified on the 200 groups of the first 400
-sampled that this install carries (the other 200 are not in it: the
-streamed-content wall; 48,553 in the registry), with the probe sample (30/30)
-agreeing:
+Header 184 bytes; `N = u32` at `0x64`; eight arrays follow, each starting where
+the previous ended.
 
 ```text
 0x00  u64 unknown0          a type-0x040 GUID; likely the group's source
@@ -46,51 +35,44 @@ agreeing:
 0xB0  u64 0x000000FFFFFFFFFF
 ```
 
-The C entries were type `0x087` on **5,844 of 5,844** entries across the 200
-parsed groups. The E entries were type `0x040` on 1,662 of 1,734 — the other
-**72 are type `0x001`** (unexplained; possibly an inline/empty shader). The
-parser checks every array offset against `N` before reading anything, so a
-group whose layout differs fails instead of yielding garbage.
-
-The G array carries one `u64` per record: in the groups inspected it is a
-single value for most records, with a block of another value in the middle.
-The pairing with the C and E records follows from the size (8 bytes each);
-the meaning is unknown.
+The C entries were type `0x087` on 5,844 of 5,844 entries across 200 parsed
+groups. The E entries were type `0x040` on 1,662 of 1,734; the other 72 are
+type `0x001` (unexplained). The parser checks every array offset against `N`
+before reading, so a different layout fails instead of yielding garbage.
 
 ## Code (`0x087`)
 
-Header at least 140 bytes; the payload is a **gzip stream**. Verified on the
-200 code assets the install test could open (of the first 200 sampled; 216,830
-in the registry) with the probe's 30/30 sample agreeing:
+Header at least 140 bytes; the payload is a **gzip stream**.
 
 ```text
 0x00  u64 unknown0           -1 on every code asset inspected
-0x08  u64 unknown1           seen 0x0000000140000401 and 0x0000000140000402
+0x08  u64 unknown1           seen 0x0000000140000401 / ...0402
 0x70  u64 data_offset        where the gzip stream starts
-0x84  u32 compressed_size    equal to asset length - data_offset, always
-0x88  u32 uncompressed_size  the inflated length, always
+0x84  u32 compressed_size    asset length - data_offset
+0x88  u32 uncompressed_size  the inflated length
 ```
 
-The parser inflates eagerly and keeps the bytes; `compressed_size`,
-`uncompressed_size` and the gzip magic are all checked, so a misdeclared asset
-fails loudly.
+The parser inflates eagerly and keeps the bytes; the sizes and gzip magic are
+checked.
 
 ## Instance (`0x086`)
 
-The layout in `shader.rs` (108-byte header, then optional tables: shader
-resources, sampler states, vertex input elements, constant-buffer headers with
-per-buffer part lists and skeletons) is a port of the reference reader and is
-**not tested**: no type-`0x086` asset exists in this build. The code lives
-behind `parse_instance` so a build that does ship them can exercise it, and
-the module's synthetic tests pin the reference's read order and gating.
+The layout in `shader.rs` (108-byte header, then optional tables) is a port of
+the reference reader and is **not tested against real data**: no type-`0x086`
+asset exists in this build. The module's synthetic tests pin the read order and
+gating.
 
 ## Open
 
-* the semantics of the group's unnamed arrays (A/B/D/F/G/H contents,
-  `unknown60`, `unknown0` vs `source_guid`) — offsets and types are pinned,
-  meanings are fitted or blank;
-* the 72 type-`0x001` source refs in E;
-* the instance layout against real data (none installed here);
-* what consumes a group (the renderer's tier/instance selection) — client
-  side, no capture holds the renderer's code pages (see
-  `docs/formats/rendering.md`).
+- The semantics of the group's unnamed arrays (`unknown60`, `unknown0` vs
+  `source_guid`).
+- The 72 type-`0x001` source refs.
+- The instance layout against real data.
+- What consumes a group (the renderer's tier/instance selection).
+
+## Verification
+
+```text
+cargo test --release -p ow-tank --test shader_real
+cargo run -p ow-tank --release --bin shader
+```

@@ -4,7 +4,7 @@
 //! cargo xtask verify          # the full gate: fmt, clippy, every test
 //! cargo xtask verify --fast   # the same without the install-reading tests
 //! cargo xtask dev-index       # is dev/INDEX.md up to date?
-//! cargo xtask fit-check       # does the code match the fitted ledger?
+//! cargo xtask deviation-check # does the code match the deviations table?
 //! ```
 //!
 //! The gate is what "done" means in this project: a change is done when
@@ -63,14 +63,13 @@ fn verify(fast: bool) -> bool {
         None,
     );
     // The install-reading tests are the slow half; on the fast path only the
-    // libraries and the viewer are checked.
+    // active data libraries are checked. The parked runtime crates are not
+    // members until the CASC/map oracle passes.
     let suites: Vec<Vec<&str>> = if fast {
         vec![
             vec!["test", "--release", "-p", "ow-casc", "--lib"],
+            vec!["test", "--release", "-p", "ow-stu", "--lib"],
             vec!["test", "--release", "-p", "ow-tank", "--lib"],
-            vec!["test", "--release", "-p", "ow-sim"],
-            vec!["test", "--release", "-p", "ow-view"],
-            vec!["test", "--release", "-p", "ow-scene"],
         ]
     } else {
         vec![vec!["test", "--release", "--workspace"]]
@@ -79,7 +78,7 @@ fn verify(fast: bool) -> bool {
         ok &= run("cargo test", "cargo", &suite, None);
     }
     ok &= python("make_index.py", &["--check"]);
-    ok &= python("fit_check.py", &["--check"]);
+    ok &= python("deviation_check.py", &["--check"]);
     ok
 }
 
@@ -89,7 +88,7 @@ fn main() -> ExitCode {
     let ok = match cmd {
         "verify" => verify(args.iter().any(|a| a == "--fast")),
         "dev-index" => python("make_index.py", &["--check"]),
-        "fit-check" => python("fit_check.py", &["--check"]),
+        "deviation-check" => python("deviation_check.py", &["--check"]),
         "help" | "--help" | "-h" => {
             println!("{}", HELP);
             true
@@ -114,5 +113,5 @@ cargo xtask <command>
   verify          fmt, clippy and every test (the full gate)
   verify --fast   the same, without the tests that read the install
   dev-index       check that dev/INDEX.md matches the tools on disk
-  fit-check       check that the fitted ledger and the code agree
+  deviation-check check that the deviations table and the code agree
 ";

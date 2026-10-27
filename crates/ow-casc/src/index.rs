@@ -217,23 +217,38 @@ pub fn parse_bucket_file(
     Ok(out)
 }
 
-/// The client's dynamic-index hash, exactly (`0x142512c60`).
+/// The client's dynamic-index hash, exactly (`DynamicIndexHash`,
+/// `0x142512c60`).
 ///
 /// It is a two-word 32-bit state hash over 12-byte blocks. The same function
 /// hashes the file header (state starts at zero) and each 18-byte entry in
 /// turn (the state carries between entries); `state[0]` is compared with the
 /// stored hash. Verified against all sixteen `.idx` files of the reference
 /// install: the file-header hash and the complete entry-block rolling hash
-/// both match.
-fn hash_index(data: &[u8], state: &mut [u32; 2]) {
+/// both match. Public so the verification probe calls this implementation
+/// rather than a copy.
+pub fn hash_index(data: &[u8], state: &mut [u32; 2]) {
     let mut a = (data.len() as u32)
         .wrapping_add(0xdead_beef)
         .wrapping_add(state[0]);
     let mut b = state[1].wrapping_add(a);
     let mut c = a;
 
+    // A zero-length segment is the client's switch case 0: it stores the two
+    // running words and returns before the final mix. The parsed index never
+    // hashes an empty slice, but the function's contract includes it.
+    if data.is_empty() {
+        state[0] = b;
+        state[1] = a;
+        return;
+    }
+
     let mut pos = 0usize;
-    while pos + 12 <= data.len() {
+    // The client's loop runs floor((len - 1) / 12) blocks: the last 1..=12
+    // bytes are the switch tail, including a whole twelve-byte group when the
+    // length is a multiple of 12. The group is added to the running words, not
+    // mixed as a block.
+    while pos + 12 < data.len() {
         let w0 = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
         let w1 = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
         let w2 = u32::from_le_bytes([data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11]]);
@@ -255,7 +270,7 @@ fn hash_index(data: &[u8], state: &mut [u32; 2]) {
 
     let tail = &data[pos..];
     match tail.len() {
-        0 => {}
+        0 => unreachable!("a non-empty input leaves a 1..=12 byte tail"),
         1 => c = c.wrapping_add(u32::from(tail[0])),
         2 => c = c.wrapping_add(le(tail, 0, 2)),
         3 => c = c.wrapping_add(le(tail, 0, 3)),
@@ -291,7 +306,12 @@ fn hash_index(data: &[u8], state: &mut [u32; 2]) {
             b = b.wrapping_add(le(tail, 8, 3));
             c = c.wrapping_add(le(tail, 0, 4));
         }
-        _ => unreachable!("the block loop leaves fewer than 12 bytes"),
+        12 => {
+            a = a.wrapping_add(le(tail, 4, 4));
+            b = b.wrapping_add(le(tail, 8, 4));
+            c = c.wrapping_add(le(tail, 0, 4));
+        }
+        _ => unreachable!("the block loop leaves at most twelve bytes"),
     }
 
     b = (b ^ a).wrapping_sub(a.rotate_left(14));
@@ -310,6 +330,112 @@ fn le(data: &[u8], at: usize, len: usize) -> u32 {
         value |= u32::from(data[at + i]) << (8 * i);
     }
     value
+}
+
+/// The client's per-record dynamic-index key hash, exactly
+/// (`DynamicIndexKeyHash`, `0x142513230`).
+///
+/// It is the lookup3 `hashlittle` word hash: the three running words start at
+/// `0xdeadbeef + len + init` (all 32-bit wrapping adds), twelve-byte groups are
+/// mixed, and the 1..=12 byte tail is added before the final mix. The returned
+/// word is the final `c`. A zero-length key is the client's `case 0`: it
+/// returns `c` before the final mix.
+///
+/// `DynamicIndexSegmentParse` (`0x14250fcf0`) calls it once per 24-byte page
+/// record as `key_hash(&record[4..23], 0)`, then compares the result ORed with
+/// `0x80000000` against the record's first dword. The client selects one of
+/// three load paths from the key pointer's low two bits (dword, word and byte
+/// loads); all three assemble the same twelve bytes, so this byte-wise
+/// implementation is the function's return contract on every alignment.
+///
+/// A page record is 4-byte stored hash, 19-byte key, one pad byte. The install's
+/// page tables are zero-filled, so this function has no stored record hash to
+/// agree with; the unit tests pin the client's own outputs instead.
+pub fn key_hash(key: &[u8], init: u32) -> u32 {
+    use std::num::Wrapping;
+
+    let seed = Wrapping(key.len() as u32) + Wrapping(0xdead_beef) + Wrapping(init);
+    let mut a = seed;
+    let mut b = seed;
+    let mut c = seed;
+
+    let mut pos = 0usize;
+    while key.len() - pos > 12 {
+        let w0 = Wrapping(le(key, pos, 4));
+        let w1 = Wrapping(le(key, pos + 4, 4));
+        let w2 = Wrapping(le(key, pos + 8, 4));
+        a += w0;
+        b += w1;
+        c += w2;
+        a = (a - c) ^ Wrapping(c.0.rotate_left(4));
+        c += b;
+        b = (b - a) ^ Wrapping(a.0.rotate_left(6));
+        a += c;
+        c = (c - b) ^ Wrapping(b.0.rotate_left(8));
+        b += a;
+        a = (a - c) ^ Wrapping(c.0.rotate_left(16));
+        c += b;
+        b = (b - a) ^ Wrapping(a.0.rotate_left(19));
+        a += c;
+        c = (c - b) ^ Wrapping(b.0.rotate_left(4));
+        b += a;
+        pos += 12;
+    }
+
+    let tail = &key[pos..];
+    match tail.len() {
+        0 => return c.0,
+        1 => a += Wrapping(u32::from(tail[0])),
+        2 => a += Wrapping(le(tail, 0, 2)),
+        3 => a += Wrapping(le(tail, 0, 3)),
+        4 => a += Wrapping(le(tail, 0, 4)),
+        5 => {
+            a += Wrapping(le(tail, 0, 4));
+            b += Wrapping(u32::from(tail[4]));
+        }
+        6 => {
+            a += Wrapping(le(tail, 0, 4));
+            b += Wrapping(le(tail, 4, 2));
+        }
+        7 => {
+            a += Wrapping(le(tail, 0, 4));
+            b += Wrapping(le(tail, 4, 3));
+        }
+        8 => {
+            a += Wrapping(le(tail, 0, 4));
+            b += Wrapping(le(tail, 4, 4));
+        }
+        9 => {
+            a += Wrapping(le(tail, 0, 4));
+            b += Wrapping(le(tail, 4, 4));
+            c += Wrapping(u32::from(tail[8]));
+        }
+        10 => {
+            a += Wrapping(le(tail, 0, 4));
+            b += Wrapping(le(tail, 4, 4));
+            c += Wrapping(le(tail, 8, 2));
+        }
+        11 => {
+            a += Wrapping(le(tail, 0, 4));
+            b += Wrapping(le(tail, 4, 4));
+            c += Wrapping(le(tail, 8, 3));
+        }
+        12 => {
+            a += Wrapping(le(tail, 0, 4));
+            b += Wrapping(le(tail, 4, 4));
+            c += Wrapping(le(tail, 8, 4));
+        }
+        _ => unreachable!("the block loop leaves at most twelve bytes"),
+    }
+
+    c = (c ^ b) - Wrapping(b.0.rotate_left(14));
+    a = (a ^ c) - Wrapping(c.0.rotate_left(11));
+    b = (b ^ a) - Wrapping(a.0.rotate_left(25));
+    c = (c ^ b) - Wrapping(b.0.rotate_left(16));
+    a = (a ^ c) - Wrapping(c.0.rotate_left(4));
+    b = (b ^ a) - Wrapping(a.0.rotate_left(14));
+    c = (c ^ b) - Wrapping(b.0.rotate_left(24));
+    c.0
 }
 
 #[cfg(test)]
@@ -370,6 +496,118 @@ mod tests {
         assert_eq!(state, [0xef6c_3f29, 0xd114_251e]);
         hash_index(&bytes("00003400342943950309a1666c77513a0000"), &mut state);
         assert_eq!(state, [0x758e_09f9, 0x9c58_4663]);
+    }
+
+    /// A zero-length segment is the client's switch case 0: it stores the two
+    /// running words and returns before the final mix. `parse_bucket_file`
+    /// never hashes an empty slice, but the function's contract includes it;
+    /// the values are the client's own output for the same inputs.
+    #[test]
+    fn a_zero_length_hash_returns_the_running_words_unmixed() {
+        let mut state = [0u32; 2];
+        hash_index(&[], &mut state);
+        assert_eq!(state, [0xdead_beef, 0xdead_beef]);
+
+        let mut state = [0xdead_beef, 0x1234_5678];
+        hash_index(&[], &mut state);
+        assert_eq!(state, [0xcf8f_d456, 0xbd5b_7dde]);
+    }
+
+    /// `DynamicIndexKeyHash` (`0x142513230`) known answers, read from the
+    /// client's bytes: the empty early return (`case 0` returns `c`), every
+    /// tail length from 1 to 12, the 12-byte block loop, and the real 19-byte
+    /// page-key shape. The install's page tables are zero-filled, so there is
+    /// no stored page-record hash; these are the client's outputs for the same
+    /// inputs. `00..18` is also a real 19-byte span of `0300000159.idx`'s first
+    /// entry block (the page tables themselves are all zero). The client reads
+    /// `init` through `R8D`, so `key_hash` takes a `u32`; the fixture exercises
+    /// the oracle's truncation of a 64-bit init word.
+    #[test]
+    fn matches_the_client_key_hash_on_known_vectors() {
+        let seq = |n: usize| -> Vec<u8> { (0..n).map(|i| i as u8).collect() };
+        let cases: &[(Vec<u8>, u32, u32)] = &[
+            (Vec::new(), 0, 0xdead_beef),
+            (Vec::new(), 1, 0xdead_bef0),
+            (Vec::new(), 0xffff_ffff, 0xdead_beee),
+            (vec![0u8; 19], 0, 0x9100_686e),
+            (vec![0u8; 19], 0xffff_ffff, 0x3428_e3f5),
+            (seq(19), 0, 0x74ab_ad21),
+            (seq(19), 1, 0x6d33_d311),
+            (seq(19), 0xffff_ffff, 0x8036_c457),
+            (b"hello, world!".to_vec(), 0x1234_5678, 0xb416_2ac5),
+            (seq(24), 0, 0x9c0a_dd53),
+            (seq(25), 0, 0x3a88_2244),
+            (seq(8), 0, 0xd4cc_b93c),
+            (seq(9), 0, 0xeca5_1474),
+            (seq(10), 0, 0x610f_c1e3),
+            (seq(14), 0, 0x9609_e9d3),
+            (seq(15), 0, 0x63a6_e503),
+            (seq(16), 0, 0x5e84_eafc),
+            (seq(17), 0, 0x8c35_32cb),
+            (seq(18), 0, 0xd732_003d),
+            (seq(23), 0, 0xa5ff_3c58),
+            // The first 19 bytes of the real file's entry block.
+            (
+                hex_bytes("00001d9bbc07919efd0fd56f31a2b422000000"),
+                0,
+                0x6de3_52b4,
+            ),
+            (
+                hex_bytes("00003400342943950309a1666c77513a000000"),
+                0,
+                0x1994_5f92,
+            ),
+        ];
+        for (key, init, expected) in cases {
+            assert_eq!(
+                key_hash(key, *init),
+                *expected,
+                "key {key:02x?} init {init:#x}"
+            );
+        }
+    }
+
+    /// The Rust slice has no alignment path; the same 19 bytes at four address
+    /// offsets must hash identically. The oracle unit runs the client's three
+    /// pointer paths (16-bit aligned, even-not-4, odd) and compares each.
+    #[test]
+    fn key_hash_does_not_depend_on_slice_alignment() {
+        let seed = seq_bytes(19);
+        let expected = key_hash(&seed, 0);
+        for offset in 0..4 {
+            let mut buf = [0u8; 32];
+            buf[offset..offset + 19].copy_from_slice(&seed);
+            assert_eq!(key_hash(&buf[offset..offset + 19], 0), expected);
+        }
+    }
+
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        hex.as_bytes()
+            .chunks_exact(2)
+            .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+            .collect()
+    }
+
+    fn seq_bytes(n: usize) -> Vec<u8> {
+        (0..n).map(|i| i as u8).collect()
+    }
+
+    /// The client's block loop runs `floor((len - 1) / 12)`, so a trailing
+    /// whole twelve-byte group is added to the running words, not mixed as a
+    /// block. The `.idx` files only hash 16- and 18-byte spans, so this shape
+    /// has no file vector; these are the client's own outputs for `00..0b`
+    /// and `00..17` with the state at zero.
+    #[test]
+    fn a_whole_twelve_byte_tail_is_added_not_mixed() {
+        let twelve: Vec<u8> = (0u8..12).collect();
+        let mut state = [0u32; 2];
+        hash_index(&twelve, &mut state);
+        assert_eq!(state, [0x5e4a_a593, 0x0cb6_e7e9]);
+
+        let twenty_four: Vec<u8> = (0u8..24).collect();
+        let mut state = [0u32; 2];
+        hash_index(&twenty_four, &mut state);
+        assert_eq!(state, [0x9c0a_dd53, 0x9f41_1002]);
     }
 
     #[test]

@@ -1,0 +1,47 @@
+{
+  "id": "fn/Salsa20StateInit",
+  "title": "tier-2 shipped code: BLTE Salsa20 state initialisation against the client's Salsa20StateInit",
+  "address": {
+    "v2b": "0x7ff7c7203230"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "salsa20_state_init",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    { "name": "state", "kind": "ptr", "ptr_len": 64 },
+    { "name": "key", "kind": "ptr", "ptr_len": 16 },
+    { "name": "nonce", "kind": "ptr", "ptr_len": 8 },
+    { "name": "counter", "kind": "u64" }
+  ],
+  "returns": "void",
+  "argFactory": "salsa20_state_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 24,
+    "mutationKillRate": 1.0,
+    "seed": 4242,
+    "allowedImageReads": [
+      "0x7ff7c8193320",
+      "0x7ff7c8193328"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/blte.rs, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the salsa20_state_init entry. The ledger binds the verdict to blte.rs + the probe source + the git revision.",
+    "Oracle is Salsa20StateInit at exe 0x1424e3230. Signature: (uint8 state[64], const uint32 key[4], const uint32 nonce[2], uint64 counter); the client writes all 64 bytes of the output buffer and returns that same pointer. The return is declared void so the arena address and the probe's host address are not compared.",
+    "The client's state is stored in diagonal order: words 0..3 are the four 'expand 16-byte k' constants, the key words are at 5, 4, 9 and 12, the nonce at 6 and 11, and the 64-bit counter at 8 (low) and 13 (high). The counter split (low word all ones, high word one, both words all ones) is in the pinned cases.",
+    "The probe calls ow_casc::blte::salsa20_state_init, the function the shipped BLTE path uses for every 64-byte block: salsa20 builds each block's state through it and maps the stored diagonal order to the quarter-round order. This unit therefore tests shipped code on the real decryption path, not a copy.",
+    "allowedImageReads: 0x7ff7c8193320 and 0x7ff7c8193328 are the two 8-byte compiler literal-pool halves of the 'expand 16-byte k' constant (exe 0x143473320 and 0x143473328, the same constant pool the Salsa20Xor block loops read). They are constants, not game globals.",
+    "Salsa20StateInit has no conditional branches, so the coverage stage discovers zero branch sites and reports 100%. The differential over 364 cases and the mutation stage carry this unit: 24 mutants rewrite the word helper's index arithmetic, the constant/key/nonce word stores and the counter high-word shift, and all 24 are killed.",
+    "Case 0 of the fixture is the pinned known-answer vector: key 01..10, nonce 10..17, counter 0. The 64 bytes it must produce are pinned by the ow-casc unit test state_init_matches_the_client_state_vector, so the layout is asserted on both sides of the harness."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "The function's return value (the output pointer)",
+      "why": "The return is the same pointer the caller passes in arg0. The harness compares the 64 bytes written through that pointer, and the pointer itself differs between the emulator's arena and the probe's host buffer, so the return is declared void by the unit contract. Comparing it would need pointer-identity masking, which adds no information about the state."
+    }
+  ]
+}

@@ -16,6 +16,7 @@
 
 pub mod assoc;
 pub mod blendtree;
+pub mod bundle;
 pub mod chunks;
 pub mod classes;
 pub mod classreg;
@@ -32,6 +33,8 @@ pub mod keytable;
 pub mod lighting;
 pub mod manifest;
 pub mod mapchunk;
+pub mod mapguid;
+pub mod mapresolve;
 pub mod material;
 pub mod model;
 pub mod mstu;
@@ -51,6 +54,8 @@ pub mod weapons;
 
 use ow_casc::Store;
 use ow_stu::Stu;
+
+use std::cell::OnceCell;
 
 #[derive(Debug)]
 pub enum Error {
@@ -114,12 +119,20 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// The defaults match a retail Windows install on the global region with English
 /// text. A text manifest is loaded alongside the base one because the base does
 /// not cover everything: on the reference install it carries 67 assets of the
-/// settings type and the enUS manifest adds another 52.
+/// settings type and the enUS manifest adds another 52. `content_manifest` can
+/// force a particular content variant; the install ships more than one.
 #[derive(Debug, Clone)]
 pub struct ManifestSelector {
     pub platform: String,
     pub region: String,
     pub text_locale: String,
+    /// Force one content manifest by a substring of its file name.
+    ///
+    /// `None` opens the first candidate that works, in the order
+    /// [`manifest::Registry::find_manifest_candidates`] returns. A caller that
+    /// needs a particular variant — the Prism renderer's assets, for example —
+    /// names it here instead of relying on the root file's order.
+    pub content_manifest: Option<String>,
 }
 
 impl Default for ManifestSelector {
@@ -128,6 +141,7 @@ impl Default for ManifestSelector {
             platform: "Win".to_string(),
             region: "RDEV".to_string(),
             text_locale: "enUS".to_string(),
+            content_manifest: None,
         }
     }
 }
@@ -142,6 +156,8 @@ pub struct GameData {
     /// Field names, read from a reference checkout when one is configured.
     /// Empty otherwise, in which case a graph's parameters cannot be named.
     pub fields: fieldnames::FieldNames,
+    /// The bundle index, built on the first bundle-hosted asset opened.
+    bundle_index: OnceCell<std::result::Result<bundle::BundleIndex, String>>,
 }
 
 impl GameData {
@@ -181,9 +197,13 @@ impl GameData {
             return Err(Error::NoManifest);
         }
 
-        // An explicit manifest, for measuring what each variant covers. Names
-        // are matched as substrings so a partial name is enough.
-        let forced = std::env::var("OW_MANIFEST").ok();
+        // An explicit manifest, for measuring what each variant covers. The
+        // selector wins over the environment; both match a substring so a
+        // partial name is enough.
+        let forced = selector
+            .content_manifest
+            .clone()
+            .or_else(|| std::env::var("OW_MANIFEST").ok());
         let mut opened = None;
         let mut skipped: Vec<String> = Vec::new();
         for (name, content_key) in &candidates {
@@ -246,6 +266,7 @@ impl GameData {
             manifests,
             classes,
             fields,
+            bundle_index: OnceCell::new(),
         })
     }
 
@@ -281,7 +302,11 @@ impl GameData {
         out
     }
 
-    /// Raw bytes of an asset.
+    /// Raw bytes of an asset, from the encoded store only.
+    ///
+    /// This is the path for assets whose CMF record byte has bit 7 clear. For
+    /// the client's full open — which falls back to a bundle — use
+    /// [`GameData::open_asset`]. Ordinary assets are identical through both.
     pub fn bytes_of(&self, guid: u64) -> Result<Vec<u8>> {
         let record = self
             .registry
@@ -290,9 +315,85 @@ impl GameData {
         Ok(self.store.open_ckey(&record.content_key)?)
     }
 
+    /// The client's asset open: the encoded store, or the asset's bundle.
+    ///
+    /// The CMF record byte at `+12` decides. With bit 7 clear the payload is a
+    /// content key in the store (`Store::open_ckey`), which is what
+    /// [`GameData::bytes_of`] does. With bit 7 set the payload is an entry of a
+    /// type-`0x09C` bundle, and the client reads
+    /// `payload + offset` for the record's declared size (`FUN_141fd5820`).
+    ///
+    /// Reading a bundle-hosted asset builds the bundle index first: the
+    /// manifest's type-`0x09C` records are opened and their entry tables read.
+    /// That is the one costly step here, and it happens once per [`GameData`].
+    pub fn open_asset(&self, guid: u64) -> Result<Vec<u8>> {
+        let record = self
+            .registry
+            .get(guid)
+            .ok_or_else(|| Error::NotFound(format!("asset 0x{guid:016x}")))?;
+        if record.unknown & bundle::RECORD_IN_BUNDLE == 0 {
+            return Ok(self.store.open_ckey(&record.content_key)?);
+        }
+
+        let index = self
+            .bundle_index()
+            .map_err(|e| Error::NotFound(format!("asset 0x{guid:016x}: {e}")))?;
+        let location = index.get(guid).ok_or_else(|| {
+            Error::NotFound(format!(
+                "asset 0x{guid:016x} is marked as bundle-hosted but no bundle holds it \
+                 ({} bundles read, {} entries)",
+                index.bundles, index.entries_seen
+            ))
+        })?;
+        let payload = self.bytes_of(location.bundle)?;
+        let parsed = bundle::Bundle::parse(&payload)
+            .map_err(|e| Error::NotFound(format!("bundle 0x{:016x}: {e}", location.bundle)))?;
+        let bytes = parsed.span(location.offset, record.size).map_err(|e| {
+            Error::NotFound(format!(
+                "asset 0x{guid:016x} in bundle 0x{:016x}: {e}",
+                location.bundle
+            ))
+        })?;
+        Ok(bytes.to_vec())
+    }
+
+    /// The bundle index, built on first use.
+    ///
+    /// Every type-`0x09C` record is a bundle; its payload is the entry table the
+    /// client reads in `FUN_141fd5820`. A bundle that cannot be opened is
+    /// skipped and counted, never fatal: the install is allowed to be partial.
+    pub fn bundle_index(&self) -> std::result::Result<&bundle::BundleIndex, &str> {
+        let cell = self.bundle_index.get_or_init(|| {
+            let guids: Vec<u64> = self
+                .registry
+                .records
+                .iter()
+                .map(|r| r.guid)
+                .filter(|g| guid::type_of(*g) == bundle::BUNDLE_TYPE)
+                .collect();
+            let index = bundle::BundleIndex::build(guids.into_iter(), |bundle_guid| {
+                self.registry
+                    .get(bundle_guid)
+                    .and_then(|r| self.store.open_ckey(&r.content_key).ok())
+            });
+            if index.bundles == 0 {
+                Err("no type-0x09C bundle payload parsed".to_string())
+            } else {
+                Ok(index)
+            }
+        });
+        match cell {
+            Ok(index) => Ok(index),
+            Err(e) => Err(e.as_str()),
+        }
+    }
+
     /// Parse an asset as structured data.
+    ///
+    /// Uses the client's full open, so a bundle-hosted asset is reachable here
+    /// too. See [`GameData::open_asset`].
     pub fn stu_of(&self, guid: u64) -> Result<Stu> {
-        let bytes = self.bytes_of(guid)?;
+        let bytes = self.open_asset(guid)?;
         Ok(Stu::parse(bytes)?)
     }
 }

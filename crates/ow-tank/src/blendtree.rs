@@ -10,8 +10,8 @@
 //! animation wrapper is the 1-based clip index.
 //!
 //! This module only *reads* the asset. The per-node runtime maths
-//! (Pose2d driver evaluation, layer compositing) is not here; what is
-//! known and what is fitted is declared in `docs/fitted-ledger.md`.
+//! (Pose2d driver evaluation, layer compositing) is not here; the remaining
+//! non-1-to-1 viewer code is listed in `docs/deviations.md`.
 
 use ow_stu::types::{ClassRegistry, Prim, TypedField, Value};
 

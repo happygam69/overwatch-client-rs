@@ -15,7 +15,14 @@ fn real_shader_assets_parse() {
         return;
     };
     let sources = Sources::discover(std::slice::from_ref(&root));
-    let data = match GameData::open(&root, &ManifestSelector::default(), &sources) {
+    // The install splits its content between the base `Win_` manifest and the
+    // Prism renderer's `WinPrism_` manifest. The shader assets this test parses
+    // are the Prism set, so name that manifest instead of taking the base one.
+    let selector = ManifestSelector {
+        content_manifest: Some("WinPrism_SPWin_RDEV".to_string()),
+        ..ManifestSelector::default()
+    };
+    let data = match GameData::open(&root, &selector, &sources) {
         Ok(data) => data,
         Err(e) => {
             eprintln!("note: install not readable here ({e}); nothing to assert");

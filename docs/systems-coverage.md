@@ -1,32 +1,52 @@
-# Coverage: every client system, at a glance
+# Coverage: every client system
 
-One line per system: its state and the document that carries the findings.
-The full evidence ledger - every decompiled path, address and open anchor,
-verbatim - is [`history/coverage-detail.md`](history/coverage-detail.md).
-"Read" means a decompiled path with recorded addresses, not a full
-reimplementation. The open questions, in the order they are worth attacking,
-are in [`open-questions.md`](open-questions.md).
+One line per system: what is read, what is open, and where the findings live.
+"Read" means a path or value with an address in `Overwatch.exe`, or a value read
+from the install — not a full reimplementation. The work queue is
+[`open-questions.md`](open-questions.md).
+
+## Gameplay
 
 | # | system | state | where |
 |---|---|---|---|
-| 1 | CASC container, manifests, BLTE | read; core decode verified against the client (Salsa20, BLTE framing, bucket index, 30-byte header, encoding header/sections); gaps: LZ4/`0x10`/ARC4/frame modes; remote fetching (opt-in `OW_CDN`); local locations come only from `data/`, CDN indexes are routes, `ecache`/`pro`/`shmem` are not content | `formats/casc.md`, `formats/manifest.md` |
-| 2 | Structured data (STU v1+v2), class registry | read end to end; typed layer over the full class registry; v1 implemented (synthetic tests only) | `formats/stu.md`, `formats/entity-schema.md` |
-| 3 | Chunked assets, models, map chunks | read; skeleton/`MSTU` parsed; placeable kinds resolve, entity layout fitted | `formats/materials.md`, `formats/mstu.md`, `formats/maps-streaming.md` |
-| 4 | Materials and textures | chain read and partly joined; textures decode (BC1-7, BC6H) with an external decoder oracle; the `0x008` keyring wall limits the covered subset | `formats/materials.md` |
-| 5 | Statescript graphs, damage nodes | nodes, literals, runtime graph and vars read; per-class code is metaobject only; node type index source still open | `formats/statescript.md`, `formats/weapons.md` |
-| 6 | Weapons, ballistics, volley | file side and class surface read; volley literals labelled; damage stays supplied | `formats/weapons.md` |
-| 7 | Entity/component system | router mapped and fully paired (descriptors, sizes, fields, parents); TankLib naming only | `history/systems-plan.md` (Phase 4) |
-| 8 | Character mover (data) | parameters read; horizontal/vertical arithmetic measured from keyed traces and verified | `formats/character-controller.md` |
-| 9 | Mover update path | advance and invoker read in the current build (`0x140ca7f30`, `0x1407ffc50`); the per-frame step/wish path is an **open read task**; `+0xc0` is a static offset, not a stored velocity | `formats/character-controller.md` |
-| 10 | Domino physics | solver chain, integration order and dt read (1/30 s steps, commanded step count) | `formats/domino.md` |
-| 11 | UI, menus, HUD | ImGui (docking) statically linked; window-list pass read | `formats/ui-menu.md` |
-| 12 | Input | var registry and the input->command-frame path read (mouse scale, aim assist, force-input mode); handler update and camera handoff open | `formats/camera.md`, `formats/input-camera-audio.md` |
-| 13 | Camera | var surface and registration mapped in 2.25.0.1; world near/far read (0.1/16384, FP one tenth); FP camera setup and input->command path read; per-frame interpolation consumer, perspective builder and shake math open | `formats/camera.md`, `formats/input-camera-audio.md`, `formats/animation.md` |
-| 14 | Audio | Wwise statically linked; metadata/WEM container read; decoding not started | `formats/input-camera-audio.md`, `formats/sound.md` |
-| 15 | Animation | clips, pose path, blend tree and FP retarget measured; tree implemented; Pose2d VM and FP camera consumer open; two leaf functions (`AnimTimeWrap`, `CurveKeySampleDual`) mechanically verified against the emulated bytes by `dev/verify_harness/` | `formats/animation.md` |
-| 16 | Maps and streaming | data read and the map-load code path read; streaming policy open | `formats/maps-streaming.md` |
-| 17 | Rendering pipeline | data surface read; the viewer draws textured, skinned models; animated draws and a real shading model open | `formats/rendering.md`, `formats/lighting.md` |
-| 18 | Shaders | containers read; bytecode semantics out of scope by design | `formats/shaders.md` |
+| 1 | Character mover (data) | per-hero slots, jump struct and component schema read from the install | `formats/character-controller.md` |
+| 2 | Mover update | component, advance, invoker, state-modifier evaluator and physics command read; the caller that computes the wish/scales is **open** | `formats/character-controller.md` |
+| 3 | Domino physics | tick driver, substep, constraint dispatch and integration functions located; runtime schema and arithmetic must be re-read in the current image | `formats/domino.md` |
+| 4 | Weapons (data) | loadout chain, weapon graphs, volley literals and projectile fields read from the install | `formats/weapons.md` |
+| 5 | Statescript | graph data, node records, executor drive and dispatch read; the node implementation behind the type index is **open** | `formats/weapons.md` |
+| 6 | Damage and health | health/armour/shield pools read; damage application, armour mitigation and shield regeneration are **open** | `formats/weapons.md` |
+| 7 | Camera | config surface, FOV, near/far, projection and FP pose path read; the per-frame look/interpolation consumer is **open** | `formats/camera.md` |
+| 8 | Input | mouse scale, aim assist and force-input mode read; the per-frame handler handoff is **open** | `formats/camera.md` |
+| 9 | Animation format | clip header, packed tracks, runtime record and sampler read | `formats/animation.md` |
+| 10 | Animation runtime | blend tree, FP items and hardpoint attachment read; the Pose2d VM and reference retarget are **open** | `formats/animation.md` |
+| 11 | View model | FP component and consumer located; the per-frame offset/scalar application is **open** | `formats/animation.md`, `formats/camera.md` |
+| 12 | Collision | map geometry is visual only; the character step/ledge/slope path is **open** | `formats/maps.md`, `formats/character-controller.md` |
+| 13 | Bots and abilities | test geometry only; no client AI read | `formats/weapons.md` |
 
-System states are also maintained in `../STATUS-handoff.md` ("Where we
-are") and the milestone history in `../MODLOG.md`.
+**The client is built.** `ow-client` and `ow-scene` are workspace members and
+the default launch draws the resolved practice range; `ow-sim` is parked
+reference code. The viewer makes no gameplay claim.
+
+## Data and content
+
+| # | system | state | where |
+|---|---|---|---|
+| 14 | CASC container | build info, configs, keyring, bucket index (`DynamicIndexHash` and `DynamicIndexKeyHash` verified), encoding header (`EncodingHeaderParse` verified), BLTE (`Salsa20StateInit` and `Salsa20Xor` verified) and the manifests, including the build-154504 encrypted derivation (`CmfKey154504`, `CmfIv154504`) | `formats/casc.md` |
+| 15 | STU | v1/v2 layouts, fields, strings, asset refs and the typed layer read | `formats/stu.md` |
+| 16 | Entities and health | hero → gameplay entity → schema entries read; pools verified | `formats/stu.md` |
+| 17 | Models, skeletons, chunks | `mskl`, `MRNM`, `MSTU`, `MDLC` and hardpoints read | `formats/stu.md`, `formats/animation.md` |
+| 18 | Maps | chunk kinds, placeables, model/look joins, the map-to-chunk link, the bundle asset path and the map asset's stored chunk fields read (type-`0x09F` `STUMapHeader` → variation → type-`0x002` scene map → 31 synthesised + stored chunks; all 305 headers open; the practice range resolves 34 chunks and the default client draws them, including 2,449 model-group entries); the variation selector, the bundle directory's producer and the streaming policy are open | `formats/maps.md` |
+| 19 | Materials and textures | model -> look -> material -> data -> texture chain read; bundle-aware `open_asset`; BC1-BC7/BC6H decode; client material application and the 55 practice-range placeholder draws are open | `formats/materials.md` |
+| 20 | Lighting | manifest table and chunk GUIDs read | `formats/lighting.md` |
+| 21 | Shaders | group and code containers read; bytecode semantics out of scope | `formats/shaders.md` |
+| 22 | Sound | Wwise metadata, sound/voice manifests and WEM headers read; audio decode not started | `formats/sound.md` |
+| 23 | Replay | `phl`/`prp` container and verified prefix read; frame payload not decoded | `formats/replay.md` |
+| 24 | Content surfaces | unlocks, skin themes, loot boxes, voice conversations and catalogs read where shipped | `formats/content.md` |
+
+## Not in scope
+
+- **Network protocol and matchmaking** — not read; no doc retained.
+- **UI implementation** — the client uses imgui; not a gameplay target.
+- **Renderer behaviour** — the viewer exists; the client's rendering pipeline
+  is not a gameplay claim.
+- **Anti-cheat and loader internals** — not part of gameplay behaviour.

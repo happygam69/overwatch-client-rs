@@ -477,8 +477,11 @@ impl Store {
     /// Decode a content key: encoding file to encoding key to record.
     pub fn open_ckey(&self, ckey: &[u8; 16]) -> Result<Vec<u8>> {
         self.ensure_encoding()?;
-        let blobs = self.encoding.borrow().clone().unwrap_or_default();
-        self.open_ckey_using(ckey, &blobs)
+        // Borrow rather than clone: the decoded encoding manifests are ~100 MB
+        // here, and a bundle index opens tens of thousands of assets.
+        let blobs = self.encoding.borrow();
+        let blobs = blobs.as_ref().expect("just loaded");
+        self.open_ckey_using(ckey, blobs)
     }
 
     /// Resolve a content key against an explicit set of decoded encoding

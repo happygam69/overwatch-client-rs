@@ -96,7 +96,7 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         };
         let limit: usize = flag("--len").and_then(|v| v.parse().ok()).unwrap_or(0x100);
-        let bytes = match data.bytes_of(guid) {
+        let bytes = match data.open_asset(guid) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("0x{guid:016x}: {e}");
@@ -280,9 +280,16 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::SUCCESS;
         };
         println!(
-            "0x{guid:016x} type 0x{:03x}: in the root manifest, declared {} B, content key {}",
+            "0x{guid:016x} type 0x{:03x}: in the root manifest, declared {} B, record byte {} \
+             ({}), content key {}",
             ow_tank::guid::type_of(guid),
             record.size,
+            record.unknown,
+            if record.unknown & ow_tank::bundle::RECORD_IN_BUNDLE != 0 {
+                "bundle-hosted"
+            } else {
+                "encoded store"
+            },
             hex16(&record.content_key)
         );
         for line in data.store().encoding_report() {
@@ -366,7 +373,7 @@ fn main() -> std::process::ExitCode {
             }
             Err(e) => println!("  encoding lookup failed: {e}"),
         }
-        for key in ["install", "download"] {
+        for key in ["install", "download", "size", "patch-index"] {
             match data.store().find_ckey_in(key, &record.content_key) {
                 Ok(hits) if hits.is_empty() => {
                     println!("  {key} manifest: content key not found")

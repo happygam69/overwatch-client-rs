@@ -18,6 +18,7 @@ import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.symbol.SourceType;
 
@@ -37,7 +38,9 @@ public class ResizePdataFunction extends GhidraScript {
         FunctionManager fm = currentProgram.getFunctionManager();
 
         java.util.List<Address> victims = new java.util.ArrayList<Address>();
-        for (Function f : fm.getFunctionsOverlapping(range)) {
+        FunctionIterator it = fm.getFunctionsOverlapping(range);
+        while (it.hasNext()) {
+            Function f = it.next();
             if (f.getEntryPoint().getOffset() != beginOffset) {
                 victims.add(f.getEntryPoint());
             }

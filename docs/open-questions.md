@@ -1,399 +1,271 @@
 # Open questions: the work queue
 
-Every open question in the project, in the order it is worth attacking. Each
-entry says what the question is, what would settle it, and where to start. The
-state of the project as a whole is in [`../STATUS-handoff.md`](../STATUS-handoff.md);
-the per-system state is in [`systems-coverage.md`](systems-coverage.md).
+Every open question, in the order worth attacking. An entry is closed when the
+answer has an address or a value, the finding is in the relevant
+`docs/formats/<system>.md`, and the code that uses it has a test.
 
-Rules for an entry: a question is *settled* when it has a recorded address or
-a measured number, not when it has a plausible guess. A guess becomes a row in
-[`fitted-ledger.md`](fitted-ledger.md) and stays a guess.
-
-**Do we have the captures for these?** Yes, and page coverage no longer needs
-a new capture either. Plan A recovered all `.text` from the installed
-executable's disk ciphertext; `.pdata` is already plaintext in that executable
-and was copied verbatim. The project holds the complete image as the Ghidra
-program `Overwatch.exe` (151,260 functions). Questions 2-13 are
-analysis/measurement work over code and function extents we now fully hold.
+The rule behind the queue: a question is never closed by a guess. If it is not
+read, it stays here and the gameplay feature stays unimplemented.
 
 ---
 
-## 1. The page-key (`w`) derivation - coverage solved offline, picker tier 3
+## 1. The mover's input→velocity ramp
 
-**Question.** The on-disk `.text` is XORed with a 4 KB window drawn from a
-static 16 KiB cycle. The window's start (`w`) is a build-time uniform draw.
-Where is `w` computed?
+**Question.** `MoverInvoker` (`0x1407ffc50`, interface vtable `0x142fdbf40`
+slot 9) passes eight arguments to `MoverAdvance` (`0x140ca7f30`): the mover,
+the output position, the local wish vector, the current position, two scales,
+the step state and the world. Which function computes those arguments from the
+input frame? That caller is the ramp/control law.
 
-**What is known.** The XOR transform is exact (2,285 current-build oracle rows
-verify). The applier is `0x14380e0` (loop `0x144c839`, caller `0x1015a94`),
-live-verified in `cpu_20261021_124450.etl`. The picker is inside the loader's
-own obfuscated VM/dispatcher, not Denuvo (`0x2511e0` dispatcher): the selector
-chain `0x1ce59b0 -> 0x3fa280 ->
-0x1494090` hashes the page VA and takes `hash % count` over a 1,439-entry table
-of type-A page records. No stored or hashed `w` table was found in the disk
-loader, the live loader, the live main module, the private ghost loader copy
-or the full heap dump.
+**What is known.** `MoverAdvance`'s character path computes
+`desired = (scale_a * body[0x18..] + wish) * scale_b + pos`, then runs
+`RunCharacterControllerSweep`; the search for a writer of `+0xc0..0xcc` is a
+dead end because that is a static local offset. `ApplyStateModifiers`
+(`0x140cbcbe0`) writes the movement parameter block at `+0x5d0..+0x67c`;
+`SubmitMoverPhysicsCommand` (`0x140cc03d0`) sends the command to Domino.
 
-**Coverage result (2026-10-23).** `dev/offline_page_recover.py` recovered
-**12,076/12,076 `.text` pages** from the on-disk ciphertext and copied the
-install's **plaintext `.pdata`** (201,246 entries). Held-out oracle
-2,284/2,284; warm images 4,887/4,888 and 5,350/5,351. One page keeps a
-declared 16-byte tail (`0x540000`). Image:
-`D:/ow-dumps/offline_recover/module_offline.bin` (preferred base
-`0x140000000`), imported as the Ghidra program `Overwatch.exe` and analysed
-to 151,260 functions; report: `D:/ow-dumps/offline_recover/REPORT.md`. Read a
-v2b address there as `0x140000000 + (v2b - 0x7ff7c4d20000)`.
+**What would settle it.** Find the vtable-9 call site and read the caller that
+produces the wish/position/scales. Then add a state unit for the ramp.
 
-**What would settle the picker.** Static reverse/emulation of the loader VM
-at `0x2511e0`/`0x40bee0..0x411536`; a fault-synchronous capture is no longer
-needed for coverage, only for naming the derivation.
-
-**Command.** `python dev/offline_page_recover.py --stage all`
-
-**Impact.** A new build re-extracts the pad and reruns the blind solver; no
-fresh oracle is required. The picker stays tier 3 until the VM is read.
+**Next anchor.** `formats/character-controller.md`,
+`dev/verify_harness/units/fn-MoverAdvance.json`, `dev/field_index.py`.
 
 ---
 
-## 2. The first-person camera consumer and the per-frame camera tick
+## 2. The first-person camera consumer and per-frame look
 
-**Question.** `STUFirstPersonComponent` is read: the per-hero values
-(`64/16/-1` then `50/1.25/0.875/0.8`), the schema (`0x70`, 7 fields), the
-`m_position` offset, and the consumer path (`FpViewmodelConsumer`, RVA
-`0xd2f060` -> bind `0xd2faa0`). The bind stores the references but never reads
-`m_position` or the four scalars. Where are they applied per frame? The
-**camera interpolation tick** is also unlocated: the five
-`*InterpolationSpeedInverse` vars and the four `*Speed` rates have no direct
-reader outside their registration stubs. The camera code pages are warm, so
-the reader is reached indirectly or through a copied settings block; this is
-not a cold-code gap.
+**Question.** `STUFirstPersonComponent` carries `m_position` and four scalars.
+`FpViewmodelConsumer` (`0x140d2f060`) and `FpViewmodelBind` (`0x140d2faa0`)
+store the view-model entity/model references but do not read them. Which system
+applies the offset and scalars? Separately, which function consumes the five
+`*InterpolationSpeedInverse` vars and four `*Speed` rates per frame?
 
-**What would settle it.** A read of the type-`0x35` system's per-frame path
-(the vtable slots `+0xe0` / `+0xe8` are an animation event player, not the
-camera). The consumer is a system keyed by type `0x35`/entity offset, still
-unread. For the tick, a capture with the registry-reader pages warm, or a live
-read trace of the static var objects listed in `formats/camera.md`.
+**What is known.** The component is type `0x35`; its consumer is a system keyed
+by type or entity offset, not a vtable method. The FP camera setup
+`ApplyFirstPersonCamera` (`0x14096c5b0`) and
+`UpdateFirstPersonCameraPose` (`0x140997b90`) build the pose from the FP
+animation entity. The config vars and defaults are read; their per-frame reader
+is not.
 
-**In the current build (2.25.0.1) the path is located and named:** the
-consumer is v2b `0x7ff7c5a4f060`, the bind `0x7ff7c5a4faa0`, the two
-per-frame slots `0x7ff7c5a51bf0` and `0x7ff7c5a522f0`, the event player
-`0x7ff7c5a49c60` - all read from the view-model class's own vtable, all
-present in the capture, all named in `docs/function-names.csv`. The
-per-frame slot A walks the six 0x110-stride animation slots and runs the
-event player on each, which is what the doc says; the camera consumer is
-still the open part.
+**What would settle it.** Read the type-`0x35` system's per-frame path and the
+camera interpolation consumer. Then the FP pose and the component values can be
+applied exactly.
 
-**The FP camera itself is a separate path (read 2026-10-23).** The setup is
-v2b `0x7ff7c568c5b0` (RVA `0x96c5b0`), readable but not a defined Ghidra
-function. It sets a **60.0 deg initial plane angle** (`0x7ff7c8582b0c`), the
-FP near/far pair, an animation-blended FOV and the camera pose. The pose comes
-from `UpdateFirstPersonCameraPose` (`0x7ff7c56b7b90`), which fills the FP
-camera FOV from `FUN_7ff7c5700f50(0)` (a full angle clamped to `[0.05, 3.0]`
-rad). That function calls `GetHorizontalFov` (`0x7ff7c6850fc0`) through the
-aspect-correction helper `FUN_7ff7c684b940`, then converts the 103-deg
-horizontal setting with `tan`/`atan` and the 9/16 factor: **70.53 deg
-vertical** at 16:9. The `50` scalar is **not** the FP FOV, and the `60.0` is a
-fallback. The FP FOV is therefore the same as the world FOV; only the camera
-pose/drop/back remains fitted (`--fp-cam-drop`, `--fp-cam-back`).
-
-**Next anchor.** `docs/formats/camera.md` (first-person section),
-`docs/formats/animation.md` (the first-person section) and
-`docs/formats/input-camera-audio.md`.
-
-**Impact.** The FP camera framing stays fitted (`--fp-cam-drop`,
-`--fp-cam-back`); the eye height and FOV in the ledger are read values but
-their application is not. The interpolation behind `--cam-look-inverse`
-stays fitted.
+**Next anchor.** `formats/camera.md`, `formats/animation.md`,
+`FpViewmodelConsumer`, `UpdateFirstPersonCameraPose`.
 
 ---
 
-## 2b. View-model animation exactness (2026-10-23 check)
+## 3. The reference-skeleton retarget
 
-**Question.** The viewer plays the authored idle tree, but is it the client's
-exact pose? The check against `module_v21_clean.bin` says no. Proven gaps:
+**Question.** The client registers `anim.EnableProxyRetarget` and
+`anim.EnableFinalRetarget` ("proxy pose re-target between (inherited) blend
+trees with different reference skeletons" / "final pose re-target between
+reference skeleton and model skeleton"). The clip's P lane is a reference-rig
+local. Where is the reference→model stage?
 
-- **Reference retarget.** The client registers `anim.EnableProxyRetarget` /
-  `anim.EnableFinalRetarget`; the card P lane is a reference-skeleton local and
-  is mapped to the model by the final stage. The viewer applies it directly,
-  stretching shoulders by 2.395x.
-- **Sampler channels.** `AnimSamplerRule` (`0x7ff7c6e84610`) copies child 0
-  unconditionally and replaces each present rotation/translation/scale lane
-  independently at `w > 0.5`; scalars lerp; absent lanes keep the previous
-  value. The viewer now does this for one-link layer bones; dropped-ancestor
-  chains fall back to the composed pair and scalar lanes are not decoded.
-- **FP camera.** `UpdateFirstPersonCameraPose` uses the animated FP pose
-  (`+0x1350/+0x1310/+0x1320`); the viewer uses the player eye/yaw/pitch plus a
-  fitted drop/back. The pose's target writer is unread.
-- **Weapons.** The pistols are on FP hardpoints/bones 44/74 with the folded
-  chain; the viewer now defaults to that FP source (`--weapon-fold 1` keeps
-  the old character-c71 A/B).
-- **Spring.** The per-frame spring is on `+0x1350` toward `+0x1370` with
-  `0.235/0.48`, k ramp `600.0/s`, settle threshold `0.004 m`; the viewer's
-  64/16/-1 form has no reader and the target writer is unread.
-- **Events.** The six `0x110` slots are event/state timelines; the viewer has
-  no animation events, but they do not write pose.
+**What is known.** Character rig 200 bones, FP rig 79, 64 shared ids with
+identical binds; the weapon-hook fold is exact. The card's shoulder rows carry
+`2.395x` the model bind, so direct application is wrong by construction at the
+shoulders. The retarget body is not the sampler.
 
-**What would settle it.** Read the reference-retarget body, the FP camera/spring
-target writer and the Pose2d dataflow VM. The per-channel sampler fix and the
-FP weapon source are applied.
+**What would settle it.** Read the two retarget registrations and the final pose
+stage, then implement the reference-skeleton transform.
 
-**Next anchor.** `docs/formats/animation.md` (2026-10-23 exactness check) and
-`docs/fitted-ledger.md` FIT-ANI-04/05/08, FIT-CAM-01.
+**Next anchor.** `formats/animation.md`, `AnimSamplerRule` (`0x1420feca0`),
+`crates/ow-tank/src/blendtree.rs`.
 
 ---
 
-## 2c. Mechanically verify the next rung of client functions (2026-10-24)
+## 4. The Pose2d dataflow VM
 
-**Question.** `dev/verify_harness/` now decides, against the emulated real
-bytes, whether a reconstruction of a client function is behaviourally exact.
-Two zero-callee functions are verified (`AnimTimeWrap` `0x7ff7c58b1ef0`,
-`CurveKeySampleDual` `0x7ff7c58b09d0`); the decompiles had two bug classes the
-harness caught (conversion instead of bit-load; IEEE ifs instead of SSE
-minss/maxss). Which functions come next, and can the 1-3 callee rung be
-verified by emulating callees inside the mapped image?
+**Question.** What drives the first-person blend tree: the branch category, the
+x/y driver inputs and the LayerChild weight? At the authored defaults the tree
+output is the base clip (c71).
 
-**Shipped-code path (2026-10-25).** Tier 2 no longer verifies a copy:
-`crates/ow-sim/src/bin/verify_probe.rs` is built by cargo and imports the real
-crate functions. The ledger binds to `candidate_sources` + `crate_rev`.
-`fn/OrthonormalizeCameraBasis-cargo` and `-state` are verified this way, and
-the state unit proves the snapshot/state-channel path for stateful functions.
-`scaffold_unit.py` turns an address into a `.pdata` extent, a decompile and a
-unit template under `units/scaffolds/`; the mover template is
-`units/fn-MoverAdvance.json`.
+**What is known.** The tree structure, item slots and sampler gate are read.
+The Pose2d nodes are authored; the per-tick VM that produces their inputs is
+not.
 
-**What is known.** Three other zero-callee decompiles are not verifiable as
-they stand: `AnimWritesOrientationPosition` and `DecodeCameraNodeTypeNames`
-are comment-only stubs (need a Ghidra re-decompile first);
-`DispatchFpCameraSlotTime` has an indirect call and an unrecovered jumptable.
-The second rung (`AnimFovHelper` `0x7ff7c5700f50`, `AnimDragSpring`
-`0x7ff7c53ab620`, `FpViewmodelEventSort` `0x7ff7c5a47410`, вЂ¦) has 1-3 named
-callees whose bodies sit in the same mapped image; the oracle's emulator can
-follow them if the fixture provides the globals they read, and the
-reads-outside-args check will name any undeclared state dependency.
+**What would settle it.** Read the Pose2d VM in the animation runtime and the
+LayerChild weight writer.
 
-**What would settle it.** Re-decompile the two stubs and the jumptable
-function in Ghidra; add a unit per second-rung function with a fixture that
-satisfies its callees; run `python dev/verify_harness/cli.py all` to gate.
-Prefer a `"cargo"` unit whose probe entry is the real crate function; a
-stateful one declares a `state` block and a `guest` pointer.
-
-**Next anchor.** `dev/decompiles/address_list.txt`, the unit JSONs under
-`dev/verify_harness/units/`, and `dev/verify_harness/scaffold_unit.py`.
+**Next anchor.** `formats/animation.md`, `crates/ow-tank/src/blendtree.rs`.
 
 ---
 
-## 3. The Pose2d dataflow VM
+## 5. The weapon fire loop and damage application
 
-**Question.** What drives the first-person blend tree: the driver inputs and
-the layer weights. At the authored defaults the tree output is the base clip
-(c71).
+**Question.** How does a volley fire, and where does per-shot damage come from?
+The volley runtime carries `numShotsPerSecond` at `+0x1c8`,
+`numProjectilesPerShot` at `+0x1c0`, `projectileSpeed`, `projectileLifetime`,
+`castLength` and the typed projectile motions. The graph data carries
+`STUStatescriptModifyHealth.m_amount` literals on 627 graphs. The join from
+weapon → fire → hit → damage is open.
 
-**What would settle it.** A read of the Pose2d VM in the animation runtime
-(the clip/blend/retarget path is measured; the VM that feeds it is not).
+**What is known.** Firing runs through the statescript executor, not the volley
+class's vtable. `StatescriptDriveWalk` (`0x140a264c0`),
+`StatescriptNodePush` (`0x142141f70`) and
+`StatescriptSlot43Executor` (`0x140a9ba70`) are read. The per-node
+implementation behind the type index is not.
 
-**Next anchor.** `docs/formats/animation.md`.
+**What would settle it.** Read the executor's node dispatch and the
+`ModifyHealth` applying function, then join the weapon graph to its ability /
+impact graph and the resolved `amount`.
 
----
-
-## 4. Per-shot damage and armour mitigation
-
-**Question.** Damage is not in the files; it is supplied by the operator.
-Damage *order* and armour mitigation are assumptions.
-
-**What would settle it.** A capture of the damage path (the statescript
-damage nodes are read, the per-class code is metaobject only).
-
-**Next anchor.** `docs/formats/weapons.md` and `docs/formats/statescript.md`.
+**Next anchor.** `formats/weapons.md`, `crates/ow-tank/src/graph.rs`.
 
 ---
 
-## 5. Material keys for the blocked assets
+## 6. Character collision
 
-**Question.** The model -> look -> texture chain works where the keyring has
-the keys. Several hero body materials and many map props are blocked by the
-`0x008` keyring wall.
+**Question.** The client's character step/ledge/slope collision is unread. The
+map mesh is currently visual only; the default client draws the practice-range
+geometry but has no character collision. `--no-map` still offers the flat
+stand-in plane and boxes for viewer work.
 
-**What would settle it.** A capture of the runtime material structure (the
-on-disk shape is not what runs) or a key for the blocked assets.
+**What would settle it.** Read the step query and sweep path from
+`MoverAdvance`/`MoverInvoker` down to the world query, and read the map's
+collision chunks (`MAP_CHUNK_COLLISION`, `teMAP_CHUNK_ADDITIVE_COLLISION`).
 
-**Next anchor.** `docs/formats/materials.md`.
-
----
-
-## 6. The per-frame camera look application
-
-**Question.** The input tick writes look deltas to entity `+0x1294`/`+0x1298`;
-the camera basis at `+0x1310`/`+0x1320` is written by `FUN_7ff7c54a9720` from a
-quaternion. The function that turns the look deltas into that quaternion is
-not located, even though the look code pages are warm. The FOV, near/far and
-projection are settled: 103 horizontal -> **70.53 vertical** at 16:9,
-`0.1/16384` and `0.01/1638.4`, with the x double negative cancelled.
-
-**What is known.** The input tick page `0x7ff7c5301000` is 3733/4096 nonzero.
-The five interpolation-inverse vars and four speed rates have no direct reader
-outside registration, so the consumer is reached indirectly or through a
-copied settings block. The camera component carries read pitch limits of
-**-89/+89 deg** at `+0x94`/`+0x98`, but no consumer is located.
-
-**What would settle it.** Trace the warm indirect dispatch / animation-event
-path from the input tick to the camera basis, or a live trace of the look
-accumulators and the camera basis.
-
-**Next anchor.** `docs/formats/camera.md` (input to camera) and
-`docs/formats/input-camera-audio.md`.
+**Next anchor.** `formats/character-controller.md`, `formats/maps.md`.
 
 ---
 
-## 7. The steep-slide rule
+## 7. Domino schema and integration in the current image
 
-**Question.** Movement is measured and gated by `trace_diff`; the steep-slope
-slide is not modelled.
+**Question.** The current image has `DmWorldConstruct` (`0x142cbeb70`),
+`DmWorldInvDt0Writer` (`0x142cc3050`),
+`DmWorldSubstepDriver` (`0x142cc3630`), `DmBroadphaseReinit`
+(`0x142cbdc60`), `ConstraintDispatch` (`0x142cd9c90`),
+`RotationInertiaSolve` (`0x142d07170`), `DmResidualQuery` (`0x142cdf710`) and
+`DmTickKeeper` (`0x14208c070`). Which fields, offsets and operation order hold
+in this build?
 
-**What would settle it.** A keyed trace on a steep slope, read with
-`dev/ctrl_probe.py` / `dev/trace_probe.py`.
+**What would settle it.** Read the world/body constructors and the island
+solve in the current image; write the schema and the arithmetic with addresses.
 
-**Next anchor.** `docs/formats/character-controller.md`.
-
----
-
-## 7b. The mover velocity-ramp writer (FIT-MOV-01)
-
-**Question.** `MoverAdvance` (`0x140ca7f30`, base vtable
-`0x1431101e8` slot 15) integrates a **static local offset** at
-`+0xc0..0xcc` with the wish/transform; `MoverInvoker` (`0x1407ffc50`) stores
-the result. Which function turns the wish vector (`+0x1140`) and transform
-(`+0x1a90`) into that per-frame step?
-
-**What is known.** The component is `RegisterMoverComponent` (`0x14017a680`,
-hash `0x6EFDBD73`, id `0x26`); its interface vtables are plaintext in the
-current build. The advance's plain-body formula is
-`out_i = (a * X_i + pos_i) * b + off_i`; the character path is the collision
-sweep. The advance is the integrator, not the ramp. The install's `.pdata` is
-plaintext and complete; Ghidra's function boundaries are fragmented in
-places, so use Ghidra's entry points (`docs/ghidra/DumpFunctionRanges.java`)
-for decompilation, not a `.pdata` begin alone. `dev/field_index.py` is the
-struct-aware finder: it separates the mover component, the character body and
-dmBody, and follows biased bases. The `+0xc0` stores in the complete image are
-only constructors and bulk copies, so `+0xc0` is a **static local offset**, not
-a stored velocity; the per-frame motion is the wish vector and transform. The
-state modifier's `param_1 + 0xc0` is byte `+0x600` (the decompiler's
-`longlong *` type), so the state table's field IDs must be mapped to byte
-offsets before it is read.
-
-**What would settle it.** Read the state modifier table (`[body+0x10e]`,
-0x38-byte records) and/or the movement statescript graph with `ow-tank`'s
-graph/parameter tools; determine whether the acceleration/friction is a
-per-field add/mul modifier, a graph value, or a force into `dmBody.force`
-(`+0x130`). Then add a `mover_ramp` entry to
-`crates/ow-sim/src/bin/verify_probe.rs` and a state unit, or gate the
-integrated behaviour with the keyed traces. Only then remove the `FIT-MOV-01`
-marker and its ledger row.
-
-**Next anchor.** `docs/formats/character-controller.md`, the scaffolder
-template `dev/verify_harness/units/fn-MoverAdvance.json`, and
-`dev/field_index.py`.
+**Next anchor.** `formats/domino.md`.
 
 ---
 
-## 8. The v1 STU path
+## 8. The view-model spring target
 
-**Question.** v1 is implemented and synthetic-tested only; no v1 asset has been
-read from an install.
+**Question.** The per-frame spring is on animation `+0x1350` toward `+0x1370`
+with coefficients `0.235`/`0.48`, a k ramp of `600.0/s` and a settle threshold
+of `0.004 m`. Who writes the target, and in what space?
 
-**What would settle it.** A v1 asset in an install.
+**What would settle it.** Read the spring function's caller and the target
+writer.
 
-**Next anchor.** `docs/formats/stu.md`.
-
----
-
-## 9. The replay frame payload
-
-**Question.** The `phl`/`prp` container, header and roster are read; the frame
-payload is a Zstd stream that is not decoded.
-
-**Next anchor.** `docs/formats/replay.md`.
+**Next anchor.** `formats/animation.md`, `crates/ow-tank/src/firstperson.rs`.
 
 ---
 
-## 10. Wwise audio decode
+## 9. Camera modes, 3P camera and shake
 
-**Question.** Wwise metadata and WEM headers are read; the audio itself is
-not decoded.
+**Question.** Read the first/third/spectator mode selection, the 3P camera
+consumer (`camera.3PPositionOffsetY.*`, `camera.3PDistanceSmoothing.chaseRate`)
+and the shake math behind `localhiteffects.3PcameraShake`.
 
-**Next anchor.** `docs/formats/sound.md`.
+**What would settle it.** Read the camera system update, the 3P pose builder
+and the local hit-effect update in the current image.
 
----
-
-## 11. Bots and abilities
-
-**Question.** They are test stand-ins: boxes and markers, no client AI.
-
-**Next anchor.** `docs/systems-coverage.md` (rows 9-10) and the statescript
-docs.
+**Next anchor.** `formats/camera.md`, `UpdateCameraSystem` (`0x14203c4e0`),
+`BuildThirdPersonCameraPose` (`0x14206e400`).
 
 ---
 
-## 12. The two standing 2.25.0.0 images disagree
+## 10. Bots and abilities
 
-**Question.** `module_v2full.bin` (the docs' Ghidra basis) and
-`module_after_diff_v2.bin` (the 17-run warm merge, which carries the only
-readable `.pdata`) are both declared 2.25.0.0, yet a page census over their
-10,582 shared nonzero pages (2026-10-21) reads **5,961 equal and 4,621
-different** - at least one merge placed captured pages wrongly, or the two
-capture sets decode pages differently. The docs' v2b addresses answer to
-`module_v2full.bin` only (verified: the dmWorld::Create prologue the deliverable
-describes sits at `0x7ff7c7a4cd70` in v2full and not where after_diff holds
-bytes), so byte matching for the docs frame now reads from `module_v2full.bin`
-(`dev/naming_seed.py`), and numbers derived from
-`module_after_diff_v2.bin`-besides the ones already decompiled-verified - are
-suspect until explained.
+**Question.** The practice-range bots are boxes and markers. What is the
+client's bot controller and ability activation?
 
-**What would settle it.** Rebuild both images from the same runs with
-provenance per page attached, or diff run-by-run to find which side carries
-foreign bytes.
+**What would settle it.** Read the bot/entity spawning path and the ability
+graph activation from the current image.
 
-**Next anchor.** The merge scripts behind `module_after_diff_v2.bin` and
-`module_v2full.bin` in `D:/ow-dumps`; `dev/live_page_diff.py` /
-`dev/warm_poll.py --all-regions` output files list which run produced each
-page.
+**Next anchor.** `formats/weapons.md`.
 
 ---
 
-## 13. CASC: the decode gaps left after the client check
+## 11. The map variation selector and the bundle directory producer
 
-**Question.** Which parts of the client's container reader are still not
-implemented, and does any of them matter for this install?
+**Question.** Two parts of the map/asset path are not 1:1 yet.
 
-**What is known (2026-10-25).** Salsa20, the BLTE frame header, the `N`/`Z`/`E`
-block paths, the bucket entry layout, the 30-byte header, the encoding
-header/section order, and the dynamic index's file-header and rolling
-entry-block hashes were checked against the client's own functions and now
-match (`docs/formats/casc.md`). The hash implementation matches all sixteen
-`.idx` files, and the `.flavor.info` / `../.build.info` layout and row
-selection are implemented and unit-tested. The key-to-entry sub-index is all
-zeros in every file, so its per-record hash is not exercised. Still different:
-LZ4 mode `4`
-(`BlteBlockReadLz4`, `0x1424d6e50`), frame type `0x10`
-(`BlteFrameHeaderParse`, `0x1424a90e0`), and ARC4 `A` / frame `F` chunks. A
-full scan of all 1,148,620 bucket entries found no `4`, `0x10`, `A` or `F`;
-every one of the 1,147,131 BLTE headers is type `0x0F`.
+1. **The variation selector.** A `STUMapHeader` pairs `m_D97BC44F` mode entries
+   with `m_78715D57` variations by index. Each variation's `m_BF231F12` names
+   its registered type-`0x002` scene map. The client function that takes a
+   requested game mode and chooses a variation - and whether it loads one
+   variation or a layer set - is not read. The practice header has one
+   variation per mode (`0x18` -> 0, `0x143` -> 1, `0x5a` -> 2), but header
+   `0x07900000000000d4` has 63 variations over 20 modes and one mode names six.
+2. **The bundle directory producer.** The client keeps a per-type directory
+   blob and binary-searches it in `FUN_141fd5160` (`0x141fd5160`); the blob is
+   handed to the job at `FUN_141fd53a0` (`0x141fd53a0`) from the content
+   database (`FUN_141fcbb10` -> `FUN_141fe81d0`, fields `+0x70`/`+0x264`).
+   Where that blob is produced is not read. `ow-tank` builds the same relation
+   by scanning the manifest's type-`0x09C` records.
 
-**What would settle it.** LZ4/`0x10`/ARC4/F need a build that uses them. This
-install does not, so no test vector exists here; implementing them would need
-a build that emits them (or a synthetic container checked against the
-client's decoder). Separately, the CDN `indices/*.index` page formula is still
-derived from the reference and measured footers, not from the client's
-decompiled CDN handler; verify it before relying on `OW_CDN` for exactness.
+**What is known.** The bundle flag, entry table and all 305 type-`0x09F`
+headers are read; the practice header `0x0790000000000688` opens from bundle
+`0x0d90968e484f8c33` at offset 3593 and parses as `STUMapHeader` with
+`mapName` `Maps\TrainingRoom\Training Room - Practice`. The practice launch
+uses the header's `m_mapName` and the paired mode's `STUGameMode.displayName`
+(`0x5DB91CE2`), taking the first `Practice Range` in header order (mode `0x18`,
+variation 0). Both mode `0x18` and mode `0x5a` are named `Practice Range`; the
+launch takes 0 and logs the ambiguity. This is a data-driven launch affinity,
+not the client's selector. The resolved scene map
+`0x080000000f69002e` requests 34 chunks, all open; the walk yields 1,358
+placeables and bit-exact bounds (`tests/map_resolve_real.rs`).
 
-**Next anchor.** `crates/ow-casc/src/index.rs`, `blte.rs`, `encoding.rs`;
-`docs/formats/casc.md`; the named functions above in `Overwatch.exe`.
+**What would settle it.** For (1), find the caller that reads
+`m_D97BC44F`/`m_78715D57` together (header `+0xF0`/`+0x110`; variation scene
+map `+0xD0`) and record whether it selects one entry or loads layers. For (2),
+read the content-database producer of the directory blob and replace the scan.
+
+**Next anchor.** `formats/maps.md`, `crates/ow-tank/src/mapresolve.rs`,
+`crates/ow-tank/src/bundle.rs`, `FUN_141fcbb10` (`0x141fcbb10`),
+`FUN_141fe81d0` (`0x141fe81d0`), `FUN_141ff5c80` (`0x141ff5c80`).
+
+---
+
+## 12. Material and texture resolution on the practice range
+
+**Question.** The viewer's practice-range scene reports 55 placeholder draws,
+148 flat fills and 3 material entries with no sRGB base colour. Which stage of
+the client's material/texture path is not reproduced, and is each case an
+unresolved reference or a renderer rule that is not read?
+
+**What is known.** Models, looks, materials and textures open through
+`GameData::open_asset`; 289 looks, 594 material entries and 120 textures decode.
+The viewer's counts are diagnostics, not a finished material path.
+
+**What would settle it.** Read the client's material application and texture
+sampler path, then account for every submesh. Do not assume missing install
+content; the bundle-aware path opens the assets.
+
+**Next anchor.** `formats/materials.md`, `crates/ow-tank/src/material.rs`,
+`crates/ow-scene/src/lib.rs`.
+
+---
+
+## 13. v1 STU, replay payload, audio decode
+
+**Question.** v1 STU has synthetic tests only; no v1 asset ships here. The
+replay frame payload is Zstd and is not decoded. Wwise audio metadata is read,
+but no waveform is decoded.
+
+**What would settle it.** A v1 asset; a decoded replay frame; an audio
+dependency and the Wwise event-posting path.
+
+**Next anchor.** `formats/stu.md`, `formats/replay.md`, `formats/sound.md`.
 
 ---
 
 ## How an entry is closed
 
-1. The answer has a number or an address, and the address names its capture.
+1. The answer has an address or a value in `Overwatch.exe` or the install.
 2. The finding is written in the relevant `docs/formats/<system>.md`.
-3. If it replaces a fit, the row in `fitted-ledger.md` is removed and the code
-   says so; if it is still a fit, the row stays and gains the evidence.
+3. The code that uses it has a test; if it replaces a `FIT-*` row, the row is
+   removed from `docs/deviations.md`.
 4. The entry is removed from this list, and `STATUS-handoff.md` is updated.

@@ -1,16 +1,10 @@
-//! The Domino body, and the integration the client's island solve applies to
-//! it — in the client's own operation order.
+//! The Domino body and the integration order the island solve applies to it.
 //!
-//! **Extracted, not fitted.** The chain was read out of the exec capture
-//! (`module.bin`; addresses in `docs/formats/domino.md` § "Q2 and Q4
-//! answered"): a system tick calls the substep driver, which builds islands,
-//! and the island solve integrates each dynamic body. The per-body velocity
-//! block is at exec `0x7ff7562616e0`; the assembly is the authority for the
-//! order because the decompiler's left-to-right rendering reassociates:
+//! The operation order is read from the client, not chosen:
 //!
 //! ```text
-//! t1 = gravityScale * mass              (mulss — one rounding, scalar)
-//! t4 = invMass * dt                     (mulps — precomputed 4-lane product)
+//! t1 = gravityScale * mass              (one f32 multiply)
+//! t4 = invMass * dt                     (precomputed 4-lane product)
 //! t2 = t1 * g_i                         (mulps)
 //! t3 = t2 + force_i                     (addps)
 //! t5 = t3 * t4                          (mulps)
@@ -20,19 +14,18 @@
 //! ```
 //!
 //! Then positions: `x += v'' * dt` (multiply, then add), with the quaternion
-//! update and renormalisation after it (`q *= 1/sqrt(|q|²)` when
-//! `|q|² > 1.17e-35`).
+//! update and renormalisation after it (`q *= 1/sqrt(|q|^2)` when
+//! `|q|^2 > 1.17e-35`).
 //!
-//! Two facts this pins that a fitted model gets wrong:
-//! * damping is **linear** — `clamp(1 − d·dt, 0, 1)` — not Box2D's
-//!   `1/(1 + dt·d)`, a difference that is first-order in `dt`;
-//! * the gravity/force term is formed as `(g·scale·mass + force) · invMass · dt`
-//!   with the products in that order, so the roundings are reproducible.
+//! Damping is linear (`clamp(1 - d*dt, 0, 1)`), not Box2D's `1/(1+dt*d)`, and
+//! the gravity/force term is formed as
+//! `(g*scale*mass + force) * invMass * dt` in that order, so the roundings are
+//! reproducible.
 //!
-//! `min`/`max` here follow the SSE operand semantics (`minss`/`maxss`: the
-//! second operand wins only when strictly less/greater), not Rust's NaN
-//! behaviour, so a NaN velocity is clamped the way the client clamps it.
-
+//! `min`/`max` follow the SSE operand semantics (`minss`/`maxss`: the second
+//! operand wins only when strictly less/greater), not Rust's NaN behaviour, so
+//! a NaN velocity is clamped the way the client clamps it.
+//!
 use crate::Vec3;
 
 /// `minss a, b` — returns `b` only when it is strictly less than `a`.

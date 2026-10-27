@@ -2,7 +2,7 @@
 #
 # `cargo xtask verify --fast` is the same gate the project runs locally:
 # fmt, clippy (warnings are errors), the library and viewer test suites, the
-# dev/ tool index check and the fitted-ledger check. The tests that read an
+# dev/ tool index check and the deviation check. The tests that read an
 # Overwatch install are left out here — CI has no install; the fast gate is
 # exactly what `--fast` selects for that case.
 #
@@ -45,5 +45,5 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: The gate (fmt, clippy, tests, dev index, fit ledger)
+      - name: The gate (fmt, clippy, tests, dev index, deviations)
         run: cargo xtask verify --fast

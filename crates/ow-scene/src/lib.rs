@@ -2,8 +2,8 @@
 //!
 //! This is the data half of the viewers: it decodes map chunks, resolves the
 //! models they place, and produces one vertex/index buffer plus per-placement
-//! instances -- everything a renderer needs, with no renderer in it. `ow-view`
-//! (wgpu) and `ow-game` (Bevy) draw the same buffer.
+//! instances -- everything a renderer needs, with no renderer in it. `ow-client`
+//! draws the buffer.
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -50,10 +50,10 @@ use std::collections::HashMap;
 
 use glam::{Mat4, Quat, Vec3};
 
-use ow_tank::mapchunk::MapChunk;
-use ow_tank::{guid, GameData, ManifestSelector};
+use ow_tank::mapchunk::{MapChunk, Placeable};
+use ow_tank::{guid, mapresolve, GameData, ManifestSelector};
 
-/// The viewer's eye height above a floor: the same 1.75 `ow-view --play` uses.
+/// The viewer's eye height above a floor.
 ///
 /// It is the *viewer's* constant, not a client reading — the traced node is the
 /// feet, so the client's own eye height is not measured here. Both the harness
@@ -81,7 +81,7 @@ pub struct Draw {
 /// A decoded texture, ready to be uploaded.
 ///
 /// The bytes are RGBA8 because that is what both viewers can take; the source
-/// format is kept for the report (`docs/formats/rendering.md` has the table of
+/// format is kept for the report (`docs/formats/materials.md` has the table of
 /// what the install ships).
 #[derive(Debug, Clone)]
 pub struct SceneTexture {
@@ -307,6 +307,12 @@ impl Scene {
     }
 
     /// A spread of viewpoints through the placements, for looking a map over.
+    ///
+    /// The camera stays at the map's eye height: many placement origins are on
+    /// walls, ceilings or the ground under the room, and a tour that used the
+    /// origin's own y axis spent half its views inside geometry. The x/z still
+    /// comes from the placements, so the tour walks the map rather than
+    /// clustering at the start.
     pub fn tour_points(&self, count: usize) -> Vec<Vec3> {
         if self.origins.is_empty() {
             return vec![self.eye];
@@ -316,7 +322,7 @@ impl Scene {
             .iter()
             .step_by(step)
             .take(count)
-            .copied()
+            .map(|v| Vec3::new(v.x, self.eye.y, v.z))
             .collect()
     }
 
@@ -377,7 +383,7 @@ struct SkinStats {
 /// it onto a guessed bone. An unskinned vertex keeps the identity default.
 ///
 /// The submesh `BoneIdOffset` term the reference adds before the Lookup is not
-/// surfaced by the model reader, so raws map directly; `docs/formats/rendering.md`
+/// surfaced by the model reader, so raws map directly; `docs/formats/animation.md`
 /// records that as the remaining gap.
 fn skinned_lanes(
     skin: &ow_tank::skin::Skin,
@@ -461,6 +467,560 @@ fn model_skin(model_bytes: &[u8]) -> Option<ow_tank::skin::Skin> {
     })
 }
 
+/// One submesh of a model loaded once and drawn once per placement group.
+struct MapMeshRange {
+    first_index: u32,
+    index_count: u32,
+    base_vertex: i32,
+    material_id: u64,
+}
+
+/// A model's drawable submeshes, already appended to the scene's shared
+/// vertex/index buffers.
+struct MapModelGeometry {
+    meshes: Vec<MapMeshRange>,
+}
+
+/// Append one model's finest LOD to the scene and return its submesh ranges.
+///
+/// Map models have no posed palette of their own; a skinned one shares the
+/// scene's bind-pose identity pool, exactly as the previous chunk path did.
+fn map_model_geometry(
+    scene: &mut Scene,
+    data: &GameData,
+    model_guid: u64,
+    no_skin: bool,
+    skin_stats: &mut SkinStats,
+) -> Result<Option<MapModelGeometry>, String> {
+    let bytes = data
+        .open_asset(model_guid)
+        .map_err(|e| format!("model 0x{model_guid:016x}: {e}"))?;
+    let loader = |g: u64| data.open_asset(g).ok();
+    let model = ow_tank::model::parse(&bytes, &loader)
+        .map_err(|e| format!("model 0x{model_guid:016x}: {e}"))?;
+    let use_meshes = model.finest_level();
+    let skin = if no_skin { None } else { model_skin(&bytes) };
+    let joint_base = match model_palette_need(skin.as_ref(), &use_meshes) {
+        Some(top) => {
+            ensure_identity_pool(scene, top);
+            skin_stats.models += 1;
+            1u32
+        }
+        None => 0,
+    };
+
+    let mut meshes = Vec::new();
+    for mesh in use_meshes {
+        let first_index = scene.indices.len() as u32;
+        let base = scene.vertices.len() as u32;
+        for (i, position) in mesh.positions.iter().enumerate() {
+            let normal = mesh.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+            let uv = mesh
+                .uv_sets
+                .first()
+                .and_then(|set| set.get(i))
+                .copied()
+                .unwrap_or([0.0, 0.0]);
+            let (joints, weights) = if joint_base > 0 && mesh.skinned {
+                skinned_lanes(
+                    skin.as_ref().expect("pool implies a skeleton"),
+                    joint_base,
+                    mesh,
+                    i,
+                    skin_stats,
+                )
+            } else {
+                ([1u8, 0, 0, 0], [255u8, 0, 0, 0])
+            };
+            scene.vertices.push(Vertex {
+                position: *position,
+                normal,
+                uv,
+                joints,
+                weights,
+            });
+        }
+        for index in &mesh.indices {
+            scene.indices.push(*index);
+        }
+        let index_count = scene.indices.len() as u32 - first_index;
+        if index_count == 0 {
+            scene.vertices.truncate(base as usize);
+            continue;
+        }
+        meshes.push(MapMeshRange {
+            first_index,
+            index_count,
+            base_vertex: base as i32,
+            material_id: model.materials.get(mesh.material).copied().unwrap_or(0),
+        });
+    }
+    Ok((!meshes.is_empty()).then_some(MapModelGeometry { meshes }))
+}
+
+/// Is a decoded texture a flat fill (no colour information)?
+///
+/// The same rule the hero path applies: at least two colour channels must have
+/// structure, or the surface stays on the placeholder instead of being painted
+/// with a mask or a solid colour that reads as if it were textured.
+fn texture_has_colour(texture: &SceneTexture) -> bool {
+    let n = (texture.rgba.len() / 4).max(1) as f64;
+    let structured = (0..3usize)
+        .filter(|c| {
+            let mean = texture
+                .rgba
+                .chunks_exact(4)
+                .map(|p| p[*c] as f64)
+                .sum::<f64>()
+                / n;
+            let variance = texture
+                .rgba
+                .chunks_exact(4)
+                .map(|p| {
+                    let d = p[*c] as f64 - mean;
+                    d * d
+                })
+                .sum::<f64>()
+                / n;
+            variance.sqrt() >= 2.0
+        })
+        .count();
+    structured >= 2
+}
+
+/// Totals for the map material pass, printed once instead of per look.
+#[derive(Default)]
+struct MaterialStats {
+    looks: usize,
+    materials: usize,
+    unreadable: usize,
+    no_colour: usize,
+    flat: usize,
+    ambiguous: usize,
+}
+
+/// Resolve a look's material ids to texture slots.
+///
+/// The join is the model's `MDLC` slot value against the look's `MaterialID`,
+/// then the material's first sRGB texture. Every failure is a reported reason,
+/// never a guessed neighbour.
+fn look_texture_slots(
+    scene: &mut Scene,
+    data: &GameData,
+    look: u64,
+    report: &mut Vec<String>,
+    stats: &mut MaterialStats,
+) -> std::collections::HashMap<u64, u32> {
+    let materials = match ow_tank::material::materials_of_look(data, look) {
+        Ok(m) => m,
+        Err(e) => {
+            report.push(format!("look 0x{look:016x}: {e}"));
+            return std::collections::HashMap::new();
+        }
+    };
+    stats.looks += 1;
+    stats.materials += materials.len();
+    let mut seen: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+    let mut ambiguous: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for m in &materials {
+        match seen.get(&m.id) {
+            None => {
+                seen.insert(m.id, m.material);
+            }
+            Some(&prev) if prev != m.material => {
+                ambiguous.insert(m.id);
+            }
+            _ => {}
+        }
+    }
+    stats.ambiguous += ambiguous.len();
+    let mut out = std::collections::HashMap::new();
+    let mut unreadable = 0usize;
+    let mut no_colour = 0usize;
+    let mut flat = 0usize;
+    for m in &materials {
+        if ambiguous.contains(&m.id) || out.contains_key(&m.id) {
+            continue;
+        }
+        if data.open_asset(m.material).is_err() {
+            unreadable += 1;
+            continue;
+        }
+        match ow_tank::material::base_texture_of_material(data, m.material) {
+            Some(texture) => {
+                let slot = texture_slot_loaded(scene, data, texture, report);
+                if texture_has_colour(&scene.textures[slot as usize]) {
+                    out.insert(m.id, slot);
+                } else {
+                    flat += 1;
+                }
+            }
+            None => no_colour += 1,
+        }
+    }
+    stats.unreadable += unreadable;
+    stats.no_colour += no_colour;
+    stats.flat += flat;
+    report.push(format!(
+        "look 0x{look:016x}: {} materials; {unreadable} unreadable, {no_colour} with no sRGB base colour, {flat} flat fills, {} textured id(s), {} ambiguous id(s)",
+        materials.len(),
+        out.len(),
+        ambiguous.len(),
+    ));
+    out
+}
+
+/// Frame a map scene: the median placement origin, with `--at`, `--look-at`
+/// and `--overview` exactly as the previous map path defined them.
+fn frame_map(
+    scene: &mut Scene,
+    args: &[String],
+    origins: &[Vec3],
+    bounds: Option<([f32; 3], [f32; 3])>,
+) {
+    let (min, max) = bounds
+        .map(|(a, b)| (Vec3::from_array(a), Vec3::from_array(b)))
+        .unwrap_or_else(|| {
+            let mut min = Vec3::splat(f32::MAX);
+            let mut max = Vec3::splat(f32::MIN);
+            for o in origins {
+                min = min.min(*o);
+                max = max.max(*o);
+            }
+            (min, max)
+        });
+    let size = max - min;
+    let centroid = if origins.is_empty() {
+        (min + max) * 0.5
+    } else {
+        let mut xs: Vec<f32> = origins.iter().map(|v| v.x).collect();
+        let mut ys: Vec<f32> = origins.iter().map(|v| v.y).collect();
+        let mut zs: Vec<f32> = origins.iter().map(|v| v.z).collect();
+        xs.sort_by(f32::total_cmp);
+        ys.sort_by(f32::total_cmp);
+        zs.sort_by(f32::total_cmp);
+        let mid = origins.len() / 2;
+        Vec3::new(xs[mid], ys[mid], zs[mid])
+    };
+    scene.eye = arg(args, "--at").and_then(parse_vec3).unwrap_or(centroid);
+    scene.yaw = if size.x >= size.z {
+        0.0
+    } else {
+        std::f32::consts::FRAC_PI_2
+    };
+    if let Some(target) = arg(args, "--look-at").and_then(parse_vec3) {
+        aim(scene, target);
+    }
+    if args.iter().any(|a| a == "--overview") {
+        let centre = (min + max) * 0.5;
+        let height = size.length() * 0.9;
+        scene.eye = Vec3::new(centre.x, max.y + height, centre.z);
+        scene.yaw = 0.0;
+        scene.pitch = -1.2;
+        println!(
+            "overview from ({:.0}, {:.0}, {:.0})",
+            scene.eye.x, scene.eye.y, scene.eye.z
+        );
+    }
+}
+
+fn arg<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
+}
+
+/// Build the practice-range scene through the map resolver.
+///
+/// The chunk set is the resolver's own (`mapresolve::resolve_scene`): the
+/// header selects a variation, the variation names a type-`0x002` scene map,
+/// and that map asset stores some chunk references and synthesises the rest
+/// from the client's table. No chunk is guessed by kind or proximity.
+fn build_practice_range(
+    scene: &mut Scene,
+    data: &GameData,
+    sources: &ow_tank::keytable::Sources,
+    args: &[String],
+) -> Result<(), String> {
+    let kinds = sources
+        .chunk_kinds()
+        .map_err(|e| format!("the client's chunk-kind table: {e}"))?;
+    let resolved = mapresolve::resolve_practice_range(data, &kinds).map_err(|e| e.to_string())?;
+    let range = &resolved.range;
+    println!(
+        "practice range: header 0x{:016x}, mapName {:?}, base map {}, mode 0x{:016x} ({}), \
+         variation {} of {} selected, scene map 0x{:016x}",
+        range.header,
+        range.map_name,
+        range
+            .base_map
+            .map(|g| format!("0x{g:016x}"))
+            .unwrap_or_else(|| "-".into()),
+        range.variation.game_mode,
+        range.mode_name,
+        range.variation.index,
+        range.variation_count,
+        range.scene_map,
+    );
+    if range.matching_variations.len() > 1 {
+        println!(
+            "  note: {} variations name the same mode display name; header order picks {} \
+             (the client's selector is still open)",
+            range.matching_variations.len(),
+            range.variation.index
+        );
+    }
+    println!(
+        "  chunks: {} requested, {} opened, {} unregistered, {} unopened; \
+         {} placeables, {} model refs, {} entity refs",
+        resolved.scene.requested.len(),
+        resolved.scene.chunks.len(),
+        resolved.scene.unregistered.len(),
+        resolved.scene.unopened.len(),
+        resolved.scene.placeables,
+        resolved.scene.models,
+        resolved.scene.entities,
+    );
+    if !resolved.scene.unregistered.is_empty() {
+        return Err(format!(
+            "the practice scene is incomplete: {} requested chunk(s) are not registered: {}",
+            resolved.scene.unregistered.len(),
+            resolved
+                .scene
+                .unregistered
+                .iter()
+                .map(|g| format!("0x{g:016x}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !resolved.scene.unopened.is_empty() {
+        return Err(format!(
+            "the practice scene is incomplete: {} requested chunk(s) are registered but did not open: {}",
+            resolved.scene.unopened.len(),
+            resolved.scene
+                .unopened
+                .iter()
+                .map(|g| format!("0x{g:016x}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    let mut chunks: Vec<(u64, u8, usize, usize)> = resolved
+        .scene
+        .chunks
+        .iter()
+        .map(|c| (c.guid, c.kind, c.size, c.placeables()))
+        .collect();
+    chunks.sort_unstable();
+    for (guid, kind, size, placeables) in &chunks {
+        println!("  chunk 0x{guid:016x} kind 0x{kind:02x}: {size} B, {placeables} placeables");
+    }
+    if let Some((min, max)) = resolved.scene.bounds {
+        println!(
+            "  bounds ({:.5}, {:.5}, {:.5}) .. ({:.5}, {:.5}, {:.5})",
+            min[0], min[1], min[2], max[0], max[1], max[2]
+        );
+    }
+
+    let mut placeables: Vec<&Placeable> = Vec::new();
+    for chunk in &resolved.scene.chunks {
+        if let Some(parsed) = &chunk.chunk {
+            placeables.extend(parsed.placeables.iter());
+        }
+    }
+    build_map_placeables(scene, data, &placeables, args)
+}
+
+/// Instance the model placeables from a resolved scene.
+fn build_map_placeables(
+    scene: &mut Scene,
+    data: &GameData,
+    placeables: &[&Placeable],
+    args: &[String],
+) -> Result<(), String> {
+    let no_skin = args.iter().any(|a| a == "--no-skin");
+    let mut order: Vec<(u64, u64)> = Vec::new();
+    let mut groups: HashMap<(u64, u64), Vec<Instance>> = HashMap::new();
+    let mut origins: Vec<Vec3> = Vec::new();
+    for placeable in placeables {
+        match &placeable.body {
+            ow_tank::mapchunk::Body::ModelGroup(group) => {
+                let Some(model) = placeable.model else {
+                    continue;
+                };
+                if guid::type_of(model) != guid::types::MODEL {
+                    continue;
+                }
+                for g in &group.groups {
+                    let look = g.look.unwrap_or(0);
+                    let key = (model, look);
+                    let instances = match groups.entry(key) {
+                        std::collections::hash_map::Entry::Vacant(e) => {
+                            order.push(key);
+                            e.insert(Vec::new())
+                        }
+                        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                    };
+                    for entry in &g.entries {
+                        instances.push(Instance {
+                            model: transform_matrix(entry.translation, entry.scale, entry.rotation)
+                                .to_cols_array_2d(),
+                        });
+                        origins.push(Vec3::from_array(entry.translation));
+                    }
+                }
+            }
+            ow_tank::mapchunk::Body::Model(_) | ow_tank::mapchunk::Body::SingleModel(_) => {
+                let Some(model) = placeable.model else {
+                    continue;
+                };
+                if guid::type_of(model) != guid::types::MODEL {
+                    continue;
+                }
+                let look = placeable.look.unwrap_or(0);
+                let key = (model, look);
+                let instances = match groups.entry(key) {
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        order.push(key);
+                        e.insert(Vec::new())
+                    }
+                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                };
+                instances.push(Instance {
+                    model: placement_matrix(placeable).to_cols_array_2d(),
+                });
+                origins.push(Vec3::from_array(placeable.translation));
+            }
+            _ => {}
+        }
+    }
+    if order.is_empty() {
+        return Err("the resolved scene has no type-0x00C model placeable".into());
+    }
+
+    let mut geometry: HashMap<u64, MapModelGeometry> = HashMap::new();
+    let mut skin_stats = SkinStats::default();
+    let mut model_failures = 0usize;
+    for (model, _) in &order {
+        if geometry.contains_key(model) {
+            continue;
+        }
+        match map_model_geometry(scene, data, *model, no_skin, &mut skin_stats) {
+            Ok(Some(geometry_of_model)) => {
+                geometry.insert(*model, geometry_of_model);
+            }
+            Ok(None) => {
+                model_failures += 1;
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                model_failures += 1;
+            }
+        }
+    }
+
+    let mut look_slots: HashMap<u64, std::collections::HashMap<u64, u32>> = HashMap::new();
+    let mut report: Vec<String> = Vec::new();
+    let mut material_stats = MaterialStats::default();
+    let mut textured_submeshes = 0usize;
+    let mut placeholder_submeshes = 0usize;
+    for key in &order {
+        let (model, look) = *key;
+        let Some(model_geometry) = geometry.get(&model) else {
+            continue;
+        };
+        let instances = groups.get(key).expect("the group was inserted above");
+        let instance_start = scene.instances.len() as u32;
+        scene.instances.extend_from_slice(instances);
+        scene.placements += instances.len();
+        look_slots.entry(look).or_insert_with(|| {
+            look_texture_slots(scene, data, look, &mut report, &mut material_stats)
+        });
+        let slots = &look_slots[&look];
+        for mesh in &model_geometry.meshes {
+            let texture = slots.get(&mesh.material_id).copied().unwrap_or(0);
+            if texture == 0 {
+                placeholder_submeshes += 1;
+            } else {
+                textured_submeshes += 1;
+            }
+            scene.draws.push(Draw {
+                first_index: mesh.first_index,
+                index_count: mesh.index_count,
+                base_vertex: mesh.base_vertex,
+                instance_start,
+                instance_count: instances.len() as u32,
+                texture,
+                model,
+            });
+        }
+    }
+
+    scene.models_loaded = geometry.len();
+    scene.origins = origins;
+    if model_failures > 0 {
+        eprintln!("{model_failures} model(s) could not be read");
+    }
+    if args.iter().any(|a| a == "--verbose") {
+        for line in &report {
+            println!("{line}");
+        }
+    }
+    println!(
+        "  materials: {} look(s), {} material entr(ies); {} unreadable, {} with no sRGB base colour, {} flat fill(s), {} ambiguous id(s); {} texture(s) decoded, {} submesh draw(s) textured, {placeholder_submeshes} on the white placeholder",
+        material_stats.looks,
+        material_stats.materials,
+        material_stats.unreadable,
+        material_stats.no_colour,
+        material_stats.flat,
+        material_stats.ambiguous,
+        scene.textures.len().saturating_sub(1),
+        textured_submeshes,
+    );
+    if skin_stats.models > 0 || skin_stats.unmapped_lanes > 0 {
+        eprintln!(
+            "skin: {} model(s) share the bind-pose identity pool, {} skinned vertices, {} unmapped lane(s) held at identity",
+            skin_stats.models, skin_stats.vertices, skin_stats.unmapped_lanes
+        );
+    }
+    println!(
+        "  geometry: {} distinct models, {} placements, {} draws",
+        scene.models_loaded,
+        scene.placements,
+        scene.draws.len(),
+    );
+    let mut bounds_min = Vec3::splat(f32::MAX);
+    let mut bounds_max = Vec3::splat(f32::MIN);
+    for origin in &scene.origins {
+        bounds_min = bounds_min.min(*origin);
+        bounds_max = bounds_max.max(*origin);
+    }
+    if !scene.origins.is_empty() {
+        let reach = Vec3::splat(8.0);
+        bounds_min -= reach;
+        bounds_max += reach;
+        println!(
+            "  model-instance origins ({:.5}, {:.5}, {:.5}) .. ({:.5}, {:.5}, {:.5})",
+            bounds_min.x + 8.0,
+            bounds_min.y + 8.0,
+            bounds_min.z + 8.0,
+            bounds_max.x - 8.0,
+            bounds_max.y - 8.0,
+            bounds_max.z - 8.0,
+        );
+    }
+
+    frame_map(
+        scene,
+        args,
+        &scene.origins.clone(),
+        Some((bounds_min.to_array(), bounds_max.to_array())),
+    );
+    Ok(())
+}
+
 pub fn build(args: &[String]) -> Result<Scene, String> {
     let flag = |name: &str| -> Option<String> {
         args.iter()
@@ -491,7 +1051,7 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
     // what it read and the scene keeps it for the pass that will evaluate it.
     if let Some(g) = flag("--clip") {
         let guid = u64::from_str_radix(g.trim_start_matches("0x"), 16).unwrap_or(0);
-        match data.bytes_of(guid) {
+        match data.open_asset(guid) {
             Ok(bytes) => match ow_tank::clip::Clip::parse(&bytes) {
                 Ok(c) => {
                     println!(
@@ -516,24 +1076,49 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
         }
     }
 
-    // `--no-map`: the test course instead of the map. The harness is playable in
-    // seconds rather than after loading thousands of models, which is what makes
-    // it usable for looking at a view model or a pose.
-    //
-    // Play does not load map chunks by default either: a `--play`/`--play-th`
-    // run with no explicit map selection takes this sandbox, and naming one of
-    // `--chunks`/`--chunks-from`/`--chunk-file`/`--cluster`/`--clusters` keeps
-    // the old behaviour — the harness plays on real geometry as before.
+    // `--list-maps`: every readable map header and its variation modes. This is
+    // the data-driven answer to "which map is which"; it does not select one.
+    if args.iter().any(|a| a == "--list-maps") {
+        let maps = mapresolve::list_maps(&data);
+        println!("{} readable type-0x09F map headers", maps.len());
+        for map in &maps {
+            println!(
+                "0x{:016x}  {}  ({} variation(s))",
+                map.header,
+                map.map_name,
+                map.variations.len()
+            );
+            for v in &map.variations {
+                println!(
+                    "    [{:>2}] mode 0x{:016x}  {:<32}  scene 0x{:016x}",
+                    v.index,
+                    v.game_mode,
+                    v.mode_name
+                        .as_deref()
+                        .unwrap_or("<no readable display name>"),
+                    v.scene_map,
+                );
+            }
+        }
+        std::process::exit(0);
+    }
+
+    // Which world to build. The default is the install's practice range,
+    // selected through the map header (no chunk seed, no synthetic course). The
+    // chunk flags remain explicit diagnostics; `--no-map` is the explicit
+    // stand-in course for viewer work.
     let one_of = |names: &[&str]| args.iter().any(|a| names.contains(&a.as_str()));
-    let map_selected = one_of(&[
+    let legacy_map = one_of(&[
         "--chunks",
         "--chunks-from",
         "--chunk-file",
         "--cluster",
         "--clusters",
+        "--list",
     ]);
-    let play = args.iter().any(|a| a == "--play" || a == "--play-th");
-    if args.iter().any(|a| a == "--no-map") || (play && !map_selected) {
+    let no_map = args.iter().any(|a| a == "--no-map") || args.iter().any(|a| a == "--hero-only");
+    let practice = args.iter().any(|a| a == "--practice-range") || (!no_map && !legacy_map);
+    if no_map {
         build_sandbox(&mut scene)?;
         // Aim before placing the hero: the placement turns the model to the
         // camera's heading, so the look has to be known first. (This used to be
@@ -563,12 +1148,29 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
         return Ok(scene);
     }
 
+    if practice {
+        build_practice_range(&mut scene, &data, &sources, args)?;
+        if let Some(hero_index) = flag("--hero").and_then(|v| v.parse::<u32>().ok()) {
+            let mut report = Vec::new();
+            let at = flag("--hero-at").and_then(|v| parse_vec3(&v));
+            match place_hero(&mut scene, &data, hero_index, at, false, args, &mut report) {
+                Ok(()) => {
+                    for line in report {
+                        println!("{line}");
+                    }
+                }
+                Err(e) => eprintln!("hero {hero_index}: {e}"),
+            }
+        }
+        return Ok(scene);
+    }
+
     if args.iter().any(|a| a == "--list") {
         let count: usize = flag("--count").and_then(|v| v.parse().ok()).unwrap_or(40);
         let guids = data.guids_of_type(0x0BC);
         println!("{} map chunk assets; the first {count}:", guids.len());
         for guid in guids.iter().take(count) {
-            let Ok(bytes) = data.bytes_of(*guid) else {
+            let Ok(bytes) = data.open_asset(*guid) else {
                 continue;
             };
             if let Ok((kind, chunk)) = MapChunk::detect(&bytes, &resolves) {
@@ -621,7 +1223,7 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
         let mut model_failures = 0usize;
         let mut skin_stats = SkinStats::default();
         let no_skin = args.iter().any(|a| a == "--no-skin");
-        let loader = |g: u64| data.bytes_of(g).ok();
+        let loader = |g: u64| data.open_asset(g).ok();
         let (_, chunk) = MapChunk::detect(&bytes, &resolves).map_err(|e| e.to_string())?;
         println!("{}", chunk.summary());
         for placeable in &chunk.placeables {
@@ -633,7 +1235,7 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
                 continue;
             }
             if let std::collections::hash_map::Entry::Vacant(e) = geometry.entry(model_guid) {
-                let Ok(model_bytes) = data.bytes_of(model_guid) else {
+                let Ok(model_bytes) = data.open_asset(model_guid) else {
                     model_failures += 1;
                     continue;
                 };
@@ -785,15 +1387,11 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
             })
             .collect::<Result<Vec<_>, _>>()?
     } else {
-        let cap: usize = flag("--max-chunks")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(12);
-        let guids = data.guids_of_type(0x0BC);
-        println!(
-            "no --chunks given; taking the first {cap} of {} map chunks",
-            guids.len()
+        return Err(
+            "no map selected: the default is --practice-range; name an explicit diagnostic \
+             with --chunks, --chunks-from, --chunk-file or --cluster"
+                .into(),
         );
-        guids.into_iter().take(cap).collect()
     };
 
     // A set of chunks gathered from a running game is not a map: it holds
@@ -857,10 +1455,10 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
     let mut skin_stats = SkinStats::default();
     let no_skin = args.iter().any(|a| a == "--no-skin");
 
-    let loader = |g: u64| data.bytes_of(g).ok();
+    let loader = |g: u64| data.open_asset(g).ok();
 
     for guid in &chunk_guids {
-        let Ok(bytes) = data.bytes_of(*guid) else {
+        let Ok(bytes) = data.open_asset(*guid) else {
             chunk_failures += 1;
             continue;
         };
@@ -881,7 +1479,7 @@ pub fn build(args: &[String]) -> Result<Scene, String> {
                 continue;
             }
             if !geometry.contains_key(&model_guid) {
-                let Ok(model_bytes) = data.bytes_of(model_guid) else {
+                let Ok(model_bytes) = data.open_asset(model_guid) else {
                     model_failures += 1;
                     continue;
                 };
@@ -1147,9 +1745,9 @@ fn texture_slot_loaded(
     if texture_guid == 0 || scene.textures[slot as usize].guid != 0 {
         return slot;
     }
-    let loader = |g: u64| data.bytes_of(g).ok();
+    let loader = |g: u64| data.open_asset(g).ok();
     match data
-        .bytes_of(texture_guid)
+        .open_asset(texture_guid)
         .map_err(|e| e.to_string())
         .and_then(|b| {
             ow_tank::texture::parse_asset(&b, texture_guid, &loader).map_err(|e| e.to_string())
@@ -1215,10 +1813,8 @@ fn texture_slot_loaded(
 
 /// The test course's boxes, as `(min, max)`, around a spawn.
 ///
-/// **One definition, used twice**: `ow-view --play` collides against these and
-/// `--no-map` draws them, so the player cannot walk through a wall that is not
-/// there. The course runs along +z (the mover's forward at yaw 0) with one
-/// pillar behind the spawn.
+/// `--no-map` draws these as the test course. The course runs along +z with
+/// one pillar behind the spawn.
 pub fn sandbox_boxes(spawn: [f32; 3], ground: f32) -> Vec<([f32; 3], [f32; 3])> {
     let (x, z) = (spawn[0], spawn[2]);
     let at = |dx: f32, dz: f32, w: f32, h: f32, d: f32| {
@@ -1439,9 +2035,9 @@ fn add_model(
     report: &mut Vec<String>,
 ) -> Result<usize, String> {
     let bytes = data
-        .bytes_of(model_guid)
+        .open_asset(model_guid)
         .map_err(|e| format!("model 0x{model_guid:016x}: {e}"))?;
-    let loader = |g: u64| data.bytes_of(g).ok();
+    let loader = |g: u64| data.open_asset(g).ok();
     let model = ow_tank::model::parse(&bytes, &loader)
         .map_err(|e| format!("model 0x{model_guid:016x}: {e}"))?;
 
@@ -1489,7 +2085,7 @@ fn add_model(
         if ambiguous_ids.contains(&m.id) || !seen_material.insert(m.material) {
             continue;
         }
-        if data.bytes_of(m.material).is_err() {
+        if data.open_asset(m.material).is_err() {
             // The material asset itself is not decryptable on this install
             // (`key … is not present`), which is where most of the hero's
             // surfaces stop — the body included.
@@ -1770,7 +2366,10 @@ fn place_hero(
     // (`Cloth::fake_hierarchy`), which is the parent list the exporters use for
     // a cloth rig; a model without one keeps `mskl`'s own list, so the default
     // path is unchanged.
-    let skin = data.bytes_of(model_guid).ok().and_then(|b| model_skin(&b));
+    let skin = data
+        .open_asset(model_guid)
+        .ok()
+        .and_then(|b| model_skin(&b));
     // The hero owns the palette tail it uploads: on an empty scene that is
     // the whole palette at base 1, and past map models' identity pool it is
     // appended, so their base-1 indices keep working.
@@ -1829,13 +2428,13 @@ fn place_hero(
     )?;
     scene.skin = skin;
     if view_model {
-        if let Ok(bytes) = data.bytes_of(parts.model) {
+        if let Ok(bytes) = data.open_asset(parts.model) {
             if let Ok(cskel) = ow_tank::skeleton::parse_model(&bytes) {
                 scene.character_ids = cskel.ids.clone();
                 scene.character_skin = model_skin(&bytes);
             }
         }
-        if let Ok(bytes) = data.bytes_of(0x0a00_0000_0000_0071u64) {
+        if let Ok(bytes) = data.open_asset(0x0a00_0000_0000_0071u64) {
             scene.character_weapon_pose = ow_tank::clip::BlendPose::decode(&bytes);
         }
     }
@@ -1847,7 +2446,7 @@ fn place_hero(
         // skeleton's two weapon bones (ids 44 and 74) — not the hand bones,
         // and not the centre weapon bone (126), which were the two wrong
         // first cuts.
-        if let Ok(bytes) = data.bytes_of(model_guid) {
+        if let Ok(bytes) = data.open_asset(model_guid) {
             if let Ok(fp_skel) = ow_tank::skeleton::parse_model(&bytes) {
                 scene.view_model_ids = fp_skel.ids.clone();
                 let hardpoints = ow_tank::hardpoint::mstu_hardpoints_of_model(data, model_guid);
@@ -2002,7 +2601,7 @@ fn cluster_chunks(data: &GameData, guids: &[u64], resolves: &dyn Fn(u64) -> bool
     let mut boxes: Vec<(Vec3, Vec3)> = Vec::new();
     let mut kept: Vec<u64> = Vec::new();
     for guid in guids {
-        let Ok(bytes) = data.bytes_of(*guid) else {
+        let Ok(bytes) = data.open_asset(*guid) else {
             continue;
         };
         let Ok((_, chunk)) = MapChunk::detect(&bytes, resolves) else {
@@ -2090,14 +2689,15 @@ fn cluster_chunks(data: &GameData, guids: &[u64], resolves: &dyn Fn(u64) -> bool
     out
 }
 
-/// A placement's transform: translate, rotate, scale.
+/// A transform from a placeable or a model-group entry: translate, rotate,
+/// scale.
 ///
 /// The rotation is stored as a quaternion in x, y, z, w order, which is what
 /// the file holds.
-fn placement_matrix(p: &ow_tank::mapchunk::Placeable) -> Mat4 {
-    let translation = Vec3::from_array(p.translation);
-    let scale = Vec3::from_array(p.scale);
-    let raw = Quat::from_xyzw(p.rotation[0], p.rotation[1], p.rotation[2], p.rotation[3]);
+fn transform_matrix(translation: [f32; 3], scale: [f32; 3], rotation: [f32; 4]) -> Mat4 {
+    let translation = Vec3::from_array(translation);
+    let scale = Vec3::from_array(scale);
+    let raw = Quat::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3]);
     // A placement with no rotation stores four zeroes, which is not a unit
     // quaternion; normalising it would produce NaN and lose the whole model.
     let rotation = if raw.length_squared() > 1e-6 {
@@ -2106,6 +2706,11 @@ fn placement_matrix(p: &ow_tank::mapchunk::Placeable) -> Mat4 {
         Quat::IDENTITY
     };
     Mat4::from_scale_rotation_translation(scale, rotation, translation)
+}
+
+/// A placement's transform: translate, rotate, scale.
+fn placement_matrix(p: &ow_tank::mapchunk::Placeable) -> Mat4 {
+    transform_matrix(p.translation, p.scale, p.rotation)
 }
 
 /// Downward collision against the map geometry, coarse but real.

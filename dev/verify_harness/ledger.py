@@ -28,7 +28,10 @@ LEDGER_PATH = os.path.join(os.path.dirname(__file__), "ledger.json")
 # Bump on every harness change that could alter a verdict (corpus changes,
 # gate logic fixes, oracle behaviour fixes). Consumers binding old entries
 # then see `stale`, never a verdict carried across a harness upgrade.
-HARNESS_VERSION = "3"
+#
+# 4: coverage accepts a unit's declared dead branch edges, but only after
+#    validating that the site ran and exactly one edge was ever observed.
+HARNESS_VERSION = "4"
 
 
 def sha256_bytes(b: bytes) -> str:

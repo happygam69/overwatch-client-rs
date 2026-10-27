@@ -32,6 +32,10 @@ pub const SUPPORTED_CMF_BUILD: u32 = 150_851;
 /// everything they hold (materials, looks, material data) reads as "not present
 /// in this installation" while the install plainly has it.
 pub const CMF_BUILD_154088: u32 = 154_088;
+/// The build whose manifest derivation was read from the client's own key and
+/// IV routines (`0x142e48a20` and `0x142e48700`) and proven against the three
+/// encrypted retail manifests of that build.
+pub const CMF_BUILD_154504: u32 = keytable::EMBEDDED_TABLE_BUILD;
 /// The resource graph uses the same table with different constants.
 pub const SUPPORTED_TRG_BUILD: u32 = 150_851;
 
@@ -64,7 +68,8 @@ impl fmt::Display for Error {
             Error::UnsupportedBuild { build, manifest } => write!(
                 f,
                 "{manifest} build {build} is not supported; its key derivation has not been \
-                 verified. Supported: {SUPPORTED_CMF_BUILD}"
+                 verified. Supported: {SUPPORTED_CMF_BUILD}, {CMF_BUILD_154088} and \
+                 {CMF_BUILD_154504}"
             ),
             Error::Crypto(m) => write!(f, "manifest decryption failed: {m}"),
         }
@@ -150,6 +155,7 @@ pub fn derive_key_iv(
     match header.build_version {
         SUPPORTED_CMF_BUILD => key_iv_150851(header, digest, table),
         CMF_BUILD_154088 => key_iv_154088(header, digest, table),
+        CMF_BUILD_154504 => key_iv_154504(header, digest, table),
         build => Err(Error::UnsupportedBuild {
             build,
             manifest: manifest.name(),
@@ -200,6 +206,50 @@ fn key_iv_154088(
         cursor = cursor.wrapping_add(3);
         let mixed = at((cursor as i64 - i as i64) as i32 as i64);
         *slot ^= digest[mixed as usize % 20];
+    }
+    Ok((key, iv))
+}
+
+/// The derivation for build 154504, read from the client's own key and IV
+/// routines.
+///
+/// Key (`0x142e48a20`): the seed is `table[0x100 + key_length]` (here
+/// `table[0x120]`); each output byte is `table[signed_mod(cursor, 512)]` and the
+/// cursor advances by 3. The key depends only on the table and the key length,
+/// not on the header or the file name.
+///
+/// IV (`0x142e48700`): SHA-1 of the ASCII file name; the cursor starts at
+/// `16 * header.build_version`, each byte is `table[signed_mod(cursor, 512)]`,
+/// then the cursor advances by `digest[data_count % 20] + data_count` and the
+/// byte is XORed with `digest[(build + i) % 20]`. The client's IV routine holds
+/// this build's number as the digest-index seed and reads the header for the
+/// cursor seed; both are 154504 here.
+fn key_iv_154504(
+    header: &Header,
+    digest: &[u8; 20],
+    table: &[u8; keytable::TABLE_SIZE],
+) -> Result<([u8; 32], [u8; 16])> {
+    let at = |i: i64| table[signed_mod(i) as usize];
+
+    // Key: fixed length 32, so the seed is table[0x100 + 32].
+    let mut key = [0u8; 32];
+    let mut cursor = u32::from(table[0x100 + 32]);
+    for slot in key.iter_mut() {
+        *slot = at(i64::from(cursor));
+        cursor = cursor.wrapping_add(3);
+    }
+
+    // IV: `length * build` seeds the table walk; the data count and the
+    // digest enter on every later step.
+    let data_count = header.data_count as u32;
+    let step = u32::from(digest[(data_count % 20) as usize]).wrapping_add(data_count);
+    let mut iv = [0u8; 16];
+    let mut cursor = 16u32.wrapping_mul(header.build_version);
+    for (i, slot) in iv.iter_mut().enumerate() {
+        *slot = at(i64::from(cursor));
+        cursor = cursor.wrapping_add(step);
+        let index = CMF_BUILD_154504.wrapping_add(i as u32) % 20;
+        *slot ^= digest[index as usize];
     }
     Ok((key, iv))
 }
@@ -487,6 +537,14 @@ impl Registry {
                 content_key,
             });
         }
+        // The record list is GUID-sorted in every valid manifest. A wrong key
+        // or IV produces plausible-looking records that are not sorted; this
+        // check is what separates a read from a guess.
+        if !records.windows(2).all(|w| w[0].guid <= w[1].guid) {
+            return Err(Error::Crypto(
+                "records are not GUID-sorted; the key/IV is wrong for this build".into(),
+            ));
+        }
 
         Ok(Registry {
             header,
@@ -665,6 +723,48 @@ Manifest/Win_SPWin_RDEV_EExt.trg|22222222222222222222222222222222|0|0|255|x|
             Registry::find_manifest_name(root, ManifestKind::ResourceGraph, "Win", "RDEV", None)
                 .unwrap();
         assert_eq!(name, "Win_SPWin_RDEV_EExt.trg");
+    }
+
+    #[test]
+    fn build_154504_derivation_matches_a_synthetic_table_vector() {
+        // A deterministic table that is not game data. The expected key and IV
+        // were produced independently from the read formula, so this pins the
+        // operation order: seed table[0x120], +3 key walk, and the IV's
+        // data-count step and build-indexed digest XOR.
+        let table: [u8; keytable::TABLE_SIZE] =
+            std::array::from_fn(|i| ((i * 37 + 11) & 0xFF) as u8);
+        let header = Header {
+            build_version: 154_504,
+            data_patch_count: 0,
+            data_count: 1_301_598,
+            entry_patch_count: 0,
+            entry_count: 361,
+            magic: 0x1b66_6d63,
+        };
+        let digest: [u8; 20] = {
+            use sha1::{Digest, Sha1};
+            let mut hasher = Sha1::new();
+            hasher.update(b"example.cmf");
+            hasher.finalize().into()
+        };
+        let (key, iv) = key_iv_154504(&header, &digest, &table).unwrap();
+        assert_eq!(
+            key.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            "c231a00f7eed5ccb3aa91887f665d443b22190ff6edd4cbb2a990877e655c433"
+        );
+        assert_eq!(
+            iv.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            "f86a520275d1c1a688bc61d258c5b83d"
+        );
+
+        // The key routine reads no header field: another name and count leave
+        // it unchanged.
+        let mut other = header;
+        other.data_count = 17;
+        let other_digest = [0x5Au8; 20];
+        let (other_key, other_iv) = key_iv_154504(&other, &other_digest, &table).unwrap();
+        assert_eq!(key, other_key);
+        assert_ne!(iv, other_iv);
     }
 
     #[test]

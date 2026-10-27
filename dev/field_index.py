@@ -135,6 +135,26 @@ PROFILES: Dict[str, Dict[int, str]] = {
         0xB4: "side", 0xC0: "crouch", 0xE0: "speed", 0xF0: "fall_terminal",
     },
 }
+
+# The state-modifier table is an inline vector at body+0x880 (pointer at
+# +0x870, count at +0x878); each record is 0x38 bytes. Scan the first entries
+# as a separate profile so a writer of the table is not lost to the generic
+# body offsets.
+MODIFIER_REC_FIELDS = {
+    0x00: "kind", 0x08: "field", 0x10: "descriptor", 0x18: "start",
+    0x1C: "end", 0x20: "end2", 0x28: "field_id", 0x2C: "op",
+    0x30: "value", 0x34: "bound",
+}
+PROFILES["modifier-records"] = {
+    0x870: "table.ptr",
+    0x878: "table.count",
+    0x87C: "table.cap",
+    **{
+        0x880 + i * 0x38 + off: f"rec[{i}].{name}"
+        for i in range(16)
+        for off, name in MODIFIER_REC_FIELDS.items()
+    },
+}
 BODY_MARKERS = {0x1140, 0x1A90, 0x1AD8, 0x1B80, 0x35B, 0x10D0, 0x10E4}
 VEL = {0xC0, 0xC4, 0xC8, 0xCC}
 FORCE = {0x130, 0x134, 0x138}
@@ -239,6 +259,15 @@ def scan(
                 dst = ops[0].reg
                 if ops[1].type == capstone.x86.X86_OP_REG and ops[1].reg in alias:
                     alias[dst] = alias[ops[1].reg]
+                elif ops[1].type == capstone.x86.X86_OP_MEM and ops[1].mem.base in alias:
+                    # The modifier table's pointer is at body+0x870 and
+                    # points at the inline buffer at body+0x880. Follow a load
+                    # so an append through the table pointer is reported at
+                    # the record's real body offset.
+                    if ops[1].mem.disp == 0x870:
+                        alias[dst] = alias[ops[1].mem.base] + 0x880
+                    else:
+                        alias.pop(dst, None)
                 elif ops[1].type == capstone.x86.X86_OP_IMM and ops[1].imm == 0:
                     alias.pop(dst, None)
             elif m == "lea" and len(ops) == 2 and ops[0].type == capstone.x86.X86_OP_REG:

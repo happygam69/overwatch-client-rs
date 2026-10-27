@@ -79,12 +79,12 @@ _KNOWN_UNIT_KEYS = {
     "id", "title", "address", "image", "c_file", "entry", "args",
     "returns", "options", "base", "knownEquivalentMutants",
     "acknowledgedGaps", "notes", "argFactory", "candidateLoader", "state",
-    "scaffold",
+    "scaffold", "candidateCrate", "candidateProbe", "suite",
 }
 _KNOWN_ARG_KEYS = {"name", "kind", "ptr_len"}
 _KNOWN_OPTION_KEYS = {
     "iterations", "coverageThreshold", "mutationCount", "mutationKillRate",
-    "seed", "allowedImageReads",
+    "seed", "allowedImageReads", "unreachableBranches",
 }
 _ARG_KINDS = ("f32", "f64", "u64")
 _RET_KINDS = ("f32", "f64", "u64", "void")
@@ -126,9 +126,12 @@ class Unit:
     arg_factory: Optional[str] = None
     # Candidate loader: "c" compiles the decompile (tier 1); "rust" runs
     # rust_probe.rs through the subprocess protocol (tier 2, legacy);
-    # "cargo" builds crates/ow-sim/src/bin/verify_probe.rs and runs the real
-    # crate functions (tier 2, shipped path).
+    # "cargo" builds crates/<crate>/src/bin/verify_probe.rs and runs the real
+    # crate functions (tier 2, shipped path). `candidate_crate` and
+    # `candidate_probe` select that crate/probe (default ow-sim).
     candidate_loader: str = "c"
+    candidate_crate: str = ""
+    candidate_probe: str = ""
     # v2b addresses of compiler literal-pool constants the decompile
     # already inlined (e.g. 1.0f, -0.0f for XORPS). Reads of these are
     # not "undeclared global state"; the candidate hardcodes the same
@@ -137,6 +140,11 @@ class Unit:
     # Inclusive ranges of allowed image reads, for state/global blocks. The
     # unit's own state region is added automatically.
     allowed_read_ranges: List[Tuple[int, int]] = field(default_factory=list)
+    # Declared dead branch edges: (branch site, never-taken next address,
+    # rationale), all in the unit's v2b frame. The coverage stage validates
+    # each one (the site ran, exactly one edge was observed, and it is not the
+    # declared-dead one) before taking it out of the denominator.
+    unreachable_branches: List[Tuple[int, int, str]] = field(default_factory=list)
     # Preloaded state snapshot, if the unit is stateful.
     state: Optional[StateSpec] = None
 
@@ -208,6 +216,15 @@ def load_unit(path: str) -> Unit:
                 allowed_image_reads.append(int(a, 16) if isinstance(a, str) else int(a))
     except (TypeError, ValueError) as e:
         raise ValueError(f"unit {path}: bad allowedImageReads: {e}") from e
+    unreachable: List[Tuple[int, int, str]] = []
+    for u in opts.get("unreachableBranches", []) or []:
+        try:
+            site = int(u["site"], 16) if isinstance(u["site"], str) else int(u["site"])
+            edge = int(u["edge"], 16) if isinstance(u["edge"], str) else int(u["edge"])
+            why = str(u["why"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"unit {path}: bad unreachableBranches entry: {e}") from e
+        unreachable.append((site, edge, why))
     state = None
     st = d.get("state")
     if st is not None:
@@ -244,8 +261,11 @@ def load_unit(path: str) -> Unit:
         notes=d.get("notes", []),
         arg_factory=d.get("argFactory"),
         candidate_loader=d.get("candidateLoader", "c"),
+        candidate_crate=d.get("candidateCrate", ""),
+        candidate_probe=d.get("candidateProbe", ""),
         allowed_image_reads=allowed_image_reads,
         allowed_read_ranges=allowed_read_ranges,
+        unreachable_branches=unreachable,
         state=state,
     )
 
@@ -446,11 +466,24 @@ def run_unit(
     candidate_sources: List[str] = []
     crate_rev = ""
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    # A cargo unit names its crate and probe; the defaults preserve the old
+    # ow-sim units. These paths are used again by the mutation builds, so
+    # resolve them once here.
+    cand_crate = unit.candidate_crate or "ow-sim"
+    cand_probe_rel = unit.candidate_probe or "crates/ow-sim/src/bin/verify_probe.rs"
+    cand_crate_dir = os.path.join(repo_root, "crates", cand_crate)
+    cand_probe = (
+        cand_probe_rel
+        if os.path.isabs(cand_probe_rel)
+        else os.path.join(repo_root, cand_probe_rel)
+    )
     if unit.candidate_loader == "cargo":
         from candidate_rust import candidate_binding, entry_sources
 
-        cand_sha, candidate_sources, crate_rev = candidate_binding(unit.entry)
-        cand_path = os.path.join(repo_root, entry_sources(unit.entry)[0])
+        cand_sha, candidate_sources, crate_rev = candidate_binding(
+            unit.entry, crate=cand_crate, probe=cand_probe
+        )
+        cand_path = os.path.join(repo_root, entry_sources(unit.entry, cand_crate)[0])
     elif unit.candidate_loader == "rust":
         from candidate_rust import PROBE_SRC
 
@@ -486,11 +519,12 @@ def run_unit(
         log(f"  FAIL: image not found: {unit.image}")
         return entry("inconclusive", notes=["image missing: " + unit.image])
     if unit.candidate_loader == "cargo":
-        from candidate_rust import CARGO_PROBE_SRC
-
-        if not os.path.exists(CARGO_PROBE_SRC):
-            log(f"  FAIL: cargo probe source not found: {CARGO_PROBE_SRC}")
-            return entry("inconclusive", notes=[f"cargo probe missing: {CARGO_PROBE_SRC}"])
+        if not os.path.exists(cand_probe):
+            log(f"  FAIL: cargo probe source not found: {cand_probe}")
+            return entry("inconclusive", notes=[f"cargo probe missing: {cand_probe}"])
+        if not os.path.isdir(cand_crate_dir):
+            log(f"  FAIL: cargo crate not found: {cand_crate_dir}")
+            return entry("inconclusive", notes=[f"cargo crate missing: {cand_crate_dir}"])
         if not os.path.exists(cand_path):
             log(f"  FAIL: candidate source not found: {cand_path}")
             return entry("inconclusive", notes=[f"candidate source missing: {cand_path}"])
@@ -551,6 +585,8 @@ def run_unit(
                 loader=unit.candidate_loader,
                 state_base=unit.state.base if unit.state is not None else None,
                 state_bytes=unit.state.data if unit.state is not None else None,
+                crate_dir=cand_crate_dir,
+                cargo_probe=cand_probe,
             )
             log(f"  candidate {unit.candidate_loader} probe: {candidate.exe}")
         else:
@@ -705,11 +741,27 @@ def run_unit(
 
             # ---- Stage 4: coverage -------------------------------------------
             log("[4/5] coverage (oracle, both branch edges of the compared runs)")
-            cov = tracker.result()
+            cov = tracker.result(unreachable=unit.unreachable_branches)
         finally:
             tracker.close()
 
-        log(f"  branch coverage {cov.coverage:.1f}% ({cov.hit}/{cov.total} branches)")
+        if cov.invalid_declarations:
+            msg = "; ".join(cov.invalid_declarations[:4])
+            log(f"  INCONCLUSIVE: unreachable-branch declaration does not hold: {msg}")
+            return entry(
+                "inconclusive",
+                coverage=cov.coverage,
+                notes=[f"invalid unreachableBranches declaration: {msg}"],
+            )
+        log(
+            f"  branch coverage {cov.coverage:.1f}% ({cov.hit}/{cov.total} reachable "
+            f"branches of {cov.discovered} sites)"
+        )
+        if cov.declared_unreachable:
+            log(
+                f"  {cov.declared_unreachable} branch site(s) declared with one dead "
+                "edge; each site ran and the dead edge was never observed"
+            )
         if cov.coverage < cov_gate:
             gaps = ", ".join(f"{a:#x}" for a in cov.missed[:8])
             log(f"  INCONCLUSIVE: coverage {cov.coverage:.1f}% < gate {cov_gate}%")
@@ -771,6 +823,8 @@ def run_unit(
                         loader=unit.candidate_loader,
                         state_base=unit.state.base if unit.state is not None else None,
                         state_bytes=unit.state.data if unit.state is not None else None,
+                        crate_dir=cand_crate_dir,
+                        cargo_probe=cand_probe,
                     )
                 else:
                     from candidate_c import CCandidate

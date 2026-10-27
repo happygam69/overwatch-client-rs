@@ -6,7 +6,7 @@
 //! extension) rather than through the install, because BC6H's shape is defined
 //! by those documents. What the install contributes is *which* variant is
 //! stored (byte 96 = DXGI 95 = `BC6H_UF16`, unsigned) — see
-//! `docs/formats/rendering.md` § "BC6H" for the measured check.
+//! `docs/formats/materials.md` § "BC6H" for the measured check.
 //!
 //! The decoder is additionally checked against two independent
 //! implementations by `dev/bc6h_oracle.py`; the numbers are in that document,
@@ -591,7 +591,7 @@ fn mode26_block(ninth: u32, blue_base: u32, blue_delta_bit0: u32, partition: u32
 ///
 /// The Khronos extension prints `g3[5]` where Microsoft's field table and its
 /// own delta-width column say `b3[5]`; the cross-decoder check found the
-/// difference (see `docs/formats/rendering.md`). This pins the behaviour the
+/// difference (see `docs/formats/materials.md`). This pins the behaviour the
 /// width table implies — {5,5,6} puts the six-bit deltas in blue — so the typo
 /// cannot come back.
 #[test]

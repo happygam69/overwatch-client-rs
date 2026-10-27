@@ -1,74 +1,62 @@
-# Project docs: read this first
+# Project docs
 
-Clean-room Rust reimplementation of the parts of the Overwatch client that
-matter for gameplay, reconstructed only from your own install and read-only
-memory captures. Nothing from the game ships in this repository.
+A clean-room Rust reimplementation of the Overwatch client's gameplay:
+movement, combat, the view model and the camera. Data comes from the
+operator's install; behaviour comes from the complete current-build
+`Overwatch.exe` Ghidra image. The rule is **1 to 1 or not implemented**.
 
-## Where to start
+## Start here
 
 | If you want to... | Read |
 |---|---|
-| know what the pieces are | [`architecture.md`](architecture.md) |
-| look up a term (STU, RVA, tier 3, ...) | [`glossary.md`](glossary.md) |
-| see every client system and its state | [`systems-coverage.md`](systems-coverage.md) |
+| know the goal and the phases | [`roadmap.md`](roadmap.md) |
+| **know the rebuild order** | **[`rebuild-plan.md`](rebuild-plan.md)** |
+| see every system and its state | [`systems-coverage.md`](systems-coverage.md) |
 | **pick the next thing to work on** | **[`open-questions.md`](open-questions.md)** |
-| know what is fitted, assumed or tier 3 | [`fitted-ledger.md`](fitted-ledger.md) |
 | know how evidence is classified | [`provenance.md`](provenance.md) |
-| work in the decompiler | [`ghidra-project.md`](ghidra-project.md) - the project, its programs, the addresses; [`ghidra/view-model-animation-2026-10-23.md`](ghidra/view-model-animation-2026-10-23.md) - the view-model animation subagent findings |
-| find a file on `D:/ow-dumps` | [`artifacts.md`](artifacts.md) |
-| know what the captures cover | [`capture-coverage.md`](capture-coverage.md) - measured, per system |
-| know which tool answers a question | [`../dev/INDEX.md`](../dev/INDEX.md) |
-| know how a subsystem works today | [`formats/`](formats/) (one file per system) |
-| understand a specific decision's history | [`history/`](history/) |
-| see the current state and next steps | [`../STATUS-handoff.md`](../STATUS-handoff.md) |
+| work in the decompiler | [`ghidra-project.md`](ghidra-project.md) |
+| find a function's current address | [`function-names.csv`](function-names.csv) |
+| know what is not 1 to 1 yet | [`deviations.md`](deviations.md) |
+| know the crates and data flow | [`architecture.md`](architecture.md) |
+| look up a term | [`glossary.md`](glossary.md) |
+| know which tool answers a question | [`tools.md`](tools.md), [`../dev/INDEX.md`](../dev/INDEX.md) |
+| read the findings for a system | [`formats/`](formats/) |
+| see the current state | [`../STATUS-handoff.md`](../STATUS-handoff.md) |
 | see how the project got here | [`../MODLOG.md`](../MODLOG.md) |
 
-Plans and process docs (different scopes, on purpose):
+## Reading orders
 
-| doc | scope |
-|---|---|
-| [`open-questions.md`](open-questions.md) | the work queue: every open question, what would settle it |
-| [`roadmap.md`](roadmap.md) | whole-project rewrite goal and accounting |
-| [`rewrite-plan.md`](rewrite-plan.md) | the movement/combat bit-exact plan |
-| [`history/`](history/) | finished plans and research logs (the systems sweep, the cleanup plan) |
+- **Movement:** `formats/character-controller.md` → `formats/domino.md` →
+  `docs/open-questions.md` (the ramp is open).
+- **Combat:** `formats/weapons.md` → `docs/open-questions.md` (fire/damage is
+  open).
+- **Camera:** `formats/camera.md` → `formats/animation.md` (first-person) →
+  `crates/ow-client/src/main.rs`.
+- **Map/client:** `formats/maps.md` -> `formats/materials.md` ->
+  `crates/ow-scene/src/lib.rs` -> `crates/ow-client/src/main.rs`.
+- **View model:** `formats/animation.md` → `crates/ow-tank/src/blendtree.rs`.
+- **Data:** `formats/casc.md` → `formats/stu.md` → `formats/materials.md`.
 
-Reading orders by task:
+## Conventions
 
-- **Animation / view model**: `architecture.md` -> `formats/animation.md`
-  (current section) -> `fitted-ledger.md` -> `history/animation.md` ->
-  `ghidra/view-model-animation-2026-10-23.md` (raw subagent findings).
-- **Movement / combat**: `formats/character-controller.md`,
-  `formats/domino.md`, `formats/weapons.md` -> `ow-sim` tests.
-- **Camera**: `formats/camera.md` -> `formats/input-camera-audio.md` ->
-  `formats/animation.md` (first-person section) -> the camera ledger rows.
-- **Data formats**: `formats/casc.md`, `formats/stu.md`, `formats/mstu.md`,
-  `formats/materials.md`.
-
-## Conventions used everywhere
-
-- **Evidence classes** (`provenance.md`): *read* (a decompiled path or data
-  value with a recorded address), *measured* (numbers from a trace or an
-  oracle), *install* (a value read from the shipped files), *fitted* /
-  *assumed* / *stand-in* (chosen, not read). A fitted value is always in
-  `fitted-ledger.md`.
-- **Tier 3**: a client stage declared unrecoverable (`rewrite-plan.md`);
-  the simulation uses a measured replacement and says so.
-- **Addresses**: every address names its image and its conversion. `v2b` is
-  the standing image space; a session address is
-  `v2b + (session base - 0x7ff7c4d20000)`; an address in the complete offline
-  image is `0x140000000 + (v2b - 0x7ff7c4d20000)`. See `architecture.md`.
+- **Evidence classes** (`provenance.md`): *read* (a decompiled path or a data
+  value with a recorded address in `Overwatch.exe`), *install* (a value read
+  from the shipped files), *verified* (a Rust implementation proven identical
+  to the client), *open* (not read; no implementation).
+- **Addresses** are current-image addresses: `0x140000000 + RVA`, or a
+  function name from `function-names.csv`. There are no other address frames.
+- **A deviation** is legacy code that is not yet 1 to 1. It is listed in
+  `deviations.md`, carries a `FIT-*` marker, and is removed when replaced.
 - **Not tested** is written down where it is true.
 
 ## Quick start
 
 ```text
-cargo build --release                      # everything
-cargo test --release -p ow-casc -p ow-tank # data layer
-cargo test -p ow-view                      # viewer / harness
-cargo run --release -p ow-view -- --play --hero 3 --anim auto
+cargo build --release
+cargo test --release -p ow-casc -p ow-stu -p ow-tank -p ow-scene
+cargo xtask verify
+cargo run --release -p ow-client          # the practice range
 ```
 
 The install is detected automatically (`OW_INSTALL` can point at the folder
-containing `.build.info`). Captures and decompiled artifacts live outside
-the repository (`D:/ow-dumps`, `E:/ow-dumps`) and are indexed in
-[`artifacts.md`](artifacts.md).
+containing `.build.info`).

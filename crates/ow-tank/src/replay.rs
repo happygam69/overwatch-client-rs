@@ -2,7 +2,7 @@
 //!
 //! This is **not** our simulation trace replay. Nothing here re-runs our own
 //! model; this is the container the game writes when it records a highlight, so
-//! it is a recording of the *real* client. See `docs/formats/trace.md` for the
+//! it is a recording of the *real* client. See `docs/formats/replay.md` for the
 //! other thing, which is unrelated and easy to confuse on a grep.
 //!
 //! ## Where the files are, and the asset-type answer

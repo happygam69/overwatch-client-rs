@@ -45,6 +45,13 @@ class CoverageResult:
     total: int
     missed: List[int] = field(default_factory=list)
     discovered: int = 0
+    # Branch sites a unit declared unreachable, after the validation below
+    # accepted them. They are reported, never silently dropped.
+    declared_unreachable: int = 0
+    # Declarations that did not hold (site absent, both edges seen, dead edge
+    # observed, or no rationale). Any entry here fails the unit: a declaration
+    # must describe a fact, not assert one.
+    invalid_declarations: List[str] = field(default_factory=list)
 
 
 def _sweep_branches(md: Cs, code: bytes, base: int) -> Set[int]:
@@ -158,19 +165,62 @@ class BranchTracker:
         first instruction would be misattributed as that branch's edge."""
         self._prev = None
 
-    def result(self) -> CoverageResult:
+    def result(
+        self,
+        unreachable: Optional[Sequence[Tuple[int, int, str]]] = None,
+    ) -> CoverageResult:
+        """Both-edge coverage, with a unit's declared dead edges validated.
+
+        A declaration names a branch site and the edge that cannot execute
+        from the function's entry, plus the reason. It is accepted only when
+        the site is a discovered conditional branch, it WAS executed (so the
+        exclusion cannot hide a branch nobody reached), exactly one edge was
+        observed, and that edge is not the one declared dead. Anything else
+        lands in ``invalid_declarations`` and the runner fails the unit.
+        """
+        declared: Set[int] = set()
+        invalid: List[str] = []
+        for site, dead_edge, why in unreachable or ():
+            if site not in self.conds:
+                invalid.append(f"{site:#x} is not a conditional branch in the sweep")
+                continue
+            seen = self.edges.get(site, set())
+            if dead_edge in seen:
+                invalid.append(
+                    f"{site:#x}: declared dead edge {dead_edge:#x} was observed"
+                )
+                continue
+            if len(seen) != 1:
+                invalid.append(
+                    f"{site:#x}: declared unreachable needs exactly one observed "
+                    f"edge (site executed with the other edge dead), saw {len(seen)}"
+                )
+                continue
+            if not why.strip():
+                invalid.append(f"{site:#x}: no rationale for the dead edge")
+                continue
+            declared.add(site)
+
         hit = 0
         missed: List[int] = []
         for cond in sorted(self.conds):
+            if cond in declared:
+                continue
             seen = self.edges.get(cond, set())
             if len(seen) >= 2:
                 hit += 1
             else:
                 missed.append(cond)
-        total = len(self.conds)
+        total = len(self.conds) - len(declared)
         cov = (100.0 * hit / total) if total else 100.0
         return CoverageResult(
-            coverage=cov, hit=hit, total=total, missed=missed, discovered=total
+            coverage=cov,
+            hit=hit,
+            total=total,
+            missed=missed,
+            discovered=len(self.conds),
+            declared_unreachable=len(declared),
+            invalid_declarations=invalid,
         )
 
     def close(self) -> None:

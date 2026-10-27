@@ -579,11 +579,25 @@ fn real_content_surface_census_and_invariants() {
          fields on them: {loot_settings_fields}",
         unlocks::class::GENERIC_SETTINGS_LOOT_BOXES
     );
-    assert_eq!(
-        loot_settings_instances,
-        rules.len(),
-        "a STUGenericSettings_LootBoxes instance exists but no table was read from it"
-    );
+    // Every instance that exists must yield at least one table. The counts are
+    // not equal: one settings instance holds a run of inline `STULootBoxRules`
+    // elements, so the comparison is "the reader reached it", not "one table
+    // per instance". (While bundle-hosted settings assets were unreadable this
+    // assertion only ever ran with both sides zero.)
+    if loot_settings_instances > 0 {
+        assert!(
+            !rules.is_empty(),
+            "a STUGenericSettings_LootBoxes instance exists but no table was read from it"
+        );
+        assert!(
+            rules.iter().all(|r| data.registry().get(r.asset).is_some()),
+            "a loot-box table came from an asset that is not in the manifest"
+        );
+        assert!(
+            loot_settings_fields >= loot_settings_instances,
+            "a STUGenericSettings_LootBoxes instance carries no fields"
+        );
+    }
 
     // -----------------------------------------------------------------------
     // Cross-check the raw reader against the typed layer, where a checkout is

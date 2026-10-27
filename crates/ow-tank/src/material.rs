@@ -95,7 +95,7 @@ pub fn materials_of_look(data: &GameData, look: u64) -> Result<Vec<LookMaterial>
 
 /// The texture GUIDs a material names, from its material data.
 pub fn textures_of_material(data: &GameData, material: u64) -> Result<Vec<u64>, crate::Error> {
-    let bytes = data.bytes_of(material)?;
+    let bytes = data.open_asset(material)?;
     if bytes.len() < 32 {
         return Ok(Vec::new());
     }
@@ -106,7 +106,7 @@ pub fn textures_of_material(data: &GameData, material: u64) -> Result<Vec<u64>, 
     if data_ref == 0 || guid::type_of(data_ref) != MATERIAL_DATA_TYPE {
         return Ok(Vec::new());
     }
-    let md = data.bytes_of(data_ref)?;
+    let md = data.open_asset(data_ref)?;
     Ok(textures_of_material_data(&md))
 }
 
@@ -170,7 +170,7 @@ pub fn textures_with_format(
         .into_iter()
         .map(|g| {
             let format = data
-                .bytes_of(g)
+                .open_asset(g)
                 .ok()
                 .and_then(|b| b.get(3).copied())
                 .unwrap_or(0);

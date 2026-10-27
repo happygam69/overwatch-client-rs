@@ -167,7 +167,7 @@ fn real_mesh_a_posed_bone_moves_only_its_own_vertices() {
                 continue;
             }
             let slot = v.joints[k] as usize;
-            if slot >= bind.len() {
+            if slot == 0 || slot >= bind.len() {
                 continue;
             }
             if slot - 1 == bone {

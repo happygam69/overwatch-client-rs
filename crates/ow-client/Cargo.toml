@@ -1,0 +1,25 @@
+lints.workspace = true
+[package]
+name = "ow-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The single launchable client: the install's map and models, ready for exact gameplay"
+
+[dependencies]
+ow-tank.workspace = true
+ow-scene.workspace = true
+ow-casc.workspace = true
+ow-stu.workspace = true
+wgpu = "22"
+winit = "0.30"
+pollster = "0.4"
+bytemuck.workspace = true
+glam.workspace = true
+flate2 = "1"
+
+[[bin]]
+name = "ow-client"
+path = "src/main.rs"

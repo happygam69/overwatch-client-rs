@@ -261,37 +261,9 @@ fn u24_be(data: &[u8], at: usize) -> Result<u32> {
 /// A wrong variant still produces bytes; it just produces the wrong bytes, and
 /// the only symptom is a chunk whose mode byte is not `N` or `Z`.
 pub fn salsa20(key: &[u8; 16], nonce: &[u8; 8], data: &[u8]) -> Vec<u8> {
-    // 16-byte key: the `expand 16-byte k` constants, key occupying both halves.
-    const TAU: &[u8; 16] = b"expand 16-byte k";
-    let key_lo = key;
-    let key_hi = key;
-
-    let word = |b: &[u8], i: usize| {
-        u32::from_le_bytes([b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]])
-    };
-    let constants: &[u8] = TAU;
-
     let mut out = Vec::with_capacity(data.len() + 64);
     for (block_index, block) in data.chunks(64).enumerate() {
-        let counter = block_index as u64;
-
-        let mut state = [0u32; 16];
-        state[0] = word(constants, 0);
-        state[1] = word(key_lo, 0);
-        state[2] = word(key_lo, 1);
-        state[3] = word(key_lo, 2);
-        state[4] = word(key_lo, 3);
-        state[5] = word(constants, 1);
-        state[6] = word(nonce, 0);
-        state[7] = word(nonce, 1);
-        state[8] = counter as u32;
-        state[9] = (counter >> 32) as u32;
-        state[10] = word(constants, 2);
-        state[11] = word(key_hi, 0);
-        state[12] = word(key_hi, 1);
-        state[13] = word(key_hi, 2);
-        state[14] = word(key_hi, 3);
-        state[15] = word(constants, 3);
+        let state = salsa20_core_state(key, nonce, block_index as u64);
 
         let mut x = state;
         // 20 rounds: ten column/row double rounds.
@@ -314,6 +286,56 @@ pub fn salsa20(key: &[u8; 16], nonce: &[u8; 8], data: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// `Salsa20StateInit` (`Overwatch.exe` `0x1424e3230`).
+///
+/// Fills the 64-byte state from a 16-byte key, an 8-byte nonce and a 64-bit
+/// block counter. The client stores the sixteen words in its diagonal order,
+/// which is not the order the quarter rounds index: words 0..3 are the four
+/// `expand 16-byte k` constants, the key words sit at 5, 4, 9 and 12, the
+/// nonce at 6 and 11, and the counter at 8 (low) and 13 (high).
+///
+/// `salsa20_core_state` maps this stored form onto the order the cipher below
+/// uses; the BLTE path calls both for every 64-byte block, so the layout this
+/// function writes is the layout the decryption consumes.
+pub fn salsa20_state_init(key: &[u8; 16], nonce: &[u8; 8], counter: u64) -> [u32; 16] {
+    const TAU: &[u8; 16] = b"expand 16-byte k";
+    let word = |b: &[u8], i: usize| {
+        u32::from_le_bytes([b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]])
+    };
+    let mut state = [0u32; 16];
+    state[0] = word(TAU, 0);
+    state[1] = word(TAU, 1);
+    state[2] = word(TAU, 2);
+    state[3] = word(TAU, 3);
+    state[4] = word(key, 1);
+    state[5] = word(key, 0);
+    state[6] = word(nonce, 0);
+    state[7] = word(key, 0);
+    state[8] = counter as u32;
+    state[9] = word(key, 2);
+    state[10] = word(key, 1);
+    state[11] = word(nonce, 1);
+    state[12] = word(key, 3);
+    state[13] = (counter >> 32) as u32;
+    state[14] = word(key, 3);
+    state[15] = word(key, 2);
+    state
+}
+
+/// The state `salsa20_state_init` writes, in the word order the quarter
+/// rounds index.
+///
+/// The client's block loops read the stored diagonal order directly; the
+/// single mapping here is that same permutation, so both spellings describe
+/// one state.
+fn salsa20_core_state(key: &[u8; 16], nonce: &[u8; 8], counter: u64) -> [u32; 16] {
+    let s = salsa20_state_init(key, nonce, counter);
+    [
+        s[0], s[5], s[10], s[15], s[12], s[1], s[6], s[11], s[8], s[13], s[2], s[7], s[4], s[9],
+        s[14], s[3],
+    ]
 }
 
 #[inline]
@@ -363,6 +385,46 @@ mod tests {
              57107cd186f82f50e4fbe28881df243bb6f61c0716ca613bebbe319339c637c7\
              5c81b569d1b11156314bf040649b9ca133f8a4abc4704248def7d7ac23c27fe7\
              204577e0fa45b754944b68bfc2727e4ca88c7a26a4a82f62385b66239d1b907b"
+        );
+    }
+
+    /// `Salsa20StateInit` (`0x1424e3230`) under the emulator for key
+    /// `01..10`, nonce `10..17` and counter 0: the exact 64 bytes it stores.
+    /// This pins the client's diagonal order as its own value, independent of
+    /// the ciphertext vector above.
+    #[test]
+    fn state_init_matches_the_client_state_vector() {
+        let key: [u8; 16] = core::array::from_fn(|i| (i + 1) as u8);
+        let nonce = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17];
+        let state = salsa20_state_init(&key, &nonce, 0);
+        let got: String = state
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            got,
+            "657870616e642031362d62797465206b05060708010203041011121301020304\
+             00000000090a0b0c05060708141516170d0e0f10000000000d0e0f10090a0b0c"
+        );
+    }
+
+    /// The 64-bit counter is split little-endian across words 8 (low) and 13
+    /// (high); both halves and the key words around them stay distinct.
+    #[test]
+    fn state_init_splits_the_counter_at_words_eight_and_thirteen() {
+        let key: [u8; 16] = core::array::from_fn(|i| (i + 20) as u8);
+        let nonce = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7];
+        let state = salsa20_state_init(&key, &nonce, 0x1122_3344_5566_7788);
+        assert_eq!(state[8], 0x5566_7788);
+        assert_eq!(state[13], 0x1122_3344);
+        assert_eq!(
+            state[9],
+            u32::from_le_bytes([key[8], key[9], key[10], key[11]])
+        );
+        assert_eq!(
+            state[10],
+            u32::from_le_bytes([key[4], key[5], key[6], key[7]])
         );
     }
 

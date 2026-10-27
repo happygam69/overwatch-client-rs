@@ -1,0 +1,47 @@
+{
+  "id": "fn/DynamicIndexKeyHash",
+  "title": "tier-2 shipped code: dynamic index page-key hash against the client's DynamicIndexKeyHash",
+  "address": {
+    "v2b": "0x7ff7c7233230"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "dynamic_index_key_hash",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    { "name": "key", "kind": "ptr", "ptr_len": 96 },
+    { "name": "len", "kind": "u64" },
+    { "name": "init", "kind": "u64" }
+  ],
+  "returns": "u64",
+  "argFactory": "dynamic_index_key_hash_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 24,
+    "mutationKillRate": 1.0,
+    "seed": 4244,
+    "allowedImageReads": [
+      "0x7ff7c7233718-0x7ff7c72337b3"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/index.rs, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the dynamic_index_key_hash entry. The ledger binds the verdict to index.rs + the probe source + the git revision.",
+    "Oracle is DynamicIndexKeyHash at exe 0x142513230. Signature: (const void *key, size_t len, uint32 initval), returning uint32 in EAX. The entry reads RCX = key, RDX = len, R8D = initval, seeds a = b = c = 0xdeadbeef + (uint32)len + initval, and returns c. The client reads initval through R8D, so the upper 32 bits are ignored.",
+    "The body is Bob Jenkins' lookup3 hashlittle: twelve-byte groups are mixed, the 1..=12 byte tail is added, then the final mix returns c. A zero-length key is the client's case 0 and returns c before the final mix (0xdeadbeef + init). The shipped ow_casc::index::key_hash implements that contract; its unit tests pin the client's outputs for empty, every tail length, the block loop and the 19-byte page-key shape.",
+    "DynamicIndexSegmentParse (0x14250fcf0) calls it once per 24-byte page record as key_hash(record+4, 0x13, 0) and accepts the record when (hash | 0x80000000) equals the record's first dword. All sixteen install .idx files have a zero-filled page table, so no stored page-record hash exists to test against; the unit verifies the function on the client's own outputs, not on a record the client accepted.",
+    "The client selects one of three load paths from the key pointer's low two bits: dword loads when key & 3 == 0, word loads when key & 3 == 2, byte loads when key & 1 != 0. All three assemble the same twelve bytes. The fixture pins the arena offset to 0, 1, 2 and 3 so every path executes; each path must return the same word as the shipped byte-wise implementation.",
+    "Coverage: the sweep finds eight conditional branch sites (the two path selects, both CMP/JBE length tests in each path, and the loop back edge in each path). Every site reaches both edges: key & 3 values 0/1/2 select all three paths, lengths 12 and 13 cross each length test, and lengths 13 and 25 cross each loop back edge. There are no compiler-dead edges to declare.",
+    "allowedImageReads: 0x7ff7c7233718-0x7ff7c72337b3 is the three 13-entry read-only dispatch tables the tail switch indexes (exe 0x142513718-0x1425137b3). They are compiler dispatch data, not game globals. The function has no callees and writes nothing.",
+    "Pinned inputs: 19 zero bytes (the real page-key shape), two real 19-byte spans of the 0300000159.idx entry block, empty input, every tail length 1..12, and lengths 13/24/25 that run the twelve-byte loop. Later cases sweep every length 0..64 at all four alignments with init 0, 1, 0xffffffff, 0xdeadbeef and 0x1_0000_0001.",
+    "Not tested: no page record in this install carries a nonzero stored hash, so the page-table integration is not exercised. The 24 scored mutants are all in index.rs's key_hash body; the mutation stage reports the kill rate."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "No stored page-record hash exists in the install",
+      "why": "Every .idx page table is zero-filled, so DynamicIndexSegmentParse never reaches its per-record compare on this install. key_hash itself is fully covered by the client's bytes for every length, alignment and init shape; what is missing is a real 24-byte page record whose hash the client accepted, not a behaviour of the function. A future install or a fetched CDN index with a populated page table would supply that vector."
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "id": "fn/Salsa20Xor",
+  "title": "tier-2 shipped code: BLTE Salsa20 keystream XOR against the client's Salsa20Xor",
+  "address": {
+    "v2b": "0x7ff7c72032c0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "salsa20_xor",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    { "name": "state", "kind": "ptr", "ptr_len": 64 },
+    { "name": "data", "kind": "ptr", "ptr_len": 4096 },
+    { "name": "len", "kind": "u64" }
+  ],
+  "returns": "void",
+  "argFactory": "salsa20_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "allowedImageReads": [
+      "0x7ff7c87e5f40",
+      "0x7ff7c87e5f98",
+      "0x7ff7c7faad90",
+      "0x7ff7c7faad98",
+      "0x7ff7c7fac3a0",
+      "0x7ff7c7fac3a8",
+      "0x7ff7c803c010",
+      "0x7ff7c803c018",
+      "0x7ff7c803d0f0",
+      "0x7ff7c803d0f8",
+      "0x7ff7c81932f0",
+      "0x7ff7c81932f8",
+      "0x7ff7c8193300",
+      "0x7ff7c8193308",
+      "0x7ff7c8193310",
+      "0x7ff7c8193318",
+      "0x7ff7c8193330",
+      "0x7ff7c8193338",
+      "0x7ff7c8193340",
+      "0x7ff7c8193348",
+      "0x7ff7c8193350",
+      "0x7ff7c8193358",
+      "0x7ff7c8339480-0x7ff7c833951f"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/blte.rs, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the salsa20_xor entry. The ledger binds the verdict to blte.rs + the probe source + the git revision.",
+    "The shipped salsa20 now builds every block's state through the client-layout salsa20_state_init (its own unit is fn/Salsa20StateInit) and maps it to the quarter-round word order with one fixed permutation; the ciphertext vectors below are unchanged by that refactor.",
+    "Oracle is Salsa20Xor at exe 0x1424e32c0. The client signature is (uint32 state[16], void *data, uint32 len): the state is 64 bytes, the buffer is XORed in place, and the counter in the state advances.",
+    "Salsa20StateInit at 0x1424e3230 builds the state from a 16-byte key, an 8-byte nonce and a 64-bit counter. The state is stored in diagonal order: words 0..3 are the four 'expand 16-byte k' constants, the key words are at 5, 4, 9, 12, the nonce words at 6, 11, and the counter at 8 (low) / 13 (high). The fixture builds that state and the pinned state vector is asserted in salsa20_fixture.py.",
+    "Salsa20Xor dispatches to Salsa20XorBlocks256 (0x1424e3370) for lengths >= 0x100 and Salsa20XorBlocks64 (0x1424e3e20) for the remaining >= 0x40 bytes, then runs a partial tail through a full 64-byte block in a stack copy. The state counter therefore advances by ceil(len/64); the state channel compares that increment for every case.",
+    "The probe discards `counter` whole blocks from ow_casc::blte::salsa20's own keystream, because the shipped function always starts at block 0. The fixture uses counters 0..3; a counter whose high word would carry is not exercised (the candidate API cannot start there), so that carry is not tested.",
+    "allowedImageReads: 0x7ff7c87e5f40 is the __security_check_cookie cookie and 0x7ff7c87e5f98 is the CRT's memcpy feature flag. 0x7ff7c8339480-0x7ff7c833951f covers memcpy's internal jump tables, which the partial-tail copy consults (the copy itself only moves bytes). The remaining addresses are 8-byte compiler literal-pool constants read by the block loops (exe 0x14328ad90/98, 0x14328c3a0/3a8, 0x14331c010/018, 0x14331d0f0/0f8, 0x1434732f0..0x143473358). They are constants and CRT dispatch data, not game globals.",
+    "Coverage gate is 100% because Salsa20Xor itself has exactly three conditional branches (len >= 0x100, remaining >= 0x40, remaining != 0) and the corpus pins both edges of each."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "The 64-bit counter's high word carry",
+      "why": "Exercise would need a starting block near 2^32; ow_casc::blte::salsa20 always starts at block 0 and has no seek entry point. Counters 0..3 verify the low word and the state layout; the carry path is not tested."
+    }
+  ],
+  "knownEquivalentMutants": [
+    {
+      "kind": "boundary +1",
+      "line": 264,
+      "rationale": "Line 264 is `Vec::with_capacity(data.len() + 64)`. Raising the constant to 65 changes only the allocation hint; the function pushes exactly one byte per input byte and never reads capacity, so the returned ciphertext is identical for every input. What would observe a difference: an allocator-failure or capacity-overflow test, neither of which is part of this unit's contract."
+    },
+    {
+      "kind": "boundary -1",
+      "line": 264,
+      "rationale": "Lowering the capacity constant to 63 leaves the capacity at data.len() + 63, still at or above the final length, so `Vec` may grow once but the content and order are unchanged. The differential compares bytes, not allocation counts. What would observe a difference: a test that instruments allocations, which this harness does not do."
+    },
+    {
+      "kind": "mask widen",
+      "line": 285,
+      "rationale": "Line 285 is `out.push(byte ^ (keystream & 0xFF) as u8)`. Widening the mask to 0x1FF cannot change the pushed byte: the `as u8` cast keeps only the low eight bits, which both masks pass through identically. What would observe a difference: a consumer of the pre-cast u32 keystream, which this function does not have - it XORs bytes and pushes bytes."
+    }
+  ]
+}

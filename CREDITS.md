@@ -93,23 +93,20 @@ Cheat-oriented material on the game executable was not consulted at all.
 
 ## Tools used
 
-* **Ghidra** and the Ghidra MCP bridge - used against your own
-  read-only memory captures of the running client. No disassembly or
-  decompilation is committed; only addresses and behavioural conclusions are
-  written down, as coordinates so the reading can be re-derived from the same
-  capture.
-* **`dev/live_page_diff.py` and `dev/warm_poll.py`** - read-only live capture
-  tools. They open the client with `OpenProcess(VM_READ | VM_QUERY)` and use
-  `ReadProcessMemory` only; captures stay outside the repository.
+* **Ghidra** and the Ghidra MCP bridge - used against the complete
+  `Overwatch.exe` image of the current build. No disassembly or decompilation
+  is committed; only addresses and behavioural conclusions are written down,
+  as coordinates so the reading can be re-derived from the same image.
+* **`dev/verify_harness/`** - the differential harness that proves a
+  reconstruction equals the client's own bytes under emulation. Its oracle is
+  the image; it writes nothing to the game.
 * **overtools/TACTLib** - read as source, and read from at runtime for the
   per-build key material described above. `TankLib/teMaterial`,
   `teStructuredDataAssetRef` and `teResourceGUID` established the material
   asset's four-GUID header and the STU reference deobfuscation used to verify
   the material chain's readable hops.
-* **REA** (Reverse Engineering Agents, with its Ghidra provider) - an optional
-  second bridge over the same captures, used where its artifact digest and
-  confidence class help. Its read-only, ephemeral-import model matches this
-  project's rule that nothing from the client is written down as code.
+* **OWLib/TankLib** - the generated class/field names used by the typed layer.
+  Names only; no code is copied.
 
 ## Community data
 

@@ -1,0 +1,64 @@
+{
+  "id": "fn/DynamicIndexHash",
+  "title": "tier-2 shipped code: dynamic index hash against the client's DynamicIndexHash",
+  "address": {
+    "v2b": "0x7ff7c7232c60"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "dynamic_index_hash",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    { "name": "data", "kind": "ptr", "ptr_len": 96 },
+    { "name": "len", "kind": "u64" },
+    { "name": "state0", "kind": "ptr", "ptr_len": 4 },
+    { "name": "state1", "kind": "ptr", "ptr_len": 4 }
+  ],
+  "returns": "void",
+  "argFactory": "dynamic_index_hash_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 1.0,
+    "seed": 4243,
+    "allowedImageReads": [
+      "0x7ff7c723318c-0x7ff7c7233227"
+    ],
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c7232d52",
+        "edge": "0x7ff7c7233118",
+        "why": "16-bit-aligned path. The post-loop check is `remaining > 12`, but the loop computes `remaining = (len - 1) % 12 + 1`, which is in 1..=12 for every len, so the jump edge can never be taken. The site executes on every len > 12 case and only its fall-through edge is ever observed."
+      },
+      {
+        "site": "0x7ff7c7232ee8",
+        "edge": "0x7ff7c7233118",
+        "why": "Two-byte-aligned path. Same dead post-loop `remaining > 12` check; `remaining` is 1..=12 by the same loop arithmetic, so only the fall-through edge is reachable. The site executes on every len > 12 case."
+      },
+      {
+        "site": "0x7ff7c7233099",
+        "edge": "0x7ff7c7233118",
+        "why": "Odd-pointer (byte-wise) path. Same dead post-loop `remaining > 12` check with the remainder in 1..=12. The site executes on every len > 12 case and only its fall-through edge is observed."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/index.rs, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the dynamic_index_hash entry. The ledger binds the verdict to index.rs + the probe source + the git revision.",
+    "Oracle is DynamicIndexHash at exe 0x142512c60. Signature: (const uint8 *data, size_t len, uint32 *state0, uint32 *state1); the two state words are in/out and the function returns nothing. The same function checks the index file header hash and the rolling hash over the 18-byte entry block.",
+    "The shipped implementation is ow_casc::index::hash_index, made public so the probe calls the real function; parse_bucket_file hashes the file header and every entry through it. Its unit tests pin the 0300000159.idx file header (0xc52f303d) and the first two entry rolling states, and all sixteen .idx files of the reference install agree.",
+    "The client has three loop paths chosen by the data pointer's low two bits (16-bit aligned, odd, otherwise 16-bit). The fixture pins the arena offset so all three paths run; the three paths produce the same state, which is itself part of the contract.",
+    "Coverage: the sweep finds 11 conditional branch sites. Eight reach both edges. Three are the compiler's post-loop `remaining > 12` checks in the three paths; the remaining length is always 1..=12, so each has one statically dead edge. Those three sites are declared under unreachableBranches and each declaration is validated (site in the sweep, site executed, exactly one edge observed, the declared edge never observed) before it leaves the denominator. Coverage is therefore 100% of the 8 reachable sites, with the dead edges named rather than hidden.",
+    "allowedImageReads: 0x7ff7c723318c-0x7ff7c7233227 is the read-only dispatch-table block the three loop paths index for their tail handling (exe 0x14251318c-0x142513227); it is compiler dispatch data, not a game global. The function has no callees.",
+    "Pinned cases: the real 0300000159.idx 16-byte header with state (0,0), its two 18-byte entries (the second with the rolling state left by the first), and empty input. Later cases sweep every tail length 0..12 at each alignment plus lengths that run the 12-byte block loop.",
+    "Not tested: nothing in the function's contract is left unexercised. The three dead edges above cannot execute from the entry and are declared, not tested."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "The three post-loop `remaining > 12` jump edges",
+      "why": "They are compiler-emitted checks that the loop's own remainder makes unreachable: `remaining = (len - 1) % 12 + 1` is 1..=12 for every len. The harness validates that each site executed and that the jump edge was never observed, then excludes exactly those three sites. No behaviour of the function depends on the dead edges."
+    }
+  ]
+}

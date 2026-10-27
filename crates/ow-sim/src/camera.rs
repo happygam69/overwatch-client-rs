@@ -1,12 +1,10 @@
 //! Camera-basis arithmetic read from the client.
 //!
-//! This module holds the *shipped* implementation used by the view path, not
-//! a harness copy. The harness probe (`src/bin/verify_probe.rs`) imports these
-//! functions directly, so a `cargo` tier-2 unit verifies the code the viewer
-//! actually links.
+//! This module holds the implementation the harness verifies, not a copy. The
+//! probe (`src/bin/verify_probe.rs`) imports these functions directly.
 //!
-//! `orthonormalize_camera_basis` is the leaf at exe `0x142069c60` (v2b
-//! `0x7ff7c6d89c60`), read from the complete current-build image. It reads two
+//! `orthonormalize_camera_basis` is the leaf at `0x142069c60`, read from the
+//! complete current-build image. It reads two
 //! float4 basis rows and rebuilds row 1 when the pair is off unit length or
 //! non-orthogonal. The operation order below is the image's, not a tidied
 //! equivalent: the harness compares bit patterns.

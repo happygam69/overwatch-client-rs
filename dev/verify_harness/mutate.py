@@ -85,16 +85,28 @@ def generate_mutants(
     lines = source.splitlines(keepends=True)
     # Find the entry function body. Ghidra C style: the signature line has
     # the name and parens but no brace; the brace is on its own line after
-    # it. Rust style: `fn name(...) {` on one line. Skip comment lines so a
+    # it. Rust style: `fn name(...)` on one line. Skip comment lines so a
     # doc comment mentioning the name is not mistaken for the definition.
+    # Prefer an actual Rust definition: a call site earlier in the file (for
+    # example `be_u32`'s caller invoking `salsa20(...)`) is not the function
+    # the mutation stage must edit.
     sig = -1
+    def_re = re.compile(r"\bfn\s+" + re.escape(entry) + r"\s*\(")
     for i, ln in enumerate(lines):
         stripped = ln.strip()
         if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
             continue
-        if entry in ln and "(" in ln:
+        if def_re.search(ln):
             sig = i
             break
+    if sig < 0:
+        for i, ln in enumerate(lines):
+            stripped = ln.strip()
+            if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
+                continue
+            if entry in ln and "(" in ln:
+                sig = i
+                break
     if sig < 0:
         return []
     start = sig

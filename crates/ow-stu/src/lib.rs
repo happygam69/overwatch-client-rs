@@ -599,6 +599,27 @@ impl Stu {
         Some(deobfuscate(self.header_checksum, field_hash, stored))
     }
 
+    /// Read an asset reference from an in-place payload (v2 array element or
+    /// inline instance) and undo its obfuscation.
+    ///
+    /// `start` and `bag` are the pair [`Self::layout_at`] takes; the field's
+    /// own declared width is used, as in [`Self::read_asset_ref`].
+    pub fn read_asset_ref_at(&self, start: usize, bag: i32, field_hash: u32) -> Option<u64> {
+        let stored = self.read_u64_at(start, bag, field_hash)?;
+        Some(deobfuscate(self.header_checksum, field_hash, stored))
+    }
+
+    /// Read a raw `u64` field from an in-place payload (v2 array element or
+    /// inline instance), without de-obfuscation.
+    pub fn read_u64_at(&self, start: usize, bag: i32, field_hash: u32) -> Option<u64> {
+        let field = self
+            .layout_at(start, bag)
+            .into_iter()
+            .find(|f| f.hash == field_hash)?;
+        let at = start.checked_add(field.offset)?;
+        rd_u64(&self.blob, at).ok()
+    }
+
     /// The instance's raw record payload, as the file carries it (reference
     /// fields still obfuscated). For probes and namer passes.
     pub fn read_raw_record(&self, instance: usize) -> Vec<u8> {

@@ -1,6 +1,7 @@
 """Run verification units. Exit code is the gate.
 
     python dev/verify_harness/cli.py fn/AnimTimeWrap
+    python dev/verify_harness/cli.py casc        # only the CASC units
     python dev/verify_harness/cli.py all
     python dev/verify_harness/cli.py selftest
     python dev/verify_harness/cli.py list
@@ -9,6 +10,7 @@
 from __future__ import annotations
 
 import glob
+import json
 import os
 import sys
 
@@ -21,6 +23,18 @@ UNITS_DIR = os.path.join(os.path.dirname(__file__), "units")
 
 def unit_paths():
     return sorted(glob.glob(os.path.join(UNITS_DIR, "*.json")))
+
+
+def raw_descriptor(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def is_casc(raw) -> bool:
+    """A unit is part of the CASC suite when its descriptor says so, or when
+    its shipped candidate is built from `ow-casc`. Both are descriptor
+    fields; the id is never parsed to decide a suite."""
+    return raw.get("suite") == "casc" or raw.get("candidateCrate") == "ow-casc"
 
 
 def main(argv):
@@ -46,14 +60,21 @@ def main(argv):
     if cmd == "all":
         paths = []
         for p in unit_paths():
-            import json as _json
-
-            with open(p, "r", encoding="utf-8") as f:
-                raw = _json.load(f)
+            raw = raw_descriptor(p)
             if raw.get("scaffold"):
                 print(f"  SKIP (scaffold)  {raw.get('id', os.path.basename(p))}")
                 continue
             paths.append(p)
+    elif cmd == "casc":
+        paths = []
+        for p in unit_paths():
+            raw = raw_descriptor(p)
+            if raw.get("scaffold") or not is_casc(raw):
+                continue
+            paths.append(p)
+        if not paths:
+            print("no CASC units declared (suite: casc / candidateCrate: ow-casc)")
+            return 2
     else:
         # Accept an id or a path.
         p = cmd if os.path.exists(cmd) else os.path.join(UNITS_DIR, cmd + ".json")
@@ -67,22 +88,34 @@ def main(argv):
                 return 2
         paths = [p]
 
-    statuses = []
+    results = []
     for p in paths:
         unit = load_unit(p)
         e = run_and_record(unit)
-        statuses.append((unit.id, e.status))
+        results.append((unit.id, e))
         print(f"  => {unit.id}: {e.status}")
-        for n in e.notes:
-            print(f"     note: {n}")
+        # `all` keeps every note; a suite run prints them only for a failure,
+        # where the note is the diagnosis rather than background.
+        if cmd != "casc" or e.status != "verified":
+            for n in e.notes:
+                print(f"     note: {n}")
 
     print()
     ok = True
-    for uid, st in statuses:
-        mark = "PASS" if st == "verified" else "FAIL"
-        if st != "verified":
+    for uid, e in results:
+        if e.status != "verified":
             ok = False
-        print(f"  {mark}  {uid}  {st}")
+        if cmd == "casc":
+            mark = "PASS" if e.status == "verified" else "FAIL"
+            cov = "-" if e.coverage is None else f"{e.coverage:.1f}%"
+            mut = "-" if e.mutants_total == 0 else f"{e.mutants_killed}/{e.mutants_total}"
+            print(f"  {mark}  {uid}  {e.status}  coverage {cov}  mutants {mut}")
+        else:
+            mark = "PASS" if e.status == "verified" else "FAIL"
+            print(f"  {mark}  {uid}  {e.status}")
+    if cmd == "casc":
+        n_ok = sum(1 for _, e in results if e.status == "verified")
+        print(f"  casc: {n_ok}/{len(results)} verified")
     print("gate:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

@@ -3,9 +3,7 @@
 //! The content manifest maps a GUID to bytes and says nothing about grouping.
 //! The resource graph is the grouping. It lists, for every asset, the package
 //! it belongs to, and a package is a thing loaded as a unit -- a map, a hero, a
-//! game mode. That is what makes it the answer here: one chunk of the practice
-//! range was recovered from a running game, and the graph names the rest of the
-//! map by looking up everything that shares its package.
+//! game mode.
 //!
 //! ```text
 //! header          version-dependent, 52 to 88 bytes, ending in a `trg` magic

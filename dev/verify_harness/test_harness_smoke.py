@@ -216,6 +216,53 @@ def test_coverage_exact_edges():
     os.unlink(path)
 
 
+def test_coverage_unreachable_declaration():
+    path = _branch_image()
+    o = EmuOracle(path, base=BASE)
+    fn = BASE + 0x100
+    zero = [ArgSpec(kind="ptr", mem=b"\x00\x00\x00\x00")]
+    one = [ArgSpec(kind="ptr", mem=b"\x01\x00\x00\x00")]
+    site = fn + 0x04
+    fall = fn + 0x06
+    target = fn + 0x0E
+
+    def run(calls, decls):
+        t = BranchTracker(o, fn)
+        for a in calls:
+            t.begin_call()
+            o.call(fn, a, ret_kind="u64")
+        res = t.result(unreachable=decls)
+        t.close()
+        return res
+
+    r = run([zero], [(site, fall, "fall-through never taken on this corpus")])
+    check("coverage/declared-dead-edge-excluded",
+          r.hit == 0 and r.total == 0 and r.coverage == 100.0
+          and r.declared_unreachable == 1 and not r.invalid_declarations,
+          f"hit={r.hit} total={r.total} declared={r.declared_unreachable}")
+
+    # Declaring the edge that WAS observed is a lie, not a declaration.
+    r = run([zero, one], [(site, target, "wrong edge")])
+    check("coverage/observed-dead-edge-rejected",
+          r.invalid_declarations and not r.declared_unreachable,
+          f"{r.invalid_declarations}")
+
+    # A site that never ran cannot be excluded: that would hide an
+    # unreached branch instead of documenting a dead edge.
+    r = run([], [(site, fall, "never ran")])
+    check("coverage/unexecuted-site-rejected", r.invalid_declarations,
+          f"{r.invalid_declarations}")
+
+    # A non-branch address and an empty rationale are both refused.
+    r = run([zero], [(fn + 0x02, target, "not a branch")])
+    check("coverage/non-branch-site-rejected", r.invalid_declarations,
+          f"{r.invalid_declarations}")
+    r = run([zero], [(site, fall, "   ")])
+    check("coverage/empty-rationale-rejected", r.invalid_declarations,
+          f"{r.invalid_declarations}")
+    os.unlink(path)
+
+
 def test_pdata_bounds():
     img = bytearray(0x400)
     img[0:2] = b"MZ"
@@ -379,6 +426,7 @@ def main() -> int:
     test_state_mode()
     test_image_read_detected()
     test_coverage_exact_edges()
+    test_coverage_unreachable_declaration()
     test_pdata_bounds()
     test_gen_pools()
     test_mutate_hex_boundary()

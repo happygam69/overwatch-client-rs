@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Fixed-tick combat simulation for Overwatch-derived data"
+description = "Exact client arithmetic read from Overwatch.exe: Domino body integration and camera basis"
 
 [dependencies]
 

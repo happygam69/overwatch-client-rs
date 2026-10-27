@@ -1,24 +1,13 @@
 //! Sample the map's ground height along a straight path.
 //!
-//! Built to check a traced descent against the geometry it crossed: the keyed
-//! trace's "steep slide" (`player_keyed.jsonl` i=630..709) drops 2.667 m over
-//! 5.747 m of straight path at a constant 4.2539 m/s horizontal and -1.9738
-//! m/s vertical (|v| = 4.6895, a 24.89 deg grade). If the ground under that
-//! path has the same grade, the segment is ground-following on steep terrain;
-//! if it is flat, the constant descent is a state, not geometry.
+//! Built to check a traced descent against the geometry it crossed. The default
+//! scene is the resolved practice range; `--chunks-from` is an explicit chunk
+//! diagnostic, not a map. `ground_at`'s fallback floor (2.0) shows up as a
+//! constant 2.000 and means the point is outside the loaded chunks.
 //!
 //! Usage:
 //!     cargo run -p ow-scene --bin ground_probe -- --from X,Z --to X,Z
-//!         [--steps N] [--max-chunks N] [--chunks-from <guid list>]
-//!
-//! Measured 2026-10-16: neither the default 12-chunk slice nor the 31-chunk
-//! interiors set (`dev/range_chunks.txt`) reaches the trace area — even the
-//! trace's spawn point returns the fallback floor; the interiors floors sit at
-//! y ~ 4-6 around (24..30, -4..1). `--max-chunks` walks the 41,811 map chunks
-//! in manifest order, so confirming the slide's grade needs a proximity walk
-//! seeded at (54..61, 12..21) (the method `dev/range_chunks.txt` came from).
-//! `ground_at`'s fallback floor (2.0) shows up as a constant 2.000 and means
-//! the point is outside the loaded chunks.
+//!         [--steps N] [--chunks-from <guid list>] [--no-map]
 
 use glam::Vec3;
 
@@ -39,7 +28,7 @@ fn main() -> std::process::ExitCode {
     };
     let (Some(from), Some(to)) = (flag("--from").and_then(pair), flag("--to").and_then(pair))
     else {
-        eprintln!("usage: ground_probe --from X,Z --to X,Z [--steps N] [--max-chunks N]");
+        eprintln!("usage: ground_probe --from X,Z --to X,Z [--steps N] [--chunks-from list]");
         return std::process::ExitCode::from(2);
     };
     let steps: usize = flag("--steps").and_then(|v| v.parse().ok()).unwrap_or(40);

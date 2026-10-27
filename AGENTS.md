@@ -2,138 +2,126 @@
 
 ## Project
 
-This project reads the Overwatch install the operator already owns and
-reimplements the parts of the client that matter for gameplay - movement,
-combat, the view model and the camera - as a clean-room Rust simulation. It is
-verified against the client by diffing recorded traces and by eye-checks, never
-by shipping anything from the game.
+A clean-room Rust reimplementation of the Overwatch client's **gameplay**:
+movement, combat, the view model and the camera, with a Bevy shell and a
+`wgpu` inspector. The operator's own installation supplies the data. The
+client's own code supplies the behaviour.
 
-Files give the data. Decompilation of the operator's own memory captures gives
-the behaviour. A fitted implementation is always labelled as fitted.
+Nothing from the game ships in this repository: no assets, no extracted files,
+no decompiled code.
+
+## The hard rule
+
+**1 to 1 or not at all.**
+
+A gameplay feature is implemented only when all three are true:
+
+1. the client's own code or value has been read from the complete
+   `Overwatch.exe` Ghidra image;
+2. the implementation follows that code operation for operation; and
+3. a test proves the result is identical — bit-exact for state, exact for
+   values, first-divergence for a trace.
+
+There is no substitute for a read expression: no placeholder, no "close
+enough", no measured replacement. If the client's expression is not read, the
+feature is **open** (`docs/open-questions.md`), not implemented.
+
+Existing `FIT-*` code is legacy debt. It is listed in `docs/deviations.md` and
+must be deleted or replaced by a read implementation. **No new `FIT-*` marker
+may be added**; `cargo xtask verify` fails on one.
+
+## Sources
+
+- **Behaviour: `Overwatch.exe` only.** The complete current-build image in the
+  Ghidra project: every `.text` page, the install's plaintext `.pdata`, base
+  `0x140000000`. Read code there; record addresses and conclusions, never
+  disassembly or decompiled code. See `docs/ghidra-project.md`.
+- **Data: the operator's installation.** Read in place, never written to.
+  `ow-casc` / `ow-tank` answer format, registry, geometry and value questions.
+  See `docs/formats/`.
+- **The current image is the only behaviour source.** No other image, no
+  process dump, no previous build's addresses. The image is complete; there is
+  no missing-code category here.
+- **No external game code.** Public sources may be used to check a number, not
+  to create one (`docs/provenance.md`).
 
 ## Hard rules, never break these
 
-1. **Never commit game assets, decompiled code, or extracted game files.**
-   They stay on this machine, untracked. Extract game data only to a gitignored
-   folder.
-2. **`.gitignore` is a whitelist.** It ignores everything and includes only
+1. **1 to 1 or not at all** — see above.
+2. **Never commit game assets, decompiled code, or extracted game files.**
+   They stay on this machine, untracked. Extract game data only to a
+   gitignored folder.
+3. **`.gitignore` is a whitelist.** It ignores everything and includes only
    source files. Do not switch it to a normal ignore list.
-3. **Do not run `git commit` unless asked.** Stage nothing beyond the current
+4. **Do not run `git commit` unless asked.** Stage nothing beyond the current
    task.
-4. **Do not touch anything outside this project folder** unless explicitly
-   named. This includes game installs: read them, never write to them.
-5. **Never put credentials in the repo or in any readable file:** no API keys,
+5. **Do not touch anything outside this project folder** unless explicitly
+   named. Read the install and the Ghidra project; never write to them.
+6. **Never put credentials in the repo or in any readable file:** no API keys,
    tokens, or passwords.
-6. **Docs record addresses and conclusions, never disassembly or decompiled
-   code.** Write "function at `<address>` does X, because Y", name the capture
-   and the build, so it can be re-derived. `docs/provenance.md` defines the
-   evidence classes.
-7. **Live tooling is read-only.** Open the client with
-   `OpenProcess(VM_READ | VM_QUERY)` and use `ReadProcessMemory` only - no
-   writes, no injection, no hooking. **A new live capture is the operator's
-   decision every time.**
-8. **Captures live outside the repo** (`D:/ow-dumps`, gitignored). They are
-   session-specific: the same build maps at different base addresses, so every
-   address names its capture and its translation. The one exception is the
-   Ghidra project, which stays in `dev/ghidra_run/` on the SSD (Ghidra reads
-   it hard) and is git-ignored; `docs/ghidra-project.md` says what is in it.
-9. **Never silently mix fitted and read behaviour.** A fitted, assumed,
-   stand-in or supplied value carries a `FIT-*` id next to its code *and* a row
-   in `docs/fitted-ledger.md`; a read value cites its address.
-   `cargo xtask fit-check` fails when the two sides disagree.
-10. **A stage that cannot be recovered is declared, not faked.** Mark it tier 3,
-    write the boundary down, and keep every other stage exact.
-
-## Capture and behaviour workflow
-
-- **Files answer data questions.** Use `ow-tank` bins, the typed STU layer and
-  `docs/formats/` for formats, registries, geometry and values.
-- **Ghidra MCP answers behaviour questions** over the captured images. The
-  project is `dev/ghidra_run/owmod`: `Overwatch.exe` is the **complete**
-  current-build image (all `.text` recovered offline, base `0x140000000`,
-  carrying the current-build names), and `module_v2full.bin`
-  is the old build the docs' addresses use; `docs/ghidra-project.md` lists
-  every program, its base and what it answers. The merged images themselves
-  stay in `D:/ow-dumps` (`module_after_diff.bin`, `loader_after_diff.bin`);
-  the older `warm_best.bin` remains useful for comparison.
-- **Preferred live capture: `dev/live_page_diff.py`.** Read-only; it selects
-  `Overwatch.exe` by name (not the largest module), watches page protections,
-  reads a page when it becomes readable, retries ciphertext pages, and logs
-  accepted code plus `encrypted.csv`. Capture with the client in a practice
-  range, first-person, with phase markers.
-- **Fallback: `dev/warm_poll.py --all-regions`.** Same read-only rule. It only
-  sweeps the game module and drops high-entropy pages, so it can miss pages
-  that are decrypted lazily.
-- **Cold pages are normal.** The on-disk `.text` is encrypted; the loader
-  decrypts pages on demand. A function can be zero-filled or ciphertext in one
-  capture and readable in another. Never conclude a function is missing from
-  one cold capture.
-- **Address algebra:** v2b base is `0x7ff7c4d20000`; file offset in a flattened
-  v2b image is `v2b - 0x7ff7c4d20000`; a session address is
-  `v2b + (session base - 0x7ff7c4d20000)`. Name the capture.
+7. **Docs record addresses and conclusions, never disassembly or decompiled
+   code.** Write "function at `<address>` does X, because Y". `docs/provenance.md`
+   defines the evidence classes.
+8. **A stage that cannot be read is declared open, not faked.** Keep every
+   other stage exact. An open stage has no gameplay implementation at all.
+9. **Addresses are current-image addresses** — `0x140000000 + RVA`, or the
+   function name from `docs/function-names.csv`. Do not introduce addresses
+   from another build.
+10. **The gate decides.** `cargo xtask verify` runs fmt, clippy (warnings are
+    errors), the tests, the tool index and the deviation check.
+11. **No seed lists for content.** A map, chunk set or texture is resolved by
+    the client's own path (map header or loader), never by a proximity seed or
+    a hand-picked GUID list. A seed that renders overlapping maps is a bug, not
+    a map. If the path is not read, the content is open.
 
 ## How to work
 
-- **One thing at a time.** Do not bundle unrelated changes; every step should
-  be revertable separately.
-- **Keep notes as you go.** When the shape of something is clear, write it into
-  `docs/` immediately. Do not stop for a big plan after every reading.
-- **Log, don't look.** You cannot see the game. Instrument positions, counts,
-  timings and state transitions to a log, then verify from the numbers. A
-  windowed eye-check is the operator's job.
-- **Tell the operator how to test.** After every change, give the exact command
-  and what should be seen. "Done" without a test procedure is not done.
-- **Ask before large refactors.** If the architecture is wrong, explain why and
-  wait.
+- **One thing at a time.** Every step should be revertable separately.
+- **Read before writing.** If the client's code has not been read, the answer
+  is "open", not a guess.
+- **Keep notes as you go.** Add the address and conclusion to the relevant
+  `docs/formats/<system>.md` immediately.
+- **Name what you understand.** When a function's role is settled, add a row
+  to `docs/function-names.csv` and run `python dev/gh_apply_names.py`.
+- **Log, don't look.** Instrument positions, counts, timings and state
+  transitions to a log, then verify from the numbers. A windowed eye-check is
+  the operator's job.
+- **Tell the operator how to test.** After every change, give the exact
+  command and what should be seen. "Done" without a test procedure is not done.
+- **Ask before large refactors.** If the architecture is wrong, explain why
+  and wait.
 - **Explain in plain language.** The operator is not the programmer; explain a
   term the first time it is used.
-- **Behaviour questions go to the decompiler, not to guesswork.** Use Ghidra
-  over the captures; use the file-side tools for data. The capture wins for
-  behaviour, the install wins for data.
-- **Record failures.** A dead end that is written down is worth more than one
-  that has to be rediscovered.
-- **Name what you understand.** When a function's role is settled, add a row
-  to `docs/function-names.csv` and run `python dev/gh_apply_names.py`, so the
-  decompiler and the docs say the same thing. A name is only for a function
-  whose role is known.
 
 ## Verification and honesty
 
+- `cargo xtask verify` is the one gate. `--fast` leaves out the tests that
+  read the install.
+- Bit-exactness is proven by golden vectors and first-divergence tests; a
+  tolerance is not acceptance.
 - If something is not tested, write **"not tested"**.
 - If you are unsure, say so. A confident wrong answer costs hours.
-- After two real attempts at a problem, stop and write up `STATUS-handoff.md`
-  instead of trying random variations.
-- **One gate decides whether a change is done:** `cargo xtask verify`.
-  It runs fmt, clippy (warnings are errors), the tests, the tool index and the
-  fitted-ledger check. `--fast` leaves out the tests that read the install.
-- The eye-check is still the operator's: `cargo run --release -p ow-view --
-  --play --hero 3 --anim auto`.
-- Golden vectors and `trace_diff` decide whether a movement stage is exact.
+- After two real attempts at a problem, stop and write up
+  `STATUS-handoff.md` instead of trying random variations.
 
 ## Tooling map
 
-| Tool | What it answers | Where |
+| tool | what it answers | where |
 |---|---|---|
-| Ghidra MCP bridge | behaviour: decompile, callers/callees, value flow, strings | captures in `D:/ow-dumps`; merged images above |
-| `dev/live_page_diff.py` | which pages are actually readable/decrypted during a session | live, read-only; operator's run |
-| `dev/warm_poll.py` | continuous warm-page accumulation | live, read-only; fallback |
-| `dev/*.py` probes | capture scans, region extraction, PE wrapping, heap/trace work | `dev/INDEX.md` lists all of them |
-| `ow-tank` bins / examples | data: formats, class registry, STU bags, entities, weapons, graphs, animation clips | `crates/ow-tank/src/bin/`, `crates/ow-tank/examples/` |
-| `ow-sim` / `trace_diff` | movement/combat verification, first divergence | `crates/ow-sim/src/trace.rs` |
-| `ow-view` / `ow-game` | the viewer, play harness and Bevy shell | `crates/ow-view`, `crates/ow-game` |
+| Ghidra project | behaviour: decompile, callers, value flow | `dev/ghidra_run/owmod`, program `Overwatch.exe` |
+| `ow-tank` bins / examples | data: formats, registry, entities, weapons, graphs, animation | `crates/ow-tank/src/bin/`, `crates/ow-tank/examples/` |
+| `ow-client`, `ow-scene` | the one launchable client and map assembly; default practice range through `mapresolve` | `crates/ow-client/`, `crates/ow-scene/` |
+| `ow-sim` | parked reference; not built until a read gameplay layer needs it | `crates/ow-sim/` |
+| `dev/verify_harness/` | differential proof that a Rust function equals the client's bytes | `dev/verify_harness/` |
+| `docs/function-names.csv` | the name ↔ current address table | `docs/` |
 
 ## Keep these files updated
 
-- `MODLOG.md`: one short entry per change; history, not a diary.
-- `STATUS-handoff.md`: the living state - what works, what is open, what is
-  next.
-- `README.md`: the public "what works / what does not" list and quick start.
-- `docs/systems-coverage.md`: every client system, its state and next anchor.
-- `docs/formats/<system>.md`: the findings, addresses and evidence class.
-- `docs/fitted-ledger.md`: every fitted, assumed, tier-3 or stand-in
-  implementation. Add the row in the same change that introduces the fit;
-  remove it when a capture or decompile settles it.
-- `docs/open-questions.md`: the work queue. The next thing to work on is at
-  the top of it.
-- `dev/INDEX.md`: the tool list, generated from the tools themselves.
-  `python dev/make_index.py` refreshes it; the gate checks it is current.
+- `MODLOG.md`: one short entry per change; milestones only.
+- `STATUS-handoff.md`: what works, what is open, what is next.
+- `README.md`: the public "what works / what does not" list.
+- `docs/systems-coverage.md`: every client system, its state, its next anchor.
+- `docs/formats/<system>.md`: findings, addresses, evidence class.
+- `docs/deviations.md`: legacy non-1:1 code, to be removed.
+- `docs/open-questions.md`: the work queue; next thing at the top.
+- `dev/INDEX.md`: generated tool list; `python dev/make_index.py` refreshes it.
