@@ -89,7 +89,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 struct BucketSegment {
     segment: u32,
-    entries: HashMap<[u8; 9], Location>,
+    entries: index::SegmentEntries,
 }
 
 /// The sixteen bucket maps, selected by the client's filename scan.
@@ -119,7 +119,7 @@ impl BucketIndex {
             let entries = index::parse_bucket_file(&found.path, Some(bucket as u8))?;
             buckets[bucket] = Some(BucketSegment {
                 segment: found.segment,
-                entries: entries.into_iter().collect(),
+                entries: index::SegmentEntries::new(entries),
             });
         }
         Ok(BucketIndex { buckets })
@@ -127,10 +127,18 @@ impl BucketIndex {
 
     fn location_of(&self, key: &[u8; 9]) -> Option<Location> {
         let bucket = usize::from(index::bucket_of(key, 0));
-        self.buckets[bucket].as_ref()?.entries.get(key).copied()
+        self.buckets[bucket].as_ref()?.entries.find(key)
     }
 
     fn key_count(&self) -> usize {
+        self.buckets
+            .iter()
+            .flatten()
+            .map(|bucket| bucket.entries.unique_key_count())
+            .sum()
+    }
+
+    fn entry_count(&self) -> usize {
         self.buckets
             .iter()
             .flatten()
@@ -228,6 +236,13 @@ impl Store {
     /// Number of encoding keys the bucket index knows about.
     pub fn key_count(&self) -> usize {
         self.index.key_count()
+    }
+
+    /// Number of 18-byte entries across the selected segments.
+    ///
+    /// This is larger than [`Store::key_count`] when a key is listed twice.
+    pub fn entry_count(&self) -> usize {
+        self.index.entry_count()
     }
 
     /// The selected segment number of each bucket, in bucket order.
@@ -1216,13 +1231,15 @@ mod tests {
             &[(bucket_key(3), (33u64 << 30) | 0x200, 30)],
         );
         // Bucket 4 also contains bucket 3's key; a merge would see this copy.
+        // The entries are in the file's non-decreasing key order, as the
+        // client's binary search requires.
         write_bucket(
             &dir,
             4,
             0x100,
             &[
-                (bucket_key(4), (5u64 << 30) | 0x300, 30),
                 (bucket_key(3), (99u64 << 30) | 0x400, 30),
+                (bucket_key(4), (5u64 << 30) | 0x300, 30),
             ],
         );
 

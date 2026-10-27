@@ -92,14 +92,16 @@ claim. `ow-sim` is parked reference code.
   are deleted.
 - **Materials:** the viewer is not the client's renderer; 55 placeholder draws
   remain diagnostics, not a finished material path.
-- **Remaining CASC units:** `DynamicIndexSegmentParse`,
-  `DynamicIndexFindEntry`, `DynamicIndexDecodeEntries`, `BlteFrameHeaderParse`,
-  `BlteBlockRead`, `DynamicContainerRead`, `EncodingSectionsRead` and the
-  key-state resolve (`0x142511540`/`0x1425115d0`); the BLTE `4`/`A`/`F` and
-  `0x10` modes, the frame/chunk MD5 checks and the CDN index-page formula are
-  also open. The bucket fold and the segment/archive selection are now read and
-  install-tested (1,147,132 salt-0 keys and 1,488 salt-1 header placeholders);
-  `docs/casc-1to1.md` is the register.
+- **Remaining CASC units:** `DynamicIndexSegmentParse` beyond the
+  header/entry block, the page-table branch of `DynamicIndexFindEntry` and the
+  page-record decode/type byte in `DynamicIndexDecodeEntries`, the key-state
+  interval merge/resident check (`0x142520c60`/`0x142520700`/`0x1425208d0`),
+  `BlteFrameHeaderParse`, `BlteBlockRead`, `DynamicContainerRead`,
+  `EncodingSectionsRead`; the BLTE `4`/`A`/`F` and `0x10` modes, the
+  frame/chunk MD5 checks and the CDN index-page formula are also open. The
+  bucket fold, segment/archive selection and the 18-byte entry search with the
+  first-duplicate choice are read and install-tested; `docs/casc-1to1.md` is
+  the register.
 
 ## Next
 

@@ -45,6 +45,7 @@ earned. The rest of the container is not.
 | `.build.info` row/bool select | `0x14248f2a0`, `0x1424aec30`, `0x1424d8800` | the rules are read-cited and pinned on synthetic text; no install test |
 | keyring parse/byte order | `0x1424cebd0`, `0x14248f040`, `0x14248efd0` | read-cited; synthetic byte-order test; the build keyring is read from the install at runtime |
 | bucket hash and segment/archive selection | `0x142501b40`, `0x14250e100`, `0x14250e720`, `0x14250e400`, `0x14250c8f0` | the fold is matched on 1,147,132 real keys (salt 0) and 1,488 archive-header placeholders (salt 1); the scan keeps the highest segment per bucket; the archive is `(packed + 0x1e) >> 30`; install-tested, no harness unit (stateful/I/O) |
+| index entry search and duplicate choice | `0x1425111a0`, `0x142511540`, `0x1425115d0`, `0x1425209a0` | the client's lower-bound walk and equal-range expansion are implemented over file-order entries; the first equal entry is chosen; every equal group of all 1,148,620 install entries was range-checked and the 806 duplicate pairs resolve to the header entry; the page-table positive-record path is open |
 | bucket index header/entries | `0x14250fcf0` (partial) | header/section/entry layout and both widths; synthetic tests plus one real hash vector; the page table is not parsed |
 | encoding header/real values | `0x142498920` | header verified; installed 16/16 keys, 4 KiB pages, 16025 + 10519 pages and the 1,484,507-byte espec block are pinned |
 | BLTE N/Z/E blocks | `0x1424e3230`, `0x1424e32c0` | Salsa20 verified; the N/Z/E container walk is synthetic and self-consistent, not client-compared |
@@ -67,13 +68,13 @@ earned. The rest of the container is not.
 | area | client address | state |
 |---|---|---|
 | `DynamicIndexSegmentParse` | `0x14250fcf0` | partial: header/section/entry only; no key-to-entry page table, no asynchronous segment load |
-| `DynamicIndexFindEntry` | `0x1425111a0` | no client algorithm; production scans 9-byte entries into a HashMap. 806 keys in this install are listed twice (header entry and payload entry); the equal-range choice is unread |
-| `DynamicIndexDecodeEntries` | `0x1425209a0` | folded into `parse_bucket_file`; no separate implementation or unit |
+| `DynamicIndexFindEntry` page-table branch | `0x1425111a0`, `0x1425209a0` | the 18-byte entry search/equal range and the first-duplicate choice are read and install-tested; the page-table record path (21 records per 0x200 page, 19-byte payload, type byte) is unread. On this install the page count is non-zero but every record's stored hash is zero, so the branch contributes nothing |
+| `DynamicKeyStateLookup` residency | `0x142520c60`, `0x142520700`, `0x1425208d0` | the chosen location and size are read; the interval merge and the `DynamicIndexRangeIsResident` resident-range check are not |
+| `DynamicIndexDecodeEntries` | `0x1425209a0` | the contiguous 18-byte entry decode is folded into `parse_bucket_file`; no separate implementation of the page-record decode or the type byte |
 | `BlteFrameHeaderParse` | `0x1424a90e0` | accepts only type `0x0F`; does not check `12 + 24*count`; skips the frame and chunk MD5s |
 | `BlteBlockRead` | `0x1424d61b0` | N/Z/E only; no LZ4 (`4`, `BlteBlockReadLz4` `0x1424d6e50`), no ARC4 `A`, no frame `F`, no type `0x10` |
 | `DynamicContainerRead` | `0x1424f48d0` | reads the 30-byte header and a span; no page cache or page-reader path |
 | `EncodingSectionsRead` | `0x1424d1c60` | page reader is format-derived; no client function and no real-file test |
-| `DynamicKeyStateLookup` key-state resolve | `0x142511540`, `0x1425115d0` | the bucket fold and segment selection are implemented; `DynamicIndexResolveRange` and the resident-interval path are not |
 | CDN index-page reader | none | reference/measured; no client handler read |
 | content key = MD5(decoded) | none | measured 300/300; no MD5 code and no test in the tree |
 | LZ4 / ARC4 / frame modes | `0x1424d6e50` etc. | not implemented; no asset on this install exercises them |
@@ -100,14 +101,19 @@ earned. The rest of the container is not.
   the directory for `<bucket><segment>.idx`, keeps the highest segment per
   bucket, and caches the sixteen numbers at `+0x110`. The old all-16 merge is
   deleted.
+- The page table was described as "a `u32` hash, a 19-byte key and a pad". The
+  19-byte payload is key (9) + location (5) + size (4) + type (1); the pad
+  makes the record 24 bytes. `DynamicIndexFindEntry` stops at a zero stored
+  hash, which is every record on this install; the positive-record path is
+  open, not "zero-filled, so the compare never runs".
 
 ## Next order
 
-1. `DynamicIndexFindEntry` (`0x1425111a0`) and the key-state resolve
-   (`0x142511540`, `0x1425115d0`): the bucket fold and selection are now in
-   place, but the parsed-segment lookup, the duplicate-key equal range and the
-   resident-interval path are not. This is the next precondition for a real
-   segment reader.
+1. `DynamicIndexFindEntry`'s page-table branch and `DynamicIndexDecodeEntries`'s
+   page-record decode (`0x1425209a0`): the 18-byte entry path is in place, but
+   the 19-byte page payload and its type byte are not. Then the key-state
+   interval merge and resident-range check (`0x142520c60`, `0x142520700`,
+   `0x1425208d0`).
 2. `BlteFrameHeaderParse` (`0x1424a90e0`) and `BlteBlockRead`
    (`0x1424d61b0`): type `0x10`, size equality and the MD5s; then the missing
    modes.

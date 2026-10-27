@@ -4,6 +4,24 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-28 - CASC index entry search and duplicate choice
+
+- `DynamicIndexFindEntry` (`0x1425111a0`) is now the client's lower-bound walk
+  with backward/forward equal-range expansion over file-order entries, not a
+  HashMap. `DynamicIndexResolveRange` (`0x1425115d0`) and the
+  `DynamicIndexResolveKeyRange` wrapper choose the **first** equal entry; the install's 806
+  duplicate pairs therefore resolve to the 30-byte header entry, not the
+  payload entry.
+- The page table is 21 records per 0x200 page at 24 bytes: a `u32` stored hash
+  plus a 19-byte payload (key 9 + location 5 + size 4 + type 1). The install's
+  page count is non-zero but every stored hash is zero, so the page-table
+  branch stops at the first record and contributes nothing; its positive-record
+  path is still open. `docs/formats/casc.md` records the rule and proof.
+- `tests/index_find_real.rs` walks all 1,148,620 entries: every key's range is
+  its contiguous equal group, all 1,147,132 salt-0 keys resolve to the first
+  entry, 1,488 salt-1 placeholders resolve to nothing, and all 806 duplicate
+  pairs choose the header entry and read back BLTE.
+
 ## 2026-10-28 - CASC bucket hash and segment/archive selection are read and install-tested
 
 - `DynamicKeyStateLookup` (`0x142501b40`) is `((xor9 ^ (xor9 >> 4)) + salt) & 0xf`;

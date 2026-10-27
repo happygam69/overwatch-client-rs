@@ -303,22 +303,27 @@ to the packed entry location, and `DynamicContainerReadPage` derives the
 archive as `(packed + 0x1e) >> 30`; `DynamicContainerOpenArchive`
 (`0x14250c8f0`) opens `data.%03d`. The install test matches 1,147,132 real
 keys at salt 0 and the 1,488 archive-header placeholders at salt 1, with no
-unmatched entry. The open functions are `DynamicIndexSegmentParse`
-(`0x14250fcf0`; header/section/entry only, no page table),
-`DynamicIndexFindEntry` (`0x1425111a0`; the equal-range and duplicate-key
-choice is unread, and this install lists 806 keys twice), `DynamicKeyStateLookup`'s
-resolve (`0x142511540`, `0x1425115d0`), `DynamicIndexDecodeEntries`
-(`0x1425209a0`), `BlteFrameHeaderParse` (`0x1424a90e0`), `BlteBlockRead`
-(`0x1424d61b0`), `BlteBlockReadLz4` (`0x1424d6e50`), `DynamicContainerRead`
-(`0x1424f48d0`; no page cache) and `EncodingSectionsRead` (`0x1424d1c60`).
-The shipped decoder accepts only BLTE type `0x0F`, does not check
-`12 + 24*count`, skips the frame/chunk MD5s, and has no LZ4/ARC4/frame modes.
+unmatched entry. `DynamicIndexFindEntry` (`0x1425111a0`) is now implemented
+as the client's lower-bound walk plus backward/forward equal-range expansion;
+the first equal entry is the chosen one, and all 806 duplicate pairs in this
+install resolve to the header entry. The open parts are the page-table branch
+of `DynamicIndexFindEntry` (page count is non-zero here but every page record's
+stored hash is zero, so it contributes nothing), the 19-byte page-record
+decode and type byte in `DynamicIndexDecodeEntries` (`0x1425209a0`), the
+key-state interval merge/resident check (`0x142520c60`, `0x142520700`,
+`0x1425208d0`), `DynamicIndexSegmentParse` beyond the header/entry block
+(`0x14250fcf0`; no page table), `BlteFrameHeaderParse` (`0x1424a90e0`),
+`BlteBlockRead` (`0x1424d61b0`), `BlteBlockReadLz4` (`0x1424d6e50`),
+`DynamicContainerRead` (`0x1424f48d0`; no page cache) and
+`EncodingSectionsRead` (`0x1424d1c60`). The shipped decoder accepts only BLTE
+type `0x0F`, does not check `12 + 24*count`, skips the frame/chunk MD5s, and
+has no LZ4/ARC4/frame modes.
 
-**What would settle it.** Read each remaining function in the current image,
-implement it operation for operation, and add a differential unit where the
-function is pure. `DynamicIndexFindEntry` and the frame header are the first
-candidates; the container read and the page-table lookup need a synthetic
-two-segment fixture.
+**What would settle it.** Read the page-table branch and the page-record
+decode first, then the key-state interval merge. Add a synthetic page table
+with a non-zero stored hash and a type byte; the install cannot exercise it.
+After that, read the remaining BLTE and encoding functions operation for
+operation and add a differential unit where the function is pure.
 
 **Next anchor.** `docs/casc-1to1.md`, `formats/casc.md`,
 `crates/ow-casc/src/index.rs`, `crates/ow-casc/src/container.rs`,

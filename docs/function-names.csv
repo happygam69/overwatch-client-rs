@@ -211,10 +211,17 @@ Overwatch.exe,0x14250e720,0x14250e720,DynamicIndexScanSegments,"Scans the data d
 Overwatch.exe,0x14250fc60,0x14250fc60,DynamicIndexSegmentLoad,Loads a dynamic index segment through the async reader
 Overwatch.exe,0x14250fcf0,0x14250fcf0,DynamicIndexSegmentParse,"Parses a dynamic index segment: section and file headers, entry block and key-to-entry table"
 Overwatch.exe,0x1425111a0,0x1425111a0,DynamicIndexFindEntry,Binary-searches the 18-byte entries by their 9-byte key and expands the equal range
+Overwatch.exe,0x142511540,0x142511540,DynamicIndexResolveKeyRange,Resolves a key's requested range through DynamicIndexResolveRange and records the retry metric
 Overwatch.exe,0x1425115d0,0x1425115d0,DynamicIndexResolveRange,Resolves a requested range against a key state's resident intervals
 Overwatch.exe,0x142512c60,0x142512c60,DynamicIndexHash,32-bit file-header and rolling entry-block hash of a dynamic index segment; called by DynamicIndexSegmentParse
-Overwatch.exe,0x142513230,0x142513230,DynamicIndexKeyHash,"32-bit hash of a 19-byte key-to-entry record, compared with the record's first word | 0x80000000"
+Overwatch.exe,0x142513230,0x142513230,DynamicIndexKeyHash,"32-bit hash of a page record's 19-byte payload, compared with the record's first word | 0x80000000"
+Overwatch.exe,0x142520520,0x142520520,DynamicIndexFindContextInit,Initializes the find/resolve context and its inline interval buffer
+Overwatch.exe,0x142520570,0x142520570,DynamicIndexFindContextFree,Frees the find/resolve context's interval buffer when it grew
+Overwatch.exe,0x142520590,0x142520590,DynamicIndexEntrySink,"Stores the first equal entry as the chosen location and appends later entries as intervals"
+Overwatch.exe,0x142520700,0x142520700,DynamicIndexAppendInterval,Adds an entry range pair to the key state's update buffer
+Overwatch.exe,0x1425208d0,0x1425208d0,DynamicIndexNormalizeIntervals,Merges adjacent intervals and writes the key state's interval count
 Overwatch.exe,0x1425209a0,0x1425209a0,DynamicIndexDecodeEntries,"Decodes entry payloads: 5-byte big-endian location, 4-byte little-endian size"
+Overwatch.exe,0x142520c60,0x142520c60,DynamicIndexRangeIsResident,Tests whether a requested range lies inside one resident interval
 Overwatch.exe,0x142cbcee0,0x142cbcee0,RunCharacterControllerSweep,Runs the character controller collision sweep for the desired position
 Overwatch.exe,0x142cbd1b0,0x142cbd1b0,SetCharacterControllerVelocity,Forwards a 4-float velocity to the character controller
 Overwatch.exe,0x142cbdc60,0x142cbdc60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0)

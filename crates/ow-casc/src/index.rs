@@ -31,9 +31,11 @@
 //! bucket. [`parse_segment_file_name`] is that parser and [`segment_name`] is
 //! the formatter.
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::fs;
 use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 /// The leading `BlockSizeAndHash` section header.
@@ -109,6 +111,100 @@ pub const ARCHIVE_MASK: u64 = (1u64 << ARCHIVE_SHIFT) - 1;
 pub const MAX_ARCHIVE: u32 = 0x3fe;
 /// The data header `DynamicContainerRead` skips before reading a payload.
 pub const DATA_HEADER_SIZE: u32 = 0x1e;
+
+/// The 18-byte entries of one segment, in the file's order.
+///
+/// `DynamicIndexFindEntry` (`0x1425111a0`) binary-searches this array and
+/// expands the equal range. The entries are not a map: this install lists 806
+/// keys twice, and the client's chosen entry is the **first** one in file
+/// order (see [`SegmentEntries::find`]).
+#[derive(Debug, Clone, Default)]
+pub struct SegmentEntries {
+    entries: Vec<([u8; 9], Location)>,
+}
+
+impl SegmentEntries {
+    pub fn new(entries: Vec<([u8; 9], Location)>) -> SegmentEntries {
+        SegmentEntries { entries }
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn as_slice(&self) -> &[([u8; 9], Location)] {
+        &self.entries
+    }
+
+    /// The client's binary search and equal-range expansion.
+    ///
+    /// `DynamicIndexFindEntry` keeps `lo = 0`, `hi = count`; each step compares
+    /// `memcmp(key, entry[lo + (hi - lo) / 2], 9)`. A smaller key moves `hi` to
+    /// the midpoint, a larger key moves `lo` past it. On equality it records
+    /// the midpoint, walks backward while the previous entry has the same nine
+    /// bytes, walks forward while the next entry has them, and decodes
+    /// `[first, one-past-last)`. An absent key therefore yields an empty range
+    /// at its insertion point; the returned range is the client's exact range,
+    /// not `std::slice::binary_search`'s single-index result.
+    pub fn find_range(&self, key: &[u8; 9]) -> Range<usize> {
+        let entries = &self.entries;
+        let mut lo = 0usize;
+        let mut hi = entries.len();
+        while lo != hi {
+            let mid = (lo + hi) / 2;
+            match key.cmp(&entries[mid].0) {
+                Ordering::Equal => {
+                    lo = mid;
+                    hi = mid + 1;
+                    while lo > 0 && entries[lo - 1].0 == *key {
+                        lo -= 1;
+                    }
+                    while hi < entries.len() && entries[hi].0 == *key {
+                        hi += 1;
+                    }
+                    return lo..hi;
+                }
+                Ordering::Less => hi = mid,
+                Ordering::Greater => lo = mid + 1,
+            }
+        }
+        lo..hi
+    }
+
+    /// The entry the client resolves: the first entry of the equal range.
+    ///
+    /// `DynamicIndexDecodeEntries` (`0x1425209a0`) gives the first equal entry
+    /// type 2, which writes it to the context's chosen slot; each later equal
+    /// entry is given type 6, which only appends to the interval buffer. The
+    /// chosen location is therefore the first in file order. For this
+    /// install's header/payload duplicate pair that is the entry at the
+    /// 30-byte header, not the entry at `offset + 30`.
+    pub fn find(&self, key: &[u8; 9]) -> Option<Location> {
+        let range = self.find_range(key);
+        if range.is_empty() {
+            None
+        } else {
+            Some(self.entries[range.start].1)
+        }
+    }
+
+    /// Number of distinct keys, using the client's non-decreasing order.
+    pub fn unique_key_count(&self) -> usize {
+        if self.entries.is_empty() {
+            0
+        } else {
+            1 + self
+                .entries
+                .windows(2)
+                .filter(|pair| pair[0].0 != pair[1].0)
+                .count()
+        }
+    }
+}
 
 /// Number of buckets in a dynamic index.
 pub const BUCKET_COUNT: usize = 16;
@@ -933,5 +1029,114 @@ mod tests {
             size: 30,
         };
         assert_eq!(boundary.data_archive(), 8);
+    }
+
+    fn key_at(first: u8, last: u8) -> [u8; 9] {
+        let mut key = [0u8; 9];
+        key[0] = first;
+        key[8] = last;
+        key
+    }
+
+    fn entry(key: [u8; 9], offset: u64, size: u32) -> ([u8; 9], Location) {
+        (
+            key,
+            Location {
+                archive: 1,
+                offset,
+                size,
+            },
+        )
+    }
+
+    fn synthetic_entries() -> SegmentEntries {
+        SegmentEntries::new(vec![
+            entry(key_at(1, 0), 0x100, 40),
+            entry([2u8; 9], 0x200, 50),
+            entry([2u8; 9], 0x232, 20),
+            entry([0xff; 9], 0x300, 60),
+        ])
+    }
+
+    /// The client's lower-bound walk and equal-range expansion
+    /// (`DynamicIndexFindEntry`, `0x1425111a0`): present keys return the whole
+    /// equal group, absent keys return the insertion point with an empty range.
+    #[test]
+    fn find_range_is_the_client_equal_range() {
+        let entries = synthetic_entries();
+
+        assert_eq!(entries.find_range(&[2u8; 9]), 1..3);
+        assert_eq!(entries.find(&[2u8; 9]), Some(entries.as_slice()[1].1));
+        assert_eq!(entries.find_range(&key_at(1, 0)), 0..1);
+        assert_eq!(entries.find_range(&[1u8; 9]), 1..1);
+        assert_eq!(entries.find_range(&[0xff; 9]), 3..4);
+        assert_eq!(entries.find_range(&[0u8; 9]), 0..0);
+        assert_eq!(entries.find_range(&key_at(1, 1)), 1..1);
+        assert_eq!(entries.find_range(&key_at(3, 0)), 3..3);
+        assert_eq!(entries.find(&key_at(1, 1)), None);
+
+        let empty = SegmentEntries::new(Vec::new());
+        assert_eq!(empty.find_range(&[0u8; 9]), 0..0);
+        assert_eq!(empty.find(&[0xff; 9]), None);
+        assert_eq!(empty.unique_key_count(), 0);
+
+        // The extreme keys: the all-zero key is the first entry, the
+        // all-ones key is the last. A key between them is absent.
+        let edge = SegmentEntries::new(vec![
+            entry([0u8; 9], 0x500, 70),
+            entry([0xff; 9], 0x600, 80),
+        ]);
+        assert_eq!(edge.find_range(&[0u8; 9]), 0..1);
+        assert_eq!(edge.find_range(&[0xff; 9]), 1..2);
+        assert_eq!(edge.find_range(&key_at(0, 1)), 1..1);
+
+        // The duplicate pair is the header entry first, the payload second.
+        let pair =
+            SegmentEntries::new(vec![entry([7u8; 9], 0x400, 90), entry([7u8; 9], 0x41e, 60)]);
+        assert_eq!(pair.find_range(&[7u8; 9]), 0..2);
+        assert_eq!(pair.find(&[7u8; 9]).unwrap().offset, 0x400);
+        assert_eq!(pair.find(&[7u8; 9]).unwrap().size, 90);
+        assert_eq!(pair.unique_key_count(), 1);
+    }
+
+    /// The search must agree with a linear first/last scan on every key,
+    /// including duplicates and absent keys. A deterministic LCG supplies a
+    /// sorted corpus; the install itself is checked in
+    /// `tests/index_find_real.rs`.
+    #[test]
+    fn find_range_agrees_with_a_linear_scan() {
+        let mut state = 0x1234_5678u32;
+        let mut keys: Vec<[u8; 9]> = Vec::new();
+        for _ in 0..400 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let mut key = [0u8; 9];
+            for byte in &mut key {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *byte = (state >> 24) as u8;
+            }
+            keys.push(key);
+        }
+        keys.sort_unstable();
+        let entries = SegmentEntries::new(
+            keys.iter()
+                .enumerate()
+                .map(|(i, key)| entry(*key, i as u64 * 0x100, 30))
+                .collect(),
+        );
+
+        let mut queries = keys.clone();
+        queries.push([0u8; 9]);
+        queries.push([0xff; 9]);
+        for query in queries {
+            let mut first = 0usize;
+            while first < keys.len() && keys[first] < query {
+                first += 1;
+            }
+            let mut last = first;
+            while last < keys.len() && keys[last] == query {
+                last += 1;
+            }
+            assert_eq!(entries.find_range(&query), first..last, "key {query:02x?}");
+        }
     }
 }

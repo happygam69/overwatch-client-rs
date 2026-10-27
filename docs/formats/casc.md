@@ -195,8 +195,9 @@ hash-selected buckets, and they match the formula with salt 1. The read path's s
 is 0, so it never looks them up; the two salt domains are not a reason to
 change the lookup formula. Separately, 806 keys appear twice in one bucket —
 one entry at the 30-byte header, one at the payload (`offset + 30`,
-`size - 30`). Both resolve to the same BLTE; `ow-casc` keeps one map entry per
-key, and `DynamicIndexFindEntry`'s equal-range choice remains open.
+`size - 30`). The client chooses the first (header) entry; `SegmentEntries`
+keeps the file order and returns it, and the second entry is the same stored
+record seen at its payload.
 
 The bucket hash and the segment/archive selection are inline and stateful (a
 typed manager plus a directory scan), so they have no five-stage differential
@@ -206,13 +207,61 @@ selected segment numbers) and the synthetic tests in `index.rs` and
 `container.rs` (the fold, the filename parser, the highest-segment scan,
 two-segment selection, no cross-bucket merge, and a missing bucket).
 
+The entry search is also stateful: `DynamicIndexFindEntry` builds a decode
+context with an allocator, reads an optional page table and calls
+`DynamicIndexDecodeEntries`; it is not an isolated pure function. The
+install test `crates/ow-casc/tests/index_find_real.rs` walks every entry in
+the selected segments: `find_range` equals each key's contiguous equal group,
+all 1,147,132 salt-0 entries resolve to the first entry of their group, the
+1,488 salt-1 placeholders resolve to nothing, and each of the 806 duplicate
+pairs resolves to the header entry whose stored record is the 30-byte header
+followed by BLTE. `Store::entry_count` is 1,148,620; `Store::key_count` is
+1,147,814 because 806 keys are listed twice. The pure search is checked
+against a linear first/last scan on a deterministic sorted corpus in
+`find_range_agrees_with_a_linear_scan`.
+
+### Entry search and duplicates
+
+`DynamicIndexFindEntry` (`0x1425111a0`) lower-bound searches the segment's
+18-byte entries, which are in non-decreasing 9-byte key order. It starts with
+`lo = 0`, `hi = count`; each step uses `mid = (lo + hi) >> 1` and
+`memcmp(key, entry + mid * 18, 9)`. A smaller key moves `hi` to `mid`, a
+greater key moves `lo` to `mid + 1`, and equality records `mid`, expands
+backward and forward over the equal keys, and stops. It then decodes
+`[first, one-past-last)`; an absent key yields an empty range at its insertion
+point. `DynamicIndexDecodeEntries` (`0x1425209a0`) decodes the 5-byte
+big-endian location and 4-byte little-endian size; the first equal entry is the
+chosen one, while later equal entries are only appended to the key state's
+interval buffer. `DynamicIndexResolveRange` (`0x1425115d0`) reads the chosen
+entry, adds the caller's requested offset and returns the location and size;
+`DynamicIndexResolveKeyRange` (`0x142511540`) is the wrapper called by
+`DynamicKeyStateLookup`. It returns 0 on success, 2 when no entry matches,
+3 when the requested range is not resident and 4 when the range runs past the
+entry. `DynamicIndexFindEntry`'s two optional output words are the page index
+and the record index reached by the page scan; both are 0 when the scan stops
+at the first record, and `DynamicIndexResolveRange` passes 0 for both, so the
+resolve path does not consume them.
+
+On this install's 806 duplicate pairs the first entry is at the 30-byte data
+header and the second at `offset + 30` with `size - 30`. The client chooses the
+header entry; `DynamicContainerRead` then adds `0x1e` to reach the payload, so
+the resolved bytes are the same BLTE as the second entry. `SegmentEntries` in
+`index.rs` keeps the file order and returns the first entry of the equal range;
+it does not sort or de-duplicate.
+
 The key-to-entry page table that follows the entry block holds 21 records per
-0x200-byte page at a 24-byte stride: a `u32` stored hash, a 19-byte key and
-one pad byte. A record is accepted when
-`DynamicIndexKeyHash(record + 4, 0x13, 0) | 0x80000000` equals the stored
-dword. Every `.idx` page table on this install is zero-filled, so the client
-never reaches that compare here; the hash function itself is verified by
-`fn/DynamicIndexKeyHash` (below).
+0x200-byte page at a 24-byte stride. A record is a `u32` stored hash followed
+by a 19-byte payload — the 9-byte key, the 5-byte location, the 4-byte size and
+one type byte — then a pad byte. `DynamicIndexKeyHash` hashes the 19-byte
+payload at `record + 4`, and the parser compares the stored dword with
+`hash | 0x80000000`. `DynamicIndexFindEntry` scans the pages only when the
+page count at `+0x70` is non-zero, stopping at the first record whose stored
+hash is zero; it collects matching record pointers and decodes them after the
+18-byte entry range. On this install the page count is non-zero (152 for
+`0300000159.idx`) but every page record is zero, so the scan stops at the first
+record and contributes nothing. The positive-record path, the record type byte
+and the page-table decode are still open.
+
 
 ## Encoding file
 
@@ -363,7 +412,7 @@ any one of them is not verified.
   word and byte loads). They assemble the same twelve bytes; the fixture pins
   arena offsets 0, 1, 2 and 3 so every path executes and the shipped
   byte-wise `key_hash` must agree with each.
-- 364 cases (the real 19-byte page-key shape, two real 19-byte entry-block
+- 364 cases (the real 19-byte page-record payload, two real 19-byte entry-block
   spans of `0300000159.idx`, every tail length 1..12, all lengths 0..64 at
   four alignments, init `0`/`1`/`0xffffffff`/`0xdeadbeef` and a 64-bit init
   whose upper half must be ignored) agree on the return word and the
