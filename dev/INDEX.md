@@ -145,9 +145,9 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` | 575 |
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 249 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 568 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 705 |
 | `verify_harness/chunk_guid_fixture.py` | Deterministic table-slot inputs for the `fn/ChunkGuid` unit. | 99 |
-| `verify_harness/cli.py` | Run verification units. Exit code is the gate. | 125 |
+| `verify_harness/cli.py` | Run verification units. Exit code is the gate. | 177 |
 | `verify_harness/cmf_iv_154504_fixture.py` | Deterministic inputs for the `fn/CmfIv154504` unit. | 202 |
 | `verify_harness/cmf_key_154504_fixture.py` | Deterministic inputs for the `fn/CmfKey154504` unit. | 60 |
 | `verify_harness/coverage.py` | Basic-block / branch coverage of the oracle, measured on the very runs | 254 |
@@ -157,12 +157,12 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/emu_oracle.py` | Unicorn oracle: run one captured client function on one input. | 412 |
 | `verify_harness/encoding_header_parse_fixture.py` | Deterministic inputs for the `fn/EncodingHeaderParse` unit. | 207 |
 | `verify_harness/gen.py` | Deterministic input generation for one unit. | 258 |
-| `verify_harness/ledger.py` | Digest-bound verification records. | 149 |
+| `verify_harness/ledger.py` | Digest-bound verification records. | 155 |
 | `verify_harness/mutate.py` | Behaviour-changing mutations of a C candidate, for measuring whether the | 268 |
 | `verify_harness/orthonormalize_basis_fixture.py` | Structured input factory for fn/OrthonormalizeCameraBasis. | 100 |
 | `verify_harness/orthonormalize_state_fixture.py` | State-mode fixture for fn/OrthonormalizeCameraBasis-state. | 26 |
 | `verify_harness/perspective_matrix_fixture.py` | Structured input factory for fn/BuildPerspectiveMatrix. | 159 |
-| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 962 |
+| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1026 |
 | `verify_harness/salsa20_fixture.py` | Deterministic Salsa20 inputs for the `fn/Salsa20Xor` unit. | 156 |
 | `verify_harness/salsa20_state_fixture.py` | Deterministic key/nonce/counter inputs for the `fn/Salsa20StateInit` unit. | 92 |
 | `verify_harness/scaffold_unit.py` | Scaffold a verification unit from an address. | 292 |

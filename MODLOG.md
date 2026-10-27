@@ -4,6 +4,26 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-27 - The verification harness's mutation stage is parallel and bounded
+
+- `fn/BundleLookup` went from 1310.6 s to 77.9 s (16.8x) and
+  `fn/BundleDirectoryLookup` from ~25 min to 158.1 s, with the same verdicts.
+  The time was 93% a 300 s wait on each of four mutants that never return, plus
+  a full dependency rebuild per mutant.
+- Mutant probes now build and run in a worker pool (`--jobs`, default
+  `min(4, active)`), the mutation corpus's oracle results are read from the
+  stage-3 cache in the main thread, and each mutant has a mutation-only call
+  budget (`--mutation-timeout`, unit option `mutationCallTimeout`, default
+  10 s; the baseline keeps 300 s). A timeout is still a kill, and is logged as
+  one.
+- Mutant builds share four warm cargo target slots per crate. `cargo clean -p`
+  plus an artifact stamp check makes a build always dirty and a stale binary a
+  hard error. `HARNESS_VERSION` is 5.
+- No unit JSON, corpus, fixture, threshold or mutant declaration changed.
+  Ledger comparison for the five proof units: status, coverage and
+  killed/total identical. Numbers and the proof are in
+  `dev/verify_harness/PERFORMANCE.md`.
+
 ## 2026-10-27 - The bundle directory lookup is harness-verified
 
 - Added `fn/BundleDirectoryLookup` to `dev/verify_harness`: oracle

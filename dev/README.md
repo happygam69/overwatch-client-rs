@@ -7,6 +7,9 @@ and the Ghidra project, never write to the game.
   by `python make_index.py`; `--check` fails when it is stale.
 - **[../docs/tools.md](../docs/tools.md)** — the tool table by task, with the
   probes that live in the Rust crates.
+- **[verify_harness/PERFORMANCE.md](verify_harness/PERFORMANCE.md)** — the
+  harness's measured wall time, where it goes, and the quality proof for the
+  parallel mutation stage (`--jobs`, `--mutation-timeout`).
 - **[../docs/ghidra-project.md](../docs/ghidra-project.md)** — the
   `Overwatch.exe` program and the address rule.
 

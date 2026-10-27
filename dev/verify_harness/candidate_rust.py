@@ -98,6 +98,47 @@ def mutation_entry(entry: str) -> str:
 # candidate side's equivalent budget.
 DEFAULT_CALL_TIMEOUT = 300.0
 
+# A mutant is deliberately broken code, so an unbounded loop is an EXPECTED
+# outcome and the call must fail fast. The mutation stage passes its own
+# timeout; every startup roundtrip (ping, state load) keeps the normal budget
+# so a cold first launch is never mistaken for a defect.
+DEFAULT_STARTUP_TIMEOUT = DEFAULT_CALL_TIMEOUT
+
+# Mutant builds share a small pool of cargo target directories per crate. The
+# dependency graph (registry crates, ow-casc, ow-stu) is compiled once per
+# slot instead of once per mutant, and up to MUTANT_BUILD_SLOTS mutants compile
+# at the same time. A slot is checked out for one build at a time, and the
+# mutant's own binary is copied out before the slot is returned, so no build
+# can ever replace the binary a running probe was launched from.
+MUTANT_BUILD_SLOTS = 4
+_MUTANT_SLOT_QUEUES: Dict[str, "queue.Queue[int]"] = {}
+_MUTANT_SLOT_GUARD = threading.Lock()
+
+
+def _mutant_slot_queue(crate_key: str) -> "queue.Queue[int]":
+    with _MUTANT_SLOT_GUARD:
+        q = _MUTANT_SLOT_QUEUES.get(crate_key)
+        if q is None:
+            q = queue.Queue()
+            for i in range(MUTANT_BUILD_SLOTS):
+                q.put(i)
+            _MUTANT_SLOT_QUEUES[crate_key] = q
+        return q
+
+
+def _artifact_stamp(path: str) -> Optional[Tuple[int, int]]:
+    """(mtime_ns, size) of an artifact, or None when it does not exist.
+
+    Two consecutive mutant builds must produce two different stamps: if the
+    stamp is unchanged, cargo did not relink and the artifact belongs to an
+    earlier build. That is a hard error, never a silent stale probe.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
 
 def _git_rev() -> str:
     try:
@@ -190,6 +231,7 @@ class RustCandidate:
         state_base: Optional[int] = None,
         state_bytes: Optional[bytes] = None,
         call_timeout: float = DEFAULT_CALL_TIMEOUT,
+        startup_timeout: float = DEFAULT_STARTUP_TIMEOUT,
         crate_dir: Optional[str] = None,
         cargo_probe: Optional[str] = None,
     ):
@@ -198,6 +240,7 @@ class RustCandidate:
         self.ret_kind = "u64" if ret_kind in ("void", None) else ret_kind
         self.is_void = ret_kind in ("void", None)
         self.call_timeout = call_timeout
+        self.startup_timeout = startup_timeout
         self.loader = loader
         self.state_mode = state_base is not None
         self.state_base = state_base
@@ -240,7 +283,7 @@ class RustCandidate:
         )
         self._reader.start()
         # Handshake: a dead binary must fail here, not on the first real call.
-        resp = self._roundtrip("ping")
+        resp = self._roundtrip("ping", timeout=self.startup_timeout)
         if resp != "pong":
             self.close()
             raise RuntimeError(f"rust probe handshake failed: {resp!r}")
@@ -248,7 +291,10 @@ class RustCandidate:
             if not self.state_bytes:
                 self.close()
                 raise RuntimeError("state mode requested with an empty snapshot")
-            resp = self._roundtrip(f"state {self.state_base:x} {self.state_bytes.hex()}")
+            resp = self._roundtrip(
+                f"state {self.state_base:x} {self.state_bytes.hex()}",
+                timeout=self.startup_timeout,
+            )
             if resp != "ok":
                 self.close()
                 raise RuntimeError(f"rust probe state load failed: {resp!r}")
@@ -263,6 +309,52 @@ class RustCandidate:
     def _cargo_bin_path(self, target_dir: str) -> str:
         name = self.probe_bin + (".exe" if os.name == "nt" else "")
         return os.path.join(target_dir, "release", name)
+
+    def _mutant_target_dir(self, slot: int) -> str:
+        """One of this crate's warm cargo target directories for mutants.
+
+        Keyed by crate because two crates can each ship a `verify_probe`
+        binary; mixing them in one target dir would let one crate's build
+        answer the other's probe. A slot is a cache: it only ever supplies
+        compiled dependencies. The mutant's own binary is copied out before
+        the slot is released (see `_build_cargo`), never launched from here.
+        """
+        base_target = os.environ.get("CARGO_TARGET_DIR") or os.path.join(
+            REPO_ROOT, "target"
+        )
+        return os.path.join(
+            base_target,
+            "verify_probe",
+            os.path.basename(self.crate_dir),
+            "_mutants",
+            f"slot{slot}",
+        )
+
+    def _package_name(self) -> str:
+        """The crate's cargo package name, for `cargo clean -p`."""
+        if not hasattr(self, "_pkg_name"):
+            import tomllib
+
+            with open(os.path.join(self.crate_dir, "Cargo.toml"), "rb") as f:
+                self._pkg_name = tomllib.load(f)["package"]["name"]
+        return self._pkg_name
+
+    @staticmethod
+    def _ensure_cache_tag(target_dir: str) -> None:
+        """Mark the slot as a cargo target dir so `cargo clean` accepts it.
+
+        `cargo clean` refuses a directory without CACHEDIR.TAG - the same tag
+        `cargo build` writes - and the first build in a fresh slot runs clean
+        before it runs build.
+        """
+        tag = os.path.join(target_dir, "CACHEDIR.TAG")
+        if os.path.exists(tag):
+            return
+        with open(tag, "w", encoding="utf-8") as f:
+            f.write(
+                "Signature: 8a477f597d28d172789f06886806bc55\n"
+                "# This file is a cache directory tag created by cargo.\n"
+            )
 
     def _build_rustc(self, src: str, work_dir: str) -> str:
         exe = os.path.join(work_dir, "rust_probe.exe")
@@ -339,29 +431,72 @@ class RustCandidate:
         dst = os.path.join(crate_dir, rel)
         with open(dst, "w", encoding="utf-8") as f:
             f.write(source_override)
-        target_dir = os.path.join(work_dir, "target")
-        cmd = [
-            "cargo",
-            "build",
-            "--release",
-            "--offline",
-            "--manifest-path",
-            os.path.join(work_dir, "Cargo.toml"),
-            "--target-dir",
-            target_dir,
-            "--bin",
-            self.probe_bin,
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0:
-            raise RuntimeError(
-                "cargo mutant build failed:\n"
-                + (proc.stderr.strip() or proc.stdout.strip())
+        # A fresh mutant workspace path would normally make cargo rebuild, but
+        # cargo's freshness check is mtime-based and two builds inside one
+        # second have been observed to be considered fresh. `cargo clean -p`
+        # removes this package's artifacts/fingerprints from the slot's target
+        # dir (the compiled dependencies stay), so the mutant is ALWAYS
+        # recompiled from the source just written.
+        slot = _mutant_slot_queue(os.path.basename(self.crate_dir)).get()
+        try:
+            target_dir = self._mutant_target_dir(slot)
+            os.makedirs(target_dir, exist_ok=True)
+            self._ensure_cache_tag(target_dir)
+            clean_cmd = [
+                "cargo",
+                "clean",
+                "--release",
+                "--offline",
+                "--manifest-path",
+                os.path.join(work_dir, "Cargo.toml"),
+                "--target-dir",
+                target_dir,
+                "-p",
+                self._package_name(),
+            ]
+            cleaned = subprocess.run(clean_cmd, capture_output=True, text=True)
+            if cleaned.returncode != 0:
+                raise RuntimeError(
+                    "cargo mutant clean failed:\n"
+                    + (cleaned.stderr.strip() or cleaned.stdout.strip())
+                )
+            cmd = [
+                "cargo",
+                "build",
+                "--release",
+                "--offline",
+                "--manifest-path",
+                os.path.join(work_dir, "Cargo.toml"),
+                "--target-dir",
+                target_dir,
+                "--bin",
+                self.probe_bin,
+            ]
+            exe = self._cargo_bin_path(target_dir)
+            before = _artifact_stamp(exe)
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    "cargo mutant build failed:\n"
+                    + (proc.stderr.strip() or proc.stdout.strip())
+                )
+            if not os.path.exists(exe):
+                raise RuntimeError(f"cargo mutant built but not found: {exe}")
+            # The artifact must have been relinked by THIS build. If the
+            # stamp is unchanged, the slot served an earlier mutant's binary:
+            # refuse it rather than run a stale probe.
+            if _artifact_stamp(exe) == before:
+                raise RuntimeError(
+                    "cargo reported success but did not relink "
+                    f"{exe}; refusing a possibly stale probe binary"
+                )
+            private_exe = os.path.join(
+                work_dir, self.probe_bin + (".exe" if os.name == "nt" else "")
             )
-        exe = self._cargo_bin_path(target_dir)
-        if not os.path.exists(exe):
-            raise RuntimeError(f"cargo mutant built but not found: {exe}")
-        return exe
+            shutil.copy2(exe, private_exe)
+        finally:
+            _mutant_slot_queue(os.path.basename(self.crate_dir)).put(slot)
+        return private_exe
 
     @staticmethod
     def _toml_value(v) -> str:
@@ -454,18 +589,20 @@ class RustCandidate:
         with open(os.path.join(work_dir, "Cargo.toml"), "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
-    def _roundtrip(self, line: str) -> str:
+    def _roundtrip(self, line: str, timeout: Optional[float] = None) -> str:
         assert self.proc.stdin and self.proc.stdout
+        if timeout is None:
+            timeout = self.call_timeout
         try:
             self.proc.stdin.write(line + "\n")
             self.proc.stdin.flush()
         except (BrokenPipeError, OSError) as e:
             raise RuntimeError(f"rust probe stdin closed: {e}") from e
         try:
-            resp = self._resp_q.get(timeout=self.call_timeout)
+            resp = self._resp_q.get(timeout=timeout)
         except queue.Empty:
             raise RuntimeError(
-                f"rust probe timed out after {self.call_timeout:.0f}s on {line[:60]!r}"
+                f"rust probe timed out after {timeout:.0f}s on {line[:60]!r}"
             )
         if resp == "":
             stderr = ""

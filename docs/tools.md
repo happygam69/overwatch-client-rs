@@ -14,7 +14,12 @@ project, never write to the game.
   `selftest` proves the verifier still detects injected defects. `all` still
   includes the inconclusive `CurveKeySampleDual` unit and the parked `ow-sim`
   units; `casc` is the green CASC gate. The unit format and the five stages
-  are in `dev/verify_harness/runner.py`.
+  are in `dev/verify_harness/runner.py`; the mutation stage's measured wall
+  time and its quality proof are in `dev/verify_harness/PERFORMANCE.md`.
+  `--jobs N` sets how many mutant probes run at once (default 4) and
+  `--mutation-timeout S` bounds one mutant probe call (default 10 s; the
+  baseline candidate keeps 300 s). Neither flag skips a stage or weakens a
+  gate.
 - **`dev/gh.py`** — the Ghidra MCP bridge client used by the naming tools.
 - **`dev/gh_apply_names.py`** — applies `docs/function-names.csv` to the
   Ghidra program.

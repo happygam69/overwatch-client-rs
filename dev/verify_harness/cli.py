@@ -5,6 +5,11 @@
     python dev/verify_harness/cli.py all
     python dev/verify_harness/cli.py selftest
     python dev/verify_harness/cli.py list
+
+Two performance knobs, neither of which can skip a stage or weaken a gate:
+
+    --jobs N                  mutant probes run at once (default: min(4, active))
+    --mutation-timeout S      per-call budget for a mutant probe (default 10 s)
 """
 
 from __future__ import annotations
@@ -16,7 +21,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from runner import load_unit, run_and_record  # noqa: E402
+from runner import (  # noqa: E402
+    DEFAULT_MUTANT_JOBS,
+    DEFAULT_MUTATION_CALL_TIMEOUT,
+    load_unit,
+    run_and_record,
+)
 
 UNITS_DIR = os.path.join(os.path.dirname(__file__), "units")
 
@@ -37,7 +47,49 @@ def is_casc(raw) -> bool:
     return raw.get("suite") == "casc" or raw.get("candidateCrate") == "ow-casc"
 
 
+def _pop_value(argv, flag):
+    """Remove `flag VALUE` / `flag=VALUE` from argv; return (value, argv)."""
+    out = []
+    value = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == flag:
+            if i + 1 >= len(argv):
+                raise SystemExit(f"{flag} needs a value")
+            value = argv[i + 1]
+            i += 2
+            continue
+        if a.startswith(flag + "="):
+            value = a.split("=", 1)[1]
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    return value, out
+
+
 def main(argv):
+    jobs_raw, argv = _pop_value(argv, "--jobs")
+    timeout_raw, argv = _pop_value(argv, "--mutation-timeout")
+    try:
+        jobs = int(jobs_raw) if jobs_raw is not None else DEFAULT_MUTANT_JOBS
+        mutation_timeout = (
+            float(timeout_raw)
+            if timeout_raw is not None
+            else DEFAULT_MUTATION_CALL_TIMEOUT
+        )
+    except ValueError as e:
+        print(f"bad performance flag value: {e}")
+        return 2
+    if jobs < 1:
+        print("--jobs must be at least 1")
+        return 2
+    if not (mutation_timeout > 0):
+        print("--mutation-timeout must be positive")
+        return 2
+    run_kw = {"mutant_workers": jobs, "mutation_call_timeout": mutation_timeout}
+
     if not argv:
         print(__doc__)
         return 2
@@ -91,7 +143,7 @@ def main(argv):
     results = []
     for p in paths:
         unit = load_unit(p)
-        e = run_and_record(unit)
+        e = run_and_record(unit, **run_kw)
         results.append((unit.id, e))
         print(f"  => {unit.id}: {e.status}")
         # `all` keeps every note; a suite run prints them only for a failure,

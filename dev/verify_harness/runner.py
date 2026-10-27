@@ -72,6 +72,18 @@ def resolve_image(path: str) -> str:
 
 SHIM_PATH = os.path.join(os.path.dirname(__file__), "ghidra_shim.h")
 
+# Mutation-stage budget. A mutant is broken code by construction, so an
+# unbounded loop is an expected outcome, not a slow call: the mutant is killed
+# at the first case that fails, and a timeout is a failure like any other.
+# The default is >1000x the slowest observed non-hanging mutant call (see
+# PERFORMANCE.md); the baseline candidate keeps DEFAULT_CALL_TIMEOUT.
+DEFAULT_MUTATION_CALL_TIMEOUT = 10.0
+# The pinned mutation corpus: the first 48 cases (declared specials first,
+# then the focused edges). Do not lengthen - a mutant only has to be caught
+# once.
+MUTATION_CORPUS_CASES = 48
+DEFAULT_MUTANT_JOBS = 4
+
 # Unit descriptor keys this harness understands. A typo'd key ("argfactory",
 # "candidateLoader ":"rust ") would otherwise be silently ignored and the
 # unit would quietly verify with a weaker surface - warn loudly instead.
@@ -84,7 +96,7 @@ _KNOWN_UNIT_KEYS = {
 _KNOWN_ARG_KEYS = {"name", "kind", "ptr_len"}
 _KNOWN_OPTION_KEYS = {
     "iterations", "coverageThreshold", "mutationCount", "mutationKillRate",
-    "seed", "allowedImageReads", "unreachableBranches",
+    "seed", "allowedImageReads", "unreachableBranches", "mutationCallTimeout",
 }
 _ARG_KINDS = ("f32", "f64", "u64")
 _RET_KINDS = ("f32", "f64", "u64", "void")
@@ -156,6 +168,22 @@ class Divergence:
     oracle: str
     candidate: str
     detail: str = ""
+
+
+@dataclass
+class MutantOutcome:
+    """One mutant's result from the mutation worker pool.
+
+    ``killed`` is the verdict; ``detail`` records why (the first diverging
+    case and channel, including a timeout), and ``build_error`` is set when
+    the mutant did not compile. A build failure is still killed, exactly as
+    before, and counted in both numerator and denominator.
+    """
+
+    mutant: Any
+    killed: bool
+    detail: str = ""
+    build_error: str = ""
 
 
 def _warn(msg: str) -> None:
@@ -446,7 +474,8 @@ def run_unit(
     work_dir: Optional[str] = None,
     skip_mutation: bool = False,
     verbose: bool = True,
-    mutant_workers: int = 4,
+    mutant_workers: int = DEFAULT_MUTANT_JOBS,
+    mutation_call_timeout: Optional[float] = None,
 ) -> LedgerEntry:
     def log(msg: str) -> None:
         if verbose:
@@ -458,6 +487,15 @@ def run_unit(
     mutation_count = int(opts.get("mutationCount", 12))
     kill_gate = float(opts.get("mutationKillRate", 0.8))
     seed = int(opts.get("seed", 4241))
+    if mutation_call_timeout is None:
+        mutation_call_timeout = float(
+            opts.get("mutationCallTimeout", DEFAULT_MUTATION_CALL_TIMEOUT)
+        )
+    if not (mutation_call_timeout > 0):
+        raise ValueError(
+            f"unit {unit.id}: mutationCallTimeout must be positive, "
+            f"got {mutation_call_timeout!r}"
+        )
 
     oracle_sha = "unloaded"
     # The candidate artifact the ledger binds to: the decompile for tier 1,
@@ -804,11 +842,30 @@ def run_unit(
             if m not in active:
                 log(f"  skip mutant {m.kind}@{m.line} (declared equivalent)")
 
-        # Build every mutant up front, concurrently - compilation is a
-        # subprocess and does not touch the oracle, so it parallelises; the
-        # differential itself runs serially below (one emulator).
-        def _build(m):
+        # Mutation corpus: a subset is enough to decide kill/survive. The
+        # first 48 are the pinned specials (factories put discriminating cases
+        # at the front) plus the focused edges; oracle results come from the
+        # stage-3 cache - identical inputs were already executed and stage 2
+        # proved the oracle agrees with itself. The results are gathered here,
+        # in the main thread, because the emulator is not shared with the
+        # mutant workers and a cache miss must not change that.
+        mut_cases = cases[: min(len(cases), MUTATION_CORPUS_CASES)]
+        mutation_oracle: List[Tuple[Any, Any]] = []
+        for args in mut_cases:
+            key = _args_key(args)
+            o = cache.get(key)
+            if o is None:  # defensive; every case ran in stage 3
+                o = oracle.call(unit.address_v2b, args, ret_kind=unit.ret_kind)
+                cache[key] = o
+            mutation_oracle.append((args, o))
+
+        # Each mutant is an independent probe subprocess and the oracle
+        # results above are read-only, so build AND run each mutant in a
+        # worker. `pool.map` keeps the report in mutant order; the verdicts
+        # are per-mutant and do not depend on scheduling.
+        def _probe(m) -> MutantOutcome:
             mdir = tempfile.mkdtemp(prefix="mutant_")
+            mc = None
             try:
                 if unit.candidate_loader in ("rust", "cargo"):
                     from candidate_rust import RustCandidate
@@ -823,6 +880,7 @@ def run_unit(
                         loader=unit.candidate_loader,
                         state_base=unit.state.base if unit.state is not None else None,
                         state_bytes=unit.state.data if unit.state is not None else None,
+                        call_timeout=mutation_call_timeout,
                         crate_dir=cand_crate_dir,
                         cargo_probe=cand_probe,
                     )
@@ -837,76 +895,82 @@ def run_unit(
                         work_dir=mdir,
                         source_override=m.source,
                     )
-                return (m, mc, mdir, None)
             except RuntimeError as e:
-                return (m, None, mdir, e)
-
-        workers = max(1, min(mutant_workers, len(active)))
-        if workers > 1:
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                builds = list(pool.map(_build, active))
-        else:
-            builds = [_build(m) for m in active]
-
-        killed = 0
-        scored = 0
-        survivors: List[Any] = []
-        for m, mc, mdir, err in builds:
-            scored += 1
-            if err is not None:
-                # A mutant that does not compile is a killed mutant: the
-                # harness cannot run a broken build, and the original still
-                # verified, so the detection-power claim stands for the
-                # mutants that do build. Count it in BOTH numerator and
-                # denominator so the kill rate stays in [0, 1].
-                log(f"  mutant {m.kind}@{m.line} does not compile (counted killed): {err}")
-                killed += 1
                 shutil.rmtree(mdir, ignore_errors=True)
-                continue
+                return MutantOutcome(m, killed=True, build_error=str(e))
             try:
-                detected = False
-                # Mutation corpus: a subset is enough to decide
-                # kill/survive. The first 48 are the pinned specials
-                # (factories put discriminating cases at the front) plus
-                # the focused edges; oracle results come from the cache -
-                # identical inputs were already executed and stage 2
-                # proved the oracle agrees with itself.
-                mut_cases = cases[: min(len(cases), 48)]
-                for idx, args in enumerate(mut_cases):
-                    o = cache.get(_args_key(args))
-                    if o is None:  # defensive; every case ran in stage 3
-                        o = oracle.call(unit.address_v2b, args, ret_kind=unit.ret_kind)
-                        cache[_args_key(args)] = o
+                for idx, (args, o) in enumerate(mutation_oracle):
                     c = mc.call(args)
                     if not c.ok:
-                        detected = True
-                        break
+                        # A fault is a divergence. A timeout is a fault: the
+                        # broken mutant never answered, which is exactly the
+                        # detection the stage is asking for.
+                        return MutantOutcome(
+                            m, killed=True, detail=f"case {idx}: candidate fault: {c.fault}"
+                        )
                     if unit.ret_kind != "void" and not _bits_equal(
                         o.ret_bits, c.ret_bits, unit.ret_kind
                     ):
-                        detected = True
-                        break
+                        return MutantOutcome(
+                            m, killed=True, detail=f"case {idx}: return differs"
+                        )
                     if _mem_channel(o.pointee_after, c.pointee_after, args) is not None:
-                        detected = True
-                        break
-                    if _state_channel(
-                        getattr(o, "state_after", None),
-                        getattr(c, "state_after", None),
-                        unit,
-                        args,
-                    ) is not None:
-                        detected = True
-                        break
-                if detected:
-                    killed += 1
-                else:
-                    survivors.append(m)
-                    log(f"  SURVIVOR: {m.kind}@{m.line}: {m.excerpt[:60]}")
+                        return MutantOutcome(
+                            m, killed=True, detail=f"case {idx}: pointee differs"
+                        )
+                    if (
+                        _state_channel(
+                            getattr(o, "state_after", None),
+                            getattr(c, "state_after", None),
+                            unit,
+                            args,
+                        )
+                        is not None
+                    ):
+                        return MutantOutcome(
+                            m, killed=True, detail=f"case {idx}: state differs"
+                        )
+                return MutantOutcome(m, killed=False)
             finally:
                 close = getattr(mc, "close", None)
                 if close is not None:
                     close()
                 shutil.rmtree(mdir, ignore_errors=True)
+
+        workers = max(1, min(mutant_workers, len(active)))
+        log(
+            f"  probing {len(active)} mutant(s) on {workers} worker(s), "
+            f"mutation call timeout {mutation_call_timeout:g}s"
+        )
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                outcomes = list(pool.map(_probe, active))
+        else:
+            outcomes = [_probe(m) for m in active]
+
+        killed = 0
+        scored = 0
+        survivors: List[Any] = []
+        for res in outcomes:
+            m = res.mutant
+            scored += 1
+            if res.build_error:
+                # A mutant that does not compile is a killed mutant: the
+                # harness cannot run a broken build, and the original still
+                # verified, so the detection-power claim stands for the
+                # mutants that do build. Count it in BOTH numerator and
+                # denominator so the kill rate stays in [0, 1].
+                log(
+                    f"  mutant {m.kind}@{m.line} does not compile "
+                    f"(counted killed): {res.build_error}"
+                )
+                killed += 1
+            elif res.killed:
+                killed += 1
+                log(f"  mutant {m.kind}@{m.line} killed: {res.detail}")
+            else:
+                survivors.append(m)
+                log(f"  SURVIVOR: {m.kind}@{m.line}: {m.excerpt[:60]}")
 
         kill_rate = (killed / scored) if scored else 0.0
         log(f"  kill rate {kill_rate:.0%} ({killed}/{scored})")

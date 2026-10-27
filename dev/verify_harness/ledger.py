@@ -31,7 +31,13 @@ LEDGER_PATH = os.path.join(os.path.dirname(__file__), "ledger.json")
 #
 # 4: coverage accepts a unit's declared dead branch edges, but only after
 #    validating that the site ran and exactly one edge was ever observed.
-HARNESS_VERSION = "4"
+# 5: mutation stage runs each mutant's build and probe in a worker pool
+#    (same per-mutant verdicts, deterministic report order), bounds a mutant
+#    call with mutationCallTimeout (a timeout is still a kill), and builds
+#    mutants in four warm cargo target slots per crate. Each build is forced
+#    dirty with `cargo clean -p` and the artifact is copied out per mutant.
+#    Same gates, same classification; see dev/verify_harness/PERFORMANCE.md.
+HARNESS_VERSION = "5"
 
 
 def sha256_bytes(b: bytes) -> str:
