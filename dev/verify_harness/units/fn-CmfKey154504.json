@@ -1,0 +1,57 @@
+{
+  "id": "fn/CmfKey154504",
+  "title": "tier-2 shipped code: CMF build-154504 key against CmfKey154504 (0x142e48a20)",
+  "address": {
+    "v2b": "0x7ff7c7b68a20"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "cmf_key_154504",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "header",
+      "kind": "ptr",
+      "ptr_len": 48
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "length",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "cmf_key_154504_fixture",
+  "state": {
+    "base": "0x7ff7c83300c0",
+    "hex": "0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50009abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e93b8dd02274c7196bbe0052a4f7499bee3082d52779cc1ff0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186a2d0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e93b8dd02274c7196bbe0052a4f7499bee3082d52779cc1e6"
+  },
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 0.0,
+    "mutationCount": 8,
+    "mutationKillRate": 1.0,
+    "seed": 154504
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/manifest.rs, built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the cmf_key_154504 entry. The ledger binds the verdict to manifest.rs + the probe source + the git revision.",
+    "Oracle is CmfKey154504 at exe 0x142e48a20 (v2b 0x7ff7c7b68a20). Signature: (Header*, uint8 out[32], int len); the header is passed in RCX and not read. The 512-byte table is the client's global at exe 0x1436100c0 (v2b 0x7ff7c83300c0), supplied as the unit state and read by the key routine.",
+    "The real body sits behind the client's overlapping-instruction opaque-predicate prologue. The emulator executes the same real path a normal call takes; the prologue only shuffles ESP, and the security cookie is written and checked around it.",
+    "The key routine seeds the cursor from table[0x100 + len] (len is 32, so table[0x120]), writes table[SignedMod(cursor, 512)] and advances the 32-bit cursor by 3. The client's SignedMod sequence (AND 0x800001ff plus the sign fix-ups) is exactly cursor & 511; the shipped signed_mod does the same on the truncated 32-bit value.",
+    "The table is synthetic, not game data: (i * 37 + 11) & 0xFF with table[0x120] = 162, table[162] = 0x00 and table[255] = 0xFF. The walk is 162, 165, ..., 255, so it reads 32 distinct indices, exercises table bytes 0x00 and 0xFF, and covers all 32 output bytes. The untouched header and a per-case output fill prove the routine writes every key byte.",
+    "The seed is a table byte, so this routine's cursor stays in 0..348 and cannot reach the 512 boundary or a negative i32 value. The % 512 wrap and the signed edge belong to the IV routine, whose cursor is 16 * buildVersion.",
+    "Mutation: the line-oriented mutator produces one mutant here - the seed offset 0x100 + 32 -> 0x100 - 32, which reads table[0xE0] = 0x6B - and the first key byte kills it. The differential, not the mutation stage, is what pins the 32-byte walk for this table.",
+    "Coverage gate is 0: the harness's linear sweep desynchronises at the overlapping-instruction opaque-predicate JMP in the entry prologue, so the discovered branch sites are the padding stubs, not the real body. The measured coverage is recorded in the ledger; the differential and mutation stages carry the unit."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "Branch coverage of the client entry",
+      "why": "The linear sweep cannot follow the overlapping-instruction opaque-predicate prologue, so it reports the padding branches rather than the real loop. The coverage value is still measured and recorded; the gate is 0. The 364-case differential and the mutation stage carry the unit."
+    }
+  ]
+}

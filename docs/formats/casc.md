@@ -395,6 +395,22 @@ table based at `0x1436101c0`, the 154088 table with this formula, and wrong
 seeds or steps each produce hundreds of thousands of out-of-order adjacent
 pairs. `Registry::open` rejects any list that is not GUID-sorted.
 
+Harness proof: `fn/CmfKey154504` and `fn/CmfIv154504` in
+`dev/verify_harness/units/` pass the differential stage on 364 cases each,
+every channel. The cases cover all 32 key bytes and all 16 IV bytes, table
+bytes `0x00`/`0xFF`, build `0` and `0xFFFF_FFFF`, data counts `0`, `19`, `20`,
+`21` and the 32-bit extremes, digest bytes `0x00`/`0xFF` at every digest index
+`0..19`, the 32-bit cursor wrap below `2^32` and the negative-`i32` modulo
+edge. The mutation stage kills 1/1 and 5/5 (the fifth IV mutant flips the
+return arrow and does not compile; the harness's rule counts that as killed).
+The coverage stage cannot measure either real body: the linear sweep
+desynchronises at the overlapping-instruction opaque-predicate prologue and
+reports the padding stubs (`0/15` and `5/33`). Both units carry that as an
+acknowledged gap with the coverage gate at `0`; the differential and mutation
+stages are the proof. The units use synthetic 512-byte tables, headers, names
+and digests; neither the installed table nor any manifest bytes are in the
+repository.
+
 ### The content key is the MD5 of the decoded file
 
 Measured on 300 small records that resolve locally: `md5(decoded) == content

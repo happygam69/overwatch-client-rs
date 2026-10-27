@@ -4,6 +4,25 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-27 - Build-154504 key and IV are harness units
+
+- Added `fn/CmfKey154504` and `fn/CmfIv154504` to `dev/verify_harness`:
+  oracle `CmfKey154504` at `0x142e48a20` and `CmfIv154504` at `0x142e48700`,
+  candidate `crates/ow-tank/src/manifest.rs` through
+  `crates/ow-tank/src/bin/verify_probe.rs`. 364 synthetic differential cases
+  each on every channel; the mutation stage kills 1/1 and 5/5.
+- Split `key_iv_154504` into the shipped `key_154504` and `iv_154504` halves;
+  the read showed the key seed is `table[0x120]` with step 3, and the IV
+  cursor starts at `16 * buildVersion`, steps by
+  `digest[dataCount % 20] + dataCount`, and XORs
+  `digest[(154504 + i) % 20]`.
+- The units use synthetic tables, headers, names and digests; no installed
+  table or manifest bytes are in the repository. The coverage stage cannot
+  measure either real body (the linear sweep desynchronises at the
+  overlapping-instruction opaque-predicate prologue), so both units carry an
+  acknowledged gap and set the coverage gate to 0; the row stays in
+  `docs/ow-tank-1to1.md` section B.
+
 ## 2026-10-27 - The chunk-GUID formula is harness-verified
 
 - `fn/ChunkGuid` is the first `ow-tank` unit in `dev/verify_harness`: oracle

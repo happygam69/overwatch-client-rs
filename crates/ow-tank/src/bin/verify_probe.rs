@@ -30,12 +30,29 @@
 //! buffer of the client's own `0x24 * 0x20` layout; the harness models the
 //! same bytes at the table's image address in its `state` block, so both
 //! sides read one table.
+//!
+//! The `cmf_key_154504` and `cmf_iv_154504` entries read the 512-byte key
+//! table from the same `state` block (the client reads it as a global at
+//! `0x1436100c0`) and call `ow_tank::manifest::key_154504` /
+//! `iv_154504`. The IV entry takes the client's string object, extracts the
+//! name through its inline/heap layout, hashes it with the same `sha1` crate
+//! the manifest decryption path uses, and passes the digest to the shipped
+//! function.
 
 use std::io::{self, BufRead, Write};
 
 const CHUNK_TABLE_SLOTS: usize = 0x24;
 const CHUNK_TABLE_STRIDE: usize = 0x20;
 const CHUNK_TABLE_LEN: usize = CHUNK_TABLE_SLOTS * CHUNK_TABLE_STRIDE;
+
+/// The client's key table is 512 bytes at `0x1436100c0`.
+const CMF_TABLE_LEN: usize = 512;
+/// `Header::parse` reads the build at `+0` and the data count at `+0x20`.
+const CMF_HEADER_LEN: usize = 48;
+/// The client string uses the 16-byte inline buffer and the size/capacity
+/// dwords at `+0x10` / `+0x14`.
+const CMF_STRING_INLINE: usize = 16;
+const CMF_STRING_OBJECT: usize = 0x20;
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     if s == "-" {
@@ -104,10 +121,137 @@ fn chunk_guid_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     Ok((format!("{:x}", guid), vec![table]))
 }
 
-fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+/// The 512-byte table from the unit's `state` block.
+fn cmf_table(state: Option<&[u8]>) -> Result<&[u8; CMF_TABLE_LEN], String> {
+    let bytes = state.ok_or("missing-state-table")?;
+    if bytes.len() < CMF_TABLE_LEN {
+        return Err("state-must-hold-512-table-bytes".into());
+    }
+    bytes[..CMF_TABLE_LEN]
+        .try_into()
+        .map_err(|_| "state-table-conversion".into())
+}
+
+/// Extract the name bytes from the client's string object. The object stores
+/// the characters inline when the capacity is 16 or less; otherwise `+0` holds
+/// the data pointer, which the fixture writes as a relative offset (0x20) into
+/// the same object buffer. The harness rebases that slot for the oracle; the
+/// probe reads the same relative offset from the slot the fixture declared.
+fn cmf_name_bytes<'a>(obj: &'a [u8], relocs: &[usize]) -> Result<&'a [u8], String> {
+    if obj.len() < CMF_STRING_OBJECT {
+        return Err("string-object-too-short".into());
+    }
+    let size = u32::from_le_bytes(obj[0x10..0x14].try_into().unwrap()) as usize;
+    let capacity = u32::from_le_bytes(obj[0x14..0x18].try_into().unwrap()) as usize;
+    let start = if capacity > CMF_STRING_INLINE {
+        let slot = *relocs.first().ok_or("string-needs-data-reloc")?;
+        let end = slot.checked_add(8).ok_or("string-reloc-overflow")?;
+        let raw = obj.get(slot..end).ok_or("string-reloc-out-of-range")?;
+        u64::from_le_bytes(raw.try_into().unwrap()) as usize
+    } else {
+        0
+    };
+    obj.get(start..start + size)
+        .ok_or_else(|| "string-out-of-range".into())
+}
+
+/// `CmfKey154504` (`0x142e48a20`): `(Header*, u8 out[32], int len)`.
+fn cmf_key_154504_entry(
+    args: Vec<Arg>,
+    state: Option<&[u8]>,
+) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let header = match it.next() {
+        Some(Arg::Ptr(b, _, None)) => b,
+        _ => return Err("arg0 must be a header buffer".into()),
+    };
+    let out = match it.next() {
+        Some(Arg::Ptr(b, _, None)) => b,
+        _ => return Err("arg1 must be an output buffer".into()),
+    };
+    let len = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg2 must be u64".into()),
+    };
+    if len != 32 {
+        return Err("key-length-must-be-32".into());
+    }
+    if out.len() != 32 {
+        return Err("out-must-be-32-bytes".into());
+    }
+    let table = cmf_table(state)?;
+    let key = ow_tank::manifest::key_154504(table);
+    Ok(("-".to_string(), vec![header, key.to_vec()]))
+}
+
+/// `CmfIv154504` (`0x142e48700`): `(string*, Header*, u8 out[16], int len)`.
+fn cmf_iv_154504_entry(
+    args: Vec<Arg>,
+    state: Option<&[u8]>,
+) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let (name_obj, relocs) = match it.next() {
+        Some(Arg::Ptr(b, r, None)) => (b, r),
+        _ => return Err("arg0 must be a string object".into()),
+    };
+    let header = match it.next() {
+        Some(Arg::Ptr(b, _, None)) => b,
+        _ => return Err("arg1 must be a header buffer".into()),
+    };
+    let out = match it.next() {
+        Some(Arg::Ptr(b, _, None)) => b,
+        _ => return Err("arg2 must be an output buffer".into()),
+    };
+    let len = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg3 must be u64".into()),
+    };
+    if len != 16 {
+        return Err("iv-length-must-be-16".into());
+    }
+    if out.len() != 16 {
+        return Err("out-must-be-16-bytes".into());
+    }
+    if header.len() < CMF_HEADER_LEN {
+        return Err("header-must-be-48-bytes".into());
+    }
+    let name = cmf_name_bytes(&name_obj, &relocs)?;
+    let digest: [u8; 20] = {
+        use sha1::{Digest, Sha1};
+        let mut hasher = Sha1::new();
+        hasher.update(name);
+        hasher.finalize().into()
+    };
+    let parsed = ow_tank::manifest::Header {
+        build_version: u32::from_le_bytes(header[0..4].try_into().unwrap()),
+        data_patch_count: 0,
+        entry_patch_count: 0,
+        data_count: i32::from_le_bytes(header[0x20..0x24].try_into().unwrap()),
+        entry_count: 0,
+        magic: 0,
+    };
+    let table = cmf_table(state)?;
+    let iv = ow_tank::manifest::iv_154504(&parsed, &digest, table);
+    Ok(("-".to_string(), vec![name_obj, header, iv.to_vec()]))
+}
+
+fn handle_call(
+    entry: &str,
+    args: Vec<Arg>,
+    state: Option<&[u8]>,
+) -> Result<(String, Vec<Vec<u8>>), String> {
     match entry {
         // crates/ow-tank/src/mapguid.rs
         "chunk_guid" => chunk_guid_entry(args),
+        // crates/ow-tank/src/manifest.rs
+        "cmf_key_154504" => cmf_key_154504_entry(args, state),
+        "cmf_iv_154504" => cmf_iv_154504_entry(args, state),
         other => Err(format!("unknown-entry-{}", other)),
     }
 }
@@ -268,7 +412,7 @@ fn main() {
             let _ = out.flush();
             continue;
         }
-        match handle_call(entry, args) {
+        match handle_call(entry, args, state.as_deref()) {
             Ok((ret, outs)) => {
                 let mut resp = format!("ok {}", ret);
                 for o in outs {

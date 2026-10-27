@@ -1,0 +1,67 @@
+{
+  "id": "fn/CmfIv154504",
+  "title": "tier-2 shipped code: CMF build-154504 IV against CmfIv154504 (0x142e48700)",
+  "address": {
+    "v2b": "0x7ff7c7b68700"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "cmf_iv_154504",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "name",
+      "kind": "ptr",
+      "ptr_len": 96
+    },
+    {
+      "name": "header",
+      "kind": "ptr",
+      "ptr_len": 48
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 16
+    },
+    {
+      "name": "length",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "cmf_iv_154504_fixture",
+  "state": {
+    "base": "0x7ff7c83300c0",
+    "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+  },
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 0.0,
+    "mutationCount": 8,
+    "mutationKillRate": 1.0,
+    "seed": 154504,
+    "allowedImageReads": [
+      "0x7ff7c8721d20-0x7ff7c8721d5f",
+      "0x7ff7c87e5f40-0x7ff7c87e5f47"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/manifest.rs, built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the cmf_iv_154504 entry. The ledger binds the verdict to manifest.rs + the probe source + the git revision.",
+    "Oracle is CmfIv154504 at exe 0x142e48700 (v2b 0x7ff7c7b68700). Signature: (string*, Header*, uint8 out[16], int len). The 512-byte table is the client's global at exe 0x1436100c0 (v2b 0x7ff7c83300c0), supplied as the unit state.",
+    "The client computes SHA-1 of the file name inside the IV routine (the three SHA-1 helpers it calls) and reads buildVersion at header +0 and dataCount at header +0x20. The probe computes the same SHA-1 with the crate's sha1 dependency and passes the digest to the shipped iv_154504. This adapter is the only difference between the two sides; the derivation itself is the shipped function.",
+    "The string argument is the client's 32-byte string layout: the 16-byte inline buffer at +0, the size dword at +0x10, and the capacity dword at +0x14. Names of 16 bytes or more use the heap form, where +0 is the data pointer; the fixture stores the relative offset 0x20 there, the oracle rebases it into its arena, and the probe reads the same relative offset from the object buffer. The runner masks that reloc slot, so only the name bytes and the other object bytes are compared. Names shorter than 16 bytes use the inline form and exercise the other side of the branch.",
+    "The IV cursor starts at 16 * buildVersion (32-bit wrap), each byte is table[SignedMod(cursor, 512)], the cursor then advances by digest[dataCount % 20] + dataCount, and the byte is XORed with digest[(154504 + i) % 20]. The fixture pins build 0, 1, 32, 0x08000000 (cursor 0x80000000, the signed edge), 0x10000000 and 0x80000000 (cursor 0), 0x7FFFFFFF and 0xFFFFFFFF (cursor wrap below 2^32), and data counts 0, 19, 20, 21, 39, 40, 41, 0x7FFFFFFF, 0x80000000 and 0xFFFFFFFF.",
+    "The table is synthetic, not game data: table[i] = i & 0xFF, so table[0] = 0x00 and table[255] = 0xFF. The cmf_table_edge.cmf case starts at cursor 0 and steps to index 255 on the second read, so both byte edges are observed. SHA-1 digest bytes 0x00 and 0xFF are pinned at every index 0..19. Each pinned case sets dataCount to the index, so every index drives the step; indices 4..19 also sit at an XOR position.",
+    "allowedImageReads: 0x7ff7c8721d20-0x7ff7c8721d5f is the SHA-1 padding constant block at exe 0x143a01d20; 0x7ff7c87e5f40-0x7ff7c87e5f47 is the /GS security cookie at exe 0x143ac5f40. Both are fixed image data read by the client's helper/check, not game state.",
+    "Mutation: the line mutants are dataCount % 20 -> % 21 and % 19, and (154504 + i) % 20 -> % 21 and % 19; the digest-byte and data-count corpus kills all four. A fifth mutant flips the return-type arrow to `->=` and does not compile; the harness's documented rule counts a non-compiling mutant as killed, and the run reports it explicitly.",
+    "Coverage gate is 0: the harness's linear sweep desynchronises at the overlapping-instruction opaque-predicate JMP in the entry prologue, so the discovered branch sites are the padding stubs, not the real body. The measured coverage is recorded in the ledger; the differential and mutation stages carry the unit."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "Branch coverage of the client entry",
+      "why": "The linear sweep cannot follow the overlapping-instruction opaque-predicate prologue, so it reports the padding branches rather than the real loop and the string-layout branch. The coverage value is still measured and recorded; the gate is 0. The 364-case differential and the mutation stage carry the unit."
+    }
+  ]
+}

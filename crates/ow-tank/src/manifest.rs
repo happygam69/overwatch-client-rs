@@ -210,37 +210,42 @@ fn key_iv_154088(
     Ok((key, iv))
 }
 
-/// The derivation for build 154504, read from the client's own key and IV
-/// routines.
+/// The build-154504 key half, read from `CmfKey154504` (`0x142e48a20`).
 ///
-/// Key (`0x142e48a20`): the seed is `table[0x100 + key_length]` (here
-/// `table[0x120]`); each output byte is `table[signed_mod(cursor, 512)]` and the
-/// cursor advances by 3. The key depends only on the table and the key length,
-/// not on the header or the file name.
-///
-/// IV (`0x142e48700`): SHA-1 of the ASCII file name; the cursor starts at
-/// `16 * header.build_version`, each byte is `table[signed_mod(cursor, 512)]`,
-/// then the cursor advances by `digest[data_count % 20] + data_count` and the
-/// byte is XORed with `digest[(build + i) % 20]`. The client's IV routine holds
-/// this build's number as the digest-index seed and reads the header for the
-/// cursor seed; both are 154504 here.
-fn key_iv_154504(
-    header: &Header,
-    digest: &[u8; 20],
-    table: &[u8; keytable::TABLE_SIZE],
-) -> Result<([u8; 32], [u8; 16])> {
+/// The seed is `table[0x100 + key_length]` (here `table[0x120]`); each output
+/// byte is `table[signed_mod(cursor, 512)]` and the cursor advances by 3. The
+/// key depends only on the table and the key length, not on the header or the
+/// file name. Public so the differential harness can call the exact half the
+/// manifest path uses.
+pub fn key_154504(table: &[u8; keytable::TABLE_SIZE]) -> [u8; 32] {
     let at = |i: i64| table[signed_mod(i) as usize];
-
-    // Key: fixed length 32, so the seed is table[0x100 + 32].
     let mut key = [0u8; 32];
     let mut cursor = u32::from(table[0x100 + 32]);
     for slot in key.iter_mut() {
         *slot = at(i64::from(cursor));
         cursor = cursor.wrapping_add(3);
     }
+    key
+}
 
-    // IV: `length * build` seeds the table walk; the data count and the
-    // digest enter on every later step.
+/// The build-154504 IV half, read from `CmfIv154504` (`0x142e48700`).
+///
+/// `digest` is SHA-1 of the ASCII file name. The cursor starts at
+/// `16 * header.build_version`, each byte is `table[signed_mod(cursor, 512)]`,
+/// then the cursor advances by `digest[data_count % 20] + data_count` and the
+/// byte is XORed with `digest[(154504 + i) % 20]`. The client's IV routine
+/// holds this build's number as the digest-index seed and reads the header for
+/// the cursor seed; both are 154504 here. Public for the same reason as
+/// [`key_154504`].
+pub fn iv_154504(
+    header: &Header,
+    digest: &[u8; 20],
+    table: &[u8; keytable::TABLE_SIZE],
+) -> [u8; 16] {
+    let at = |i: i64| table[signed_mod(i) as usize];
+
+    // `length * build` seeds the table walk; the data count and the digest
+    // enter on every later step.
     let data_count = header.data_count as u32;
     let step = u32::from(digest[(data_count % 20) as usize]).wrapping_add(data_count);
     let mut iv = [0u8; 16];
@@ -251,7 +256,19 @@ fn key_iv_154504(
         let index = CMF_BUILD_154504.wrapping_add(i as u32) % 20;
         *slot ^= digest[index as usize];
     }
-    Ok((key, iv))
+    iv
+}
+
+/// The derivation for build 154504, composed from the two client routines.
+///
+/// Key (`0x142e48a20`) and IV (`0x142e48700`) are separate client functions;
+/// [`key_154504`] and [`iv_154504`] are their operation-for-operation halves.
+fn key_iv_154504(
+    header: &Header,
+    digest: &[u8; 20],
+    table: &[u8; keytable::TABLE_SIZE],
+) -> Result<([u8; 32], [u8; 16])> {
+    Ok((key_154504(table), iv_154504(header, digest, table)))
 }
 
 /// The derivation for build 150851, verified against that build's manifests.

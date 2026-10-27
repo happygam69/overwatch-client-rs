@@ -33,7 +33,10 @@ claim. `ow-sim` is parked reference code.
 - **Build-154504 manifest:** `CmfKey154504` (`0x142e48a20`) and
   `CmfIv154504` (`0x142e48700`) use the table at `0x1436100c0`, read from the
   installed `Overwatch.exe` at runtime. The encrypted manifest decrypts to
-  1,301,598 GUID-sorted records.
+  1,301,598 GUID-sorted records. The two routines now have differential units
+  (`fn/CmfKey154504`, `fn/CmfIv154504`): 364 synthetic cases each, every
+  channel, all key and IV bytes; the coverage stage cannot measure the body
+  (acknowledged gap, gate 0), so the row stays in `ow-tank-1to1.md` section B.
 - **Bundle assets:** the CMF record byte's bit 7 selects the encoded store or
   a type-`0x09C` bundle; the entry lookup is read from `FUN_141fd5820`
   (`0x141fd5820`) and implemented in `ow-tank::bundle`. All 305 type-`0x09F`
@@ -49,7 +52,9 @@ claim. `ow-sim` is parked reference code.
 - **Other verified client functions:** `AnimTimeWrap`,
   `BuildPerspectiveMatrix`, `InitProjectionDescriptor`,
   `OrthonormalizeCameraBasis` (stateful) and `MapChunkGuid` (`fn/ChunkGuid`,
-  the first `ow-tank` tier-2 unit). `CurveKeySampleDual` is inconclusive at
+  the first `ow-tank` tier-2 unit). The build-154504 key/IV units
+  (`fn/CmfKey154504`, `fn/CmfIv154504`) pass differential and mutation but
+  keep an acknowledged coverage gap. `CurveKeySampleDual` is inconclusive at
   75% coverage; the two `ow-sim` units cannot run while `ow-sim` is parked.
 
 ## Open
