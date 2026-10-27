@@ -50,6 +50,10 @@ streaming policy and collision path are open.
   identity; its 304 groups carry the looks and its 2,449 entries carry the
   world transforms. The practice-range client places the entries, not one
   instance per group placeable.
+- **Bundle directory: consumer verified, producer open.** The lookup
+  `BundleDirectoryLookup` (`0x141fd5160`) is a verified harness unit
+  (`fn/BundleDirectoryLookup`); the *producer* of the directory blob is still
+  not read.
 - **Open:** the client's *producer* of the bundle directory (the blob handed to
   the bundle job), the producer of the level-load GUID lists (which resolves a
   map request to the scene map), the streaming policy (which chunks load when),
@@ -428,6 +432,58 @@ and returns the request handle of the group's bundle. The client hands this blob
 to the job from its content database (`FUN_141fcbb10` → `FUN_141fe81d0`, fields
 `+0x70` and `+0x264`). **Where that blob is produced is not read**; see
 `docs/open-questions.md` item 11.2.
+
+The lookup is a verified harness unit: `fn/BundleDirectoryLookup`
+(`dev/verify_harness/units/fn-BundleDirectoryLookup.json`) compares the shipped
+`ow_tank::bundle::directory_lookup` with `BundleDirectoryLookup` at
+`0x141fd5160`. It passes 364 synthetic differential cases on every channel and
+93.3% branch coverage (14/15 reachable branches of 18 sites: three sites
+declare one structurally dead edge each, and one guarded edge is a named gap);
+the mutation stage kills 35/35 scored mutants (one further type-count gate flip
+is declared equivalent, and one signature-line mutant does not compile and is
+counted killed by the harness).
+Every compared byte is synthetic; the state region places the directory object
+at its own image address (`0x1441b3b88`) because the function reads the
+type-entry pointer twice, once through the object's `+0x18` and once through
+the fixed qword at `0x1441b3ba0`, which is that same address. The blob the
+lookup walks carries absolute guest pointers: `FUN_141fd53a0` rebases the
+producer's base-relative fields before the lookup runs, so the model follows
+the post-fixup form.
+
+What the unit added to the read:
+
+- The object is a type-entry array at `+0x18` and an `i32` type count at
+  `+0x20`; an entry is `0x20` bytes (`+0` `i32` key, `+8` type block, `+0x10`
+  bundle-handle array). The block's `+8` stride and `+0x0e` type id are not
+  read by the lookup.
+- The type key is the asset type id: the bit-reversed 12-bit field at GUID
+  bits 48..59, plus one, sign-extended from 12 bits. It is the same value as
+  `ow_tank::guid::type_of` except field `0xFFF`, where the client's 12-bit
+  sign extension wraps to `0`; a type-`0x09C` bundle GUID keys to `0x09C`. A
+  first read of the mask agreed on every `0x0D90...` GUID and was wrong for a
+  GUID with a non-zero top nibble; the harness caught it on a random one
+  (`0xA72C...` → `847`).
+- A hit's index entry is its position in the bundle's listed GUID array, and
+  the running sum of the preceding groups' `i16` listed counts (`+0x24`) makes
+  one handle array span all the groups of a type. A loaded handle (status 4)
+  returns at once; the first unready handle is remembered and a later loaded
+  group wins; no hit leaves the client's absent value `-1`.
+- The handle state comes from `FUN_141fd3970`: a `-1` handle, a handle that
+  masks to zero and a low-six-bit tag mismatch are unusable; `obj+0xa` bit 0
+  clear means unready; `obj+8` bit 15 set means known-but-not-loaded; otherwise
+  the handle is loaded. The decompiler printed the last test as
+  `& 0xffffff01`; the disassembly is `SHR EAX,0xf` then `AND AL,1`, and the
+  unit's first differential run diverged on a bit-31 object because of it.
+- The loaded-bundle guard is `FUN_141fcbf40`. Only its GUID-`0` answer is
+  reachable in emulation: a non-zero GUID tail-calls `FUN_141fcf330` with a
+  pointer derived from the runtime-patched qword at `0x1439aef30`, and the
+  shipped image's value yields a null base, so the oracle faults before the
+  guard can answer "not loaded". The unit declares that false edge as a named
+  acknowledged gap and sets its coverage gate to 93%; the gap is not a silent
+  exclusion.
+
+This verifies a **consumer** of the directory blob, not where the blob comes
+from: the producer row in `ow-tank-1to1.md` section A stays open.
 
 What `ow-tank` does: `GameData::open_asset` implements steps 2–3 and the entry
 lookup exactly, and builds the directory's *content* by scanning the manifest's

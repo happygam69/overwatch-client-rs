@@ -214,7 +214,10 @@ graph activation from the current image.
 **What is known.** The bundle flag, entry table and all 305 type-`0x09F`
 headers are read; the practice header `0x0790000000000688` opens from bundle
 `0x0d90968e484f8c33` at offset 3593 and parses as `STUMapHeader` with
-`mapName` `Maps\TrainingRoom\Training Room - Practice`. The mode entry's
+`mapName` `Maps\TrainingRoom\Training Room - Practice`. The lookup *consumer*
+of the directory blob is a verified cross-check (`fn/BundleDirectoryLookup`,
+`BundleDirectoryLookup` at `0x141fd5160`), but it does not answer where the
+blob comes from: the scan in `ow-tank` is still our own. The mode entry's
 `m_A9253C68` is a `STUIdentifier` (`0xD800000000000000 | u32`, class
 `0x9CADF2EC`), not an asset; a census of 305 headers / 1,612 entries finds 30
 distinct identifiers. The practice header's three modes share

@@ -12,10 +12,11 @@ different run; it is not evidence. Code whose only citation is a capture is
 
 **"Verified" has one meaning here:** a differential-harness unit passes all
 five stages against the client's bytes. As of this commit the harness ledger
-has 17 units and **four target `ow-tank`**: `fn/ChunkGuid` and
-`fn/BundleLookup` (section D) and `fn/CmfKey154504` / `fn/CmfIv154504`
-(section B; differential and mutation pass, but the coverage stage cannot
-measure the body). `casc` targets
+has 18 units and **five target `ow-tank`**: `fn/ChunkGuid` and
+`fn/BundleLookup` (section D), `fn/BundleDirectoryLookup` (section E, a
+verified consumer) and `fn/CmfKey154504` / `fn/CmfIv154504` (section B;
+differential and mutation pass, but the coverage stage cannot measure the
+body). `casc` targets
 `ow-casc`; the legacy probe and `ow-sim` targets are not shipped `ow-tank`
 code. Every row in sections A–C is therefore not 1 to 1 in the strict sense,
 even where the code is read, implemented and exact on the install.
@@ -84,6 +85,28 @@ sides compare one guest `u64`. The read also found a real divergence: the
 shipped search used half-open bounds `[0, count)` while the client walks
 `0..count - 1`; both agree on a GUID-sorted install table and differ on an
 unsorted one, so the search now follows the client's walk exactly.
+
+## E. Verified consumers (no A–C row to close)
+
+A verified unit can prove a stage that is already implemented without closing
+the open row next to it. These are recorded separately so section D stays the
+list of rows that actually moved.
+
+| area | unit | client address | result |
+|---|---|---|---|
+| Bundle directory lookup | `dev/verify_harness/units/fn-BundleDirectoryLookup.json` (`fn/BundleDirectoryLookup`) | `BundleDirectoryLookup` at `0x141fd5160` (loaded-bundle guard `FUN_141fcbf40`, handle status `FUN_141fd3970`) | verified: 364 differential cases, every channel; 93.3% coverage (14/15 reachable branches of 18 sites; three sites declare one structurally dead edge each) with one named gap — the loaded-bundle guard's false edge needs the live content-database set; 35/35 mutants killed (one further type-count gate flip declared equivalent; one signature-line mutant does not compile and is counted killed). It verifies the **consumer** of the directory blob; the producer row in section A stays open. |
+
+The unit's probe follows the blob's absolute guest pointers through the same
+state region the oracle reads: the directory object sits at its own image
+address because the function loads the type-entry pointer twice, through
+`param_1+0x18` and through the fixed qword at `0x1441b3ba0`. It reads the
+0x20-byte type entry, the group's sorted/index arrays, the running listed
+count and the tagged handle's status object. The fixture writes every byte:
+multiple type blocks and groups, the key at even and odd type indices,
+first/middle/last rows, absent before/between/after, duplicate GUIDs, sorted
+and unsorted arrays, counts 0/1/2/3/4/8, every handle status, GUID `0` and
+`u64::MAX`, and two sentinels just past the declared type and group counts so
+an implementation that runs past them is caught.
 
 ## Closing a row
 

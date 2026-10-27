@@ -265,6 +265,278 @@ pub fn entry_lookup(
     }
 }
 
+/// The client's per-type bundle directory, read as `BundleDirectoryLookup`
+/// (`0x141fd5160`) walks it.
+///
+/// The directory is the content database's blob at `DAT_1441b3b88`. Its type
+/// count is an `i32` at `+0x20` and its type-entry array pointer an absolute
+/// qword at `+0x18`; every pointer in the blob is absolute in the client. The
+/// type-entry array has stride `0x20`:
+///
+/// ```text
+/// type entry (0x20)   +0x00 i32  type key (the GUID hash below)
+///                     +0x08 u64  type block
+///                     +0x10 u64  bundle handle array
+///
+/// type block          +0x00 u64  group array
+///                     +0x08 u32  group stride (0x28; not read by the lookup)
+///                     +0x0c u16  group count
+///                     +0x0e u16  type id (not read by the lookup)
+///
+/// group (0x28)        +0x00 u64  listed GUID array (not read by the lookup)
+///                     +0x08 u64  sorted GUID array
+///                     +0x10 u64  index array, one u16 per sorted GUID
+///                     +0x18 u64  the bundle's own GUID
+///                     +0x20 i32  sorted GUID count
+///                     +0x24 i16  listed GUID count
+/// ```
+///
+/// A hit's index array entry is the sorted row's position in the bundle's
+/// *listed* GUID array; adding the listed counts of the preceding groups gives
+/// the row in the type's bundle handle array. That is how one handle array can
+/// span the groups of a type.
+///
+/// `blob` is the memory the pointers name and `base` the guest address of
+/// `blob[0]`; `directory` is the guest address of the directory object (the
+/// client's fixed `DAT_1441b3b88`). The client's second read of the type-entry
+/// pointer is the same qword as `directory + 0x18` — its global address is the
+/// field's address — so the model reads it once.
+#[derive(Clone, Copy)]
+pub struct Directory<'a> {
+    blob: &'a [u8],
+    base: u64,
+    directory: u64,
+}
+
+impl<'a> Directory<'a> {
+    /// Read the directory at `directory` from `blob`, whose first byte is the
+    /// guest address `base`.
+    pub fn new(blob: &'a [u8], base: u64, directory: u64) -> Directory<'a> {
+        Directory {
+            blob,
+            base,
+            directory,
+        }
+    }
+
+    fn bytes(&self, addr: u64, len: usize) -> Option<&'a [u8]> {
+        let off = addr.checked_sub(self.base)? as usize;
+        self.blob.get(off..off.checked_add(len)?)
+    }
+
+    fn u8(&self, addr: u64) -> Option<u8> {
+        self.bytes(addr, 1).map(|b| b[0])
+    }
+
+    fn u16(&self, addr: u64) -> Option<u16> {
+        Some(u16::from_le_bytes(self.bytes(addr, 2)?.try_into().ok()?))
+    }
+
+    fn i16(&self, addr: u64) -> Option<i16> {
+        Some(i16::from_le_bytes(self.bytes(addr, 2)?.try_into().ok()?))
+    }
+
+    fn u32(&self, addr: u64) -> Option<u32> {
+        Some(u32::from_le_bytes(self.bytes(addr, 4)?.try_into().ok()?))
+    }
+
+    fn i32(&self, addr: u64) -> Option<i32> {
+        Some(i32::from_le_bytes(self.bytes(addr, 4)?.try_into().ok()?))
+    }
+
+    fn u64(&self, addr: u64) -> Option<u64> {
+        Some(u64::from_le_bytes(self.bytes(addr, 8)?.try_into().ok()?))
+    }
+
+    /// The client's `FUN_141fd3970` handle state.
+    ///
+    /// `4` is "loaded" (the lookup returns it at once), `2` and `3` are
+    /// "known but not ready" (the lookup remembers the first one), and `0`
+    /// is an unusable handle (no object, a tag mismatch, or `-1`). The client
+    /// also spins on the object's `+0x3c` lock word, which nets to zero and so
+    /// has no observable effect here.
+    ///
+    /// The two readiness bytes are `obj+0xa` bit 0 (`FUN_141fd3f40`) and
+    /// `obj+8` bit 15 (`FUN_141fd4040`, which the decompiler printed as the
+    /// wider mask `0xffffff01`; the disassembly is `SHR EAX,0xf` / `AND AL,1`).
+    fn handle_status(&self, handle: u64) -> i32 {
+        if handle == u64::MAX {
+            return 0;
+        }
+        let object = handle & !0x3f;
+        if object == 0 {
+            return 0;
+        }
+        let Some(tag) = self.u32(object.wrapping_add(8)) else {
+            return 0;
+        };
+        if ((handle as u32) ^ tag) & 0x3f != 0 {
+            return 0;
+        }
+        if self.u8(object.wrapping_add(0x0a)).unwrap_or(0) & 1 == 0 {
+            return 2;
+        }
+        if (tag >> 15) & 1 != 0 {
+            3
+        } else {
+            4
+        }
+    }
+}
+
+/// The client's GUID-to-type key, as `BundleDirectoryLookup` computes it.
+///
+/// The key is the asset type id: the bit-reversed 12-bit field at GUID bits
+/// 48..59, plus one, sign-extended from 12 bits. It is the same value as
+/// `guid::type_of` for every field except `0xFFF`, where the client's 12-bit
+/// sign extension wraps to `0` while `type_of` returns `0x1000`. A
+/// type-`0x09C` bundle GUID keys to `0x09C`, which is how the type-entry array
+/// is indexed.
+pub fn guid_type_key(guid: u64) -> i32 {
+    let a = (guid & 0xFFFF_0000_0000_0000) << 4;
+    let s = a >> 1;
+    let mut x = ((a << 1) ^ s) & 0xAAAA_AAAA_AAAA_AAAA;
+    x ^= s;
+    let s = x >> 2;
+    let mut y = ((x << 2) ^ s) & 0xCCCC_CCCC_CCCC_CCCC;
+    y ^= s;
+    let s = y >> 4;
+    let mut z = ((y << 4) ^ s) & 0xF0F0_F0F0_F0F0_F0F0;
+    z ^= s;
+    let w = (z.swap_bytes() as u32).wrapping_add(1);
+    ((w << 20) as i32) >> 20
+}
+
+/// `BundleDirectoryLookup` (`0x141fd5160`) as a pure function.
+///
+/// Returns the request handle of the bundle that holds `guid`, or `u64::MAX`
+/// (the client's `-1`) when no loaded group holds it. The first group that
+/// holds the GUID wins unless its handle is not fully loaded; the client then
+/// remembers it and keeps looking for a fully loaded one.
+///
+/// `is_loaded` is the client's `FUN_141fcbf40`: the group's bundle GUID is
+/// looked up in the content database's loaded-bundle set. GUID `0` is the
+/// client's unconditional "loaded" answer. The set itself is live loader
+/// state, so the caller supplies it.
+///
+/// The search is the client's: bounds `0` and `count - 1` (not half-open),
+/// midpoint `(lo + hi) >> 1` in 32-bit arithmetic, an unsigned
+/// `slice[mid] >= guid` pivot and a lower bound, then one equality test. A
+/// non-positive sorted count skips the group; zero type entries, a missing
+/// type and a zero group count all return `u64::MAX`. Negative counts are
+/// outside the producer's contract (the client's count arithmetic wraps), so
+/// they are treated as empty.
+pub fn directory_lookup(
+    directory: &Directory<'_>,
+    guid: u64,
+    is_loaded: impl Fn(u64) -> bool,
+) -> u64 {
+    let mut out = u64::MAX;
+    let Some(count) = directory.i32(directory.directory.wrapping_add(0x20)) else {
+        return out;
+    };
+    if count <= 0 {
+        return out;
+    }
+    let Some(types) = directory.u64(directory.directory.wrapping_add(0x18)) else {
+        return out;
+    };
+    let key = guid_type_key(guid);
+    let mut found = None;
+    let mut scan: i64 = 0;
+    while scan < i64::from(count) {
+        let entry = types.wrapping_add((scan as u64) << 5);
+        let Some(entry_key) = directory.i32(entry) else {
+            return out;
+        };
+        if entry_key == key {
+            found = Some(entry);
+            break;
+        }
+        scan += 1;
+    }
+    let Some(entry) = found else {
+        return out;
+    };
+    let Some(block) = directory.u64(entry.wrapping_add(8)) else {
+        return out;
+    };
+    let Some(handles) = directory.u64(entry.wrapping_add(0x10)) else {
+        return out;
+    };
+    let Some(group_count) = directory.u16(block.wrapping_add(0x0c)) else {
+        return out;
+    };
+    if group_count == 0 {
+        return out;
+    }
+    let Some(groups) = directory.u64(block) else {
+        return out;
+    };
+    let mut running: u32 = 0;
+    let mut group_offset: u64 = 0;
+    let mut group_index: u16 = 0;
+    while group_index < group_count {
+        let group = groups.wrapping_add(group_offset);
+        let Some(bundle) = directory.u64(group.wrapping_add(0x18)) else {
+            return out;
+        };
+        if is_loaded(bundle) {
+            let Some(count) = directory.i32(group.wrapping_add(0x20)) else {
+                return out;
+            };
+            if count > 0 {
+                let Some(sorted) = directory.u64(group.wrapping_add(8)) else {
+                    return out;
+                };
+                let last = count - 1;
+                let mut lo: i32 = 0;
+                let mut hi: i32 = last;
+                while lo < hi {
+                    let mid = lo.wrapping_add(hi) >> 1;
+                    let Some(pivot) = directory.u64(sorted.wrapping_add((mid as u64) << 3)) else {
+                        return out;
+                    };
+                    if pivot >= guid {
+                        hi = mid;
+                    } else {
+                        lo = mid.wrapping_add(1);
+                    }
+                }
+                let Some(found_guid) = directory.u64(sorted.wrapping_add((lo as u64) << 3)) else {
+                    return out;
+                };
+                if found_guid == guid {
+                    let Some(index_array) = directory.u64(group.wrapping_add(0x10)) else {
+                        return out;
+                    };
+                    let Some(index) = directory.u16(index_array.wrapping_add((lo as u64) << 1))
+                    else {
+                        return out;
+                    };
+                    let slot = u32::from(index).wrapping_add(running) as i32;
+                    let Some(handle) = directory.u64(handles.wrapping_add((slot as u64) << 3))
+                    else {
+                        return out;
+                    };
+                    let status = directory.handle_status(handle);
+                    if status == 4 {
+                        return handle;
+                    }
+                    if out == u64::MAX {
+                        out = handle;
+                    }
+                }
+            }
+        }
+        running = running
+            .wrapping_add(directory.i16(group.wrapping_add(0x24)).unwrap_or(0) as i32 as u32);
+        group_offset = group_offset.wrapping_add(0x28);
+        group_index += 1;
+    }
+    out
+}
+
 /// Where an asset lives inside a bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Location {
@@ -518,6 +790,365 @@ mod tests {
             0
         );
         assert_eq!(entry_lookup(handle, object_tag, None, 0x20, 0x1000), 0);
+    }
+
+    /// A synthetic in-memory directory: `base == 0`, so every pointer is an
+    /// offset into `blob`. Fixed regions keep the builder readable.
+    struct Dir {
+        blob: Vec<u8>,
+    }
+
+    impl Dir {
+        const DIR: usize = 0x00;
+        const TYPE: usize = 0x40;
+        const BLOCK: usize = 0x100;
+        const GROUP: usize = 0x200;
+        const SORTED: usize = 0x400;
+        const INDEX: usize = 0x600;
+        const LISTED: usize = 0x700;
+        const HANDLES: usize = 0x800;
+        const OBJECT: usize = 0x900;
+
+        fn new() -> Dir {
+            Dir {
+                blob: vec![0; 0x1000],
+            }
+        }
+
+        fn u64(&mut self, at: usize, v: u64) {
+            self.blob[at..at + 8].copy_from_slice(&v.to_le_bytes());
+        }
+
+        fn u32(&mut self, at: usize, v: u32) {
+            self.blob[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+
+        fn u16(&mut self, at: usize, v: u16) {
+            self.blob[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        }
+
+        fn i32(&mut self, at: usize, v: i32) {
+            self.u32(at, v as u32);
+        }
+
+        fn i16(&mut self, at: usize, v: i16) {
+            self.u16(at, v as u16);
+        }
+
+        fn u8(&mut self, at: usize, v: u8) {
+            self.blob[at] = v;
+        }
+
+        /// One type entry keyed by `key`, pointing at one group at `GROUP`
+        /// with `sorted` rows, `indices` and `listed`, a bundle GUID and the
+        /// type's handle array at `HANDLES`.
+        fn one_type(key: i32, sorted: &[u64], indices: &[u16], listed: i16) -> Dir {
+            let mut d = Dir::new();
+            d.i32(Dir::DIR + 0x20, 1);
+            d.u64(Dir::DIR + 0x18, Dir::TYPE as u64);
+            d.i32(Dir::TYPE, key);
+            d.u64(Dir::TYPE + 8, Dir::BLOCK as u64);
+            d.u64(Dir::TYPE + 0x10, Dir::HANDLES as u64);
+            d.u64(Dir::BLOCK, Dir::GROUP as u64);
+            d.u32(Dir::BLOCK + 8, 0x28);
+            d.u16(Dir::BLOCK + 0x0c, 1);
+            d.u16(Dir::BLOCK + 0x0e, 0x9c);
+            d.u64(Dir::GROUP, Dir::LISTED as u64);
+            d.u64(Dir::GROUP + 8, Dir::SORTED as u64);
+            d.u64(Dir::GROUP + 0x10, Dir::INDEX as u64);
+            d.u64(Dir::GROUP + 0x18, 0);
+            d.i32(Dir::GROUP + 0x20, sorted.len() as i32);
+            d.i16(Dir::GROUP + 0x24, listed);
+            for (i, &guid) in sorted.iter().enumerate() {
+                d.u64(Dir::SORTED + i * 8, guid);
+            }
+            for (i, &index) in indices.iter().enumerate() {
+                d.u16(Dir::INDEX + i * 2, index);
+            }
+            d
+        }
+
+        /// A handle-array row pointing at `OBJECT + n * 0x40`, with `tag` in
+        /// the low six bits and the object's own tag dword.
+        fn handle(&mut self, row: usize, n: usize, tag: u8, loaded: bool, status_bits: u32) {
+            let object = Dir::OBJECT + n * 0x40;
+            self.u64(
+                Dir::HANDLES + row * 8,
+                (object as u64) | u64::from(tag & 0x3f),
+            );
+            self.u32(object + 8, u32::from(tag & 0x3f) | status_bits);
+            self.u8(object + 0x0a, u8::from(loaded));
+        }
+
+        /// The same row with the object's `+8` dword spelled out.
+        fn handle_word(&mut self, row: usize, n: usize, tag: u8, dword: u32) {
+            let object = Dir::OBJECT + n * 0x40;
+            self.u64(
+                Dir::HANDLES + row * 8,
+                (object as u64) | u64::from(tag & 0x3f),
+            );
+            self.u32(object + 8, dword);
+        }
+
+        /// Two groups that both hold `G`, sharing one sorted/index array.
+        fn two_group_dir(handles: usize) -> Dir {
+            let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+            d.u16(Dir::BLOCK + 0x0c, 2);
+            let g1 = Dir::GROUP + 0x28;
+            d.u64(g1, Dir::LISTED as u64);
+            d.u64(g1 + 8, Dir::SORTED as u64);
+            d.u64(g1 + 0x10, Dir::INDEX as u64);
+            d.u64(g1 + 0x18, 0);
+            d.i32(g1 + 0x20, 1);
+            d.i16(g1 + 0x24, 1);
+            let _ = handles;
+            d
+        }
+
+        fn lookup(&self, guid: u64) -> u64 {
+            directory_lookup(
+                &Directory::new(&self.blob, 0, Dir::DIR as u64),
+                guid,
+                |_| true,
+            )
+        }
+    }
+
+    const G: u64 = 0x0D90_847B_FC92_C67C;
+
+    #[test]
+    fn the_type_key_is_the_asset_type_id() {
+        // A type-0x09C bundle GUID keys to 0x09C. The top nibble of the type
+        // word is part of the input: `0xA72C...` keys to 847, which a mask
+        // that dropped GUID bits 60..63 would miss.
+        assert_eq!(guid_type_key(G), 0x09c);
+        assert_eq!(guid_type_key(0xA72C_BBE1_3BBD_4F5C), 847);
+        assert_eq!(guid_type_key(0), 1);
+        for guid in [G, 0xA72C_BBE1_3BBD_4F5C, 0, 0x1234_5678_9ABC_DEF0] {
+            assert_eq!(guid_type_key(guid), i32::from(crate::guid::type_of(guid)));
+        }
+        // Only GUID bits 48..59 reach the (post-shift) input.
+        assert_eq!(guid_type_key(G + 1), guid_type_key(G));
+        assert_eq!(guid_type_key(G ^ (1 << 20)), guid_type_key(G));
+        // Field 0xFFF is the one value where the client's 12-bit sign
+        // extension and `type_of`'s untruncated `+ 1` differ.
+        let all_ones = 0x0FFF_u64 << 48;
+        assert_eq!(guid_type_key(all_ones), 0);
+        assert_eq!(crate::guid::type_of(all_ones), 0x1000);
+    }
+
+    #[test]
+    fn directory_finds_the_handle_of_a_loaded_group() {
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.handle(0, 0, 0x21, true, 0);
+        assert_eq!(d.lookup(G), (Dir::OBJECT as u64) | 0x21);
+        assert_eq!(d.lookup(G + 1), u64::MAX);
+        assert_eq!(d.lookup(G - 1), u64::MAX);
+    }
+
+    #[test]
+    fn directory_searches_first_middle_and_last() {
+        let rows: Vec<u64> = (0..8).map(|i| G + i * 0x10).collect();
+        let mut d = Dir::one_type(guid_type_key(G), &rows, &[0, 1, 2, 3, 4, 5, 6, 7], 8);
+        for row in 0..8 {
+            d.handle(row, row, 0x21, true, 0);
+        }
+        let base = Dir::OBJECT as u64;
+        assert_eq!(d.lookup(rows[0]), base | 0x21);
+        assert_eq!(d.lookup(rows[3]), (base + 3 * 0x40) | 0x21);
+        assert_eq!(d.lookup(rows[7]), (base + 7 * 0x40) | 0x21);
+        assert_eq!(d.lookup(rows[0] - 1), u64::MAX);
+        assert_eq!(d.lookup(rows[3] + 1), u64::MAX);
+        assert_eq!(d.lookup(rows[7] + 1), u64::MAX);
+    }
+
+    #[test]
+    fn directory_lower_bound_uses_the_first_duplicate() {
+        // Rows 0 and 1 are both G; the lower bound is row 0, whose index
+        // array entry names handle row 2.
+        let mut d = Dir::one_type(guid_type_key(G), &[G, G, G + 0x10], &[2, 1, 0], 3);
+        d.handle(0, 0, 0x21, true, 0);
+        d.handle(1, 1, 0x22, true, 0);
+        d.handle(2, 2, 0x23, true, 0);
+        assert_eq!(d.lookup(G), ((Dir::OBJECT as u64) + 2 * 0x40) | 0x23);
+        assert_eq!(d.lookup(G + 0x10), (Dir::OBJECT as u64) | 0x21);
+    }
+
+    #[test]
+    fn directory_index_runs_across_the_groups_of_a_type() {
+        // Group 0 lists two GUIDs and misses; group 1's hit names listed row
+        // 0, which is handle row 2 of the type's array.
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.u64(Dir::BLOCK, Dir::GROUP as u64);
+        d.u16(Dir::BLOCK + 0x0c, 2);
+        // Group 1 sits at GROUP + 0x28 and reuses the same sorted/index arrays.
+        let g1 = Dir::GROUP + 0x28;
+        d.u64(g1, Dir::LISTED as u64);
+        d.u64(g1 + 8, Dir::SORTED as u64);
+        d.u64(g1 + 0x10, Dir::INDEX as u64);
+        d.u64(g1 + 0x18, 0);
+        d.i32(g1 + 0x20, 1);
+        d.i16(g1 + 0x24, 1);
+        d.i16(Dir::GROUP + 0x24, 2);
+        d.u64(Dir::SORTED, G + 0x10);
+        d.u16(Dir::INDEX, 0);
+        d.handle(2, 2, 0x21, true, 0);
+        assert_eq!(d.lookup(G + 0x10), ((Dir::OBJECT as u64) + 2 * 0x40) | 0x21);
+    }
+
+    #[test]
+    fn directory_keeps_the_first_unready_handle_and_takes_a_loaded_one() {
+        // Group 0's handle is known but not ready (status 2); group 1's is
+        // loaded (status 4) and wins.
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.u16(Dir::BLOCK + 0x0c, 2);
+        let g1 = Dir::GROUP + 0x28;
+        d.u64(g1, Dir::LISTED as u64);
+        d.u64(g1 + 8, Dir::SORTED as u64);
+        d.u64(g1 + 0x10, Dir::INDEX as u64);
+        d.u64(g1 + 0x18, 0);
+        d.i32(g1 + 0x20, 1);
+        d.i16(g1 + 0x24, 1);
+        d.i16(Dir::GROUP + 0x24, 1);
+        d.handle(0, 0, 0x21, false, 0);
+        d.handle(1, 1, 0x22, true, 0);
+        assert_eq!(d.lookup(G), ((Dir::OBJECT as u64) + 0x40) | 0x22);
+
+        // With no loaded group the first unready handle is returned.
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.u16(Dir::BLOCK + 0x0c, 2);
+        d.u64(g1, Dir::LISTED as u64);
+        d.u64(g1 + 8, Dir::SORTED as u64);
+        d.u64(g1 + 0x10, Dir::INDEX as u64);
+        d.u64(g1 + 0x18, 0);
+        d.i32(g1 + 0x20, 1);
+        d.i16(g1 + 0x24, 1);
+        d.i16(Dir::GROUP + 0x24, 1);
+        d.handle(0, 0, 0x21, false, 0);
+        d.handle(1, 1, 0x22, false, 0);
+        assert_eq!(d.lookup(G), (Dir::OBJECT as u64) | 0x21);
+    }
+
+    #[test]
+    fn directory_returns_a_status_three_handle_only_when_nothing_loads() {
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.handle(0, 0, 0x21, true, 1 << 15);
+        assert_eq!(d.lookup(G), (Dir::OBJECT as u64) | 0x21);
+    }
+
+    #[test]
+    fn directory_readiness_is_obj_plus_a_bit_0_and_obj_plus_8_bit_15() {
+        // FUN_141fd4040 disassembles as `SHR EAX,0xf` then `AND AL,1`, so
+        // only bit 15 of obj+8 is read; the decompiler's `& 0xffffff01`
+        // would also have made bits 23 and 31 status bits, and the unit's
+        // first run caught that on a bit-31 object (the client said 4).
+        for bits in [1 << 23, 1 << 31] {
+            let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+            d.handle(0, 0, 0x21, true, bits);
+            assert_eq!(d.lookup(G), (Dir::OBJECT as u64) | 0x21);
+        }
+        // The first group's handle is status 3 (bit 15 set); a later loaded
+        // group wins. If bit 15 had been missed the first would have won.
+        let mut d = Dir::two_group_dir(2);
+        d.handle(0, 0, 0x21, true, 1 << 15);
+        d.handle(1, 1, 0x22, true, 0);
+        assert_eq!(d.lookup(G), ((Dir::OBJECT as u64) + 0x40) | 0x22);
+        // obj+0xa bit 0 clear is status 2 even when the byte's other bits are
+        // set: a wider mask would call it loaded and return it at once.
+        let mut d = Dir::two_group_dir(2);
+        d.handle(0, 0, 0x21, false, 0);
+        d.u8(Dir::OBJECT + 0x0a, 2);
+        d.handle(1, 1, 0x22, true, 0);
+        assert_eq!(d.lookup(G), ((Dir::OBJECT as u64) + 0x40) | 0x22);
+        // obj+8 is tested for its low six bits: bit 6 is not a tag bit, so
+        // this handle is loaded (status 4) and returns before group 1.
+        let mut d = Dir::two_group_dir(2);
+        d.handle_word(0, 0, 0x21, 0x21 | 0x40 | 0x1_0000);
+        d.handle(1, 1, 0x22, true, 0);
+        assert_eq!(d.lookup(G), (Dir::OBJECT as u64) | 0x21);
+    }
+
+    #[test]
+    fn directory_stores_an_unusable_handle_the_client_would() {
+        // A tag mismatch fails FUN_141fd3970 but the client still records the
+        // handle in the output when it is the first one.
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.u64(Dir::HANDLES, (Dir::OBJECT as u64) | 0x21);
+        d.u32(Dir::OBJECT + 8, 0xffff_ffe2);
+        d.u8(Dir::OBJECT + 0x0a, 1);
+        assert_eq!(d.lookup(G), (Dir::OBJECT as u64) | 0x21);
+
+        // A handle of -1 is the client's absent value and stays absent.
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.u64(Dir::HANDLES, u64::MAX);
+        assert_eq!(d.lookup(G), u64::MAX);
+    }
+
+    #[test]
+    fn directory_takes_the_clients_walk_on_unsorted_rows() {
+        // [G+0x10, G] looking for G+0x10 examines no row and reads row 0: a
+        // hit, as in Bundle::offset_of. Looking for G reads row 0 and misses.
+        // Both GUIDs hash to the type's key.
+        let mut d = Dir::one_type(guid_type_key(G), &[G + 0x10, G], &[0, 1], 2);
+        d.handle(0, 0, 0x21, true, 0);
+        d.handle(1, 1, 0x22, true, 0);
+        assert_eq!(d.lookup(G + 0x10), (Dir::OBJECT as u64) | 0x21);
+        assert_eq!(d.lookup(G), u64::MAX);
+    }
+
+    #[test]
+    fn directory_edges_are_the_clients() {
+        // No types.
+        let d = Dir::new();
+        assert_eq!(d.lookup(G), u64::MAX);
+        // A key that is not listed.
+        let d = Dir::one_type(guid_type_key(G) + 1, &[G], &[0], 1);
+        assert_eq!(d.lookup(G), u64::MAX);
+        // A type with no groups.
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.u16(Dir::BLOCK + 0x0c, 0);
+        assert_eq!(d.lookup(G), u64::MAX);
+        // A loaded group with an empty sorted array, then a hit in group 1.
+        let mut d = Dir::one_type(guid_type_key(G), &[], &[], 0);
+        d.u16(Dir::BLOCK + 0x0c, 2);
+        let g1 = Dir::GROUP + 0x28;
+        d.u64(g1, Dir::LISTED as u64);
+        d.u64(g1 + 8, Dir::SORTED as u64);
+        d.u64(g1 + 0x10, Dir::INDEX as u64);
+        d.u64(g1 + 0x18, 0);
+        d.i32(g1 + 0x20, 1);
+        d.i16(g1 + 0x24, 1);
+        d.u64(Dir::SORTED, G);
+        d.u16(Dir::INDEX, 0);
+        d.handle(0, 0, 0x21, true, 0);
+        assert_eq!(d.lookup(G), (Dir::OBJECT as u64) | 0x21);
+        // One row (no search loop) hit and miss.
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.handle(0, 0, 0x21, true, 0);
+        assert_eq!(d.lookup(G), (Dir::OBJECT as u64) | 0x21);
+        assert_eq!(d.lookup(0), u64::MAX);
+        // A pointer outside the blob is reported, not read.
+        let d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        let mut d = d;
+        d.u64(Dir::TYPE + 8, 0x8000);
+        assert_eq!(d.lookup(G), u64::MAX);
+    }
+
+    #[test]
+    fn directory_honours_the_loaded_query() {
+        let mut d = Dir::one_type(guid_type_key(G), &[G], &[0], 1);
+        d.u64(Dir::GROUP + 0x18, 0x1234);
+        d.handle(0, 0, 0x21, true, 0);
+        let dir = Directory::new(&d.blob, 0, Dir::DIR as u64);
+        assert_eq!(
+            directory_lookup(&dir, G, |_| true),
+            (Dir::OBJECT as u64) | 0x21
+        );
+        assert_eq!(directory_lookup(&dir, G, |_| false), u64::MAX);
+        assert_eq!(
+            directory_lookup(&dir, G, |bundle| bundle == 0x1234),
+            (Dir::OBJECT as u64) | 0x21
+        );
     }
 
     #[test]

@@ -45,8 +45,76 @@
 //! That function returns the client's `payload + offset` as a guest address,
 //! so the fixture passes the payload's guest base in the client's dead first
 //! argument slot (RCX) and the probe returns the same guest value.
+//!
+//! The `bundle_directory_lookup` entry takes the directory object, the output
+//! slot and the target GUID in the client's RCX/RDX/R8 slots and the
+//! directory's structure pool in the dead R9 slot, all as guest slices of the
+//! unit's `state` block (the client reads the type-entry pointer through its
+//! fixed global, which the state covers). It calls
+//! `ow_tank::bundle::directory_lookup` and returns the out slot's guest
+//! address, which is the client's `param_2` return value.
 
 use std::io::{self, BufRead, Write};
+
+/// The probe's copy of the unit's preloaded state snapshot.
+///
+/// A guest address is translated by subtracting `base`, so a pointer in the
+/// blob can be followed exactly as the client follows it. The state region is
+/// also the state-differential channel: `main` returns the whole buffer after
+/// every call when one is loaded.
+struct State {
+    base: u64,
+    /// The unit's declared snapshot, kept so each call starts from it exactly
+    /// as the oracle re-seeds its state region before every call.
+    snapshot: Vec<u8>,
+    buf: Vec<u8>,
+}
+
+impl State {
+    fn new() -> State {
+        State {
+            base: 0,
+            snapshot: Vec::new(),
+            buf: Vec::new(),
+        }
+    }
+
+    fn loaded(&self) -> bool {
+        !self.snapshot.is_empty()
+    }
+
+    fn reset(&mut self) {
+        self.buf.copy_from_slice(&self.snapshot);
+    }
+
+    fn off(&self, guest: u64) -> Option<usize> {
+        let off = guest.checked_sub(self.base)? as usize;
+        (off <= self.buf.len()).then_some(off)
+    }
+}
+
+/// Copy a guest slice into the state and rebase its relative pointers, exactly
+/// as the oracle rebases the pointee it writes.
+fn guest_write(state: &mut State, guest: u64, mem: &[u8], relocs: &[usize]) -> Result<(), String> {
+    let off = state.off(guest).ok_or("guest-outside-state")?;
+    let end = off.checked_add(mem.len()).ok_or("guest-slice-overflow")?;
+    if end > state.buf.len() {
+        return Err("guest-slice-too-long".into());
+    }
+    state.buf[off..end].copy_from_slice(mem);
+    for &r in relocs {
+        let slot = off.checked_add(r).ok_or("reloc-overflow")?;
+        let bytes: [u8; 8] = state
+            .buf
+            .get(slot..slot + 8)
+            .ok_or("reloc-out-of-range")?
+            .try_into()
+            .unwrap();
+        let abs = guest.wrapping_add(u64::from_le_bytes(bytes));
+        state.buf[slot..slot + 8].copy_from_slice(&abs.to_le_bytes());
+    }
+    Ok(())
+}
 
 const CHUNK_TABLE_SLOTS: usize = 0x24;
 const CHUNK_TABLE_STRIDE: usize = 0x20;
@@ -129,12 +197,14 @@ fn chunk_guid_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
 }
 
 /// The 512-byte table from the unit's `state` block.
-fn cmf_table(state: Option<&[u8]>) -> Result<&[u8; CMF_TABLE_LEN], String> {
-    let bytes = state.ok_or("missing-state-table")?;
-    if bytes.len() < CMF_TABLE_LEN {
+fn cmf_table(state: &State) -> Result<&[u8; CMF_TABLE_LEN], String> {
+    if !state.loaded() {
+        return Err("missing-state-table".into());
+    }
+    if state.buf.len() < CMF_TABLE_LEN {
         return Err("state-must-hold-512-table-bytes".into());
     }
-    bytes[..CMF_TABLE_LEN]
+    state.buf[..CMF_TABLE_LEN]
         .try_into()
         .map_err(|_| "state-table-conversion".into())
 }
@@ -163,10 +233,7 @@ fn cmf_name_bytes<'a>(obj: &'a [u8], relocs: &[usize]) -> Result<&'a [u8], Strin
 }
 
 /// `CmfKey154504` (`0x142e48a20`): `(Header*, u8 out[32], int len)`.
-fn cmf_key_154504_entry(
-    args: Vec<Arg>,
-    state: Option<&[u8]>,
-) -> Result<(String, Vec<Vec<u8>>), String> {
+fn cmf_key_154504_entry(args: Vec<Arg>, state: &State) -> Result<(String, Vec<Vec<u8>>), String> {
     if args.len() != 3 {
         return Err(format!("expected 3 args, got {}", args.len()));
     }
@@ -195,10 +262,7 @@ fn cmf_key_154504_entry(
 }
 
 /// `CmfIv154504` (`0x142e48700`): `(string*, Header*, u8 out[16], int len)`.
-fn cmf_iv_154504_entry(
-    args: Vec<Arg>,
-    state: Option<&[u8]>,
-) -> Result<(String, Vec<Vec<u8>>), String> {
+fn cmf_iv_154504_entry(args: Vec<Arg>, state: &State) -> Result<(String, Vec<Vec<u8>>), String> {
     if args.len() != 4 {
         return Err(format!("expected 4 args, got {}", args.len()));
     }
@@ -294,10 +358,69 @@ fn bundle_lookup_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String>
     Ok((format!("{:x}", ret), vec![region]))
 }
 
+/// `BundleDirectoryLookup` (`0x141fd5160`): `(directory*, u64* out, u64 GUID)`.
+///
+/// RCX is the directory object (the client always passes its fixed
+/// `DAT_1441b3b88`), RDX the output slot and R8 the target GUID. R9 is dead:
+/// the fixture uses it for the structure pool the directory's absolute
+/// pointers name. Every buffer is a guest slice of the unit's state, so the
+/// probe follows the blob's pointers exactly as the client does. The client
+/// returns `param_2`, the output pointer, and writes the handle (or `-1`) to
+/// `*param_2`; the probe returns the same guest address and the out slot's
+/// bytes carry the handle.
+///
+/// `is_loaded` models `FUN_141fcbf40`: the fixture puts every group's bundle
+/// GUID at 0, the client's unconditional "loaded" answer. Any other GUID
+/// would need the live content-database set, which this unit cannot model.
+fn bundle_directory_lookup_entry(
+    args: Vec<Arg>,
+    state: &mut State,
+) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let (dir_mem, dir_relocs, dir_guest) = match it.next() {
+        Some(Arg::Ptr(b, r, Some(g))) => (b, r, g),
+        _ => return Err("arg0 must be a guest directory buffer".into()),
+    };
+    let (out_mem, out_guest) = match it.next() {
+        Some(Arg::Ptr(b, r, Some(g))) if r.is_empty() && b.len() == 8 => (b, g),
+        _ => return Err("arg1 must be the 8-byte out slot".into()),
+    };
+    let guid = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg2 must be u64".into()),
+    };
+    let (pool_mem, pool_relocs, pool_guest) = match it.next() {
+        Some(Arg::Ptr(b, r, Some(g))) => (b, r, g),
+        _ => return Err("arg3 must be a guest structure pool".into()),
+    };
+    if !state.loaded() {
+        return Err("state-not-loaded".into());
+    }
+    state.reset();
+    guest_write(state, dir_guest, &dir_mem, &dir_relocs)?;
+    guest_write(state, pool_guest, &pool_mem, &pool_relocs)?;
+    guest_write(state, out_guest, &out_mem, &[])?;
+    let handle = {
+        let directory = ow_tank::bundle::Directory::new(&state.buf, state.base, dir_guest);
+        ow_tank::bundle::directory_lookup(&directory, guid, |bundle| bundle == 0)
+    };
+    let off = state.off(out_guest).ok_or("out-outside-state")?;
+    state.buf[off..off + 8].copy_from_slice(&handle.to_le_bytes());
+    let mut out_after = out_mem;
+    out_after.copy_from_slice(&handle.to_le_bytes());
+    Ok((
+        format!("{:x}", out_guest),
+        vec![dir_mem, out_after, pool_mem],
+    ))
+}
+
 fn handle_call(
     entry: &str,
     args: Vec<Arg>,
-    state: Option<&[u8]>,
+    state: &mut State,
 ) -> Result<(String, Vec<Vec<u8>>), String> {
     match entry {
         // crates/ow-tank/src/mapguid.rs
@@ -307,6 +430,7 @@ fn handle_call(
         "cmf_iv_154504" => cmf_iv_154504_entry(args, state),
         // crates/ow-tank/src/bundle.rs
         "bundle_lookup" => bundle_lookup_entry(args),
+        "bundle_directory_lookup" => bundle_directory_lookup_entry(args, state),
         other => Err(format!("unknown-entry-{}", other)),
     }
 }
@@ -317,8 +441,9 @@ fn main() {
     let mut out = stdout.lock();
     // The harness sends the unit's `state` snapshot before the first call.
     // `chunk_guid` reads its table through the pointee argument, so the bytes
-    // are only echoed back on the state channel.
-    let mut state: Option<Vec<u8>> = None;
+    // are only echoed back on the state channel; the bundle-directory entry
+    // follows the blob's guest pointers through the same buffer.
+    let mut state = State::new();
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -356,8 +481,9 @@ fn main() {
                     continue;
                 }
             };
-            let _ = base;
-            state = Some(bytes);
+            state.base = base;
+            state.buf = bytes.clone();
+            state.snapshot = bytes;
             let _ = writeln!(out, "ok");
             let _ = out.flush();
             continue;
@@ -467,16 +593,16 @@ fn main() {
             let _ = out.flush();
             continue;
         }
-        match handle_call(entry, args, state.as_deref()) {
+        match handle_call(entry, args, &mut state) {
             Ok((ret, outs)) => {
                 let mut resp = format!("ok {}", ret);
                 for o in outs {
                     resp.push(' ');
                     resp.push_str(&hex_encode(&o));
                 }
-                if let Some(s) = &state {
+                if state.loaded() {
                     resp.push(' ');
-                    resp.push_str(&hex_encode(s));
+                    resp.push_str(&hex_encode(&state.buf));
                 }
                 let _ = writeln!(out, "{}", resp);
             }

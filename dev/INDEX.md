@@ -142,9 +142,10 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `trace_probe.py` | Measure the client's movement per write (frame) from a captured trace. | 89 |
 | `vel_scan.py` | Velocity-signature scan: find the (vx, 0, vz) walk-velocity triple. | 135 |
 | `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 81 |
+| `verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` | 575 |
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 249 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 565 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 568 |
 | `verify_harness/chunk_guid_fixture.py` | Deterministic table-slot inputs for the `fn/ChunkGuid` unit. | 99 |
 | `verify_harness/cli.py` | Run verification units. Exit code is the gate. | 125 |
 | `verify_harness/cmf_iv_154504_fixture.py` | Deterministic inputs for the `fn/CmfIv154504` unit. | 202 |

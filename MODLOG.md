@@ -4,6 +4,31 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-27 - The bundle directory lookup is harness-verified
+
+- Added `fn/BundleDirectoryLookup` to `dev/verify_harness`: oracle
+  `BundleDirectoryLookup` at `0x141fd5160`, candidate
+  `ow_tank::bundle::directory_lookup` through `crates/ow-tank/src/bin/verify_probe.rs`
+  (a `bundle_directory_lookup` entry whose state region holds the directory at
+  its own image address). 364 synthetic differential cases on every channel,
+  93.3% branch coverage (14/15 reachable branches of 18 sites; three sites
+  declare one structurally dead edge each) and 35/35 mutants killed (one
+  further type-count gate flip declared equivalent; one signature-line mutant
+  does not compile and is counted killed).
+- Read the blob the function walks: the type-entry array at `+0x18` and count
+  at `+0x20`, the 0x20-byte type entry, the group's sorted/index arrays and
+  running listed count, the handle-array slot arithmetic and the tagged handle
+  status. The type key is the asset type id (the bit-reversed 12-bit
+  field at GUID bits 48..59, plus one); a mask read as
+  `0xFFF0...` agreed on every `0x0D90...` GUID and diverged on a random one.
+  `FUN_141fd4040` disassembles as `SHR EAX,0xf` / `AND AL,1`, not the
+  decompiler's `& 0xffffff01`; bits 23 and 31 are not status bits, and the
+  first differential run caught that on a bit-31 object.
+- The loaded-bundle guard's false path needs `FUN_141fcf330` and the live
+  content-database object, so it is a named acknowledged gap (coverage gate
+  93%), not a silent exclusion. The producer of the directory blob remains
+  open in `ow-tank-1to1.md` section A; this unit verifies its consumer.
+
 ## 2026-10-27 - The map variation selector is not a client function
 
 - Read the header's mode/variation path to its end. `m_D97BC44F`

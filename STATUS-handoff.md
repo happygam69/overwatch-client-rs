@@ -44,6 +44,12 @@ claim. `ow-sim` is parked reference code.
   (`fn/BundleLookup`: 364 synthetic cases, 100% branch coverage, 12/12
   mutants). All 305 type-`0x09F` map headers open: 42 from the store, 263 from
   bundles.
+- **Bundle directory:** the per-type directory **lookup** is read from
+  `BundleDirectoryLookup` (`0x141fd5160`), implemented as
+  `ow_tank::bundle::{Directory, directory_lookup, guid_type_key}` and verified
+  by `fn/BundleDirectoryLookup` (364 synthetic cases, 93.3% coverage with one
+  named guard gap). The directory's **producer** is still open; the install
+  scan in `BundleIndex` remains our own.
 - **Map resolver:** `ow-tank::mapresolve` follows a header's paired mode and
   variation arrays, the variation's type-`0x002` scene map, the map asset's
   stored chunk references and the 31 synthesised chunks. The practice range
@@ -58,9 +64,11 @@ claim. `ow-sim` is parked reference code.
 - **Other verified client functions:** `AnimTimeWrap`,
   `BuildPerspectiveMatrix`, `InitProjectionDescriptor`,
   `OrthonormalizeCameraBasis` (stateful), `MapChunkGuid` (`fn/ChunkGuid`,
-  the first `ow-tank` tier-2 unit) and `BundleEntryLookup`
+  the first `ow-tank` tier-2 unit), `BundleEntryLookup`
   (`fn/BundleLookup`, the second `ow-tank` tier-2 unit: 100% coverage,
-  12/12 mutants). The build-154504 key/IV units
+  12/12 mutants) and `BundleDirectoryLookup` (`fn/BundleDirectoryLookup`,
+  the third: 93.3% coverage with one named guard gap, 35/35 mutants killed).
+  The build-154504 key/IV units
   (`fn/CmfKey154504`, `fn/CmfIv154504`) pass differential and mutation but
   keep an acknowledged coverage gap. `CurveKeySampleDual` is inconclusive at
   75% coverage; the two `ow-sim` units cannot run while `ow-sim` is parked.
