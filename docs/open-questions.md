@@ -288,30 +288,41 @@ dependency and the Wwise event-posting path.
 
 **Question.** The five leaf units (`Salsa20Xor`, `Salsa20StateInit`,
 `DynamicIndexHash`, `DynamicIndexKeyHash`, `EncodingHeaderParse`) are verified,
-but the path that uses them is not. Which client functions remain, and what do
-they change?
+and the bucket hash and segment/archive selection are now read and
+install-tested, but the path that uses them is not. Which client functions
+remain, and what do they change?
 
-**What is known.** The open functions are `DynamicIndexSegmentParse`
-(`0x14250fcf0`), `DynamicIndexFindEntry` (`0x1425111a0`),
-`DynamicIndexDecodeEntries` (`0x1425209a0`), `BlteFrameHeaderParse`
-(`0x1424a90e0`), `BlteBlockRead` (`0x1424d61b0`), `BlteBlockReadLz4`
-(`0x1424d6e50`), `DynamicContainerRead` (`0x1424f48d0`) and
-`EncodingSectionsRead` (`0x1424d1c60`). The client also selects a segment with
-`DynamicIndexSegmentOpen` (`0x14250e400`) and `DynamicContainerOpenArchive`
-(`0x14250c8f0`), and hashes a key with `DynamicKeyStateLookup` (`0x142501b40`);
-`ow-casc` merges all sixteen `.idx` files and uses a HashMap instead. The
-shipped decoder accepts only BLTE type `0x0F`, does not check `12 + 24*count`,
-skips the frame/chunk MD5s, and has no LZ4/ARC4/frame modes. `docs/casc-1to1.md`
-has the full table.
+**What is known.** `DynamicKeyStateLookup` (`0x142501b40`) is
+`((xor9 ^ (xor9 >> 4)) + salt) & 0xf`; the read path's salt is 0 at all three
+callers. `DynamicIndexOpen` (`0x14250e100`) and
+`DynamicIndexScanSegments` (`0x14250e720`) select the highest
+`<bucket><segment>.idx` per bucket, with no container-header field and no
+merge; `DynamicIndexSegmentOpen` (`0x14250e400`) opens that one file and the
+parser rejects a header-bucket mismatch. `DynamicContainerRead` adds `0x1e`
+to the packed entry location, and `DynamicContainerReadPage` derives the
+archive as `(packed + 0x1e) >> 30`; `DynamicContainerOpenArchive`
+(`0x14250c8f0`) opens `data.%03d`. The install test matches 1,147,132 real
+keys at salt 0 and the 1,488 archive-header placeholders at salt 1, with no
+unmatched entry. The open functions are `DynamicIndexSegmentParse`
+(`0x14250fcf0`; header/section/entry only, no page table),
+`DynamicIndexFindEntry` (`0x1425111a0`; the equal-range and duplicate-key
+choice is unread, and this install lists 806 keys twice), `DynamicKeyStateLookup`'s
+resolve (`0x142511540`, `0x1425115d0`), `DynamicIndexDecodeEntries`
+(`0x1425209a0`), `BlteFrameHeaderParse` (`0x1424a90e0`), `BlteBlockRead`
+(`0x1424d61b0`), `BlteBlockReadLz4` (`0x1424d6e50`), `DynamicContainerRead`
+(`0x1424f48d0`; no page cache) and `EncodingSectionsRead` (`0x1424d1c60`).
+The shipped decoder accepts only BLTE type `0x0F`, does not check
+`12 + 24*count`, skips the frame/chunk MD5s, and has no LZ4/ARC4/frame modes.
 
-**What would settle it.** Read each function in the current image, implement it
-operation for operation, and add a differential unit where the function is pure
-(the index find/hash and the frame header are the first candidates). The
-container read and segment selection need a synthetic two-segment fixture.
+**What would settle it.** Read each remaining function in the current image,
+implement it operation for operation, and add a differential unit where the
+function is pure. `DynamicIndexFindEntry` and the frame header are the first
+candidates; the container read and the page-table lookup need a synthetic
+two-segment fixture.
 
 **Next anchor.** `docs/casc-1to1.md`, `formats/casc.md`,
-`crates/ow-casc/src/index.rs`, `crates/ow-casc/src/blte.rs`,
-`crates/ow-casc/src/container.rs`.
+`crates/ow-casc/src/index.rs`, `crates/ow-casc/src/container.rs`,
+`crates/ow-casc/src/blte.rs`.
 
 ---
 

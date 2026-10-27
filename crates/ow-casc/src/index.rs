@@ -19,7 +19,17 @@
 //! Files are preallocated, so a zero-padded tail follows the entries; the entry
 //! count comes from the block header, never from the file size.
 //!
-//! Bucket selection hashes the 9 key bytes: XOR them, then fold the nibbles.
+//! Bucket selection is the client's `DynamicKeyStateLookup` (`0x142501b40`)
+//! exactly: XOR the nine key bytes, fold the high nibble into the low one,
+//! add the caller's salt, and keep four bits. Every lookup caller passes a
+//! salt of 0; [`bucket_of`] keeps the parameter because the client has it.
+//!
+//! A bucket's file name is `<bucket:02x><segment:08x>.idx`. The client's
+//! `DynamicIndexSegmentOpen` (`0x14250e400`) builds it from the bucket and the
+//! segment number in its per-bucket table; its directory scan
+//! (`DynamicIndexScanSegments`) parses the same shape and keeps the highest segment per
+//! bucket. [`parse_segment_file_name`] is that parser and [`segment_name`] is
+//! the formatter.
 
 use std::fmt;
 use std::fs;
@@ -70,6 +80,128 @@ pub struct Location {
     pub offset: u64,
     /// Stored length, including any 30-byte data header.
     pub size: u32,
+}
+
+impl Location {
+    /// The client's 40-bit virtual offset: the index entry's five big-endian
+    /// bytes read as `(archive << 30) | offset`.
+    pub fn packed(&self) -> u64 {
+        (u64::from(self.archive) << ARCHIVE_SHIFT) | self.offset
+    }
+
+    /// The archive the client's payload read selects.
+    ///
+    /// `DynamicContainerRead` (`0x1424f48d0`) adds the 30-byte data header to
+    /// the packed location before `DynamicContainerReadPage`
+    /// (`0x1424fcd20`) shifts it right by 30. On this installation no record
+    /// crosses a 2^30 boundary, so this is the entry's own archive for every
+    /// key; the arithmetic is kept because it is the client's expression.
+    pub fn data_archive(&self) -> u32 {
+        ((self.packed() + u64::from(DATA_HEADER_SIZE)) >> ARCHIVE_SHIFT) as u32
+    }
+}
+
+/// The client's 10-bit archive field: `location >> 30`.
+pub const ARCHIVE_SHIFT: u32 = 30;
+/// The low 30 bits of the packed location.
+pub const ARCHIVE_MASK: u64 = (1u64 << ARCHIVE_SHIFT) - 1;
+/// `DynamicContainerReadPage` rejects an archive above this before opening it.
+pub const MAX_ARCHIVE: u32 = 0x3fe;
+/// The data header `DynamicContainerRead` skips before reading a payload.
+pub const DATA_HEADER_SIZE: u32 = 0x1e;
+
+/// Number of buckets in a dynamic index.
+pub const BUCKET_COUNT: usize = 16;
+
+/// The client's key→bucket fold (`DynamicKeyStateLookup`, `0x142501b40`).
+///
+/// It XORs the nine key bytes into one byte `b`, computes `b ^ (b >> 4)`,
+/// adds the caller's low salt byte and keeps the low four bits. The client's
+/// third argument is the salt; all three callers of `DynamicKeyStateLookup`
+/// pass 0. The additions are 32-bit in the client and cannot overflow a byte
+/// before the mask.
+pub fn bucket_of(key: &[u8; 9], salt: u8) -> u8 {
+    let mut folded = 0u8;
+    for byte in key {
+        folded ^= *byte;
+    }
+    (folded ^ (folded >> 4)).wrapping_add(salt) & 0x0f
+}
+
+/// A parsed `<bucket:02x><segment:08x>.idx` file name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentName {
+    pub bucket: u8,
+    pub segment: u32,
+    /// The client's `._idx` temporary marker: deleted in a read-write store
+    /// and ignored by a read-only one.
+    pub temporary: bool,
+}
+
+/// Parse a file name with the client's exact rule (`DynamicIndexScanSegments`).
+///
+/// The name is ten hex digits, a `.`, and `idx` (ASCII case-insensitive).
+/// The ten digits are the bucket and segment: the first two are a hex byte
+/// below 16 (so the first digit is always `0`), the last eight are the
+/// segment. A `_` between the dot and `idx` marks a temporary file. Any other
+/// character in the ten-digit prefix, any other length, and any other suffix
+/// is rejected. The suffix compare is case-insensitive.
+pub fn parse_segment_file_name(name: &str) -> Option<SegmentName> {
+    let bytes = name.as_bytes();
+    if bytes.len() < 14 {
+        return None;
+    }
+    let mut digits = [0u8; 10];
+    for (slot, byte) in digits.iter_mut().zip(&bytes[..10]) {
+        *slot = hex_nibble(*byte)?;
+    }
+    let bucket = (digits[0] << 4) | digits[1];
+    if usize::from(bucket) >= BUCKET_COUNT {
+        return None;
+    }
+    let mut segment = 0u32;
+    for digit in &digits[2..] {
+        segment = (segment << 4) | u32::from(*digit);
+    }
+    if bytes[10] != b'.' {
+        return None;
+    }
+    let (temporary, suffix_at) = if bytes[11] == b'_' {
+        (true, 12)
+    } else {
+        (false, 11)
+    };
+    if bytes.len() != suffix_at + 3 || !bytes[suffix_at..].eq_ignore_ascii_case(b"idx") {
+        return None;
+    }
+    Some(SegmentName {
+        bucket,
+        segment,
+        temporary,
+    })
+}
+
+/// The name `DynamicIndexSegmentOpen` (`0x14250e400`) builds for a bucket and
+/// segment number: `0` + one lowercase hex digit + eight lowercase hex digits
+/// + `.idx`. The install's `0c0000014b.idx` pins the lowercase form.
+pub fn segment_name(bucket: u8, segment: u32) -> String {
+    debug_assert!(usize::from(bucket) < BUCKET_COUNT);
+    format!("{bucket:02x}{segment:08x}.idx")
+}
+
+/// The name `DynamicContainerOpenArchive` (`0x14250c8f0`) builds for an
+/// archive ordinal: `data.%03d`.
+pub fn archive_name(archive: u32) -> String {
+    format!("data.{archive:03}")
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Parse one bucket file. `expect_bucket` is verified against the header.
@@ -687,5 +819,119 @@ mod tests {
         let path = write_temp("bucket", &bucket_file(7, 1, &[(key, 0, 7)]));
         assert!(parse_bucket_file(&path, Some(2)).is_err());
         fs::remove_file(&path).ok();
+    }
+
+    /// The client's fold (`0x142501b40`): XOR the nine bytes, fold the high
+    /// nibble, add the salt, mask. `all 0xff` and the real `0300000159.idx`
+    /// key are both pinned; salt 1 moves every bucket by one.
+    #[test]
+    fn bucket_of_is_the_client_fold() {
+        assert_eq!(bucket_of(&[0u8; 9], 0), 0);
+        // Nine 0xff bytes XOR to 0xff; 0xff ^ 0x0f = 0xf0.
+        assert_eq!(bucket_of(&[0xff; 9], 0), 0);
+        assert_eq!(bucket_of(&[0xff; 9], 1), 1);
+        assert_eq!(bucket_of(&[0xff; 9], 0x1f), 0x0f);
+
+        // XOR 0x11 ^ 0x22 ^ ... ^ 0x99 = 0x11; 0x11 ^ 0x01 = 0x10.
+        let key = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99];
+        assert_eq!(bucket_of(&key, 0), 0);
+        assert_eq!(bucket_of(&key, 0x0f), 0x0f);
+        assert_eq!(bucket_of(&key, 0x10), 0);
+
+        // The first entry of the real 0300000159.idx: XOR 0xcf, fold 0xc3,
+        // bucket 3, which is that file's header bucket.
+        let real = [0x00, 0x00, 0x1d, 0x9b, 0xbc, 0x07, 0x91, 0x9e, 0xfd];
+        assert_eq!(bucket_of(&real, 0), 3);
+    }
+
+    /// The client's file-name parser (`DynamicIndexScanSegments`): exactly ten hex
+    /// digits, a dot, then `idx`, optionally with the `_` temporary marker.
+    #[test]
+    fn parses_segment_file_names_like_the_client() {
+        assert_eq!(
+            parse_segment_file_name("0300000159.idx"),
+            Some(SegmentName {
+                bucket: 3,
+                segment: 0x159,
+                temporary: false
+            })
+        );
+        assert_eq!(
+            parse_segment_file_name("0c0000014b.idx"),
+            Some(SegmentName {
+                bucket: 12,
+                segment: 0x14b,
+                temporary: false
+            })
+        );
+        assert_eq!(
+            parse_segment_file_name("0a0000FFFF.IDX"),
+            Some(SegmentName {
+                bucket: 10,
+                segment: 0xffff,
+                temporary: false
+            })
+        );
+        assert_eq!(
+            parse_segment_file_name("0300000020._idx"),
+            Some(SegmentName {
+                bucket: 3,
+                segment: 0x20,
+                temporary: true
+            })
+        );
+        assert_eq!(
+            parse_segment_file_name("0030000159.idx"),
+            Some(SegmentName {
+                bucket: 0,
+                segment: 0x3000_0159,
+                temporary: false
+            })
+        );
+
+        for rejected in [
+            "data.000",
+            "0300000159.idx.bak",
+            "030000015.idx",
+            "1030000159.idx",
+            "x300000159.idx",
+            "0300000159.id",
+            "0300000159._id",
+            "0300000159.zidx",
+        ] {
+            assert_eq!(
+                parse_segment_file_name(rejected),
+                None,
+                "{rejected} must not parse"
+            );
+        }
+
+        assert_eq!(segment_name(3, 0x159), "0300000159.idx");
+        assert_eq!(segment_name(12, 0x14b), "0c0000014b.idx");
+        assert_eq!(segment_name(15, 0), "0f00000000.idx");
+        assert_eq!(archive_name(7), "data.007");
+        assert_eq!(archive_name(1022), "data.1022");
+    }
+
+    /// The payload archive is the packed location plus the 30-byte data
+    /// header, shifted by 30. A synthetic entry whose offset is within 29
+    /// bytes of the 2^30 boundary carries into the next archive; no install
+    /// entry does.
+    #[test]
+    fn payload_archive_is_the_packed_location_plus_the_header() {
+        let location = Location {
+            archive: 7,
+            offset: 0x1234,
+            size: 30,
+        };
+        assert_eq!(location.packed(), (7 << 30) | 0x1234);
+        assert_eq!(location.data_archive(), 7);
+
+        let boundary = Location {
+            archive: 7,
+            offset: (1 << 30) - 29,
+            size: 30,
+        };
+        assert_eq!(boundary.data_archive(), 8);
     }
 }

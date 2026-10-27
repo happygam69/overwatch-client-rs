@@ -2,6 +2,15 @@
 //!
 //! Lookup path for a content key is
 //! `encoding file -> encoding key -> bucket index -> data.NNN -> BLTE`.
+//!
+//! The bucket index is the client's dynamic index, not a search over every
+//! `.idx` file: the key's nine bytes pick one of sixteen buckets
+//! ([`index::bucket_of`]), that bucket has exactly one selected segment (the
+//! highest `<bucket><segment>.idx` number found by the directory scan), and
+//! the segment's entry supplies the archive ordinal and offset. `ecache/` and
+//! `indices/` are not local content stores: the first holds chunk manifests,
+//! the second CDN routes, and merging either into a local lookup produced
+//! wrong reads.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -70,12 +79,124 @@ impl From<crate::encoding::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// One bucket's selected `.idx` segment.
+///
+/// The client keeps exactly one segment per bucket: the highest
+/// `<bucket:02x><segment:08x>.idx` number its directory scan finds
+/// (`DynamicIndexScanSegments`). `segment` is the number in the file name and `entries`
+/// is that file's key table; keys are never merged across segments or
+/// buckets.
+#[derive(Debug)]
+struct BucketSegment {
+    segment: u32,
+    entries: HashMap<[u8; 9], Location>,
+}
+
+/// The sixteen bucket maps, selected by the client's filename scan.
+#[derive(Debug)]
+struct BucketIndex {
+    buckets: [Option<BucketSegment>; index::BUCKET_COUNT],
+}
+
+impl BucketIndex {
+    /// Scan `dir` and load the highest segment of each bucket.
+    ///
+    /// The client's read-only open (`DynamicIndexOpen`, mode 2/3) requires all
+    /// sixteen buckets; a missing one is an error, not a reason to merge
+    /// another segment. `parse_bucket_file` checks the header's bucket byte
+    /// against the bucket the name selected, so a misnamed file is rejected.
+    fn open_dir(dir: &Path) -> Result<BucketIndex> {
+        let found = discover_segments(dir)?;
+        let mut buckets: [Option<BucketSegment>; index::BUCKET_COUNT] =
+            std::array::from_fn(|_| None);
+        for (bucket, found) in found.into_iter().enumerate() {
+            let Some(found) = found else {
+                return Err(Error::Parse(format!(
+                    "bucket {bucket:02x} has no .idx segment in {}; the client's read-only open requires all 16",
+                    dir.display()
+                )));
+            };
+            let entries = index::parse_bucket_file(&found.path, Some(bucket as u8))?;
+            buckets[bucket] = Some(BucketSegment {
+                segment: found.segment,
+                entries: entries.into_iter().collect(),
+            });
+        }
+        Ok(BucketIndex { buckets })
+    }
+
+    fn location_of(&self, key: &[u8; 9]) -> Option<Location> {
+        let bucket = usize::from(index::bucket_of(key, 0));
+        self.buckets[bucket].as_ref()?.entries.get(key).copied()
+    }
+
+    fn key_count(&self) -> usize {
+        self.buckets
+            .iter()
+            .flatten()
+            .map(|bucket| bucket.entries.len())
+            .sum()
+    }
+
+    fn segment_count(&self) -> usize {
+        self.buckets.iter().flatten().count()
+    }
+
+    fn segment_numbers(&self) -> [Option<u32>; index::BUCKET_COUNT] {
+        std::array::from_fn(|bucket| self.buckets[bucket].as_ref().map(|b| b.segment))
+    }
+}
+
+/// One `.idx` file the directory scan selected.
+struct DiscoveredSegment {
+    segment: u32,
+    path: std::path::PathBuf,
+}
+
+/// Scan `dir` for `<bucket:02x><segment:08x>.idx` names and keep the highest
+/// segment number of each bucket (`DynamicIndexScanSegments`).
+///
+/// The client's scan deletes a lower segment and any `._idx` temporary in a
+/// read-write store, and ignores both in a read-only one; no segment is ever
+/// merged with another. The highest wins, and an equal number replaces.
+fn discover_segments(dir: &Path) -> Result<[Option<DiscoveredSegment>; index::BUCKET_COUNT]> {
+    let mut found: [Option<DiscoveredSegment>; index::BUCKET_COUNT] = std::array::from_fn(|_| None);
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        // `FUN_1426a16b0` reports directories separately and the scan skips
+        // them; a directory named like a segment must not be opened.
+        if entry.file_type()?.is_dir() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let Some(parsed) = index::parse_segment_file_name(name) else {
+            continue;
+        };
+        if parsed.temporary {
+            continue;
+        }
+        let slot = &mut found[usize::from(parsed.bucket)];
+        if slot
+            .as_ref()
+            .is_some_and(|current| current.segment > parsed.segment)
+        {
+            continue;
+        }
+        *slot = Some(DiscoveredSegment {
+            segment: parsed.segment,
+            path: entry.path(),
+        });
+    }
+    Ok(found)
+}
+
 /// Read-only view over an installation's store.
 pub struct Store {
     install: Install,
-    buckets: HashMap<[u8; 9], Location>,
-    /// Bucket files read, for the diagnostic.
-    bucket_files: usize,
+    index: BucketIndex,
     /// Open pack files, keyed by archive ordinal (`data/data.NNN`).
     archives: RefCell<HashMap<u32, fs::File>>,
     /// The decoded encoding **manifests**: this build config names more than
@@ -90,11 +211,10 @@ pub struct Store {
 
 impl Store {
     pub fn open(install: Install) -> Result<Store> {
-        let (buckets, bucket_files) = load_bucket_index(&install)?;
+        let index = BucketIndex::open_dir(&install.data_dir())?;
         Ok(Store {
             install,
-            buckets,
-            bucket_files,
+            index,
             archives: RefCell::new(HashMap::new()),
             encoding: RefCell::new(None),
             encoding_report: RefCell::new(Vec::new()),
@@ -107,7 +227,12 @@ impl Store {
 
     /// Number of encoding keys the bucket index knows about.
     pub fn key_count(&self) -> usize {
-        self.buckets.len()
+        self.index.key_count()
+    }
+
+    /// The selected segment number of each bucket, in bucket order.
+    pub fn segment_numbers(&self) -> [Option<u32>; index::BUCKET_COUNT] {
+        self.index.segment_numbers()
     }
 
     /// What the local index layer found, for `look --index-stats`.
@@ -116,8 +241,8 @@ impl Store {
     /// describe the CDN, with its own archive numbering and offsets.
     pub fn stats(&self) -> StoreStats {
         StoreStats {
-            keys: self.buckets.len(),
-            bucket_files: self.bucket_files,
+            keys: self.index.key_count(),
+            bucket_files: self.index.segment_count(),
             data_packs: pack_count(&self.install.data_dir()),
             cdn_indexes: index_file_count(&self.install.indices_dir()),
         }
@@ -125,49 +250,69 @@ impl Store {
 
     pub fn location_of(&self, ekey: &[u8]) -> Option<Location> {
         let key: [u8; 9] = ekey.get(0..9)?.try_into().ok()?;
-        self.buckets.get(&key).copied()
+        self.index.location_of(&key)
     }
 
     /// Read the stored (still BLTE-encoded) record for an encoding key.
+    ///
+    /// The record starts at the entry's packed location and is `size` bytes
+    /// long, 30-byte data header included. The client reads the payload from
+    /// `(packed + 0x1e) >> 30` for `size - 0x1e` bytes; a record whose header
+    /// would cross a 2^30 boundary therefore moves into the next archive.
+    /// The loop below reads the same `size` bytes as one contiguous span,
+    /// following that boundary, so `blte::decode` still sees the header it
+    /// strips. No entry in this install crosses.
     pub fn read_stored(&self, ekey: &[u8]) -> Result<Vec<u8>> {
         let location = self
             .location_of(ekey)
             .ok_or_else(|| Error::KeyNotFound(hex(ekey)))?;
 
-        // The client's page reader (`DynamicContainerReadPage`, `0x1424fcd20`)
-        // rejects an archive number above 0x3fe before opening the pack. The
-        // 10-bit field can hold 0..1023, so a corrupt entry can name 1023.
-        if location.archive > 0x3fe {
-            return Err(Error::Parse(format!(
-                "data archive {} is beyond the client's 0..=1022 range",
-                location.archive
-            )));
+        let mut at = location.packed();
+        let mut remaining = u64::from(location.size);
+        let mut out = Vec::new();
+        while remaining != 0 {
+            let archive = (at >> index::ARCHIVE_SHIFT) as u32;
+            let offset = at & index::ARCHIVE_MASK;
+            // The client's page reader (`DynamicContainerReadPage`,
+            // `0x1424fcd20`) rejects an archive number above 0x3fe before
+            // opening the pack. The 10-bit field can hold 0..1023, so a
+            // corrupt entry can name 1023.
+            if archive > index::MAX_ARCHIVE {
+                return Err(Error::Parse(format!(
+                    "data archive {archive} is beyond the client's 0..=1022 range"
+                )));
+            }
+            let take = remaining.min(index::ARCHIVE_MASK + 1 - offset);
+            out.extend_from_slice(&self.read_archive_span(archive, offset, take as usize)?);
+            at += take;
+            remaining -= take;
         }
+        Ok(out)
+    }
 
-        // The ordinal names a pack in `data/`. `ecache/` is deliberately not a
-        // content store here: its records are chunk manifests (see
-        // `load_bucket_index`).
-        let path = self
-            .install
-            .data_dir()
-            .join(format!("data.{:03}", location.archive));
+    /// Read one archive span, keeping the pack open in the `archives` cache.
+    ///
+    /// The ordinal names a pack in `data/`. `ecache/` is deliberately not a
+    /// content store here: its records are chunk manifests (see
+    /// `BucketIndex::open_dir`).
+    fn read_archive_span(&self, archive: u32, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let path = self.install.data_dir().join(index::archive_name(archive));
         let mut archives = self.archives.borrow_mut();
-        if let std::collections::hash_map::Entry::Vacant(e) = archives.entry(location.archive) {
+        if let std::collections::hash_map::Entry::Vacant(e) = archives.entry(archive) {
             e.insert(fs::File::open(&path)?);
         }
-        let file = archives.get_mut(&location.archive).expect("just inserted");
-        file.seek(SeekFrom::Start(location.offset))?;
+        let file = archives.get_mut(&archive).expect("just inserted");
+        file.seek(SeekFrom::Start(offset))?;
         // The entry claims this many bytes; a truncated archive must not turn
         // the claim into a multi-GB zeroed allocation before `read_exact` can
         // reject it.
-        let available = file.metadata()?.len().saturating_sub(location.offset);
-        if u64::from(location.size) > available {
+        let available = file.metadata()?.len().saturating_sub(offset);
+        if len as u64 > available {
             return Err(Error::Parse(format!(
-                "data.{:03}: record at {:#x} claims {} B but the pack has {available} B left",
-                location.archive, location.offset, location.size
+                "data.{archive:03}: record at {offset:#x} claims {len} B but the pack has {available} B left"
             )));
         }
-        let mut buf = vec![0u8; location.size as usize];
+        let mut buf = vec![0u8; len];
         file.read_exact(&mut buf)?;
         Ok(buf)
     }
@@ -782,53 +927,6 @@ pub struct StoreStats {
     pub cdn_indexes: usize,
 }
 
-/// Scan the sixteen `data/*.idx` bucket files into one map.
-///
-/// `ecache/` is deliberately **not** read here. Measured on build
-/// `2.25.0.1.154504`: its 103 bucket entries resolve to `ecache/data.000`,
-/// where all 87 records that carry a BLTE are chunk tables with no payload
-/// (`frameHeader + 30 == record size` for every one) and the other 16 are
-/// 30-byte headers with no BLTE. The content is not in that file, so treating
-/// an `ecache` key as a local location turned a clean CDN fallback into
-/// `chunk runs past the container`.
-///
-/// `indices/<archive-hash>.index` is also not read here. Those files describe
-/// the CDN (archive ordinals 0..826, CDN offsets, sizes that exclude the local
-/// 30-byte header); merging them into local locations produced wrong reads and
-/// suppressed the CDN fallback. `cdn_route_of` reads them on demand instead.
-fn load_bucket_index(install: &Install) -> Result<(HashMap<[u8; 9], Location>, usize)> {
-    let mut buckets = HashMap::new();
-    let mut bucket_files = 0usize;
-    let dir = install.data_dir();
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !name.ends_with(".idx") {
-            continue;
-        }
-        // `.get` instead of slicing: a name whose second byte is mid-UTF-8
-        // must skip, not panic the whole index load.
-        let bucket = name.get(0..2).and_then(|p| u8::from_str_radix(p, 16).ok());
-        if bucket.is_none() || bucket == Some(0xff) {
-            continue;
-        }
-        bucket_files += 1;
-        for (ekey, location) in index::parse_bucket_file(&path, bucket)? {
-            buckets.insert(ekey, location);
-        }
-    }
-    if buckets.is_empty() {
-        return Err(Error::Parse(format!(
-            "no .idx bucket files found in {}",
-            dir.display()
-        )));
-    }
-    Ok((buckets, bucket_files))
-}
-
 /// `data.NNN` files in the store.
 fn pack_count(dir: &Path) -> usize {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -1022,5 +1120,165 @@ mod tests {
         let e = index.loose_lookup(&key(1)).expect_err("must refuse");
         assert!(e.to_string().contains("not a loose-file index"), "{e}");
         fs::remove_file(&path).ok();
+    }
+
+    fn bucket_file(bucket: u8, entries: &[([u8; 9], u64, u32)]) -> Vec<u8> {
+        let mut out = vec![0u8; index::ENTRIES_OFFSET];
+        out[0..4].copy_from_slice(&16u32.to_le_bytes());
+        out[8..10].copy_from_slice(&7u16.to_le_bytes());
+        out[10] = bucket;
+        out[12] = 4;
+        out[13] = 5;
+        out[14] = 9;
+        out[15] = 30;
+        out[32..36].copy_from_slice(&((entries.len() * index::ENTRY_SIZE) as i32).to_le_bytes());
+        for (key, packed, size) in entries {
+            out.extend_from_slice(key);
+            out.extend_from_slice(&packed.to_be_bytes()[3..8]);
+            out.extend_from_slice(&size.to_le_bytes());
+        }
+        let mut state = [0u32; 2];
+        for entry in out[index::ENTRIES_OFFSET..].chunks_exact(index::ENTRY_SIZE) {
+            index::hash_index(entry, &mut state);
+        }
+        out[36..40].copy_from_slice(&state[0].to_le_bytes());
+        let mut state = [0u32; 2];
+        index::hash_index(&out[8..24], &mut state);
+        out[4..8].copy_from_slice(&state[0].to_le_bytes());
+        out
+    }
+
+    /// A key whose first byte is the bucket: XOR = b, fold = b ^ 0 = b.
+    fn bucket_key(bucket: u8) -> [u8; 9] {
+        let mut key = [0u8; 9];
+        key[0] = bucket;
+        key
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("ow-casc-buckets-{}-{name}", std::process::id()));
+        fs::create_dir_all(&path).expect("create synthetic bucket dir");
+        path
+    }
+
+    fn write_bucket(dir: &Path, bucket: u8, segment: u32, entries: &[([u8; 9], u64, u32)]) {
+        let name = index::segment_name(bucket, segment);
+        fs::write(dir.join(name), bucket_file(bucket, entries)).expect("write synthetic bucket");
+    }
+
+    /// The client's scan keeps the highest segment number per bucket, ignores
+    /// `._idx` temporaries, and never picks two files for one bucket.
+    #[test]
+    fn discover_segments_keeps_the_highest_and_ignores_temporaries() {
+        let dir = temp_dir("highest");
+        let key = bucket_key(3);
+        write_bucket(&dir, 3, 0x10, &[(key, (1u64 << 30) | 0x10, 30)]);
+        write_bucket(&dir, 3, 0x20, &[(key, (1u64 << 30) | 0x20, 30)]);
+        write_bucket(&dir, 3, 0x05, &[(key, (1u64 << 30) | 0x05, 30)]);
+        write_bucket(&dir, 4, 0x30, &[(bucket_key(4), (2u64 << 30) | 0x30, 30)]);
+        fs::write(
+            dir.join("0300000021._idx"),
+            bucket_file(3, &[(key, (9u64 << 30) | 0x21, 30)]),
+        )
+        .expect("write temporary");
+        // A directory with a segment-shaped name must be skipped.
+        fs::create_dir(dir.join("0300000030.idx")).expect("create segment-shaped dir");
+
+        let found = discover_segments(&dir).expect("scan");
+        let bucket3 = found[3].as_ref().expect("bucket 3");
+        assert_eq!(bucket3.segment, 0x20);
+        assert!(bucket3.path.ends_with("0300000020.idx"));
+        assert_eq!(found[4].as_ref().expect("bucket 4").segment, 0x30);
+        assert!(found[5].is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The selected segment is loaded alone; a key is looked up only in the
+    /// bucket its hash selects. A copy placed in another bucket must not be
+    /// merged in, and a lower segment's entry must not survive.
+    #[test]
+    fn bucket_index_selects_one_segment_and_does_not_merge_buckets() {
+        let dir = temp_dir("no-merge");
+        for bucket in 0u8..16 {
+            write_bucket(
+                &dir,
+                bucket,
+                0x100,
+                &[(bucket_key(bucket), (u64::from(bucket) + 1) << 30, 30)],
+            );
+        }
+        // Bucket 3 has a newer segment; its old entry must be gone.
+        write_bucket(
+            &dir,
+            3,
+            0x200,
+            &[(bucket_key(3), (33u64 << 30) | 0x200, 30)],
+        );
+        // Bucket 4 also contains bucket 3's key; a merge would see this copy.
+        write_bucket(
+            &dir,
+            4,
+            0x100,
+            &[
+                (bucket_key(4), (5u64 << 30) | 0x300, 30),
+                (bucket_key(3), (99u64 << 30) | 0x400, 30),
+            ],
+        );
+
+        let index = BucketIndex::open_dir(&dir).expect("open synthetic buckets");
+        assert_eq!(index.segment_numbers()[3], Some(0x200));
+        assert_eq!(index.segment_numbers()[4], Some(0x100));
+        let key3 = bucket_key(3);
+        let location = index.location_of(&key3).expect("bucket 3 key");
+        assert_eq!(location.archive, 33);
+        assert_eq!(location.offset, 0x200);
+        let key4 = bucket_key(4);
+        let location = index.location_of(&key4).expect("bucket 4 key");
+        assert_eq!(location.archive, 5);
+        assert_eq!(location.offset, 0x300);
+        assert_eq!(index.key_count(), 17);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A read-only open needs all sixteen buckets, as `DynamicIndexOpen` does.
+    #[test]
+    fn a_missing_bucket_is_an_error() {
+        let dir = temp_dir("missing");
+        for bucket in 0u8..16 {
+            if bucket == 7 {
+                continue;
+            }
+            write_bucket(
+                &dir,
+                bucket,
+                0x100,
+                &[(bucket_key(bucket), u64::from(bucket) << 30, 30)],
+            );
+        }
+        let err = BucketIndex::open_dir(&dir).expect_err("bucket 7 is missing");
+        assert!(err.to_string().contains("bucket 07"), "{err}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The file name selected the bucket; the header must agree.
+    #[test]
+    fn a_header_bucket_disagreement_is_refused() {
+        let dir = temp_dir("header");
+        for bucket in 0u8..16 {
+            let header = if bucket == 2 { 9 } else { bucket };
+            write_bucket(
+                &dir,
+                bucket,
+                0x100,
+                &[(bucket_key(bucket), u64::from(bucket) << 30, 30)],
+            );
+            if bucket == 2 {
+                let name = index::segment_name(bucket, 0x100);
+                fs::write(dir.join(name), bucket_file(header, &[])).expect("rewrite header");
+            }
+        }
+        assert!(BucketIndex::open_dir(&dir).is_err());
+        fs::remove_dir_all(&dir).ok();
     }
 }

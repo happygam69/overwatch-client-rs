@@ -4,6 +4,21 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-28 - CASC bucket hash and segment/archive selection are read and install-tested
+
+- `DynamicKeyStateLookup` (`0x142501b40`) is `((xor9 ^ (xor9 >> 4)) + salt) & 0xf`;
+  all three callers pass salt 0. `ow-casc` now has `index::bucket_of` and uses
+  it instead of a merged all-16 map.
+- `DynamicIndexOpen` (`0x14250e100`) / `DynamicIndexScanSegments`
+  (`0x14250e720`) select the highest `<bucket><segment>.idx` per bucket and
+  cache the sixteen numbers at `+0x110`; there is no container-header field.
+  The old merge is deleted, and a missing bucket or segment is an error.
+- The install test matches 1,147,132 real keys at salt 0 and 1,488 30-byte
+  archive-header placeholders at salt 1, with 0 unmatched; 806 keys are listed
+  twice (header and payload), which remains part of the open
+  `DynamicIndexFindEntry` work. `docs/formats/casc.md` records the rule,
+  addresses and proof.
+
 ## 2026-10-27 - CASC audit: five leaves verified, the container path open
 
 - The five differential units are real: `Salsa20Xor`, `Salsa20StateInit`,

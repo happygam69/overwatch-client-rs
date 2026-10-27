@@ -10,7 +10,7 @@ marked, against the client's own functions in `Overwatch.exe`.
 <install>/.build.info
 <install>/_retail_/.flavor.info
 <install>/data/casc/config/<xx>/<yy>/<key>   build, CDN, patch and keyring configs
-<install>/data/casc/data/<bucket:02X>*.idx    bucket index
+<install>/data/casc/data/<bucket:02x><segment:08x>.idx  bucket index (one segment per bucket)
 <install>/data/casc/data/data.NNN             stored records
 <install>/data/casc/indices/<hash>.index      CDN routes, not local locations
 <install>/data/casc/ecache/*.idx              cached chunk manifests, not content
@@ -90,7 +90,8 @@ will not be found.
 
 ## Bucket index
 
-Sixteen files, `<bucket:02X>*.idx`. Header:
+Sixteen files named `<bucket:02x><segment:08x>.idx`; `0300000159.idx` is
+bucket 3, segment 0x159. Header:
 
 | offset | field |
 |---|---|
@@ -115,10 +116,95 @@ entry block's second word is a rolling hash over the 18-byte entries. The
 client verifies both (`DynamicIndexHash`, `0x142512c60`) before using the
 segment. `ow-casc` implements the same hash; a one-off scan of the sixteen
 `.idx` files matched, while the in-crate test pins one real header and two
-rolling states. `ow-casc` also merges every `.idx` file it finds; the client
-opens the segment named by the container header (`DynamicIndexSegmentOpen`,
-`0x14250e400`) and selects buckets with `DynamicKeyStateLookup`
-(`0x142501b40`). Neither selection rule is implemented here yet.
+rolling states.
+
+### Key to bucket
+
+`DynamicKeyStateLookup` (`0x142501b40`) XORs the nine key bytes into one byte
+`b`, computes `((b ^ (b >> 4)) + salt) & 0xf`, locks the per-bucket lock at
+`manager + 0xa58 + bucket * 8`, and looks the key up in that bucket's key
+state. The function's third argument is the salt. Its three callers —
+`DynamicContainerRead` (`0x1424f48d0`), `FUN_1424f2900` and `FUN_1424f4b30` —
+all pass 0. `index::bucket_of` is that expression; the other key-state entry
+points take the same salt argument and use it for their own inserts.
+
+### Bucket to segment
+
+There is **no container-header field** that names the segment. The earlier
+note that the container header supplied it was wrong. On open,
+`DynamicIndexOpen` (`0x14250e100`) first tries the sixteen cached segment
+numbers in the object at index-manager `+0x68`, table `+0x110`. A cold cache
+sends it to `DynamicIndexScanSegments` (`0x14250e720`), which enumerates the
+data directory and accepts exactly ten hex digits, a dot and `idx`
+(case-insensitive), optionally with the client's `._idx` temporary marker.
+The first two digits are the bucket (the parsed byte must be below 16, so the
+first digit is `0`), the last eight are the segment. The scan keeps the
+**highest** segment number per bucket; in a read-write store it deletes a
+lower or temporary file, and in a read-only store it ignores it.
+`DynamicIndexSegmentOpen` (`0x14250e400`) opens
+`<base>/<bucket:02x><segment:08x>.idx` for the bucket it is asked for and
+`DynamicIndexSegmentLoad` (`0x14250fc60`) parses it. The parser rejects a
+file whose header bucket at `+0x0A` disagrees with the bucket the name
+selected, so a renamed file cannot silently load.
+
+The `+0x110` table is a runtime cache of the open segment number per bucket,
+not a header field: `DynamicIndexOpen` writes it after the scan.
+`DynamicIndexSegmentOpen` itself returns 0 when the requested segment is
+already open, 1 when the cached number is greater, and otherwise opens the
+file. All 21 callers of `DynamicIndexSegmentOpen` pass `table[bucket]` as the
+segment number; only the source of `bucket` differs (the key fold or an
+explicit bucket argument). The container open loads all sixteen selected
+segments (one per bucket); a key lookup lazily opens its own bucket's segment
+when it is not already open. The client never opens two segments for one
+bucket and never merges entries across files.
+
+A read-only open requires all sixteen buckets. A missing file makes
+`DynamicIndexOpen` return 9 (0x12 if all sixteen are missing); a lazy open for
+a missing file returns 8 (the OS error mapping) and the key lookup fails. A
+missing bucket or segment is an error, with no fallback to another file.
+
+### Entry to archive
+
+Each entry is `key[9] | location[5, big-endian] | size u32 LE`; the location is
+`(archive << 30) | offset`. `DynamicContainerRead` adds the 30-byte data
+header (`0x1e`) to the packed location; `DynamicContainerReadPage`
+(`0x1424fcd20`) shifts it right by 30 to select the archive and masks the
+offset with `2^30 - 1`. `DynamicContainerOpenArchive` (`0x14250c8f0`) opens
+`<base>/data.%03d` through an archive-number cache and returns the file. A
+missing archive is an error; there is no fallback. The shift and mask are set
+by the container constructor (`0x1424f3ee0` passes `0x1e`), not read from the
+index header's offset-bits byte; `index::Location::data_archive` mirrors the
+client's addition and `Store::read_stored` follows the boundary if a record
+ever crosses it. No entry in this install crosses a `2^30` boundary, so
+`(packed + 0x1e) >> 30` equals `packed >> 30` for every key.
+
+### Proof on this install
+
+One pass over all 1,148,620 entries of the sixteen files:
+
+| class | entries | rule |
+|---|---:|---|
+| real keys | 1,147,132 | `bucket_of(key, 0)` equals the file's header bucket |
+| archive-header placeholders | 1,488 | `bucket_of(key, 1)` equals the file's header bucket |
+| unmatched | 0 | — |
+
+The 1,488 placeholders are 93 archives × 16 slots: a 30-byte record at
+`offset = 30 * bucket`, `key[2..4] == 00 28`, and one fixed five-byte suffix.
+They sit in the first sixteen 30-byte slots of each archive, not at
+hash-selected buckets, and they match the formula with salt 1. The read path's salt
+is 0, so it never looks them up; the two salt domains are not a reason to
+change the lookup formula. Separately, 806 keys appear twice in one bucket —
+one entry at the 30-byte header, one at the payload (`offset + 30`,
+`size - 30`). Both resolve to the same BLTE; `ow-casc` keeps one map entry per
+key, and `DynamicIndexFindEntry`'s equal-range choice remains open.
+
+The bucket hash and the segment/archive selection are inline and stateful (a
+typed manager plus a directory scan), so they have no five-stage differential
+unit. The proof is the install test
+`crates/ow-casc/tests/bucket_hash_real.rs` (all keys, all archive numbers,
+selected segment numbers) and the synthetic tests in `index.rs` and
+`container.rs` (the fold, the filename parser, the highest-segment scan,
+two-segment selection, no cross-bucket merge, and a missing bucket).
 
 The key-to-entry page table that follows the entry block holds 21 records per
 0x200-byte page at a 24-byte stride: a `u32` stored hash, a 19-byte key and

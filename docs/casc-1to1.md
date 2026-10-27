@@ -44,6 +44,7 @@ earned. The rest of the container is not.
 |---|---|---|
 | `.build.info` row/bool select | `0x14248f2a0`, `0x1424aec30`, `0x1424d8800` | the rules are read-cited and pinned on synthetic text; no install test |
 | keyring parse/byte order | `0x1424cebd0`, `0x14248f040`, `0x14248efd0` | read-cited; synthetic byte-order test; the build keyring is read from the install at runtime |
+| bucket hash and segment/archive selection | `0x142501b40`, `0x14250e100`, `0x14250e720`, `0x14250e400`, `0x14250c8f0` | the fold is matched on 1,147,132 real keys (salt 0) and 1,488 archive-header placeholders (salt 1); the scan keeps the highest segment per bucket; the archive is `(packed + 0x1e) >> 30`; install-tested, no harness unit (stateful/I/O) |
 | bucket index header/entries | `0x14250fcf0` (partial) | header/section/entry layout and both widths; synthetic tests plus one real hash vector; the page table is not parsed |
 | encoding header/real values | `0x142498920` | header verified; installed 16/16 keys, 4 KiB pages, 16025 + 10519 pages and the 1,484,507-byte espec block are pinned |
 | BLTE N/Z/E blocks | `0x1424e3230`, `0x1424e32c0` | Salsa20 verified; the N/Z/E container walk is synthetic and self-consistent, not client-compared |
@@ -59,7 +60,6 @@ earned. The rest of the container is not.
 | CDN routes/fetch/cache | TACTLib `HttpCDNClient.Fetch` / `ICDNClient` | a port; 12 offline mock tests, no client address, no real endpoint test |
 | CDN index-page formula | reference `CDNIndexHandler` + measured footers | reference/measured; its four tests build the fixture with the same formula |
 | CMF builds 154088/150851 | TACTLib `ProCMF_154088`; no test for 150851 | ports; only 154504 has differential units |
-| index segment merge | our own decision to merge all 16 `.idx` files | the client opens the segment named by the container header and selects buckets by hash; neither rule is implemented |
 | config text parse | no client address | format-derived; no test against the install's real config files |
 
 ## D. Open
@@ -67,15 +67,13 @@ earned. The rest of the container is not.
 | area | client address | state |
 |---|---|---|
 | `DynamicIndexSegmentParse` | `0x14250fcf0` | partial: header/section/entry only; no key-to-entry page table, no asynchronous segment load |
-| `DynamicIndexFindEntry` | `0x1425111a0` | no client algorithm; production scans 9-byte entries into a HashMap |
+| `DynamicIndexFindEntry` | `0x1425111a0` | no client algorithm; production scans 9-byte entries into a HashMap. 806 keys in this install are listed twice (header entry and payload entry); the equal-range choice is unread |
 | `DynamicIndexDecodeEntries` | `0x1425209a0` | folded into `parse_bucket_file`; no separate implementation or unit |
 | `BlteFrameHeaderParse` | `0x1424a90e0` | accepts only type `0x0F`; does not check `12 + 24*count`; skips the frame and chunk MD5s |
 | `BlteBlockRead` | `0x1424d61b0` | N/Z/E only; no LZ4 (`4`, `BlteBlockReadLz4` `0x1424d6e50`), no ARC4 `A`, no frame `F`, no type `0x10` |
 | `DynamicContainerRead` | `0x1424f48d0` | reads the 30-byte header and a span; no page cache or page-reader path |
 | `EncodingSectionsRead` | `0x1424d1c60` | page reader is format-derived; no client function and no real-file test |
-| `DynamicKeyStateLookup` | `0x142501b40` | bucket hash/selection is not implemented; all 16 `.idx` files are merged |
-| `DynamicIndexSegmentOpen` | `0x14250e400` | segment selection is not implemented |
-| `DynamicContainerOpenArchive` | `0x14250c8f0` | archive selection is not implemented |
+| `DynamicKeyStateLookup` key-state resolve | `0x142511540`, `0x1425115d0` | the bucket fold and segment selection are implemented; `DynamicIndexResolveRange` and the resident-interval path are not |
 | CDN index-page reader | none | reference/measured; no client handler read |
 | content key = MD5(decoded) | none | measured 300/300; no MD5 code and no test in the tree |
 | LZ4 / ARC4 / frame modes | `0x1424d6e50` etc. | not implemented; no asset on this install exercises them |
@@ -97,17 +95,24 @@ earned. The rest of the container is not.
 - `docs/systems-coverage.md` summarised the container as verified while six
   functions are open; the row now separates the verified leaves from the open
   path.
+- The bucket section said the client opens "the segment named by the container
+  header". There is no such field: `DynamicIndexOpen` (`0x14250e100`) scans
+  the directory for `<bucket><segment>.idx`, keeps the highest segment per
+  bucket, and caches the sixteen numbers at `+0x110`. The old all-16 merge is
+  deleted.
 
 ## Next order
 
-1. `DynamicIndexFindEntry` (`0x1425111a0`) and `DynamicKeyStateLookup`
-   (`0x142501b40`): pure, small, and the preconditions for a real segment
-   reader.
+1. `DynamicIndexFindEntry` (`0x1425111a0`) and the key-state resolve
+   (`0x142511540`, `0x1425115d0`): the bucket fold and selection are now in
+   place, but the parsed-segment lookup, the duplicate-key equal range and the
+   resident-interval path are not. This is the next precondition for a real
+   segment reader.
 2. `BlteFrameHeaderParse` (`0x1424a90e0`) and `BlteBlockRead`
    (`0x1424d61b0`): type `0x10`, size equality and the MD5s; then the missing
    modes.
-3. `DynamicIndexSegmentParse` (`0x14250fcf0`) with the segment/archive
-   selection (`0x14250e400`, `0x14250c8f0`) and a two-segment fixture.
+3. `DynamicIndexSegmentParse` (`0x14250fcf0`) beyond the header/entry block,
+   with a two-segment fixture for the parse itself.
 4. `EncodingSectionsRead` (`0x1424d1c60`) and a real encoding page walk.
 5. The CDN index-page formula from the client's handler, then LZ4.
 

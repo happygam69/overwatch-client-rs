@@ -199,9 +199,15 @@ Overwatch.exe,0x1424e3370,0x1424e3370,Salsa20XorBlocks256,"Salsa20 block loop fo
 Overwatch.exe,0x1424e3e20,0x1424e3e20,Salsa20XorBlocks64,Salsa20 block loop for 64..255 bytes
 Overwatch.exe,0x1424f48d0,0x1424f48d0,DynamicContainerRead,"Resolves a 16-byte key to a stored range, skips the 30-byte data header and reads the bytes"
 Overwatch.exe,0x1424fcd20,0x1424fcd20,DynamicContainerReadPage,Reads one page-aligned range through the archive page cache
+Overwatch.exe,0x1424fffe0,0x1424fffe0,DynamicIndexRebuild,"Groups a key list by the salt-free bucket fold and writes one new index segment per non-empty bucket"
 Overwatch.exe,0x142501b40,0x142501b40,DynamicKeyStateLookup,Computes the 9-byte bucket hash and looks the key up in the key state
+Overwatch.exe,0x142503000,0x142503000,DynamicContainerOpenIndex,"Opens a container's dynamic index: initializes it, scans or opens the 16 bucket segments, then loads each"
+Overwatch.exe,0x1425032d0,0x1425032d0,DynamicIndexKeyInsert,"Inserts one key into a bucket's key state, creating the next segment number when the bucket has none"
 Overwatch.exe,0x14250c8f0,0x14250c8f0,DynamicContainerOpenArchive,Opens data.%03d for an archive number taken from the virtual offset
+Overwatch.exe,0x14250e100,0x14250e100,DynamicIndexOpen,"Opens the 16 bucket segments from cached segment numbers or a directory scan and caches the selected numbers"
+Overwatch.exe,0x14250e2d0,0x14250e2d0,DynamicIndexSegmentOpenSlot,"Opens one bucket's <bucket><segment>.idx into its 16-byte slot"
 Overwatch.exe,0x14250e400,0x14250e400,DynamicIndexSegmentOpen,Opens one data/0X........idx segment for a bucket and segment number
+Overwatch.exe,0x14250e720,0x14250e720,DynamicIndexScanSegments,"Scans the data directory for <bucket><segment>.idx names, keeping the highest segment per bucket and deleting lower or temporary files in read-write mode"
 Overwatch.exe,0x14250fc60,0x14250fc60,DynamicIndexSegmentLoad,Loads a dynamic index segment through the async reader
 Overwatch.exe,0x14250fcf0,0x14250fcf0,DynamicIndexSegmentParse,"Parses a dynamic index segment: section and file headers, entry block and key-to-entry table"
 Overwatch.exe,0x1425111a0,0x1425111a0,DynamicIndexFindEntry,Binary-searches the 18-byte entries by their 9-byte key and expands the equal range
