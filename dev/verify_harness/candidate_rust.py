@@ -64,6 +64,7 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "dynamic_index_hash": ["crates/ow-casc/src/index.rs"],
     "dynamic_index_key_hash": ["crates/ow-casc/src/index.rs"],
     "encoding_header_parse": ["crates/ow-casc/src/encoding.rs"],
+    "chunk_guid": ["crates/ow-tank/src/mapguid.rs"],
 }
 
 # The mutation stage rewrites the *Rust function body*, so a probe entry that
@@ -75,6 +76,7 @@ ENTRY_MUTATION: Dict[str, str] = {
     "dynamic_index_hash": "hash_index",
     "dynamic_index_key_hash": "key_hash",
     "encoding_header_parse": "write_header_fields",
+    "chunk_guid": "chunk_guid",
 }
 
 
@@ -399,10 +401,19 @@ class RustCandidate:
         }
         for name, value in deps.items():
             if isinstance(value, dict) and "path" in value:
-                raise RuntimeError(
-                    f"mutant build: workspace dependency {name!r} is a path "
-                    "dependency; extend _write_mutant_workspace to copy it"
-                )
+                # A workspace path dependency (ow-tank -> ow-casc / ow-stu) is
+                # a real crate in this repository, not a file the mutation
+                # writes. Point the temporary workspace at the read-only
+                # original with an absolute path; the mutated source lives in
+                # the copied `crate/` member, so the original tree is never
+                # edited. Relative paths would be resolved against the temp
+                # root and silently point nowhere.
+                p = value["path"]
+                if not os.path.isabs(p):
+                    p = os.path.join(REPO_ROOT, p)
+                value = dict(value)
+                value["path"] = os.path.normpath(p).replace("\\", "/")
+                deps[name] = value
         lines = [
             "[workspace]",
             'resolver = "2"',

@@ -4,6 +4,21 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-27 - The chunk-GUID formula is harness-verified
+
+- `fn/ChunkGuid` is the first `ow-tank` unit in `dev/verify_harness`: oracle
+  `MapChunkGuid` at `0x141b32e20`, candidate
+  `crates/ow-tank/src/mapguid.rs` called by
+  `crates/ow-tank/src/bin/verify_probe.rs`. 364 differential cases on every
+  channel, 100% coverage, 3/3 viable mutants killed.
+- The read showed the kind is the full `+8` qword of the stride-`0x20` table
+  entry at `0x1439aa320`, shifted left 32 in a 64-bit register; the old
+  `kind & 0xFFFF` mask dropped kind `0x1_0000`. The map argument is a `uint`,
+  so only its low 32 bits are used.
+- The probe performs the client's table-slot read and passes the identical
+  fixture bytes to the oracle, so the unit proves the formula against the
+  client's instructions rather than against the install alone.
+
 ## 2026-10-27 - The one client launches the practice range
 
 - `ow-client` and `ow-scene` are workspace members; `ow-sim` stays parked.

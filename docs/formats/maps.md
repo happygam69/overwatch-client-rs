@@ -202,6 +202,19 @@ client's table predicts for it (`0x0DD0000100F47508`, `0x0DD0000300F47508`,
 ... `0x0DD0002800F47508`), with the same 31 kind ids. The manifest's 41,811
 type-`0x0BC` assets are these synthesised chunks plus the stored ones.
 
+Proof against the client's bytes: `dev/verify_harness/units/fn-ChunkGuid.json`
+(unit `fn/ChunkGuid`) compares `ow_tank::mapguid::chunk_guid` with
+`MapChunkGuid` at `0x141b32e20`. The probe reads the kind from the same
+stride-`0x20` slot of the fixture table that the oracle indexes, then calls
+the shipped function; both sides read identical bytes. The unit passes 364
+differential cases on every channel, reports 100% coverage (the function has
+no branches) and kills 3/3 viable mutants.
+
+The shift in the image is a 64-bit register shift, so only the kind's low 32
+bits reach bits 32..63; the map argument is a `uint`, so only its low 32 bits
+are used. The former `ow-tank` mask `kind & 0xFFFF` was wrong for kind
+`0x1_0000` and was removed.
+
 ### Base map and variation map
 
 A `STUMapHeader` names two different type-`0x002` kinds of map asset:

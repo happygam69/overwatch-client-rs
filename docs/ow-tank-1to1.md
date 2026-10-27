@@ -12,10 +12,11 @@ different run; it is not evidence. Code whose only citation is a capture is
 
 **"Verified" has one meaning here:** a differential-harness unit passes all
 five stages against the client's bytes. As of this commit the harness ledger
-has 13 units and **none targets `ow-tank`** (`casc` targets `ow-casc`; the
-legacy probe and `ow-sim` targets are not shipped `ow-tank` code). Every row
-below is therefore not 1 to 1 in the strict sense, even where the code is
-read, implemented and exact on the install.
+has 14 units and **one targets `ow-tank`**: `fn/ChunkGuid` (section D).
+`casc` targets `ow-casc`; the legacy probe and `ow-sim` targets are not
+shipped `ow-tank` code. Every row in sections A–C is therefore not 1 to 1 in
+the strict sense, even where the code is read, implemented and exact on the
+install.
 
 ## A. Implemented, but not the client's own behaviour
 
@@ -40,7 +41,6 @@ equals the client's instructions.
 
 | area | client address | what is proven today | what is missing |
 |---|---|---|---|
-| Chunk-GUID formula | `0x141b32e20`, kind table `0x1439aa320` | the 31 synthesised GUIDs equal the manifest's own type-`0x0BC` records, 31/31 (practice map) | no harness unit; other maps only by the same formula |
 | Map resolver | `0x14143b5c0`, `0x141ff5c80` | 34/34 chunks, 1,358 placeables, 229 models, 550 entities; bit-exact bounds | counts and bounds are regression pins, not a client trace; no harness unit |
 | Bundle entry lookup | `0x141fd5820`, `0x141fd4a50` | 305/305 map headers open (42 store, 263 bundle) | unit tests use synthetic bytes; no real-bundle duplicate/absent/offset-zero assertion; no harness unit |
 | Manifest build 154504 | `0x142e48a20`, `0x142e48700`, table `0x1436100c0` | decrypts and matches 25 records field-for-field against the plaintext `WinPrism` manifest | not a harness unit; the key table may come from `OW_KEYTABLE`/TACTLib, and the test does not assert the installed exe supplied it; builds 154088 and 150851 are untested |
@@ -55,6 +55,17 @@ equals the client's instructions.
 | Replay frame payload | container prefix only | `formats/replay.md` |
 | Audio decode | Wwise metadata and WEM headers only | `formats/sound.md` |
 | Shader instance data | containers parse; real instance layout unvalidated | `formats/shaders.md` |
+
+## D. Closed: verified by a differential unit
+
+| area | unit | client address | result |
+|---|---|---|---|
+| Chunk-GUID formula | `dev/verify_harness/units/fn-ChunkGuid.json` (`fn/ChunkGuid`) | `MapChunkGuid` at `0x141b32e20`, kind table `0x1439aa320` | verified: 364 differential cases, every channel; 100% coverage (0/0 branches); 3/3 viable mutants killed |
+
+The unit's probe reads the kind from the same table slot the client indexes
+and calls the shipped `ow_tank::mapguid::chunk_guid(map, kind)`. The oracle
+reads the identical fixture table bytes, so the formula itself — the kind
+shift, the map mask and the base OR — is what the unit proves.
 
 ## Closing a row
 

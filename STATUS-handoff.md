@@ -47,10 +47,10 @@ claim. `ow-sim` is parked reference code.
   Materials report 289 looks, 594 entries, 120 decoded textures, 817 textured
   submesh draws, 55 placeholders, 148 flat fills and 3 no-sRGB entries.
 - **Other verified client functions:** `AnimTimeWrap`,
-  `BuildPerspectiveMatrix`, `InitProjectionDescriptor` and
-  `OrthonormalizeCameraBasis` (stateful). `CurveKeySampleDual` is
-  inconclusive at 75% coverage; the two `ow-sim` units cannot run while
-  `ow-sim` is parked.
+  `BuildPerspectiveMatrix`, `InitProjectionDescriptor`,
+  `OrthonormalizeCameraBasis` (stateful) and `MapChunkGuid` (`fn/ChunkGuid`,
+  the first `ow-tank` tier-2 unit). `CurveKeySampleDual` is inconclusive at
+  75% coverage; the two `ow-sim` units cannot run while `ow-sim` is parked.
 
 ## Open
 

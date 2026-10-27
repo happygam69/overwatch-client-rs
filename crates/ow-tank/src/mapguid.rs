@@ -9,7 +9,9 @@
 //!      | (mapGuid & 0xFFFFFFFF)
 //! ```
 //!
-//! `chunkKind[]` is the 0x24-entry table at `0x1439aa320` (see
+//! The shift is a 64-bit register shift, so only the kind's low 32 bits reach
+//! bits 32..63; `mapGuid` is a `uint` argument, so only its low 32 bits are
+//! used. `chunkKind[]` is the 0x24-entry table at `0x1439aa320` (see
 //! [`crate::keytable::Sources::chunk_kinds`]), stride 0x20, the kind at `+8`.
 //! The map loader `FUN_141ff5c80` (`0x141ff5c80`) calls the formula for type
 //! indices `1..=0x1C`, then `0x1F`, `0x20` and `0x23` — 31 chunk GUIDs.
@@ -47,8 +49,12 @@ pub fn slot_of_kind(kinds: &[u64], kind: u64) -> Option<usize> {
 }
 
 /// One chunk GUID: the map's low 32 bits under `kind`.
+///
+/// `kind` is the `+8` qword of the table slot `FUN_141b32e20` indexes. The
+/// client shifts that 64-bit value left by 32 in a 64-bit register, so the
+/// kind's high 32 bits are discarded; the `kind << 32` below does the same.
 pub fn chunk_guid(map: u64, kind: u64) -> u64 {
-    CHUNK_GUID_BASE | ((kind & 0xFFFF) << 32) | (map & 0xFFFF_FFFF)
+    CHUNK_GUID_BASE | (kind << 32) | (map & 0xFFFFFFFF)
 }
 
 /// The chunk GUIDs the map loader asks for, in type-index order.
@@ -77,6 +83,20 @@ mod tests {
             chunk_guid(0x0800_0000_00F4_7508, 0x01),
             0x0DD0_0001_00F4_7508
         );
+    }
+
+    #[test]
+    fn the_kind_is_the_table_qword() {
+        // The client shifts the 64-bit table value; only its low 32 bits reach
+        // bits 32..63. A 16-bit kind mask drops 0x1_0000 entirely.
+        assert_eq!(chunk_guid(0x1_0000_0000, 0x1_0000), 0x0DD1_0000_0000_0000);
+        assert_eq!(
+            chunk_guid(0xFFFF_FFFF, 0x1_0000_0001),
+            0x0DD0_0001_FFFF_FFFF
+        );
+        // Base 0x0DD0... is entirely inside the all-ones result.
+        assert_eq!(chunk_guid(u64::MAX, 0xFFFF_FFFF), u64::MAX);
+        assert_eq!(chunk_guid(0, 0xFFFF_FFFF_0000_0000), CHUNK_GUID_BASE);
     }
 
     #[test]
