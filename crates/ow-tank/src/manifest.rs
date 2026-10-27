@@ -26,15 +26,15 @@ use std::fmt;
 
 /// The build whose manifest derivation is implemented.
 pub const SUPPORTED_CMF_BUILD: u32 = 150_851;
-/// The retail build this install is (`2.25.0.0.154088`), whose derivation the
-/// reference publishes as `ProCMF_154088`. Without it the *plain* manifests —
+/// The build-154088 derivation, published as `ProCMF_154088` in the reference
+/// library. Without it the *plain* manifests —
 /// the ones whose content matches what is installed — cannot be opened, and
 /// everything they hold (materials, looks, material data) reads as "not present
 /// in this installation" while the install plainly has it.
 pub const CMF_BUILD_154088: u32 = 154_088;
 /// The build whose manifest derivation was read from the client's own key and
-/// IV routines (`0x142e48a20` and `0x142e48700`) and proven against the three
-/// encrypted retail manifests of that build.
+/// IV routines (`0x142e48a20` and `0x142e48700`) and proven against its
+/// encrypted manifests and the plaintext WinPrism cross-check.
 pub const CMF_BUILD_154504: u32 = keytable::EMBEDDED_TABLE_BUILD;
 /// The resource graph uses the same table with different constants.
 pub const SUPPORTED_TRG_BUILD: u32 = 150_851;
@@ -139,9 +139,11 @@ impl Header {
 
 /// Derive the AES key and IV for a manifest of the given build.
 ///
-/// These are the verified derivations. Each walks the 512-byte table with a
-/// stride taken from the header, which is what binds the ciphertext to the
-/// build: the numbers in the header are the same ones that produced it.
+/// These are the implemented derivations. Only build 154504 has differential
+/// units; 154088 is a TACTLib port and 150851 has no test. Each walks the
+/// 512-byte table with a stride taken from the header, which is what binds the
+/// ciphertext to the build: the numbers in the header are the same ones that
+/// produced it.
 ///
 /// The key is 32 bytes (AES-256) even though the framework the algorithm comes
 /// from nominally asks for 128 bits; the shorter key does not decrypt, which is

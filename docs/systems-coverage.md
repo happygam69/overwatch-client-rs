@@ -31,7 +31,7 @@ reference code. The viewer makes no gameplay claim.
 
 | # | system | state | where |
 |---|---|---|---|
-| 14 | CASC container | build info, configs, keyring, bucket index (`DynamicIndexHash` and `DynamicIndexKeyHash` verified), encoding header (`EncodingHeaderParse` verified), BLTE (`Salsa20StateInit` and `Salsa20Xor` verified) and the manifests, including the build-154504 encrypted derivation (`CmfKey154504`, `CmfIv154504`) | `formats/casc.md` |
+| 14 | CASC container | build info, configs, keyring, bucket index header/entries and encoding header read; **verified leaves:** `DynamicIndexHash`, `DynamicIndexKeyHash`, `EncodingHeaderParse`, `Salsa20StateInit`, `Salsa20Xor`; **open:** segment parse/find/decode, BLTE frame/block/container, LZ4/`0x10`/MD5, segment and bucket selection, encoding page reader, CDN page formula; build-154504 key/IV differential-only (coverage gap) | `formats/casc.md`, `casc-1to1.md` |
 | 15 | STU | v1/v2 layouts, fields, strings, asset refs and the typed layer read | `formats/stu.md` |
 | 16 | Entities and health | hero → gameplay entity → schema entries read; pool values read from the install, not client-verified (`ow-tank-1to1.md`) | `formats/stu.md` |
 | 17 | Models, skeletons, chunks | `mskl`, `MRNM`, `MSTU`, `MDLC` and hardpoints read | `formats/stu.md`, `formats/animation.md` |

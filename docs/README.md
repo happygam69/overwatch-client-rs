@@ -16,7 +16,7 @@ operator's install; behaviour comes from the complete current-build
 | know how evidence is classified | [`provenance.md`](provenance.md) |
 | work in the decompiler | [`ghidra-project.md`](ghidra-project.md) |
 | find a function's current address | [`function-names.csv`](function-names.csv) |
-| know what is not 1 to 1 yet | [`deviations.md`](deviations.md), [`ow-tank-1to1.md`](ow-tank-1to1.md) |
+| know what is not 1 to 1 yet | [`deviations.md`](deviations.md), [`ow-tank-1to1.md`](ow-tank-1to1.md), [`casc-1to1.md`](casc-1to1.md) |
 | know the crates and data flow | [`architecture.md`](architecture.md) |
 | look up a term | [`glossary.md`](glossary.md) |
 | know which tool answers a question | [`tools.md`](tools.md), [`../dev/INDEX.md`](../dev/INDEX.md) |

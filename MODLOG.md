@@ -4,6 +4,21 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-27 - CASC audit: five leaves verified, the container path open
+
+- The five differential units are real: `Salsa20Xor`, `Salsa20StateInit`,
+  `DynamicIndexHash`, `DynamicIndexKeyHash` and `EncodingHeaderParse`, all
+  against the current build's decrypted `.text`. The installed PE's plaintext
+  sections are byte-identical to the recovered image; no process capture is
+  involved.
+- The container path is not: six named units remain, LZ4 was falsely marked
+  implemented, frame type `0x10` and the MD5s are skipped,
+  `DynamicIndexFindEntry` is a HashMap substitute, the segment/bucket selection
+  is ours, and the CDN page formula is reference-derived.
+- `docs/casc-1to1.md` is the new register; `docs/open-questions.md` item 14 is
+  the queue. The audit also corrected the LZ4, "verified derivations", CMF
+  "harness proof" and stale-number claims.
+
 ## 2026-10-27 - The verification harness's mutation stage is parallel and bounded
 
 - `fn/BundleLookup` went from 1310.6 s to 77.9 s (16.8x) and

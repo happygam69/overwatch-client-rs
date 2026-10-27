@@ -422,7 +422,7 @@ mod tests {
 
     /// The install's real encoding header (`111,058,223` decoded bytes):
     /// `'EN'`, version 1, 16/16 keys, 4 KiB pages, 16025 + 10519 pages,
-    /// byte 17 zero, and a 1,467,099-byte espec block.
+    /// byte 17 zero, and a 1,484,507-byte espec block.
     const REAL_HEADER: [u8; HEADER_SIZE] = [
         0x45, 0x4e, 0x01, 0x10, 0x10, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x3e, 0x99, 0x00, 0x00,
         0x29, 0x17, 0x00, 0x00, 0x16, 0xa6, 0xdb,

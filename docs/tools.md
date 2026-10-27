@@ -69,6 +69,10 @@ The table below is the practical set by task.
 | `python dev/verify_harness/cli.py all` | every differential unit |
 | `python dev/verify_harness/cli.py casc` | the verified CASC subset |
 | `python dev/verify_harness/cli.py fn/<Name>` | one unit |
+
+`cargo xtask verify` does not run the differential harness; `python
+dev/verify_harness/cli.py casc` is the CASC gate, and `fn/<Name>` is the
+per-function gate.
 | `python dev/verify_harness/scaffold_unit.py <address> --name <Name>` | a scaffold for a new client function |
 | `cargo run --release -p ow-client` | the practice-range eye-check |
 | `cargo run --release -p ow-client -- --list-maps` | map headers and variation modes |

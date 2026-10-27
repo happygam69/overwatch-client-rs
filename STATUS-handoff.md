@@ -93,8 +93,11 @@ claim. `ow-sim` is parked reference code.
 - **Materials:** the viewer is not the client's renderer; 55 placeholder draws
   remain diagnostics, not a finished material path.
 - **Remaining CASC units:** `DynamicIndexSegmentParse`, `DynamicIndexFindEntry`,
-  `DynamicIndexDecodeEntries`, `BlteFrameHeaderParse`, `BlteBlockRead` and
-  `DynamicContainerRead`.
+  `DynamicIndexDecodeEntries`, `BlteFrameHeaderParse`, `BlteBlockRead`,
+  `DynamicContainerRead`, `EncodingSectionsRead` and `DynamicKeyStateLookup`;
+  the BLTE `4`/`A`/`F` and `0x10` modes, the frame/chunk MD5 checks, segment
+  selection and the CDN index-page formula are also open. `docs/casc-1to1.md`
+  is the register.
 
 ## Next
 

@@ -20,8 +20,8 @@ marked, against the client's own functions in `Overwatch.exe`.
 `config/` files are addressed by their own key, two directory levels deep:
 `config/<key[0..2]>/<key[2..4]>/<key>`.
 
-The current install has 93 `data.NNN` archives, 16 bucket index files and a
-103 MB encoding file.
+The current install has 93 `data.NNN` archives, 16 bucket index files and an
+encoding file of 109,882,544 stored / 111,058,223 decoded bytes.
 
 **Only `data/` is local content.** `ecache/` records are a 30-byte header plus
 a BLTE frame header with no payload; `indices/` is the CDN's archive map (its
@@ -113,7 +113,12 @@ file with the same widths reads identically.
 The section header's second word is a 32-bit hash of the section body; the
 entry block's second word is a rolling hash over the 18-byte entries. The
 client verifies both (`DynamicIndexHash`, `0x142512c60`) before using the
-segment. `ow-casc` implements the same hash; all sixteen `.idx` files match.
+segment. `ow-casc` implements the same hash; a one-off scan of the sixteen
+`.idx` files matched, while the in-crate test pins one real header and two
+rolling states. `ow-casc` also merges every `.idx` file it finds; the client
+opens the segment named by the container header (`DynamicIndexSegmentOpen`,
+`0x14250e400`) and selects buckets with `DynamicKeyStateLookup`
+(`0x142501b40`). Neither selection rule is implemented here yet.
 
 The key-to-entry page table that follows the entry block holds 21 records per
 0x200-byte page at a 24-byte stride: a `u32` stored hash, a 19-byte key and
@@ -148,16 +153,21 @@ check that a wrong section order fails.
 
 ## BLTE
 
-`BlteFrameHeaderParse` (`0x1424a90e0`) expects `12 + 24*count` bytes and puts
-chunk 0 at that size; no hash sits between the table and the chunk.
+`BlteFrameHeaderParse` (`0x1424a90e0`) expects `12 + 24*count` bytes, accepts
+frame type `0x0F` or `0x10`, and validates the frame header's MD5; chunk 0
+starts at that size and no hash sits between the table and the chunk.
 `BlteBlockRead` (`0x1424d61b0`) accepts an `E` IV of 0..8 bytes, not only 4/8.
+The shipped `decode` currently accepts only type `0x0F`, does not check the
+declared frame size against `12 + 24*count`, and skips both MD5 fields; those
+are open gaps in `ow-casc`, not claims about the client.
 
 Block modes:
 
 - `N` — stored;
 - `Z` — zlib;
 - `E` — Salsa20-encrypted, key from the keyring;
-- `4` — LZ4 (implemented; no asset on this install uses it);
+- `4` - LZ4 (**not implemented**; the client's reader is `BlteBlockReadLz4`
+  at `0x1424d6e50`; no asset on this install uses it);
 - `A` / `F` — ARC4 / frame variants (not used on this install).
 
 Salsa20 is the standard 20-round cipher; `Salsa20StateInit`
@@ -171,9 +181,14 @@ that is not BLTE.
 
 ## Oracle
 
-Five CASC units run under `dev/verify_harness/`. The oracle is the client's
-own bytes in `Overwatch.exe` (base `0x140000000`); the candidate is the
-matching shipped function in `ow-casc`, built by
+Five CASC units run under `dev/verify_harness/`. The oracle is the current
+build's code: the installed `Overwatch.exe` PE with its `.text` decrypted by
+`dev/offline_page_recover.py` into `module_offline.bin` (same PE headers and
+timestamp; `.rdata`, `.data`, `.pdata`, `.rsrc` and `.reloc` are byte-identical
+to the installed file; no process capture). The unit descriptors carry that
+recovery image's `v2b` frame; the runner maps it to the current-image address
+`0x140000000 + RVA`. The candidate is the matching shipped function in
+`ow-casc`, built by
 `crates/ow-casc/src/bin/verify_probe.rs`. `python
 dev/verify_harness/cli.py casc` runs exactly these units and exits non-zero if
 any one of them is not verified.
@@ -357,8 +372,10 @@ is the verified unit `fn/BundleLookup` (oracle `BundleEntryLookup` at
 
 The key/IV derivation is per build and uses a 512-byte table. The implemented
 CMF derivations are builds `150851`, `154088` and `154504`: AES-256, CBC, no
-padding. A wrong key/IV yields an unsorted record list; `Registry::open`
-enforces that check, which is how AES-128 was ruled out.
+padding. Only `154504` has differential units (with the coverage gap below);
+`154088` is a TACTLib port and `150851` has no test. A wrong key/IV yields an
+unsorted record list; `Registry::open` enforces that check, which is how
+AES-128 was ruled out.
 
 ### Build 154504: the table and the derivation
 
@@ -388,16 +405,19 @@ The two routines the client's CMF path calls:
 header, accepts the version-27 `cmf` magic, calls the two routines (call sites
 `0x141fef04c` and `0x141fef061`) and sets up AES-256-CBC with no padding.
 
-Proof: the three encrypted regional content manifests and the enUS text
-manifest decrypt to GUID-sorted records with this derivation: 1,301,598
+Install measurement: the three encrypted regional content manifests and the
+enUS text manifest decrypt to GUID-sorted records with this derivation: 1,301,598
 (`Win_SPWin_RDEV_EExt.cmf`), 1,306,039 (`Win_SPWin_RCN_EExt.cmf`), 1,301,855
 (`Win_SPWin_RKR_EExt.cmf`) and 124,196
 (`Win_SPWin_RDEV_LenUS_text_EExt.cmf`). The 154088 formula on this table, the
 table based at `0x1436101c0`, the 154088 table with this formula, and wrong
 seeds or steps each produce hundreds of thousands of out-of-order adjacent
-pairs. `Registry::open` rejects any list that is not GUID-sorted.
+pairs. `Registry::open` rejects any list that is not GUID-sorted. The install
+test opens `Win_SPWin_RDEV_EExt.cmf` and its enUS text manifest; the RCN and
+RKR counts are measured, not test-pinned.
 
-Harness proof: `fn/CmfKey154504` and `fn/CmfIv154504` in
+Differential and mutation proof (not a five-stage verdict):
+`fn/CmfKey154504` and `fn/CmfIv154504` in
 `dev/verify_harness/units/` pass the differential stage on 364 cases each,
 every channel. The cases cover all 32 key bytes and all 16 IV bytes, table
 bytes `0x00`/`0xFF`, build `0` and `0xFFFF_FFFF`, data counts `0`, `19`, `20`,
@@ -439,8 +459,7 @@ This reproduces the published `types.txt` table and lands on known landmarks
   footers, not from the client's decompiled CDN handler.
 - All 305 type-`0x09F` map headers now open: 42 from the encoded store and
   263 from bundles. See `formats/maps.md`.
-- The 357 entry records are open. The record byte's low seven bits are read as
-  a class, not as a meaning.
+- The record byte's low seven bits are read as a class, not as a meaning.
 
 ## Verification
 
