@@ -4,6 +4,29 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-27 - The map variation selector is not a client function
+
+- Read the header's mode/variation path to its end. `m_D97BC44F`
+  (`0xD97BC44F`) and `m_78715D57` (`0x78715D57`) occur in `.text` only at
+  their registration sites (`0x14143ba49`, `0x14143bc95`); the class hash
+  `0x02514B6A` occurs only at `RegisterStuMapHeader` and in the lazy
+  asset-type descriptor init at `0x1403216a0`. The field descriptors and the
+  class definition have no consumer, so the client never reads a header's
+  variation arrays.
+- The map reaches the client as type-`0x002` GUIDs in Jam message `0x501B`
+  (dispatch `0x14063b3f0`, handler `0x140618b30`, preload `0x14077b7d0`;
+  four GUID vectors at `+0x78`/`+0x90`/`+0xA8`/`+0xC0`). The replay header's
+  map GUID is a header's `m_map` (base map), not a variation's scene map.
+- `m_A9253C68` is a `STUIdentifier` (`0xD800000000000000 | u32`, class
+  `0x9CADF2EC`), not an asset. 305 headers / 1,612 mode entries carry 30
+  distinct identifiers; a `(mode, identifier)` pair can name two scene maps
+  (header `0x07900000000000d4`, mode `0x0230000000000016`). The practice launch
+  is therefore documented as a viewer default; the open question narrows to the
+  producer of the level-load GUID lists.
+- `mapresolve::Variation` now carries the read `variant` identifier, and three
+  install tests pin the finding (shared practice identifier; two scene maps per
+  mode+identifier; replay map is a base map).
+
 ## 2026-10-27 - The bundle entry lookup is harness-verified
 
 - Added `fn/BundleLookup` to `dev/verify_harness`: oracle `BundleEntryLookup`

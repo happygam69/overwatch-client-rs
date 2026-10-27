@@ -95,11 +95,13 @@ The practice header `0x0790000000000688` resolves by `mapName`
 (229 model-group references, 550 entity references), bounds pinned bit-exact
 by `tests/map_resolve_real.rs`.
 
-Open: the client function that chooses a variation for a requested game mode.
-The practice header has two modes named `Practice Range` (mode `0x18` and mode
-`0x5a`); the launch takes the first in header order. That is a launch affinity,
-not the client's selector. Also open: the streaming policy, which chunks load
-when.
+Open: the producer of the level-load GUID lists. The client has no
+mode→variation selector: the header's mode/variation field hashes occur only in
+the registration functions, and the map arrives as type-`0x002` GUIDs in Jam
+message `0x501B`. The practice header has two modes named `Practice Range`
+(mode `0x18` and mode `0x5a`); the launch takes the first in header order. That
+is a viewer default, not the client's selector. Also open: the streaming
+policy, which chunks load when.
 
 ## Stage 4 - materials and textures
 

@@ -43,10 +43,10 @@ yet harness-verified; their gaps are itemised in
 
 - **Done:** CASC oracle, build-154504 manifest, bundle assets, map resolver,
   the one executable rendering the practice range.
-- **Next:** the variation-selector caller, then movement.
+- **Next:** the producer of the level-load GUID lists, then movement.
 - **Open:** movement, combat, camera application, view model, retarget, Pose2d
-  VM, collision, streaming, the bundle directory producer and the client's
-  variation selector.
+  VM, collision, streaming, the bundle directory producer and the level-load
+  GUID-list producer.
 
 The stage order and gates are in [`rebuild-plan.md`](rebuild-plan.md). The
 work queue is [`open-questions.md`](open-questions.md). Current state is

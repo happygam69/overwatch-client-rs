@@ -48,10 +48,21 @@
 //! variant stores the base map's collision/pathing chunks there, which is why
 //! its scene is complete while the base map asset alone has no visual chunks.
 //!
-//! **Open:** the client function that *selects* a variation for a game mode is
-//! not read yet. The pairing above is the file's own invariant and the query
-//! [`Header::variants_for_mode`] only reports the entries that name a mode; it
-//! does not invent a default. See `docs/open-questions.md` item 11b.
+//! **No client selector.** The current image does not read either array at
+//! runtime: the field hashes `0xD97BC44F` and `0x78715D57` occur only inside
+//! `RegisterStuMapHeaderFields` (`0x14143b5c0`) / `RegisterStuMapHeaderTail`
+//! (`0x14143bbe5`), and the class hash `0x02514B6A` occurs only in
+//! `RegisterStuMapHeader` (`0x14031c580`) and in the asset-type descriptor init
+//! at `0x1403216a0` (which stores type `0x09F` and class `0x02514B6A` at
+//! `0x143ed6948`/`0x143ed694c` so the asset loader can parse the payload). The
+//! map the game loads arrives as type-`0x002` GUIDs in the level-load message
+//! (`JamMessage` `0x501B`, dispatch at `0x14063b3f0`, handler `0x140618b30`,
+//! preload `0x14077b7d0`), and the replay header's map GUID is a header's
+//! `m_map` (base map), not a variation's `m_BF231F12` scene map. A variation is
+//! therefore chosen outside the client's read path; the pairing and the query
+//! [`Header::variations_for_mode`] are data facts, and the launch affinity in
+//! [`find_practice_range`] is a viewer default. See `docs/open-questions.md`
+//! item 11.1 and `docs/formats/maps.md`.
 
 use std::fmt;
 
@@ -77,7 +88,17 @@ pub const FIELD_VARIATIONS: u32 = 0x7871_5D57;
 pub const FIELD_LAYER: u32 = 0x364A_DD04;
 /// `m_gameMode` on a `STU_71B2D30A` mode entry.
 pub const FIELD_GAME_MODE: u32 = 0xEB4F_2408;
-/// `m_A9253C68` on a `STU_71B2D30A` mode entry.
+/// `m_A9253C68` on a `STU_71B2D30A` mode entry: the map-variant identifier.
+///
+/// The client registers this offset as a `STUIdentifier` (class `0x9CADF2EC`,
+/// 8 bytes) at `RegisterStuMapVariationMode` (`0x14142ee0c`), so the value is a
+/// `0xD800000000000000 | u32` identifier, not an asset. The stored bytes use
+/// the same obfuscation as an asset reference; reading through the reference
+/// transform recovers the identifier. A census of all 305 headers (1,612 mode
+/// entries) yields 30 distinct identifiers; a variation is a
+/// `(m_gameMode, m_A9253C68)` pair, and a mode can name the same identifier
+/// twice (header `0x07900000000000d4`, mode `0x0230000000000016`), so the pair
+/// still does not identify one scene map.
 pub const FIELD_MODE_VARIANT: u32 = 0xA925_3C68;
 /// `m_364ADD04` on a `STU_7FB10A24` variation: the variation's layer key.
 pub const FIELD_VARIATION_LAYER: u32 = 0x364A_DD04;
@@ -237,12 +258,15 @@ fn rd_u64(bytes: &[u8], at: usize) -> Option<u64> {
 
 /// One selectable variation of a map header.
 ///
-/// `game_mode` comes from the paired `m_D97BC44F` entry; `layer`, `map` and
-/// `resource_key` come from `m_78715D57[index]`.
+/// `game_mode` and `variant` come from the paired `m_D97BC44F` entry; `layer`,
+/// `map` and `resource_key` come from `m_78715D57[index]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Variation {
     pub index: usize,
     pub game_mode: u64,
+    /// The mode entry's `m_A9253C68` map-variant identifier
+    /// ([`FIELD_MODE_VARIANT`]).
+    pub variant: u64,
     pub layer: u64,
     pub map: u64,
     pub resource_key: u64,
@@ -303,6 +327,10 @@ impl Header {
                     .stu
                     .read_asset_ref_at(*mode_at, *mode_bag, FIELD_GAME_MODE)
                     .unwrap_or(0),
+                variant: self
+                    .stu
+                    .read_asset_ref_at(*mode_at, *mode_bag, FIELD_MODE_VARIANT)
+                    .unwrap_or(0),
                 layer: self
                     .stu
                     .read_asset_ref_at(*variant_at, *variant_bag, FIELD_VARIATION_LAYER)
@@ -322,9 +350,11 @@ impl Header {
 
     /// Every variation whose paired mode entry names `game_mode`.
     ///
-    /// This is a query over the header's own arrays, not a default: a mode may
-    /// name several variations (Cairo names 63 variations for 10 modes), and
-    /// the client's choice among them is not read yet.
+    /// This is a query over the header's own arrays, not a default and not a
+    /// client rule: a mode may name several variations, and one
+    /// `(mode, variant)` pair can name two (header `0x07900000000000d4`, mode
+    /// `0x0230000000000016`). The client's map is supplied as a type-`0x002`
+    /// GUID (see the module note), so no mode-only choice is invented here.
     pub fn variations_for_mode(&self, game_mode: u64) -> Result<Vec<Variation>> {
         Ok(self
             .variations()?
@@ -507,6 +537,12 @@ pub struct PracticeRange {
 /// [`PRACTICE_MAP_NAME`], and the variation is the first whose paired mode's
 /// `STUGameMode.displayName` is exactly [`PRACTICE_MODE_NAME`]. A missing or
 /// duplicate header, or a header with no such variation, is an error.
+///
+/// **This is a viewer default, not a client selector.** The current image has
+/// no code that reads the header's mode/variation arrays; the map it loads
+/// arrives as a type-`0x002` GUID in the level-load message. The first-match
+/// affinity is kept so the viewer has a deterministic practice-range scene, and
+/// the ambiguity is reported in [`PracticeRange::matching_variations`].
 pub fn find_practice_range(data: &GameData) -> Result<PracticeRange> {
     let named = find_map_by_name(data, PRACTICE_MAP_NAME)?;
     let variation_count = named.variations.len();

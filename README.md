@@ -36,7 +36,8 @@ launch selects the practice header by its `m_mapName`
 (`Maps\TrainingRoom\Training Room - Practice`), takes the first variation whose
 paired mode's display name is exactly `Practice Range`, and loads the 34 chunks
 the client's map loader requests for that variation's scene map
-`0x080000000f69002e`.
+`0x080000000f69002e`. That choice is a viewer default: the current image has no
+client-side mode→variation selector.
 
 - **Read in the current image:** the mover advance/invoker path, the Domino
   tick driver, the camera surface and projection builders, the FP camera pose
@@ -47,8 +48,9 @@ the client's map loader requests for that variation's scene map
   The practice scene requests and opens 34/34 chunks, walks 1,358 placeables
   (229 model-group references, 550 entity references), and places 2,449 model
   instances from the model groups' 304 groups.
-- **Open:** the client function that selects a variation for a requested game
-  mode (the practice-range launch is a data query, not a claim that the caller
+- **Open:** the producer of the level-load GUID lists (the client has no
+  mode→variation selector; the map arrives as type-`0x002` GUIDs, so the
+  practice-range launch is a viewer default, not a claim that a client caller
   is read), the streaming policy, the client's producer of the bundle
   directory, character collision, the mover's input→velocity ramp, the
   per-frame camera look, the FP retarget, the Pose2d VM, the weapon fire loop,

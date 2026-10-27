@@ -19,7 +19,8 @@ cargo xtask verify --fast     # without the install-reading tests
 takes the first paired variation whose `STUGameMode.displayName` is exactly
 `Practice Range`, and loads the 34 chunks the client's map loader requests for
 scene map `0x080000000f69002e`. No chunk seed, capture or synthetic course is
-the default.
+the default. This selection is a **viewer default**: the current image has no
+client-side mode→variation selector (see "Open").
 
 The client is a **viewer**. It makes no movement, combat or camera-behaviour
 claim. `ow-sim` is parked reference code.
@@ -47,7 +48,10 @@ claim. `ow-sim` is parked reference code.
   variation arrays, the variation's type-`0x002` scene map, the map asset's
   stored chunk references and the 31 synthesised chunks. The practice range
   requests and opens 34/34 chunks: 1,358 placeables (229 model-group
-  references, 550 entity references), bounds pinned bit-exact.
+  references, 550 entity references), bounds pinned bit-exact. The mode
+  entry's `m_A9253C68` is read as a `STUIdentifier` (30 identifiers across the
+  install), and the replay header's map GUID is proven to be a base map, not a
+  scene map.
 - **Client:** 229 distinct models, 2,449 model-group placements, 872 draws.
   Materials report 289 looks, 594 entries, 120 decoded textures, 817 textured
   submesh draws, 55 placeholders, 148 flat fills and 3 no-sRGB entries.
@@ -63,10 +67,14 @@ claim. `ow-sim` is parked reference code.
 
 ## Open
 
-- **Map variation selector:** the client function that chooses a variation for
-  a requested game mode is not read. The practice header has two modes named
-  `Practice Range` (`0x18` and `0x5a`); the launch takes the first in header
-  order. This is an affinity, not the client's selector.
+- **Map variation choice:** the client has no mode→variation selector. The
+  field hashes `0xD97BC44F`/`0x78715D57` occur only in the registration
+  functions and the header class hash only in the asset-type descriptor init;
+  the map arrives as type-`0x002` GUIDs in the level-load message (Jam
+  `0x501B`, `0x14063b3f0` → `0x140618b30` → `0x14077b7d0`). What is open is
+  the producer of that message, including which input it uses. A
+  `(mode, identifier)` pair can name two scene maps, so the practice-range
+  launch affinity is a viewer default, not a missing client rule.
 - **Bundle directory producer:** our bundle index scans the manifest's
   type-`0x09C` records; the client builds a directory blob in its content
   database (`FUN_141fd53a0`, `0x141fd53a0`). One non-1:1 stage remains.
@@ -82,7 +90,9 @@ claim. `ow-sim` is parked reference code.
 
 ## Next
 
-1. Read the variation-selector caller (`docs/open-questions.md` item 11).
+1. Read the producer of the level-load GUID lists (`docs/open-questions.md`
+   item 11.1): who resolves a map request to Jam `0x501B`'s four vectors, and
+   whether the local practice-range session builds it in-process.
 2. Rebuild movement from the `MoverInvoker` caller through `MoverAdvance` and
    Domino.
 3. Then camera, animation retarget, combat and collision in that order.

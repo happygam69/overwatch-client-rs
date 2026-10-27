@@ -188,17 +188,22 @@ graph activation from the current image.
 
 ---
 
-## 11. The map variation selector and the bundle directory producer
+## 11. The map request producer and the bundle directory producer
 
 **Question.** Two parts of the map/asset path are not 1:1 yet.
 
-1. **The variation selector.** A `STUMapHeader` pairs `m_D97BC44F` mode entries
-   with `m_78715D57` variations by index. Each variation's `m_BF231F12` names
-   its registered type-`0x002` scene map. The client function that takes a
-   requested game mode and chooses a variation - and whether it loads one
-   variation or a layer set - is not read. The practice header has one
-   variation per mode (`0x18` -> 0, `0x143` -> 1, `0x5a` -> 2), but header
-   `0x07900000000000d4` has 63 variations over 20 modes and one mode names six.
+1. **The map request producer.** A `STUMapHeader` pairs `m_D97BC44F` mode
+   entries with `m_78715D57` variations by index, and each variation's
+   `m_BF231F12` names its registered type-`0x002` scene map. The client has
+   **no selector**: it does not read either array at runtime. The map arrives
+   as type-`0x002` GUIDs in the level-load message (Jam `0x501B`,
+   `0x14063b3f0` dispatch, `0x140618b30` handler, `0x14077b7d0` preload; four
+   GUID vectors at message `+0x78`, `+0x90`, `+0xA8`, `+0xC0`). The remaining
+   question is **who builds that message**: the server, or the local-session
+   setup for an offline map such as the practice range, and which input
+   (a variation index, a scene-map GUID, or the mode plus a variant identifier)
+   it uses. The client's replay header records a base-map GUID, not a scene
+   map, so the client's own map identity is the base map.
 2. **The bundle directory producer.** The client keeps a per-type directory
    blob and binary-searches it in `FUN_141fd5160` (`0x141fd5160`); the blob is
    handed to the job at `FUN_141fd53a0` (`0x141fd53a0`) from the content
@@ -209,22 +214,36 @@ graph activation from the current image.
 **What is known.** The bundle flag, entry table and all 305 type-`0x09F`
 headers are read; the practice header `0x0790000000000688` opens from bundle
 `0x0d90968e484f8c33` at offset 3593 and parses as `STUMapHeader` with
-`mapName` `Maps\TrainingRoom\Training Room - Practice`. The practice launch
-uses the header's `m_mapName` and the paired mode's `STUGameMode.displayName`
-(`0x5DB91CE2`), taking the first `Practice Range` in header order (mode `0x18`,
-variation 0). Both mode `0x18` and mode `0x5a` are named `Practice Range`; the
-launch takes 0 and logs the ambiguity. This is a data-driven launch affinity,
-not the client's selector. The resolved scene map
-`0x080000000f69002e` requests 34 chunks, all open; the walk yields 1,358
-placeables and bit-exact bounds (`tests/map_resolve_real.rs`).
+`mapName` `Maps\TrainingRoom\Training Room - Practice`. The mode entry's
+`m_A9253C68` is a `STUIdentifier` (`0xD800000000000000 | u32`, class
+`0x9CADF2EC`), not an asset; a census of 305 headers / 1,612 entries finds 30
+distinct identifiers. The practice header's three modes share
+`0xD800000000008F9D`; header `0x07900000000000d4` has 63 variations over 20
+modes and three identifiers (21 entries each), and mode
+`0x0230000000000016` names six entries - two scene maps per identifier - so
+neither a mode nor a `(mode, identifier)` pair identifies one scene map.
 
-**What would settle it.** For (1), find the caller that reads
-`m_D97BC44F`/`m_78715D57` together (header `+0xF0`/`+0x110`; variation scene
-map `+0xD0`) and record whether it selects one entry or loads layers. For (2),
-read the content-database producer of the directory blob and replace the scan.
+**The static proof of "no client selector".** The field hashes `0xD97BC44F`
+and `0x78715D57` occur in `.text` only at the registration sites
+(`0x14143ba49`, `0x14143bc95`); the class hash `0x02514B6A` occurs only at
+`RegisterStuMapHeader` (`0x14031c5e2`) and in the asset-type descriptor init at
+`0x1403216a0` (which stores type `0x09F` / class `0x02514B6A` at
+`0x143ed6948`/`0x143ed694c`). The field descriptors and the class definition
+are referenced only by registration/init code; no consumer that names the class
+or either field exists. No differential harness unit can be written for (1):
+there is no client function to mirror; the choice is made by the producer of
+the message, so any unit would be a test of our own invention, not of the
+client.
 
-**Next anchor.** `formats/maps.md`, `crates/ow-tank/src/mapresolve.rs`,
-`crates/ow-tank/src/bundle.rs`, `FUN_141fcbb10` (`0x141fcbb10`),
+**What would settle it.** For (1), find the producer of the `0x501B` message
+and read how it resolves a map request to the GUID vectors - including whether
+the local practice-range session builds it in-process. For (2), read the
+content-database producer of the directory blob and replace the scan.
+
+**Next anchor.** `formats/maps.md` ("Who chooses a variation"),
+`crates/ow-tank/src/mapresolve.rs`, `crates/ow-tank/src/bundle.rs`,
+`FUN_14063b3f0` (`0x14063b3f0`), `FUN_140618b30` (`0x140618b30`),
+`FUN_14077b7d0` (`0x14077b7d0`), `FUN_141fcbb10` (`0x141fcbb10`),
 `FUN_141fe81d0` (`0x141fe81d0`), `FUN_141ff5c80` (`0x141ff5c80`).
 
 ---

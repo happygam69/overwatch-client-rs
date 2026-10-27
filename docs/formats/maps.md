@@ -25,26 +25,35 @@ streaming policy and collision path are open.
   the map asset. Implemented in `ow-tank::mapresolve`; the practice-range
   variation opens 34 chunks, 1,358 placeables, 229 model references and 550
   entity references (`tests/map_resolve_real.rs`).
-- **Map variations: data pairing read; selector open.** `m_D97BC44F` has one
-  entry per `m_78715D57` variation (practice 3/3, Cairo 10/10, header
-  `0x07900000000000d4` 63/63) while `m_C0CA4671` is a shorter display list
-  (21 entries for that 63-variation header). Each variation's `m_BF231F12` is
-  its registered scene map asset; the client function that chooses a variation
-  for a game mode is not read.
-- **Practice-range launch: data-selected, implemented.** `ow-client`'s default
-  finds the header whose `m_mapName` is
+- **Map variations: pairing and identifiers read; the client has no selector.**
+  `m_D97BC44F` has one entry per `m_78715D57` variation (practice 3/3, Cairo
+  10/10, header `0x07900000000000d4` 63/63), and each variation's
+  `m_BF231F12` is its registered scene map asset. The mode entry's
+  `m_A9253C68` is a `STUIdentifier` (`0xD800000000000000 | u32`), not an
+  asset: 30 distinct identifiers cover the install's 1,612 mode entries. No
+  client code reads the two arrays or the header class at runtime, and the map
+  the game loads arrives as a type-`0x002` GUID in the level-load message; see
+  "Who chooses a variation" below.
+- **Practice-range launch: viewer default, not the client's selector.**
+  `ow-client`'s default finds the header whose `m_mapName` is
   `Maps\TrainingRoom\Training Room - Practice`, then takes the first paired
   variation whose mode's `STUGameMode.displayName` (`0x5DB91CE2`) is exactly
   `Practice Range`. It resolves that variation's scene map through
-  `mapresolve::resolve_scene` and draws only that chunk set. The selection is a
-  query over the install, not the client's own mode selector.
+  `mapresolve::resolve_scene` and draws only that chunk set. The client's map
+  input is a GUID, not a mode, so this remains a deterministic viewer choice
+  and the two matching modes are reported.
+- **Level load: message-driven.** Jam message `0x501B` carries four GUID
+  vectors (`+0x78`, `+0x90`, `+0xA8`, `+0xC0`); the client preloads them and
+  opens the map catalog. The replay header's map GUID is a header's `m_map`
+  (base map), not a variation scene map. See "Who chooses a variation".
 - **Model groups: expanded.** A kind-`0x01` placeable's own transform is
   identity; its 304 groups carry the looks and its 2,449 entries carry the
   world transforms. The practice-range client places the entries, not one
   instance per group placeable.
 - **Open:** the client's *producer* of the bundle directory (the blob handed to
-  the bundle job), the variation-selection caller, the streaming policy (which
-  chunks load when), the entity-placeable layout and the collision mesh.
+  the bundle job), the producer of the level-load GUID lists (which resolves a
+  map request to the scene map), the streaming policy (which chunks load when),
+  the entity-placeable layout and the collision mesh.
 
 
 ## The chunk vocabulary
@@ -225,18 +234,29 @@ A `STUMapHeader` names two different type-`0x002` kinds of map asset:
 | `m_364ADD04` | `+0x150` | the header's layer key (a type-`0x002` GUID with bit 40 set; not registered as an asset) |
 | `m_D97BC44F` | `+0xF0` | one `STU_71B2D30A` mode entry per variation |
 | `m_78715D57` | `+0x110` | one `STU_7FB10A24` variation per mode entry |
+| mode entry `m_A9253C68` | mode `+0x38` | the map-variant **identifier** (`STUIdentifier`, class `0x9CADF2EC`: `0xD800000000000000 \| u32`, not an asset) |
 | variation `m_BF231F12` | variation `+0xD0` | that variation's **scene** map asset (a registered type-`0x002` asset) |
 | variation `m_364ADD04` | variation `+0xC0` | that variation's layer key |
 
 The offsets are the ones the client registers at `RegisterStuMapHeaderFields`
 (`0x14143b5c0`) and `RegisterStuMapHeaderTail` (`0x14143bbe5`);
-`STU_7FB10A24` is registered at `RegisterStuMapVariation` (`0x14142dbf0`).
-`m_78715D57` and `m_D97BC44F` are paired **by index**, which their lengths prove
-on the install: the practice header has 3/3, Cairo 10/10, and header
-`0x07900000000000d4` 63/63. `m_C0CA4671` is a different display list: 21
-entries for that 63-variation header, and on Cairo its 10 modes are in another
-order. The client function that consumes the pairing for a game mode is **not
-read**; see `docs/open-questions.md` item 11b.
+`STU_7FB10A24` is registered at `RegisterStuMapVariation` (`0x14142dbf0`), and
+`STU_71B2D30A` at `RegisterStuMapVariationMode` (`0x14142ee0c`) where
+`m_A9253C68` is registered through `FUN_140f81de0` with class `0x9CADF2EC`
+(`STUIdentifier`, 8 bytes). `m_78715D57` and `m_D97BC44F` are paired **by
+index**, which their lengths prove on the install: the practice header has
+3/3, Cairo 10/10, and header `0x07900000000000d4` 63/63. `m_C0CA4671` is a
+different display list: 21 entries for that 63-variation header, and on Cairo
+its 10 modes are in another order.
+
+The identifier census (all 305 headers, 1,612 mode entries) finds **30 distinct
+identifiers**. The practice header's three entries all carry
+`0xD800000000008F9D`; header `0x07900000000000d4` carries three
+(`...A039`, `...A062`, `...A0C4`), 21 entries each over 20 modes. A variation is
+therefore a `(m_gameMode, m_A9253C68)` pair, not a mode alone. The pair is
+still not unique: on that header mode `0x0230000000000016` names six entries,
+two scene maps per identifier (different scene map and `m_resourceKey`). No
+mode-only or mode-plus-identifier rule can select one scene map.
 
 Cairo is the case that separates the two map GUIDs: the header's `m_map` is
 `0x080000000000005B`, which has only the two collision/pathing chunks (kinds
@@ -249,6 +269,66 @@ variation, so it is a layer key, not the scene asset.
 For the practice range the two indices coincide, so both formulas produce the
 same 31 scene GUIDs; the resolver uses `m_BF231F12` because Cairo proves that
 is the asset the loader actually opens.
+
+### Who chooses a variation: not the client
+
+The current image contains **no function that reads a header's mode or
+variation array**. This is a static-search result, not an inference from one
+call site. An index-based reader (field order rather than field hash) cannot be
+excluded by a hash search alone; the offset-pattern scan below covers the
+native-layout case, and the data shows that even such a reader could not pick
+one scene map from a mode (or from a mode plus identifier).
+
+- `m_D97BC44F` (`0xD97BC44F`) occurs in `.text` only at `0x14143ba49`, inside
+  `RegisterStuMapHeaderFields` (`0x14143b5c0`).
+- `m_78715D57` (`0x78715D57`) occurs only at `0x14143bc95`, inside
+  `RegisterStuMapHeaderTail` (`0x14143bbe5`).
+- The class hash `0x02514B6A` occurs at only two addresses: `0x14031c5e2`
+  inside `RegisterStuMapHeader` (`0x14031c580`) and `0x1403216b8` inside the
+  lazy asset-type descriptor init at `0x1403216a0`, which stores tool type
+  `0x09F` at `0x143ed6948` and class `0x02514B6A` at `0x143ed694c` for the STU
+  asset loader. Neither is a consumer.
+- The registered field descriptors (`0x143ed7580` for `m_D97BC44F`,
+  `0x143ed75f0` for `m_78715D57`, `0x143ed68b0` for `m_BF231F12`) and the class
+  definition at `0x143eebf70` are referenced only by the registration and
+  initialisation functions. A consumer would have to reference one of them; no
+  such reference exists.
+- A whole-image instruction scan (10,946,277 instructions) found **no**
+  function that touches `+0xF0` and `+0x110` on one base register together with
+  the element stride (`0x58` or `0xD8`) and one of the header's other
+  distinctive offsets (`+0x150`, `+0x170`). Code that baked the native array
+  offsets would need exactly that shape. The scan is a check on the
+  hash-reference result, not the only proof.
+
+What the client does instead is load the map it is given:
+
+1. **The game's map identity is the base map.** The replay header's map field
+   (`replay.rs`, block `+0x08`) holds a type-`0x002` GUID. The install check
+   pins `0x080000000000069E` as the `m_map` of header `0x079000000000069E`,
+   and as the `m_BF231F12` of none of the 305 headers
+   (`tests/map_resolve_real.rs::a_replay_map_guid_is_the_base_map_not_a_scene_map`).
+   The map catalog (`STUMapCatalog` `0x25DA0DF5`, asset
+   `0x01c0000000000041`) pairs every header GUID with that base-map GUID.
+2. **Level load is a message.** Jam message `0x501B` is dispatched by the
+   opcode switch at `0x14063b3f0`; its handler `0x140618b30` copies four GUID
+   vectors from message offsets `+0x78`, `+0x90`, `+0xA8`, `+0xC0` (the message
+   field descriptors at `0x143b437f0` name those four offsets) and calls the
+   preload at `0x14077b7d0`. The preload registers the `+0x78`/`+0x90` lists
+   into GUID tables (`FUN_140847be0`, `FUN_140847cc0`), requests the
+   `+0xA8`/`+0xC0` lists as assets (`FUN_141fe1610`) and opens the map catalog
+   (`FUN_14077c8a0`). The `+0x78` table is filtered later by `FUN_140843800`,
+   which loads each GUID and reads flags at `+0x388`/`+0x389` of the loaded
+   object.
+3. **The variation is already resolved when the message is built.** The
+   client's read path never sees a `(mode, variant)` request; it sees GUIDs.
+   Who builds the message (the game server, or the local session setup for an
+   offline practice range) is the remaining question, and it is outside the
+   code path read here. See `docs/open-questions.md` item 11.1.
+
+The practical consequence: `ow-tank` must not invent a mode→variation selector.
+The arrays are a data pairing; a consumer has to be handed the scene map (or at
+least the exact variation index) by the producer of the level-load message.
+
 
 
 ### Where a header payload comes from
@@ -347,7 +427,7 @@ group (0x28 B)      +0x00 GUID list        (count: i16 at +0x24)
 and returns the request handle of the group's bundle. The client hands this blob
 to the job from its content database (`FUN_141fcbb10` → `FUN_141fe81d0`, fields
 `+0x70` and `+0x264`). **Where that blob is produced is not read**; see
-`docs/open-questions.md` item 11b.
+`docs/open-questions.md` item 11.2.
 
 What `ow-tank` does: `GameData::open_asset` implements steps 2–3 and the entry
 lookup exactly, and builds the directory's *content* by scanning the manifest's
@@ -411,19 +491,19 @@ The header's `m_78715D57` has three entries, paired with `m_D97BC44F` by index.
 The variant name text asset (`m_0342E00E.m_D978BBDC`, `0x0de00000000185d1`) is
 `"Evening"` for all three.
 
-| index | mode (`m_gameMode`) | mode name | layer key (`m_364ADD04`) | scene map (`m_BF231F12`) |
-|---|---|---|---|---|
-| 0 | `0x0230000000000018` | Practice Range | `0x080001000f69002e` | `0x080000000f69002e` |
-| 1 | `0x0230000000000143` | Stadium | `0x0800010038792434` | `0x0800000038792434` |
-| 2 | `0x023000000000005a` | Practice Range | `0x08000100878409c8` | `0x08000000878409c8` |
+| index | mode (`m_gameMode`) | variant (`m_A9253C68`) | mode name | layer key (`m_364ADD04`) | scene map (`m_BF231F12`) |
+|---|---|---|---|---|---|
+| 0 | `0x0230000000000018` | `0xD800000000008F9D` | Practice Range | `0x080001000f69002e` | `0x080000000f69002e` |
+| 1 | `0x0230000000000143` | `0xD800000000008F9D` | Stadium | `0x0800010038792434` | `0x0800000038792434` |
+| 2 | `0x023000000000005a` | `0xD800000000008F9D` | Practice Range | `0x08000100878409c8` | `0x08000000878409c8` |
 
-The two "Practice Range" modes are distinct entries; a mode query returns the
-one variation whose `STU_71B2D30A.m_gameMode` equals the requested mode. The
-client's selector is not read, so `ow-tank::mapresolve` exposes the pairing, the
-per-mode filter and the named practice-range query below; none is claimed as
-the client's own selector.
+The three mode entries share one map-variant identifier, and the identifier is
+not a registered asset (`tests/map_resolve_real.rs` asserts both). The two
+"Practice Range" modes are distinct entries; `ow-tank::mapresolve` exposes the
+pairing, the per-mode filter and the named practice-range query below, but
+none is claimed as the client's own selector.
 
-#### The launch's selection rule
+#### The launch's selection rule (a viewer default)
 
 `ow-tank::mapresolve::find_practice_range` is a data query, not a seed:
 
@@ -440,10 +520,10 @@ the client's own selector.
 
 On the practice header two entries name `Practice Range` — mode `0x18`
 (variation 0) and mode `0x5a` (variation 2) — and the rule takes variation 0.
-That first-in-header-order choice is a **launch affinity**, because this header
-offers no other discriminator in the read fields; it is not a claim that the
-client's mode selector is read. `--list-maps` prints both rows, so the
-ambiguity is visible. The selector caller remains item 11b in
+That first-in-header-order choice is a **viewer default**, not the client's
+rule: the client never reads this header at runtime and is handed the map GUID
+by the level-load message (see "Who chooses a variation"). `--list-maps` prints
+both rows, so the ambiguity is visible. The input side remains item 11.1 in
 `docs/open-questions.md`.
 
 `ow-client` uses `find_practice_range` for both the default launch and
@@ -518,14 +598,22 @@ The install's map catalog is readable: tool type `0x039`, asset
 `0x01c0000000000041` (7,184 B), 305 entries of
 `(m_660E53F7 header GUID, m_7BF4EF38 map GUID)`. The practice entry is
 `0x0790000000000688 -> 0x0800000000000688`. It names the base map; the
-variations come from the header.
+variations come from the header. The client opens this catalog lazily in
+`FUN_14077c8a0` (`0x14077c8a0`), which is called from the level-preload path
+`FUN_14077b7d0` (`0x14077b7d0`), so the catalog is part of the same
+message-driven load.
 
 ### Streaming and selection
 
 `teMAP_CHUNK_STREAMING` names the streaming kind. The policy - which chunks
-load when, and how the engine chooses among a header's variations - is **not
-read**. The chunk set for a map asset, including the four stored kinds and the
-31 synthesised GUIDs, is read and implemented.
+load when - is **not read**. The chunk set for a map asset, including the four
+stored kinds and the 31 synthesised GUIDs, is read and implemented.
+
+**The variation choice is not a client function.** The header's mode and
+variation arrays are registered data with no runtime consumer in the image
+("Who chooses a variation"); the map reaches the client as a type-`0x002` GUID
+in the level-load message. What is open is the producer of that message: the
+server, or the local-session setup that builds it for an offline map.
 
 **A chunk list is not a map.** The client's chunk set is the synthesised set
 for one map GUID; a proximity list is not a substitute.
@@ -571,20 +659,26 @@ not the scene. The run prints the index size (38,320 bundles, 0 malformed, 721,2
 entries, 0 duplicates) and the header census (305/305).
 
 `tests/map_resolve_real.rs` is the scene oracle: it opens the same header,
-reads the three `(mode, layer, scene map)` variations from `m_D97BC44F` /
-`m_78715D57`, selects mode `0x18`'s single variation, opens its
+reads the three `(mode, variant, layer, scene map)` variations from
+`m_D97BC44F` / `m_78715D57`, selects mode `0x18`'s single variation, opens its
 `m_BF231F12` map asset, asserts the four stored chunk references, checks the 31
 synthesised GUIDs against the manifest's own records under the variation map's
 index, then opens and walks all 34 chunks. It pins the placeable count (1,358),
 the model and entity counts (229/550) and the bounds bit-for-bit. It also
 proves that the base map opens no chunk and that variation 0 differs from
-variation 1 in the entity chunk while sharing the model-group chunk.
+variation 1 in the entity chunk while sharing the model-group chunk. Two
+further tests pin the selector finding: the 63-variation header has three
+identifiers (21 entries each) and one mode names six entries, two scene maps
+per identifier; and the replay header's map GUID (`0x080000000000069E`) is a
+header's `m_map`, not any variation's scene map. The practice test also pins
+the shared `STUIdentifier` variant, which is not an asset.
 
 **Not tested:** the client's bundle-directory producer (the index is our scan of
-the same relation); the client function that selects a variation for a game
-mode (the pairing and the per-mode query are read, the caller is not); the
-chunk body layout of kind `0x12` at the placeable level (its size walk stops at
-the first placeable, so the test reports rather than asserts the count).
+the same relation); the producer of the level-load GUID lists (the client never
+reads the header's mode/variation arrays, so no client selector exists to
+test); the chunk body layout of kind `0x12` at the placeable level (its size
+walk stops at the first placeable, so the test reports rather than asserts the
+count).
 
 
 The default `ow-client` launch draws the practice range's resolver-set chunks

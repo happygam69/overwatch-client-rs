@@ -40,6 +40,10 @@ const VARIATION_MODES: [u64; 3] = [
     0x0230_0000_0000_0143,
     0x0230_0000_0000_005A,
 ];
+/// The mode entries' `m_A9253C68` map-variant identifier. It is a
+/// `STUIdentifier` (`0xD800000000000000 | u32`), the same for all three
+/// practice modes, and it is not a registered asset.
+const PRACTICE_VARIANT: u64 = 0x0D80_0000_0000_8F9D;
 
 /// The two base-map chunks every practice variation stores at `+0x1B8`/`+0x1C0`.
 const BASE_COLLISION_CHUNKS: [u64; 2] = [0x0DD0_0011_0000_0688, 0x0DD0_0012_0000_0688];
@@ -99,6 +103,7 @@ fn practice_range_resolves_through_the_header_and_the_map_asset() {
     for (i, v) in variations.iter().enumerate() {
         assert_eq!(v.index, i);
         assert_eq!(v.game_mode, VARIATION_MODES[i], "variation {i} mode");
+        assert_eq!(v.variant, PRACTICE_VARIANT, "variation {i} variant id");
         assert_eq!(v.layer, VARIATION_LAYERS[i], "variation {i} layer key");
         assert_eq!(v.map, VARIATION_MAPS[i], "variation {i} map asset");
         assert_eq!(
@@ -107,6 +112,10 @@ fn practice_range_resolves_through_the_header_and_the_map_asset() {
             "variation {i} maps to a type-0x002 asset"
         );
     }
+    assert!(
+        data.registry().get(PRACTICE_VARIANT).is_none(),
+        "the variant identifier is a STUIdentifier, not a registered asset"
+    );
 
     // The practice modes are unique per variation, so asking for the standard
     // practice mode has one answer. This is a data query, not a default.
@@ -406,5 +415,103 @@ fn a_mode_can_name_several_variations() {
     eprintln!(
         "header 0x{LAYERED_HEADER:016x}: 63 variations over 20 modes; \
          mode 0x{mode:016x} names {count} variations"
+    );
+}
+
+/// A mode plus its map-variant identifier still does not identify one scene
+/// map. Header `0x07900000000000d4` has 63 variations over 20 modes and three
+/// variant identifiers; mode `0x0230000000000016` names each identifier
+/// twice, with a different scene map and resource key each time. This is why
+/// `find_practice_range` cannot be replaced by a `(mode, variant)` lookup: the
+/// client is supplied a type-`0x002` map GUID, it does not derive one here.
+#[test]
+fn a_mode_and_variant_pair_can_still_name_two_scene_maps() {
+    let Some(data) = open() else {
+        return;
+    };
+    const LAYERED_HEADER: u64 = 0x0790_0000_0000_00D4;
+    const SIX_ENTRY_MODE: u64 = 0x0230_0000_0000_0016;
+    const VARIANTS: [u64; 3] = [
+        0x0D80_0000_0000_A039,
+        0x0D80_0000_0000_A062,
+        0x0D80_0000_0000_A0C4,
+    ];
+
+    let header = Header::open(&data, LAYERED_HEADER).expect("the 63-variation header opens");
+    let variations = header.variations().expect("the arrays pair");
+    assert_eq!(variations.len(), 63);
+
+    let mut by_variant = std::collections::BTreeMap::new();
+    let mut by_mode = std::collections::BTreeMap::new();
+    let mut pairs = std::collections::BTreeMap::new();
+    for v in &variations {
+        *by_variant.entry(v.variant).or_insert(0usize) += 1;
+        *by_mode.entry(v.game_mode).or_insert(0usize) += 1;
+        *pairs.entry((v.game_mode, v.variant)).or_insert(0usize) += 1;
+        assert!(
+            data.registry().get(v.variant).is_none(),
+            "variant 0x{:016x} is an identifier, not an asset",
+            v.variant
+        );
+    }
+    assert_eq!(
+        by_variant,
+        VARIANTS.iter().map(|v| (*v, 21)).collect(),
+        "three variant identifiers, 21 entries each"
+    );
+    assert_eq!(by_mode.len(), 20, "63 variations over 20 distinct modes");
+    assert_eq!(by_mode.get(&SIX_ENTRY_MODE), Some(&6));
+    // The six entries are two scene maps for each of the three identifiers.
+    let mut six: Vec<(u64, u64)> = variations
+        .iter()
+        .filter(|v| v.game_mode == SIX_ENTRY_MODE)
+        .map(|v| (v.variant, v.map))
+        .collect();
+    six.sort_unstable();
+    assert_eq!(six.len(), 6);
+    for chunk in six.chunks(2) {
+        assert_eq!(chunk[0].0, chunk[1].0, "two entries share the variant id");
+        assert_ne!(chunk[0].1, chunk[1].1, "but name different scene maps");
+    }
+    assert_eq!(pairs.get(&(SIX_ENTRY_MODE, VARIANTS[0])), Some(&2));
+    eprintln!(
+        "header 0x{LAYERED_HEADER:016x}: {} variations, {} modes, 3 variant ids \
+         (21 each); mode 0x{SIX_ENTRY_MODE:016x} names six, two per variant",
+        variations.len(),
+        by_mode.len()
+    );
+}
+
+/// The replay header's map GUID is a header's `m_map` (base map), not a
+/// variation's `m_BF231F12` scene map. This is the install half of the proof
+/// that the game's map identity is the base map (see `docs/formats/maps.md`).
+#[test]
+fn a_replay_map_guid_is_the_base_map_not_a_scene_map() {
+    let Some(data) = open() else {
+        return;
+    };
+    const REPLAY_HEADER: u64 = 0x0790_0000_0000_069E;
+    const REPLAY_MAP: u64 = 0x0800_0000_0000_069E;
+
+    let maps = mapresolve::list_maps(&data);
+    let replay = maps
+        .iter()
+        .find(|m| m.header == REPLAY_HEADER)
+        .expect("the replay's header is in the catalog");
+    assert_eq!(
+        replay.base_map,
+        Some(REPLAY_MAP),
+        "the replay's map GUID is the header's m_map"
+    );
+    assert!(
+        maps.iter()
+            .flat_map(|m| &m.variations)
+            .all(|v| v.scene_map != REPLAY_MAP),
+        "the replay's map GUID is not any variation's scene map"
+    );
+    eprintln!(
+        "replay map 0x{REPLAY_MAP:016x} = header 0x{REPLAY_HEADER:016x} m_map; \
+         scene of none of the {} headers",
+        maps.len()
     );
 }

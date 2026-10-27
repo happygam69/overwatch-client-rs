@@ -50,10 +50,12 @@ header by `m_mapName`, selects the first variation whose paired
 `STUGameMode.displayName` is exactly `Practice Range`, and resolves that
 variation's type-`0x002` scene map through `ow-tank::mapresolve`. The client
 draws only the resolver's requested chunk set and the model placeables inside
-it; it does not run proximity clustering or guess a chunk kind. The variation
-selector caller remains open, so the launch affinity is documented rather than
-claimed as the client's selector. `--list-maps` prints every readable header
-and its variation modes.
+it; it does not run proximity clustering or guess a chunk kind. That choice is
+a **viewer default**: the current image has no client-side mode→variation
+selector (its mode/variation field hashes occur only in the registration
+functions), and the game's map arrives as type-`0x002` GUIDs in the level-load
+message. The producer of those GUIDs is open. `--list-maps` prints every
+readable header and its variation modes.
 
 ## Behaviour pipeline
 
