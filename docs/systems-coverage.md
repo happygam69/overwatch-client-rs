@@ -33,7 +33,7 @@ reference code. The viewer makes no gameplay claim.
 |---|---|---|---|
 | 14 | CASC container | build info, configs, keyring, bucket index (`DynamicIndexHash` and `DynamicIndexKeyHash` verified), encoding header (`EncodingHeaderParse` verified), BLTE (`Salsa20StateInit` and `Salsa20Xor` verified) and the manifests, including the build-154504 encrypted derivation (`CmfKey154504`, `CmfIv154504`) | `formats/casc.md` |
 | 15 | STU | v1/v2 layouts, fields, strings, asset refs and the typed layer read | `formats/stu.md` |
-| 16 | Entities and health | hero → gameplay entity → schema entries read; pools verified | `formats/stu.md` |
+| 16 | Entities and health | hero → gameplay entity → schema entries read; pool values read from the install, not client-verified (`ow-tank-1to1.md`) | `formats/stu.md` |
 | 17 | Models, skeletons, chunks | `mskl`, `MRNM`, `MSTU`, `MDLC` and hardpoints read | `formats/stu.md`, `formats/animation.md` |
 | 18 | Maps | chunk kinds, placeables, model/look joins, the map-to-chunk link, the bundle asset path and the map asset's stored chunk fields read (type-`0x09F` `STUMapHeader` → variation → type-`0x002` scene map → 31 synthesised + stored chunks; all 305 headers open; the practice range resolves 34 chunks and the default client draws them, including 2,449 model-group entries); the variation selector, the bundle directory's producer and the streaming policy are open | `formats/maps.md` |
 | 19 | Materials and textures | model -> look -> material -> data -> texture chain read; bundle-aware `open_asset`; BC1-BC7/BC6H decode; client material application and the 55 practice-range placeholder draws are open | `formats/materials.md` |

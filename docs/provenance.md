@@ -38,6 +38,10 @@ finding; it is an open question.
    down only when a byte-level check agrees with it.
 5. **Every load-bearing claim has a check** that fails if the claim is wrong.
    A table with no check is a note, not a finding.
+6. **The current image is the only behaviour source.** A capture address
+   (`0x7ff6...`) belongs to another build or another process and is not
+   evidence. Code whose only citation is a capture is open until the path is
+   re-read at its current-image address.
 
 ## What came from where
 

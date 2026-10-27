@@ -35,9 +35,11 @@ A tolerance is not acceptance.
 
 ## Current position
 
-The data path is working and the client launches the practice range. The map
-chain, bundle path, manifest derivation and five CASC primitives are verified.
-Gameplay is not.
+The data path is working and the client launches the practice range. The five
+CASC primitives are verified by the differential harness. The map chain, bundle
+path and manifest derivation are read and tested against the install, but not
+yet harness-verified; their gaps are itemised in
+[`ow-tank-1to1.md`](ow-tank-1to1.md). Gameplay is not.
 
 - **Done:** CASC oracle, build-154504 manifest, bundle assets, map resolver,
   the one executable rendering the practice range.

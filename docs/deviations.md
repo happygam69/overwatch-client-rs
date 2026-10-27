@@ -7,8 +7,11 @@ code, and must be deleted or replaced by a read implementation.
 No new row may be added. `cargo xtask deviation-check` fails if a `FIT-*` id in
 the code is not in this table, or if a new id appears at all.
 
-The simulation deviations are gone with the deleted movement/combat code. What
-remains is presentation and view-model framing in `ow-client` / `ow-scene`.
+The simulation deviations are gone with the deleted movement/combat code. One
+`ow-tank` deviation remains (`FIT-ANI-07`); the rest are presentation and
+view-model framing in `ow-client` / `ow-scene`. The wider list of `ow-tank`
+code that is not 1 to 1, with or without a marker, is
+[`ow-tank-1to1.md`](ow-tank-1to1.md).
 
 ## Camera and view model
 
