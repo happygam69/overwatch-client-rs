@@ -116,10 +116,10 @@ impl BucketIndex {
                     dir.display()
                 )));
             };
-            let entries = index::parse_bucket_file(&found.path, Some(bucket as u8))?;
+            let file = index::parse_bucket_file(&found.path, Some(bucket as u8))?;
             buckets[bucket] = Some(BucketSegment {
                 segment: found.segment,
-                entries: index::SegmentEntries::new(entries),
+                entries: index::SegmentEntries::with_pages(file.entries, file.pages),
             });
         }
         Ok(BucketIndex { buckets })
@@ -1160,6 +1160,8 @@ mod tests {
         let mut state = [0u32; 2];
         index::hash_index(&out[8..24], &mut state);
         out[4..8].copy_from_slice(&state[0].to_le_bytes());
+        let page_table_offset = ((entries.len() * index::ENTRY_SIZE) + 32 + 0x1007) & !0xfff;
+        out.resize(page_table_offset + index::PAGE_TABLE_MIN_BYTES, 0);
         out
     }
 

@@ -92,16 +92,16 @@ claim. `ow-sim` is parked reference code.
   are deleted.
 - **Materials:** the viewer is not the client's renderer; 55 placeholder draws
   remain diagnostics, not a finished material path.
-- **Remaining CASC units:** `DynamicIndexSegmentParse` beyond the
-  header/entry block, the page-table branch of `DynamicIndexFindEntry` and the
-  page-record decode/type byte in `DynamicIndexDecodeEntries`, the key-state
-  interval merge/resident check (`0x142520c60`/`0x142520700`/`0x1425208d0`),
+- **Remaining CASC units:** `DynamicIndexSegmentParse` asynchronous load, the
+  page-table writer/insert path (`DynamicIndexPageInsert`), the key-state interval
+  merge/resident check (`0x142520c60`/`0x142520700`/`0x1425208d0`),
   `BlteFrameHeaderParse`, `BlteBlockRead`, `DynamicContainerRead`,
   `EncodingSectionsRead`; the BLTE `4`/`A`/`F` and `0x10` modes, the
   frame/chunk MD5 checks and the CDN index-page formula are also open. The
-  bucket fold, segment/archive selection and the 18-byte entry search with the
-  first-duplicate choice are read and install-tested; `docs/casc-1to1.md` is
-  the register.
+  bucket fold, segment/archive selection, the 18-byte entry search with the
+  first-duplicate choice, and the page-table layout/hash/linear lookup are read
+  and tested; all 2,560 install pages are zero, so the page hit path is
+  synthetic-only. `docs/casc-1to1.md` is the register.
 
 ## Next
 

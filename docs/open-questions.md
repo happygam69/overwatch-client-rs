@@ -306,24 +306,30 @@ keys at salt 0 and the 1,488 archive-header placeholders at salt 1, with no
 unmatched entry. `DynamicIndexFindEntry` (`0x1425111a0`) is now implemented
 as the client's lower-bound walk plus backward/forward equal-range expansion;
 the first equal entry is the chosen one, and all 806 duplicate pairs in this
-install resolve to the header entry. The open parts are the page-table branch
-of `DynamicIndexFindEntry` (page count is non-zero here but every page record's
-stored hash is zero, so it contributes nothing), the 19-byte page-record
-decode and type byte in `DynamicIndexDecodeEntries` (`0x1425209a0`), the
-key-state interval merge/resident check (`0x142520c60`, `0x142520700`,
-`0x1425208d0`), `DynamicIndexSegmentParse` beyond the header/entry block
-(`0x14250fcf0`; no page table), `BlteFrameHeaderParse` (`0x1424a90e0`),
-`BlteBlockRead` (`0x1424d61b0`), `BlteBlockReadLz4` (`0x1424d6e50`),
-`DynamicContainerRead` (`0x1424f48d0`; no page cache) and
-`EncodingSectionsRead` (`0x1424d1c60`). The shipped decoder accepts only BLTE
-type `0x0F`, does not check `12 + 24*count`, skips the frame/chunk MD5s, and
-has no LZ4/ARC4/frame modes.
+install resolve to the header entry. The page table is now read: it starts at
+`(entry_block_size + entry_header + 0x1007) & ~0xfff`, holds 21 24-byte
+records per 0x200 page, and `DynamicIndexFindEntry` scans every record in order
+until the first zero stored hash. The stored hash is
+`DynamicIndexKeyHash(payload, 0x13, 0) | 0x80000000`, so
+`DynamicIndexKeyHash` has production callers (`DynamicIndexSegmentParse` and
+the page writer `DynamicIndexPageInsert` (`0x142511d20`)), contrary to the old note. All 2,560 install
+pages (53,760 slots) have zero hashes and the first zero is page 0 record 0 in
+every file, so the positive page path is synthetic-only here; the type byte's
+chosen-entry effect is implemented, and its interval-buffer effect is open.
+The remaining open parts are the page-table writer/insert path, the key-state
+interval merge/resident check (`0x142520c60`, `0x142520700`, `0x1425208d0`),
+`DynamicIndexSegmentParse`'s asynchronous load (`0x14250fcf0`),
+`BlteFrameHeaderParse` (`0x1424a90e0`), `BlteBlockRead` (`0x1424d61b0`),
+`BlteBlockReadLz4` (`0x1424d6e50`), `DynamicContainerRead`
+(`0x1424f48d0`; no page cache) and `EncodingSectionsRead` (`0x1424d1c60`).
+The shipped decoder accepts only BLTE type `0x0F`, does not check
+`12 + 24*count`, skips the frame/chunk MD5s, and has no LZ4/ARC4/frame modes.
 
-**What would settle it.** Read the page-table branch and the page-record
-decode first, then the key-state interval merge. Add a synthetic page table
-with a non-zero stored hash and a type byte; the install cannot exercise it.
-After that, read the remaining BLTE and encoding functions operation for
-operation and add a differential unit where the function is pure.
+**What would settle it.** Read the page-table writer (`DynamicIndexPageInsert`) and the
+key-state interval merge, then exercise a page-table record in the read path
+with a synthetic non-zero table. After that, read the remaining BLTE and
+encoding functions operation for operation and add a differential unit where
+the function is pure.
 
 **Next anchor.** `docs/casc-1to1.md`, `formats/casc.md`,
 `crates/ow-casc/src/index.rs`, `crates/ow-casc/src/container.rs`,

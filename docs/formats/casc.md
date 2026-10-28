@@ -215,10 +215,16 @@ the selected segments: `find_range` equals each key's contiguous equal group,
 all 1,147,132 salt-0 entries resolve to the first entry of their group, the
 1,488 salt-1 placeholders resolve to nothing, and each of the 806 duplicate
 pairs resolves to the header entry whose stored record is the 30-byte header
-followed by BLTE. `Store::entry_count` is 1,148,620; `Store::key_count` is
-1,147,814 because 806 keys are listed twice. The pure search is checked
+followed by BLTE. It also parses all sixteen page tables: 2,560 pages, 53,760
+record slots, 0 non-zero stored hashes, first zero at page 0 record 0, and no
+page-table key resolves. `Store::entry_count` is 1,148,620; `Store::key_count`
+is 1,147,814 because 806 keys are listed twice. The pure search is checked
 against a linear first/last scan on a deterministic sorted corpus in
-`find_range_agrees_with_a_linear_scan`.
+`find_range_agrees_with_a_linear_scan`; the page-table parser and lookup are
+checked by `page_table_parses_and_selects_in_page_order`,
+`a_zero_page_hash_stops_the_scan`, `a_page_record_hash_must_match_its_payload`,
+`a_short_page_table_is_rejected`, `page_collision_uses_decode_order` and
+`page_counts_one_and_many_share_the_lookup_order`.
 
 ### Entry search and duplicates
 
@@ -249,18 +255,41 @@ the resolved bytes are the same BLTE as the second entry. `SegmentEntries` in
 `index.rs` keeps the file order and returns the first entry of the equal range;
 it does not sort or de-duplicate.
 
-The key-to-entry page table that follows the entry block holds 21 records per
-0x200-byte page at a 24-byte stride. A record is a `u32` stored hash followed
-by a 19-byte payload — the 9-byte key, the 5-byte location, the 4-byte size and
-one type byte — then a pad byte. `DynamicIndexKeyHash` hashes the 19-byte
-payload at `record + 4`, and the parser compares the stored dword with
-`hash | 0x80000000`. `DynamicIndexFindEntry` scans the pages only when the
-page count at `+0x70` is non-zero, stopping at the first record whose stored
-hash is zero; it collects matching record pointers and decodes them after the
-18-byte entry range. On this install the page count is non-zero (152 for
-`0300000159.idx`) but every page record is zero, so the scan stops at the first
-record and contributes nothing. The positive-record path, the record type byte
-and the page-table decode are still open.
+The key-to-entry page table that follows the entry block starts at
+`(entry_block_size + entry_header + 0x1007) & ~0xfff`. The client requires at
+least `0x7800` bytes and derives `page_count = (file_size - offset) >> 9`.
+Each 0x200-byte page holds 21 records at a 24-byte stride; the last 8 bytes are
+pad. A record is a `u32` stored hash followed by a 19-byte payload — the
+9-byte key, the 5-byte location, the 4-byte size and one type byte — then a pad
+byte. `DynamicIndexKeyHash` hashes the 19-byte payload at `record + 4`, and the
+stored dword is `hash | 0x80000000`. This is a production caller of the
+verified `DynamicIndexKeyHash`, not a dead function; the page writer
+`DynamicIndexPageInsert` (`0x142511d20`) computes the same hash when it
+appends a record.
+
+`DynamicIndexFindEntry` does **not** select a page from the key. It scans every
+page and every record in file order and stops at the first record whose stored
+hash is zero; the zero is the empty-slot sentinel, not a valid record and not a
+per-page header. It collects matching record pointers and decodes them after
+the 18-byte entry range. A page hit and a sorted-entry hit decode the same
+5-byte location and 4-byte size; the difference is the page record's type byte
+and the decode order. The type byte is passed to the entry sink: types 1 and 2
+replace the chosen location, type 3 clears it, and types 4-7 affect only the
+interval buffer or metrics. `ow-casc` models that chosen-entry effect; the
+interval side effects remain open. The writer is `DynamicIndexPageInsert`
+(`0x142511d20`): it asks `DynamicIndexFindEntry` for the first empty slot,
+writes the key/location/size and the caller's type byte there, and stores
+`DynamicIndexKeyHash(payload, 0x13, 0) | 0x80000000`. The write wrapper at
+`0x1425033e0` passes type 6 or 7; the read path never supplies a page type on
+this install because every page table is empty.
+
+On this install every page table is dormant: 2,560 pages, 53,760 record slots,
+**0** non-zero stored hashes, and the first zero is page 0 record 0 in every
+one of the sixteen files. The client enters the branch because the page count
+is non-zero (144-176 pages per file; 152 for `0300000159.idx`) and stops at the
+first record, so no key resolves through the page table here. The synthetic
+tests build non-zero tables and exercise first/middle/last records, type
+1/2/3/6, a zero sentinel and page counts one and many.
 
 
 ## Encoding file
@@ -407,7 +436,11 @@ any one of them is not verified.
   through `R8D`, so only its low 32 bits reach `c`.
 - `DynamicIndexSegmentParse` (`0x14250fcf0`) calls it once per 24-byte page
   record as `key_hash(record + 4, 0x13, 0)` and compares
-  `hash | 0x80000000` with the record's first dword.
+  `hash | 0x80000000` with the record's first dword. The page writer
+  `DynamicIndexPageInsert` (`0x142511d20`) computes the same value. The other
+  direct callers are `0x142504d20`, `0x142504e90`, `0x14251dcb0` and
+  `0x14251f720` (other index-family writers); the "no production caller" note
+  was wrong.
 - Three load paths are selected by the key pointer's low two bits (dword,
   word and byte loads). They assemble the same twelve bytes; the fixture pins
   arena offsets 0, 1, 2 and 3 so every path executes and the shipped
@@ -419,9 +452,11 @@ any one of them is not verified.
   untouched buffer. All 8 branch sites reach both edges; 24 of 24 scored
   mutants are killed.
 - Not tested: every `.idx` page table on this install is zero-filled, so no
-  stored page-record hash exists to agree with. The function's contract is
-  verified from the client's bytes; the page-table integration remains open
-  with `DynamicIndexSegmentParse`.
+  stored page-record hash exists to agree with. The production caller
+  `DynamicIndexSegmentParse` is now mirrored by `PageTable::parse`, and the
+  synthetic page-table fixtures validate the hash; the function's contract is
+  verified from the client's bytes. The page-table read path is implemented;
+  its write path (`DynamicIndexPageInsert`) and the interval side effects remain open.
 
 `EncodingHeaderParse`:
 

@@ -210,9 +210,11 @@ Overwatch.exe,0x14250e400,0x14250e400,DynamicIndexSegmentOpen,Opens one data/0X.
 Overwatch.exe,0x14250e720,0x14250e720,DynamicIndexScanSegments,"Scans the data directory for <bucket><segment>.idx names, keeping the highest segment per bucket and deleting lower or temporary files in read-write mode"
 Overwatch.exe,0x14250fc60,0x14250fc60,DynamicIndexSegmentLoad,Loads a dynamic index segment through the async reader
 Overwatch.exe,0x14250fcf0,0x14250fcf0,DynamicIndexSegmentParse,"Parses a dynamic index segment: section and file headers, entry block and key-to-entry table"
+Overwatch.exe,0x142511100,0x142511100,DynamicIndexGetEntry,Returns the chosen 16-byte location/size entry for a key
 Overwatch.exe,0x1425111a0,0x1425111a0,DynamicIndexFindEntry,Binary-searches the 18-byte entries by their 9-byte key and expands the equal range
 Overwatch.exe,0x142511540,0x142511540,DynamicIndexResolveKeyRange,Resolves a key's requested range through DynamicIndexResolveRange and records the retry metric
 Overwatch.exe,0x1425115d0,0x1425115d0,DynamicIndexResolveRange,Resolves a requested range against a key state's resident intervals
+Overwatch.exe,0x142511d20,0x142511d20,DynamicIndexPageInsert,"Appends a resolved key range to the first zero page-table slot and stores DynamicIndexKeyHash(payload, 0x13, 0) | 0x80000000"
 Overwatch.exe,0x142512c60,0x142512c60,DynamicIndexHash,32-bit file-header and rolling entry-block hash of a dynamic index segment; called by DynamicIndexSegmentParse
 Overwatch.exe,0x142513230,0x142513230,DynamicIndexKeyHash,"32-bit hash of a page record's 19-byte payload, compared with the record's first word | 0x80000000"
 Overwatch.exe,0x142520520,0x142520520,DynamicIndexFindContextInit,Initializes the find/resolve context and its inline interval buffer

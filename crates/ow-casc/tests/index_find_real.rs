@@ -57,13 +57,23 @@ fn find_range_and_duplicate_choice_match_the_install() {
     let mut placeholders = 0usize;
     let mut duplicate_groups = 0usize;
     let mut entries_total = 0usize;
+    let mut page_count_total = 0usize;
+    let mut page_slots_total = 0usize;
+    let mut page_nonzero_total = 0usize;
 
     for bucket in 0u8..16 {
         let segment = selected[usize::from(bucket)].expect("selected segment");
         let path = selected_path(&files, bucket, segment).expect("selected path");
-        let entries = SegmentEntries::new(
-            parse_bucket_file(&path, Some(bucket)).expect("valid selected segment"),
-        );
+        let file = parse_bucket_file(&path, Some(bucket)).expect("valid selected segment");
+        page_count_total += file.pages.page_count();
+        page_slots_total += file.pages.total_slots();
+        page_nonzero_total += file.pages.nonzero_records();
+        // Every install page table is dormant: the first record's stored hash
+        // is zero, so the client stops before reading any record.
+        assert_eq!(file.pages.first_empty(), Some((0, 0)));
+        assert!(file.pages.records().is_empty());
+        assert_eq!(file.pages.nonzero_records(), 0);
+        let entries = SegmentEntries::with_pages(file.entries, file.pages);
         entries_total += entries.len();
 
         // The client's search assumes the file's non-decreasing key order.
@@ -123,12 +133,17 @@ fn find_range_and_duplicate_choice_match_the_install() {
 
     eprintln!(
         "index find: {entries_total} entries, {real_keys} salt-0 keys, \
-         {placeholders} salt-1 placeholders, {duplicate_groups} duplicate pairs"
+         {placeholders} salt-1 placeholders, {duplicate_groups} duplicate pairs; \
+         page tables: {page_count_total} pages, {page_slots_total} slots, \
+         {page_nonzero_total} non-zero hashes"
     );
     assert_eq!(entries_total, 1_148_620);
     assert_eq!(real_keys, 1_147_132);
     assert_eq!(placeholders, 1_488);
     assert_eq!(duplicate_groups, 806);
+    assert_eq!(page_count_total, 2_560);
+    assert_eq!(page_slots_total, 53_760);
+    assert_eq!(page_nonzero_total, 0);
     assert_eq!(store.entry_count(), entries_total);
     assert_eq!(store.key_count(), 1_147_814);
 }

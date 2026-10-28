@@ -4,6 +4,25 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-28 - CASC page table read: layout, hash, linear lookup
+
+- The `.idx` page table starts at
+  `(entry_block_size + entry_header + 0x1007) & ~0xfff`; 21 24-byte records per
+  0x200 page, a `u32` stored hash plus key9 + location5 + size4 + type1 and a
+  pad byte. `DynamicIndexFindEntry` scans pages and records in order and stops
+  at the first zero stored hash; there is no hash-based page selection.
+- `DynamicIndexKeyHash` has production callers after all:
+  `DynamicIndexSegmentParse` validates every page record and the page writer
+  `DynamicIndexPageInsert` stores the same `hash | 0x80000000`. The old "no production
+  caller" line is corrected.
+- `PageTable`/`BucketFile` in `index.rs` parse and retain the table; `find`
+  applies the page type byte (1/2 replace the chosen entry, 3 clears it, 4-7
+  only interval/metrics) after the sorted-entry range. Synthetic tables cover
+  first/middle/last, type 1/2/3/6, zero sentinel and page counts one/many.
+- The install has 2,560 pages and 53,760 record slots, all with zero stored
+  hashes; the first zero is page 0 record 0 in every file, so no key resolves
+  through the page table there. The install test reports those counts.
+
 ## 2026-10-28 - CASC index entry search and duplicate choice
 
 - `DynamicIndexFindEntry` (`0x1425111a0`) is now the client's lower-bound walk

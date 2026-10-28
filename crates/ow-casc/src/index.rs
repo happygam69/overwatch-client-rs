@@ -112,6 +112,165 @@ pub const MAX_ARCHIVE: u32 = 0x3fe;
 /// The data header `DynamicContainerRead` skips before reading a payload.
 pub const DATA_HEADER_SIZE: u32 = 0x1e;
 
+/// One record in a `.idx` page table.
+///
+/// The record is 24 bytes: a `u32` stored hash at `+0`, a 9-byte key at `+4`,
+/// a 5-byte big-endian location at `+13`, a 4-byte little-endian size at
+/// `+18`, a one-byte type at `+22`, and one pad byte. The stored hash is
+/// `DynamicIndexKeyHash(record + 4, 0x13, 0) | 0x80000000`; zero marks the
+/// first empty slot, not a valid record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageRecord {
+    pub stored_hash: u32,
+    pub key: [u8; 9],
+    pub location: Location,
+    /// The decoder's type byte. See [`SegmentEntries::find`] for the chosen
+    /// entry effect; the interval-buffer effect is not modelled.
+    pub kind: u8,
+}
+
+/// One 0x200-byte page holds 21 24-byte records; the last 8 bytes are pad.
+pub const PAGE_SIZE: usize = 0x200;
+pub const PAGE_RECORD_COUNT: usize = 21;
+pub const PAGE_RECORD_SIZE: usize = 24;
+/// The client's parser requires at least this much page-table space.
+pub const PAGE_TABLE_MIN_BYTES: usize = 0x7800;
+
+/// The page table that follows the 18-byte entry block.
+///
+/// `DynamicIndexFindEntry` (`0x1425111a0`) scans pages and records in file
+/// order and stops at the first record whose stored hash is zero. There is no
+/// hash-based page selection: the stored hash is a validity check, and the
+/// scan is linear. [`PageTable::matches`] returns only the records before the
+/// first zero, exactly the prefix the client can reach.
+#[derive(Debug, Clone, Default)]
+pub struct PageTable {
+    page_count: usize,
+    records: Vec<PageRecord>,
+    first_empty: Option<(usize, usize)>,
+    nonzero_records: usize,
+}
+
+impl PageTable {
+    /// Construct a table for a synthetic fixture. `records` must be the prefix
+    /// before `first_empty` (or the whole table when no slot is empty).
+    pub fn from_records(
+        page_count: usize,
+        records: Vec<PageRecord>,
+        first_empty: Option<(usize, usize)>,
+    ) -> PageTable {
+        let nonzero_records = records.len();
+        PageTable {
+            page_count,
+            records,
+            first_empty,
+            nonzero_records,
+        }
+    }
+
+    pub fn page_count(&self) -> usize {
+        self.page_count
+    }
+
+    /// Records before the first zero stored hash, in file order.
+    pub fn records(&self) -> &[PageRecord] {
+        &self.records
+    }
+
+    /// `(page, record)` of the first zero stored hash, if any.
+    pub fn first_empty(&self) -> Option<(usize, usize)> {
+        self.first_empty
+    }
+
+    /// Number of non-zero stored hashes across every page and record, including
+    /// any after the first zero (which the client never reads).
+    pub fn nonzero_records(&self) -> usize {
+        self.nonzero_records
+    }
+
+    pub fn total_slots(&self) -> usize {
+        self.page_count * PAGE_RECORD_COUNT
+    }
+
+    /// The records for `key` in the client's scan order: page by page, record
+    /// by record, stopping at the first zero hash.
+    pub fn matches<'a>(&'a self, key: &[u8; 9]) -> impl Iterator<Item = &'a PageRecord> + 'a {
+        let key = *key;
+        self.records.iter().filter(move |record| record.key == key)
+    }
+
+    /// Parse the client's page table from a loaded segment.
+    ///
+    /// The first zero stored hash stops the client's validation and lookup;
+    /// this parser validates the records before it, retains only that prefix,
+    /// and still counts non-zero hashes after it for diagnostics.
+    fn parse(
+        data: &[u8],
+        offset: usize,
+        page_count: usize,
+    ) -> std::result::Result<PageTable, &'static str> {
+        let mut records = Vec::new();
+        let mut first_empty = None;
+        let mut nonzero_records = 0usize;
+        for page in 0..page_count {
+            for record in 0..PAGE_RECORD_COUNT {
+                let at = offset + page * PAGE_SIZE + record * PAGE_RECORD_SIZE;
+                let bytes = data
+                    .get(at..at + PAGE_RECORD_SIZE)
+                    .ok_or("page-table record runs past the end of the file")?;
+                let stored = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                if stored == 0 {
+                    if first_empty.is_none() {
+                        first_empty = Some((page, record));
+                    }
+                    continue;
+                }
+                nonzero_records += 1;
+                if first_empty.is_some() {
+                    // The client stopped reading here; do not validate or
+                    // retain records after its terminating zero.
+                    continue;
+                }
+                let payload = &bytes[4..4 + 19];
+                let expected = key_hash(payload, 0) | 0x8000_0000;
+                if stored != expected {
+                    return Err("page-table record hash mismatch");
+                }
+                let mut key = [0u8; 9];
+                key.copy_from_slice(&payload[0..9]);
+                let mut packed = 0u64;
+                for byte in &payload[9..14] {
+                    packed = (packed << 8) | u64::from(*byte);
+                }
+                let size = u32::from_le_bytes([payload[14], payload[15], payload[16], payload[17]]);
+                records.push(PageRecord {
+                    stored_hash: stored,
+                    key,
+                    location: Location {
+                        archive: (packed >> ARCHIVE_SHIFT) as u32,
+                        offset: packed & ARCHIVE_MASK,
+                        size,
+                    },
+                    kind: payload[18],
+                });
+            }
+        }
+        Ok(PageTable {
+            page_count,
+            records,
+            first_empty,
+            nonzero_records,
+        })
+    }
+}
+
+/// A parsed `.idx` file: the sorted 18-byte entries and the page table.
+#[derive(Debug, Clone, Default)]
+pub struct BucketFile {
+    pub entries: Vec<([u8; 9], Location)>,
+    pub pages: PageTable,
+}
+
 /// The 18-byte entries of one segment, in the file's order.
 ///
 /// `DynamicIndexFindEntry` (`0x1425111a0`) binary-searches this array and
@@ -121,11 +280,19 @@ pub const DATA_HEADER_SIZE: u32 = 0x1e;
 #[derive(Debug, Clone, Default)]
 pub struct SegmentEntries {
     entries: Vec<([u8; 9], Location)>,
+    pages: PageTable,
 }
 
 impl SegmentEntries {
     pub fn new(entries: Vec<([u8; 9], Location)>) -> SegmentEntries {
-        SegmentEntries { entries }
+        SegmentEntries {
+            entries,
+            pages: PageTable::default(),
+        }
+    }
+
+    pub fn with_pages(entries: Vec<([u8; 9], Location)>, pages: PageTable) -> SegmentEntries {
+        SegmentEntries { entries, pages }
     }
 
     pub fn len(&self) -> usize {
@@ -138,6 +305,10 @@ impl SegmentEntries {
 
     pub fn as_slice(&self) -> &[([u8; 9], Location)] {
         &self.entries
+    }
+
+    pub fn pages(&self) -> &PageTable {
+        &self.pages
     }
 
     /// The client's binary search and equal-range expansion.
@@ -175,21 +346,33 @@ impl SegmentEntries {
         lo..hi
     }
 
-    /// The entry the client resolves: the first entry of the equal range.
+    /// The entry the client resolves.
     ///
-    /// `DynamicIndexDecodeEntries` (`0x1425209a0`) gives the first equal entry
-    /// type 2, which writes it to the context's chosen slot; each later equal
-    /// entry is given type 6, which only appends to the interval buffer. The
-    /// chosen location is therefore the first in file order. For this
-    /// install's header/payload duplicate pair that is the entry at the
-    /// 30-byte header, not the entry at `offset + 30`.
+    /// The 18-byte search gives the first equal entry, exactly as
+    /// `DynamicIndexDecodeEntries` (`0x1425209a0`) gives a single equal entry
+    /// type 1 and the first of several type 2. Either way the chosen location
+    /// is that first entry; type 1 additionally merges the entry's interval,
+    /// which this method does not model (the interval/residency path is open).
+    /// The client then decodes the page-table matches, in page/record order,
+    /// through the same entry sink: page type 1 or 2 replaces the chosen entry,
+    /// type 3 clears it, and types 4-7 leave the chosen entry alone (they
+    /// affect only the interval buffer or metrics). This method models that
+    /// chosen-entry effect; the interval buffer is not part of the read lookup.
     pub fn find(&self, key: &[u8; 9]) -> Option<Location> {
         let range = self.find_range(key);
-        if range.is_empty() {
+        let mut chosen = if range.is_empty() {
             None
         } else {
             Some(self.entries[range.start].1)
+        };
+        for record in self.pages.matches(key) {
+            match record.kind {
+                1 | 2 => chosen = Some(record.location),
+                3 => chosen = None,
+                _ => {}
+            }
         }
+        chosen
     }
 
     /// Number of distinct keys, using the client's non-decreasing order.
@@ -301,10 +484,7 @@ fn hex_nibble(byte: u8) -> Option<u8> {
 }
 
 /// Parse one bucket file. `expect_bucket` is verified against the header.
-pub fn parse_bucket_file(
-    path: &Path,
-    expect_bucket: Option<u8>,
-) -> Result<Vec<([u8; 9], Location)>> {
+pub fn parse_bucket_file(path: &Path, expect_bucket: Option<u8>) -> Result<BucketFile> {
     let data = fs::read(path)?;
     if data.len() < SECTION_HEADER + FILE_HEADER_SIZE {
         return Err(Error::Malformed(
@@ -442,7 +622,32 @@ pub fn parse_bucket_file(
             },
         ));
     }
-    Ok(out)
+    // The page table starts at the first 0x1000 boundary after the entry
+    // block plus 0x1007, exactly as `DynamicIndexSegmentParse` computes it
+    // from the entry block size and the entry header offset. The client
+    // requires at least 0x7800 bytes (60 pages) and derives the page count by
+    // shifting the remainder right by 9.
+    let page_table_offset = (block_size as usize + entry_header + 0x1007) & !0xfff;
+    if page_table_offset >= data.len() {
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "page table starts past the end of the file",
+        ));
+    }
+    let remaining = data.len() - page_table_offset;
+    if remaining < PAGE_TABLE_MIN_BYTES {
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "page table is shorter than 60 pages",
+        ));
+    }
+    let page_count = remaining / PAGE_SIZE;
+    let pages = PageTable::parse(&data, page_table_offset, page_count)
+        .map_err(|message| Error::Malformed(path.to_path_buf(), message))?;
+    Ok(BucketFile {
+        entries: out,
+        pages,
+    })
 }
 
 /// The client's dynamic-index hash, exactly (`DynamicIndexHash`,
@@ -693,6 +898,44 @@ mod tests {
         let mut state = [0u32; 2];
         hash_index(&out[8..24], &mut state);
         out[4..8].copy_from_slice(&state[0].to_le_bytes());
+        paste_page_table(&mut out, entries.len() * ENTRY_SIZE, &[]);
+        out
+    }
+
+    fn page_table_offset(entry_block_size: usize) -> usize {
+        (entry_block_size + 32 + 0x1007) & !0xfff
+    }
+
+    /// Resize a synthetic file to the client's 60-page minimum and write page
+    /// records at `(page, record)`. The rest of the page table stays zero.
+    fn paste_page_table(
+        out: &mut Vec<u8>,
+        entry_block_size: usize,
+        pages: &[(usize, usize, [u8; 9], u64, u32, u8)],
+    ) {
+        let off = page_table_offset(entry_block_size);
+        out.resize(off + PAGE_TABLE_MIN_BYTES, 0);
+        for (page, record, key, packed, size, kind) in pages {
+            let at = off + page * PAGE_SIZE + record * PAGE_RECORD_SIZE;
+            out[at + 4..at + 13].copy_from_slice(key);
+            out[at + 13..at + 18].copy_from_slice(&packed.to_be_bytes()[3..8]);
+            out[at + 18..at + 22].copy_from_slice(&size.to_le_bytes());
+            out[at + 22] = *kind;
+            let stored = key_hash(&out[at + 4..at + 23], 0) | 0x8000_0000;
+            out[at..at + 4].copy_from_slice(&stored.to_le_bytes());
+        }
+    }
+
+    fn bucket_file_with_pages(
+        version: u16,
+        bucket: u8,
+        entries: &[([u8; 9], u64, u32)],
+        pages: &[(usize, usize, [u8; 9], u64, u32, u8)],
+    ) -> Vec<u8> {
+        let mut out = bucket_file(version, bucket, entries);
+        // `bucket_file` already padded with zero pages; overwrite the records
+        // requested by the fixture and recompute each stored hash.
+        paste_page_table(&mut out, entries.len() * ENTRY_SIZE, pages);
         out
     }
 
@@ -845,7 +1088,8 @@ mod tests {
         let offset = 0x1234_5678u64;
         let packed = (archive << 30) | offset;
         let path = write_temp("entries", &bucket_file(7, 3, &[(key, packed, 0x1122_3344)]));
-        let entries = parse_bucket_file(&path, Some(3)).expect("parses");
+        let file = parse_bucket_file(&path, Some(3)).expect("parses");
+        let entries = &file.entries;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, key);
         assert_eq!(
@@ -864,9 +1108,9 @@ mod tests {
     fn accepts_a_newer_version_with_the_same_widths() {
         let key = [7u8; 9];
         let path = write_temp("v8", &bucket_file(8, 0, &[(key, 1 << 30, 7)]));
-        let entries = parse_bucket_file(&path, Some(0)).expect("v8 parses");
-        assert_eq!(entries[0].1.archive, 1);
-        assert_eq!(entries[0].1.offset, 0);
+        let file = parse_bucket_file(&path, Some(0)).expect("v8 parses");
+        assert_eq!(file.entries[0].1.archive, 1);
+        assert_eq!(file.entries[0].1.offset, 0);
         fs::remove_file(&path).ok();
     }
 
@@ -896,12 +1140,14 @@ mod tests {
         let mut state = [0u32; 2];
         hash_index(&data[8..8 + section], &mut state);
         data[4..8].copy_from_slice(&state[0].to_le_bytes());
+        let page_table_offset = (ENTRY_SIZE + entry_header + 0x1007) & !0xfff;
+        data.resize(page_table_offset + PAGE_TABLE_MIN_BYTES, 0);
 
         let path = write_temp("section", &data);
-        let entries = parse_bucket_file(&path, Some(2)).expect("parses");
-        assert_eq!(entries[0].0, key);
-        assert_eq!(entries[0].1.archive, 1);
-        assert_eq!(entries[0].1.size, 99);
+        let file = parse_bucket_file(&path, Some(2)).expect("parses");
+        assert_eq!(file.entries[0].0, key);
+        assert_eq!(file.entries[0].1.archive, 1);
+        assert_eq!(file.entries[0].1.size, 99);
         fs::remove_file(&path).ok();
     }
 
@@ -1138,5 +1384,230 @@ mod tests {
             }
             assert_eq!(entries.find_range(&query), first..last, "key {query:02x?}");
         }
+    }
+
+    fn page(
+        page: usize,
+        record: usize,
+        key: [u8; 9],
+        offset: u64,
+        size: u32,
+        kind: u8,
+    ) -> (usize, usize, [u8; 9], u64, u32, u8) {
+        (page, record, key, (1u64 << 30) | offset, size, kind)
+    }
+
+    fn filler(page: usize, record: usize) -> [u8; 9] {
+        let mut key = [0x80u8; 9];
+        key[1] = page as u8;
+        key[2] = record as u8;
+        key[3] = 0;
+        key
+    }
+
+    /// The page table is parsed from its real 24-byte records and scanned in
+    /// page/record order. A page type 1/2 replaces the sorted-entry choice, a
+    /// type 3 clears it, and a type 6 does not change it.
+    #[test]
+    fn page_table_parses_and_selects_in_page_order() {
+        let sorted = [0x40u8; 9];
+        let clear = [0x41u8; 9];
+        let interval = [0x42u8; 9];
+        let first = [0x10u8; 9];
+        let middle = [0x11u8; 9];
+        let last = [0x12u8; 9];
+        let entries = vec![
+            entry(sorted, 0x700, 90),
+            entry(clear, 0x710, 91),
+            entry(interval, 0x720, 92),
+        ];
+        let pages = {
+            let mut pages = Vec::new();
+            for record in 0..=20 {
+                let key = match record {
+                    0 => first,
+                    10 => middle,
+                    _ => filler(0, record),
+                };
+                let kind = if record == 10 { 1 } else { 2 };
+                let offset = if record == 10 {
+                    0x200
+                } else {
+                    0x100 + record as u64
+                };
+                pages.push(page(0, record, key, offset, 40, kind));
+            }
+            for record in 0..=20 {
+                let key = if record == 20 {
+                    last
+                } else {
+                    filler(1, record)
+                };
+                let offset = if record == 20 {
+                    0x300
+                } else {
+                    0x200 + record as u64
+                };
+                pages.push(page(1, record, key, offset, 50, 2));
+            }
+            pages.push(page(2, 0, sorted, 0x400, 70, 2));
+            pages.push(page(2, 1, clear, 0x500, 80, 3));
+            pages.push(page(2, 2, interval, 0x600, 90, 6));
+            pages
+        };
+        let file = bucket_file_with_pages(7, 3, &[], &pages);
+        let parsed = parse_bucket_file(&write_temp("pages", &file), Some(3)).expect("parses");
+        assert_eq!(parsed.pages.page_count(), 60);
+        assert_eq!(parsed.pages.total_slots(), 60 * 21);
+        assert_eq!(parsed.pages.records().len(), 45);
+        assert_eq!(parsed.pages.nonzero_records(), 45);
+        assert_eq!(parsed.pages.first_empty(), Some((2, 3)));
+
+        let entries = SegmentEntries::with_pages(entries, parsed.pages);
+        assert_eq!(entries.find(&first).unwrap().offset, 0x100);
+        assert_eq!(entries.find(&middle).unwrap().offset, 0x200);
+        assert_eq!(entries.find(&last).unwrap().offset, 0x300);
+        // A page hit replaces the sorted entry, and a later type 3 clears it.
+        assert_eq!(entries.find(&sorted).unwrap().offset, 0x400);
+        assert_eq!(entries.find(&clear), None);
+        // A type 6 page record never changes the chosen sorted entry.
+        assert_eq!(entries.find(&interval).unwrap().offset, 0x720);
+
+        // The page record type byte is retained exactly.
+        assert_eq!(
+            entries
+                .pages()
+                .matches(&first)
+                .map(|record| record.kind)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(
+            entries
+                .pages()
+                .matches(&interval)
+                .map(|record| record.kind)
+                .collect::<Vec<_>>(),
+            vec![6]
+        );
+    }
+
+    /// A zero stored hash ends the client's page scan. A record after the zero
+    /// is not retained and cannot resolve, even though it is non-zero and is
+    /// counted in the raw diagnostic.
+    #[test]
+    fn a_zero_page_hash_stops_the_scan() {
+        let first = [0x20u8; 9];
+        let after = [0x21u8; 9];
+        let file = bucket_file_with_pages(
+            7,
+            3,
+            &[],
+            &[
+                page(0, 0, first, 0x100, 40, 2),
+                page(0, 2, after, 0x200, 50, 2),
+            ],
+        );
+        let parsed = parse_bucket_file(&write_temp("page-zero", &file), Some(3)).expect("parses");
+        assert_eq!(parsed.pages.first_empty(), Some((0, 1)));
+        assert_eq!(parsed.pages.records().len(), 1);
+        assert_eq!(parsed.pages.nonzero_records(), 2);
+
+        let entries = SegmentEntries::with_pages(Vec::new(), parsed.pages);
+        assert_eq!(entries.find(&first).unwrap().offset, 0x100);
+        assert_eq!(entries.find(&after), None);
+    }
+
+    /// The client requires at least 0x7800 page-table bytes; a shorter
+    /// remainder is a malformed segment, not an empty page table.
+    #[test]
+    fn a_short_page_table_is_rejected() {
+        let mut file = bucket_file(7, 3, &[]);
+        let off = page_table_offset(0);
+        file.truncate(off + PAGE_SIZE);
+        assert!(parse_bucket_file(&write_temp("page-short", &file), Some(3)).is_err());
+    }
+
+    /// A page record's stored hash is `DynamicIndexKeyHash(payload, 0) | bit
+    /// 31`; a mismatch is a malformed segment, as in `DynamicIndexSegmentParse`.
+    #[test]
+    fn a_page_record_hash_must_match_its_payload() {
+        let key = [0x30u8; 9];
+        let mut file = bucket_file_with_pages(7, 3, &[], &[page(0, 0, key, 0x100, 40, 2)]);
+        let page_at = page_table_offset(0);
+        file[page_at] ^= 0xff;
+        assert!(parse_bucket_file(&write_temp("page-hash", &file), Some(3)).is_err());
+    }
+
+    /// Page records are decoded in page/record order. A later type 2 replaces
+    /// an earlier type 2; a later type 6 never replaces a type 2.
+    #[test]
+    fn page_collision_uses_decode_order() {
+        let key = [0x60u8; 9];
+        let location = |offset| Location {
+            archive: 1,
+            offset,
+            size: 40,
+        };
+        let record = |offset, kind| PageRecord {
+            stored_hash: 1,
+            key,
+            location: location(offset),
+            kind,
+        };
+        let pages = PageTable::from_records(
+            1,
+            vec![record(0x100, 2), record(0x200, 2), record(0x300, 6)],
+            Some((0, 3)),
+        );
+        let entries = SegmentEntries::with_pages(Vec::new(), pages);
+        assert_eq!(entries.find(&key).unwrap().offset, 0x200);
+
+        let pages =
+            PageTable::from_records(1, vec![record(0x100, 6), record(0x200, 2)], Some((0, 2)));
+        let entries = SegmentEntries::with_pages(Vec::new(), pages);
+        assert_eq!(entries.find(&key).unwrap().offset, 0x200);
+    }
+
+    /// The page lookup is independent of the file's 60-page minimum: a
+    /// one-page table and a many-page table use the same page/record order.
+    #[test]
+    fn page_counts_one_and_many_share_the_lookup_order() {
+        let one = [0x50u8; 9];
+        let many = [0x51u8; 9];
+        let one_page = PageTable::from_records(
+            1,
+            vec![PageRecord {
+                stored_hash: 1,
+                key: one,
+                location: Location {
+                    archive: 1,
+                    offset: 0x100,
+                    size: 40,
+                },
+                kind: 2,
+            }],
+            None,
+        );
+        let entries = SegmentEntries::with_pages(Vec::new(), one_page);
+        assert_eq!(entries.find(&one).unwrap().offset, 0x100);
+
+        let many_pages = PageTable::from_records(
+            4,
+            vec![PageRecord {
+                stored_hash: 1,
+                key: many,
+                location: Location {
+                    archive: 2,
+                    offset: 0x200,
+                    size: 50,
+                },
+                kind: 1,
+            }],
+            None,
+        );
+        let entries = SegmentEntries::with_pages(Vec::new(), many_pages);
+        assert_eq!(entries.find(&many).unwrap().offset, 0x200);
+        assert_eq!(entries.pages().page_count(), 4);
     }
 }

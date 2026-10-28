@@ -32,7 +32,7 @@ re-run `casc` after a commit if you need a fresh binding.
 | `Salsa20StateInit` | `0x1424e3230` | `fn/Salsa20StateInit` | verified: 100%, 24/24 | proves the 64-byte state; the return pointer is not compared |
 | `Salsa20Xor` | `0x1424e32c0` | `fn/Salsa20Xor` | verified: 100%, 7/7 scored + 3 declared equivalent | the probe seeks to the counter and advances the state itself; canonical states and counters 0..3 only, high-word carry untested |
 | `DynamicIndexHash` | `0x142512c60` | `fn/DynamicIndexHash` | verified: 100%, 12/12 | three post-loop edges declared dead; the client's alignment-dependent loads are oracle-side, the Rust is byte-wise |
-| `DynamicIndexKeyHash` | `0x142513230` | `fn/DynamicIndexKeyHash` | verified: 100%, 24/24 | verified function has **no production caller**; the page-table integration is open |
+| `DynamicIndexKeyHash` | `0x142513230` | `fn/DynamicIndexKeyHash` | verified: 100%, 24/24 | production callers: `DynamicIndexSegmentParse` validates each page record and `DynamicIndexPageInsert` stores the same hash; the page-table read path is implemented |
 | `EncodingHeaderParse` | `0x142498920` | `fn/EncodingHeaderParse` | verified: 100%, 39/39 | proves the raw 40-byte struct; the null-data guard is untestable; the production wrapper zeroes the buffer before the call |
 
 These are the only CASC functions for which the five-stage word "verified" is
@@ -45,8 +45,9 @@ earned. The rest of the container is not.
 | `.build.info` row/bool select | `0x14248f2a0`, `0x1424aec30`, `0x1424d8800` | the rules are read-cited and pinned on synthetic text; no install test |
 | keyring parse/byte order | `0x1424cebd0`, `0x14248f040`, `0x14248efd0` | read-cited; synthetic byte-order test; the build keyring is read from the install at runtime |
 | bucket hash and segment/archive selection | `0x142501b40`, `0x14250e100`, `0x14250e720`, `0x14250e400`, `0x14250c8f0` | the fold is matched on 1,147,132 real keys (salt 0) and 1,488 archive-header placeholders (salt 1); the scan keeps the highest segment per bucket; the archive is `(packed + 0x1e) >> 30`; install-tested, no harness unit (stateful/I/O) |
-| index entry search and duplicate choice | `0x1425111a0`, `0x142511540`, `0x1425115d0`, `0x1425209a0` | the client's lower-bound walk and equal-range expansion are implemented over file-order entries; the first equal entry is chosen; every equal group of all 1,148,620 install entries was range-checked and the 806 duplicate pairs resolve to the header entry; the page-table positive-record path is open |
-| bucket index header/entries | `0x14250fcf0` (partial) | header/section/entry layout and both widths; synthetic tests plus one real hash vector; the page table is not parsed |
+| index entry search and duplicate choice | `0x1425111a0`, `0x142511540`, `0x1425115d0`, `0x1425209a0` | the client's lower-bound walk and equal-range expansion are implemented over file-order entries; the first equal entry is chosen; every equal group of all 1,148,620 install entries was range-checked and the 806 duplicate pairs resolve to the header entry |
+| page table layout, hash and lookup | `0x14250fcf0`, `0x1425111a0`, `0x1425209a0`, `0x142513230` | parsed at the client's offset with 21 records per 0x200 page; a record is a u32 hash + key9 + location5 + size4 + type1; the stored hash is `DynamicIndexKeyHash(payload, 0x13, 0)` OR `0x80000000`; the client scans pages and records linearly and stops at the first zero hash. Synthetic non-zero tables cover first/middle/last, type 1/2/3/6, a zero sentinel, a same-key collision and page counts one/many; all 2,560 install pages have zero hashes, so the branch is dormant there |
+| bucket index header/entries | `0x14250fcf0` | header/section/entry/page-table layout and both widths; synthetic tests plus real hash/page counts |
 | encoding header/real values | `0x142498920` | header verified; installed 16/16 keys, 4 KiB pages, 16025 + 10519 pages and the 1,484,507-byte espec block are pinned |
 | BLTE N/Z/E blocks | `0x1424e3230`, `0x1424e32c0` | Salsa20 verified; the N/Z/E container walk is synthetic and self-consistent, not client-compared |
 | `.cmf` header/record/flags | `0x141fda1f0`, `0x141feff80`, `0x141fef610`, `0x141fd4a50` | the flag chain and the store/bundle branch open 305/305 map headers |
@@ -67,10 +68,9 @@ earned. The rest of the container is not.
 
 | area | client address | state |
 |---|---|---|
-| `DynamicIndexSegmentParse` | `0x14250fcf0` | partial: header/section/entry only; no key-to-entry page table, no asynchronous segment load |
-| `DynamicIndexFindEntry` page-table branch | `0x1425111a0`, `0x1425209a0` | the 18-byte entry search/equal range and the first-duplicate choice are read and install-tested; the page-table record path (21 records per 0x200 page, 19-byte payload, type byte) is unread. On this install the page count is non-zero but every record's stored hash is zero, so the branch contributes nothing |
+| `DynamicIndexSegmentParse` | `0x14250fcf0` | header/section/entry/page-table layout parsed by `ow-casc`; the asynchronous segment load and the page-table **writer** remain open |
 | `DynamicKeyStateLookup` residency | `0x142520c60`, `0x142520700`, `0x1425208d0` | the chosen location and size are read; the interval merge and the `DynamicIndexRangeIsResident` resident-range check are not |
-| `DynamicIndexDecodeEntries` | `0x1425209a0` | the contiguous 18-byte entry decode is folded into `parse_bucket_file`; no separate implementation of the page-record decode or the type byte |
+| `DynamicIndexDecodeEntries` | `0x1425209a0` | the 18-byte entry decode and the page-record decode are implemented, including the page type's effect on the chosen entry; the interval-buffer/type side effects are not |
 | `BlteFrameHeaderParse` | `0x1424a90e0` | accepts only type `0x0F`; does not check `12 + 24*count`; skips the frame and chunk MD5s |
 | `BlteBlockRead` | `0x1424d61b0` | N/Z/E only; no LZ4 (`4`, `BlteBlockReadLz4` `0x1424d6e50`), no ARC4 `A`, no frame `F`, no type `0x10` |
 | `DynamicContainerRead` | `0x1424f48d0` | reads the 30-byte header and a span; no page cache or page-reader path |
@@ -105,20 +105,24 @@ earned. The rest of the container is not.
   19-byte payload is key (9) + location (5) + size (4) + type (1); the pad
   makes the record 24 bytes. `DynamicIndexFindEntry` stops at a zero stored
   hash, which is every record on this install; the positive-record path is
-  open, not "zero-filled, so the compare never runs".
+  implemented and synthetic-tested, not exercised by the install.
+- `docs/casc-1to1.md` said `DynamicIndexKeyHash` had no production caller. It
+  has six: `DynamicIndexSegmentParse` validates every page record; the page
+  writer (`DynamicIndexPageInsert`) stores the same hash; four other index
+  families call it too. The page-table read path is now implemented.
 
 ## Next order
 
-1. `DynamicIndexFindEntry`'s page-table branch and `DynamicIndexDecodeEntries`'s
-   page-record decode (`0x1425209a0`): the 18-byte entry path is in place, but
-   the 19-byte page payload and its type byte are not. Then the key-state
-   interval merge and resident-range check (`0x142520c60`, `0x142520700`,
-   `0x1425208d0`).
+1. The page-table writer (`DynamicIndexPageInsert`, `0x142511d20`) and the
+   key-state interval merge/resident-range check (`0x142520c60`,
+   `0x142520700`, `0x1425208d0`): the page-table read path is in place and
+   synthetic-tested, but the insert range and the interval side effects are
+   not.
 2. `BlteFrameHeaderParse` (`0x1424a90e0`) and `BlteBlockRead`
    (`0x1424d61b0`): type `0x10`, size equality and the MD5s; then the missing
    modes.
-3. `DynamicIndexSegmentParse` (`0x14250fcf0`) beyond the header/entry block,
-   with a two-segment fixture for the parse itself.
+3. `DynamicIndexSegmentParse` (`0x14250fcf0`) asynchronous load beyond the
+   already-parsed header/entry/page-table layout.
 4. `EncodingSectionsRead` (`0x1424d1c60`) and a real encoding page walk.
 5. The CDN index-page formula from the client's handler, then LZ4.
 

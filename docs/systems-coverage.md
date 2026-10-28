@@ -31,7 +31,7 @@ reference code. The viewer makes no gameplay claim.
 
 | # | system | state | where |
 |---|---|---|---|
-| 14 | CASC container | build info, configs, keyring, bucket index header/entries and encoding header read; bucket fold, segment/archive selection and the 18-byte index entry search/duplicate choice read and install-tested; **verified leaves:** `DynamicIndexHash`, `DynamicIndexKeyHash`, `EncodingHeaderParse`, `Salsa20StateInit`, `Salsa20Xor`; **open:** segment parse page table, page-table find/decode, key-state residency, BLTE frame/block/container, LZ4/`0x10`/MD5, encoding page reader, CDN page formula; build-154504 key/IV differential-only (coverage gap) | `formats/casc.md`, `casc-1to1.md` |
+| 14 | CASC container | build info, configs, keyring, bucket index header/entries, bucket fold, segment/archive selection, the 18-byte entry search, and the page-table layout/hash/linear lookup read and install-tested; **verified leaves:** `DynamicIndexHash`, `DynamicIndexKeyHash`, `EncodingHeaderParse`, `Salsa20StateInit`, `Salsa20Xor`; **open:** page-table writer, key-state residency, asynchronous segment load, BLTE frame/block/container, LZ4/`0x10`/MD5, encoding page reader, CDN page formula; build-154504 key/IV differential-only (coverage gap) | `formats/casc.md`, `casc-1to1.md` |
 | 15 | STU | v1/v2 layouts, fields, strings, asset refs and the typed layer read | `formats/stu.md` |
 | 16 | Entities and health | hero → gameplay entity → schema entries read; pool values read from the install, not client-verified (`ow-tank-1to1.md`) | `formats/stu.md` |
 | 17 | Models, skeletons, chunks | `mskl`, `MRNM`, `MSTU`, `MDLC` and hardpoints read | `formats/stu.md`, `formats/animation.md` |

@@ -63,8 +63,8 @@ fn every_real_key_hashes_to_its_idx_file_bucket() {
 
     for (file_bucket, _segment, path) in &files {
         bucket_seen[usize::from(*file_bucket)] = true;
-        let entries = parse_bucket_file(path, Some(*file_bucket)).expect("valid bucket file");
-        for (key, location) in entries {
+        let file = parse_bucket_file(path, Some(*file_bucket)).expect("valid bucket file");
+        for (key, location) in file.entries {
             if bucket_of(&key, 0) == *file_bucket {
                 salt_zero += 1;
             } else if bucket_of(&key, 1) == *file_bucket {
@@ -143,6 +143,7 @@ fn the_store_selects_the_highest_segment_of_each_bucket() {
             .clone();
         let keys: HashSet<[u8; 9]> = parse_bucket_file(&path, Some(bucket))
             .expect("valid selected bucket")
+            .entries
             .into_iter()
             .map(|(key, _)| key)
             .collect();
