@@ -215,13 +215,18 @@ the selected segments: `find_range` equals each key's contiguous equal group,
 all 1,147,132 salt-0 entries resolve to the first entry of their group, the
 1,488 salt-1 placeholders resolve to nothing, and each of the 806 duplicate
 pairs resolves to the header entry whose stored record is the 30-byte header
-followed by BLTE. It also parses all sixteen page tables: 2,560 pages, 53,760
-record slots, 0 non-zero stored hashes, first zero at page 0 record 0, and no
-page-table key resolves. `Store::entry_count` is 1,148,620; `Store::key_count`
-is 1,147,814 because 806 keys are listed twice. The pure search is checked
-against a linear first/last scan on a deterministic sorted corpus in
-`find_range_agrees_with_a_linear_scan`; the page-table parser and lookup are
-checked by `page_table_parses_and_selects_in_page_order`,
+followed by BLTE. The same pass asks `Store::resolve_range` for every key's
+client request `(0x1e, size - 0x1e)`: all 1,147,132 salt-0 keys return status
+0 with the absolute range `(packed + 0x1e, size - 0x1e)`, all 1,488 salt-1
+placeholders return status 2, and each duplicate request starts at the second
+entry's packed location and ends at the header entry's end — the second
+entry's type-6 interval. It also parses all sixteen page tables: 2,560 pages,
+53,760 record slots, 0 non-zero stored hashes, first zero at page 0 record 0,
+and no page-table key resolves. `Store::entry_count` is 1,148,620;
+`Store::key_count` is 1,147,814 because 806 keys are listed twice. The pure
+search is checked against a linear first/last scan on a deterministic sorted
+corpus in `find_range_agrees_with_a_linear_scan`; the page-table parser and
+lookup are checked by `page_table_parses_and_selects_in_page_order`,
 `a_zero_page_hash_stops_the_scan`, `a_page_record_hash_must_match_its_payload`,
 `a_short_page_table_is_rejected`, `page_collision_uses_decode_order` and
 `page_counts_one_and_many_share_the_lookup_order`.
@@ -273,10 +278,12 @@ hash is zero; the zero is the empty-slot sentinel, not a valid record and not a
 per-page header. It collects matching record pointers and decodes them after
 the 18-byte entry range. A page hit and a sorted-entry hit decode the same
 5-byte location and 4-byte size; the difference is the page record's type byte
-and the decode order. The type byte is passed to the entry sink: types 1 and 2
-replace the chosen location, type 3 clears it, and types 4-7 affect only the
-interval buffer or metrics. `ow-casc` models that chosen-entry effect; the
-interval side effects remain open. The writer is `DynamicIndexPageInsert`
+and the decode order. The type byte is passed to `DynamicIndexEntrySink`
+(`0x142520590`); `ow-casc` models every type (see "Key-state intervals and
+resolve" below): 1 and 2 replace the chosen entry, 3 clears it, 4 appends the
+current chosen entry as a resident interval, 5 clears the intervals, and 6/7
+append the record's interval resident/non-resident. The writer is
+`DynamicIndexPageInsert`
 (`0x142511d20`): it asks `DynamicIndexFindEntry` for the first empty slot,
 writes the key/location/size and the caller's type byte there, and stores
 `DynamicIndexKeyHash(payload, 0x13, 0) | 0x80000000`. The write wrapper at
@@ -290,6 +297,65 @@ is non-zero (144-176 pages per file; 152 for `0300000159.idx`) and stops at the
 first record, so no key resolves through the page table here. The synthetic
 tests build non-zero tables and exercise first/middle/last records, type
 1/2/3/6, a zero sentinel and page counts one and many.
+
+### Key-state intervals and resolve
+
+`DynamicIndexDecodeEntries` (`0x1425209a0`) clears the interval count, decodes
+the sorted equal range, then the matching page records in page/record order,
+and calls `DynamicIndexNormalizeIntervals` (`0x1425208d0`) once at the end. A
+single equal entry is sink type 1 (found, chosen, clear intervals, append its
+resident interval); two or more are type 2 for the first (found, chosen, clear
+intervals) and type 6 for each later entry (append resident). The chosen entry
+is therefore the first equal entry, and on a duplicate pair the only interval
+comes from the second entry.
+
+`DynamicIndexAppendInterval` (`0x142520700`) writes two 16-byte
+`{u64 start, i32 delta}` events: `(start, +1)` and `(start + (u32)len, -1)` for
+a resident range, or `(start, -0x40000000)` and `(start + (u32)len,
++0x40000000)` for a non-resident one. Only the non-resident append normalizes
+immediately; the decode pass normalizes once at the end. The end is a 64-bit
+add of the 32-bit length.
+
+`DynamicIndexNormalizeIntervals` sorts the events by start (the client's
+unstable 16-byte sort), sums each equal-start group with 32-bit wrap, and keeps
+only coverage crossings: `(start, +1)` when coverage goes from `<= 0` to `> 0`
+and `(start, -1)` when it goes from `> 0` to `<= 0`. The group's start is the
+first event's start, and non-crossing groups disappear.
+
+`DynamicIndexRangeIsResident` (`0x142520c60`) walks the normalized events while
+`event.start <= request.start`, adding deltas with 32-bit wrap. If the buffer
+ends there, it answers `!resident` (an empty tail is outside every interval).
+Otherwise it accepts only when the request's coverage matches the flag — `> 0`
+for a resident request, `<= 0` for a non-resident one — and
+`request.start + len <= next_event.start`. The end comparison is inclusive, so
+a request that ends exactly at the next event is accepted. The client's
+flag-mismatch return is non-zero with a zero low byte; every caller tests only
+the low byte (`DynamicIndexResolveRange` uses `TEST AL,AL`), so `ow-casc`
+models the answer as a bool.
+
+`DynamicIndexResolveRange` (`0x1425115d0`) first requires a chosen entry
+(status 2 otherwise). It rejects `start > size` (status 4); a request length of
+`0xffffffff` becomes `size - start`; and it rejects `start + len > size`
+(status 4). The output range is the absolute `packed + start` with that length
+and is written before the resident check. A non-zero length is then checked
+with the resident flag 1; failure is status 3 and leaves the entry unwritten.
+A zero length skips the check and succeeds. Success writes the chosen entry's
+packed location and stored size.
+
+`DynamicContainerRead` (`0x1424f48d0`) asks for
+`(caller_offset + 0x1e, caller_len)`. `Store::read_stored` keeps the full-record
+read the decoder needs but resolves `(0x1e, size - 0x1e)` first: status 2 is
+`KeyNotFound`, and status 3/4 is a parse error. The install's 806 duplicate
+keys only read because the second entry's type-6 interval is exactly that
+payload range. The short-record and status-3/4 error paths of `read_stored` are
+not tested: every install record carries the 30-byte header and every install
+payload request is resident.
+
+The interval arithmetic is synthetic-tested (merge, adjacency, overlap, gap,
+i32 wrap, non-resident holes, all four statuses, `0xffffffff`, every sink type,
+duplicate decode order, type-7 split). The install sweep exercises the type-1
+and type-2+6 paths on every key. Page types 3/4/5/7 are synthetic only: this
+install's page tables have no records.
 
 
 ## Encoding file
@@ -455,8 +521,9 @@ any one of them is not verified.
   stored page-record hash exists to agree with. The production caller
   `DynamicIndexSegmentParse` is now mirrored by `PageTable::parse`, and the
   synthetic page-table fixtures validate the hash; the function's contract is
-  verified from the client's bytes. The page-table read path is implemented;
-  its write path (`DynamicIndexPageInsert`) and the interval side effects remain open.
+  verified from the client's bytes. The page-table read path and the key-state
+  interval/resolve path are implemented; the page-table write path
+  (`DynamicIndexPageInsert`) remains open.
 
 `EncodingHeaderParse`:
 

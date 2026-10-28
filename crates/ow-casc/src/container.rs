@@ -130,6 +130,17 @@ impl BucketIndex {
         self.buckets[bucket].as_ref()?.entries.find(key)
     }
 
+    /// The client's resolve for the bucket `bucket_of(key, 0)` selects.
+    fn resolve(&self, key: &[u8; 9], start: u64, len: u32) -> Option<index::ResolveResult> {
+        let bucket = usize::from(index::bucket_of(key, 0));
+        Some(
+            self.buckets[bucket]
+                .as_ref()?
+                .entries
+                .resolve_range(key, start, len),
+        )
+    }
+
     fn key_count(&self) -> usize {
         self.buckets
             .iter()
@@ -268,19 +279,75 @@ impl Store {
         self.index.location_of(&key)
     }
 
+    /// Resolve a key's request against the client's key state.
+    ///
+    /// `DynamicKeyStateLookup` (`0x142501b40`) selects the salt-0 bucket and
+    /// calls `DynamicIndexResolveRange` (`0x1425115d0`) with the caller's
+    /// `(start, len)` request. The result's status codes are 0 found, 2 no
+    /// entry, 3 not resident, 4 past the entry's end. This is the read path's
+    /// lookup; it returns `None` only when the salt-0 bucket has no segment,
+    /// which a read-only open does not allow.
+    pub fn resolve_range(&self, ekey: &[u8], start: u64, len: u32) -> Result<index::ResolveResult> {
+        let key: [u8; 9] = ekey
+            .get(0..9)
+            .and_then(|key| key.try_into().ok())
+            .ok_or_else(|| Error::KeyNotFound(hex(ekey)))?;
+        self.index
+            .resolve(&key, start, len)
+            .ok_or_else(|| Error::Parse("the salt-0 bucket has no segment".into()))
+    }
+
     /// Read the stored (still BLTE-encoded) record for an encoding key.
     ///
     /// The record starts at the entry's packed location and is `size` bytes
     /// long, 30-byte data header included. The client reads the payload from
     /// `(packed + 0x1e) >> 30` for `size - 0x1e` bytes; a record whose header
     /// would cross a 2^30 boundary therefore moves into the next archive.
-    /// The loop below reads the same `size` bytes as one contiguous span,
-    /// following that boundary, so `blte::decode` still sees the header it
-    /// strips. No entry in this install crosses.
+    /// `DynamicContainerRead` (`0x1424f48d0`) builds the request as
+    /// `(caller_offset + 0x1e, caller_len)`, so a full-record read asks the
+    /// key state for `(0x1e, size - 0x1e)`; the absolute output range is
+    /// `(packed + 0x1e, size - 0x1e)` and must be inside resident coverage.
+    /// The install's duplicate keys rely on exactly that: the chosen header
+    /// entry has no interval of its own, and the second entry's interval is
+    /// the payload range the request asks for.
+    ///
+    /// The loop below then reads the same `size` bytes as one contiguous span,
+    /// following the archive boundary, so `blte::decode` still sees the header
+    /// it strips. No entry in this install crosses.
     pub fn read_stored(&self, ekey: &[u8]) -> Result<Vec<u8>> {
-        let location = self
-            .location_of(ekey)
+        let key: [u8; 9] = ekey
+            .get(0..9)
+            .and_then(|key| key.try_into().ok())
             .ok_or_else(|| Error::KeyNotFound(hex(ekey)))?;
+        let bucket = usize::from(index::bucket_of(&key, 0));
+        let Some(segment) = self.index.buckets[bucket].as_ref() else {
+            return Err(Error::Parse(format!(
+                "the salt-0 bucket {bucket:02x} has no segment"
+            )));
+        };
+        let state = segment.entries.key_state(&key);
+        let Some(chosen) = state.chosen() else {
+            return Err(Error::KeyNotFound(hex(ekey)));
+        };
+        let payload_len = chosen
+            .size
+            .checked_sub(index::DATA_HEADER_SIZE)
+            .ok_or_else(|| {
+                Error::Parse(format!(
+                    "key {}: stored record is {} B, shorter than the 30-byte data header",
+                    hex(ekey),
+                    chosen.size
+                ))
+            })?;
+        let resolved = state.resolve(u64::from(index::DATA_HEADER_SIZE), payload_len);
+        if resolved.status() != index::ResolveStatus::Found {
+            return Err(Error::Parse(format!(
+                "key {}: client resolve status {} for the {payload_len}-byte payload range",
+                hex(ekey),
+                resolved.status().code()
+            )));
+        }
+        let location = chosen.to_location();
 
         let mut at = location.packed();
         let mut remaining = u64::from(location.size);

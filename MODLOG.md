@@ -4,6 +4,29 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-28 - CASC key-state intervals and resident resolve
+
+- `DynamicIndexEntrySink` (`0x142520590`), `DynamicIndexAppendInterval`
+  (`0x142520700`), `DynamicIndexNormalizeIntervals` (`0x1425208d0`) and
+  `DynamicIndexRangeIsResident` (`0x142520c60`) are implemented as the client's
+  16-byte `{u64 start, i32 delta}` events: types 1-7, resident and non-resident
+  deltas, unstable sort, i32-wrapping equal-start sums, crossing output, the
+  inclusive end comparison and the flag-0 complement.
+- `DynamicIndexResolveRange` (`0x1425115d0`) is implemented with the client's
+  bounds and statuses: 0 found, 2 no entry, 3 not resident, 4 past end;
+  `0xffffffff` becomes `size - start`; `out_range` is written before the
+  resident check and `out_entry` only on success.
+- `DynamicIndexDecodeEntries`' decode order is reproduced (type 1 for a single
+  equal entry; type 2 then type 6 for duplicates; page records in order; one
+  final normalize), and `Store::read_stored` now resolves `(0x1e, size - 0x1e)`
+  before the full-record read. Status 2 is `KeyNotFound`; 3/4 is a parse error.
+- The install test now resolves all 1,147,132 salt-0 payload requests to
+  `packed + 0x1e` (status 0), all 1,488 salt-1 placeholders to status 2, and
+  checks that the 806 duplicate requests are the second entry's type-6
+  interval. Synthetic tests cover types 1-7, gaps, i32 wrap, all statuses and
+  `0xffffffff`. Page types 3/4/5/7 are synthetic only; the install's pages are
+  all zero.
+
 ## 2026-10-28 - CASC page table read: layout, hash, linear lookup
 
 - The `.idx` page table starts at

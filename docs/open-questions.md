@@ -288,9 +288,9 @@ dependency and the Wwise event-posting path.
 
 **Question.** The five leaf units (`Salsa20Xor`, `Salsa20StateInit`,
 `DynamicIndexHash`, `DynamicIndexKeyHash`, `EncodingHeaderParse`) are verified,
-and the bucket hash and segment/archive selection are now read and
-install-tested, but the path that uses them is not. Which client functions
-remain, and what do they change?
+and the bucket hash, segment/archive selection, entry search, key-state
+intervals and resident resolve are now read and install-tested. Which client
+functions remain, and what do they change?
 
 **What is known.** `DynamicKeyStateLookup` (`0x142501b40`) is
 `((xor9 ^ (xor9 >> 4)) + salt) & 0xf`; the read path's salt is 0 at all three
@@ -314,10 +314,12 @@ until the first zero stored hash. The stored hash is
 `DynamicIndexKeyHash` has production callers (`DynamicIndexSegmentParse` and
 the page writer `DynamicIndexPageInsert` (`0x142511d20`)), contrary to the old note. All 2,560 install
 pages (53,760 slots) have zero hashes and the first zero is page 0 record 0 in
-every file, so the positive page path is synthetic-only here; the type byte's
-chosen-entry effect is implemented, and its interval-buffer effect is open.
-The remaining open parts are the page-table writer/insert path, the key-state
-interval merge/resident check (`0x142520c60`, `0x142520700`, `0x1425208d0`),
+every file, so the positive page path is synthetic-only here. The entry sink's
+seven types, the interval merge (`0x142520700`, `0x1425208d0`), the resident
+check (`0x142520c60`) and `DynamicIndexResolveRange` (`0x1425115d0`) are now
+read and implemented; every salt-0 key's `(0x1e, size - 0x1e)` request resolves
+to its payload and the 1,488 salt-1 placeholders return status 2. The remaining
+open parts are the page-table writer/insert path,
 `DynamicIndexSegmentParse`'s asynchronous load (`0x14250fcf0`),
 `BlteFrameHeaderParse` (`0x1424a90e0`), `BlteBlockRead` (`0x1424d61b0`),
 `BlteBlockReadLz4` (`0x1424d6e50`), `DynamicContainerRead`
@@ -325,11 +327,10 @@ interval merge/resident check (`0x142520c60`, `0x142520700`, `0x1425208d0`),
 The shipped decoder accepts only BLTE type `0x0F`, does not check
 `12 + 24*count`, skips the frame/chunk MD5s, and has no LZ4/ARC4/frame modes.
 
-**What would settle it.** Read the page-table writer (`DynamicIndexPageInsert`) and the
-key-state interval merge, then exercise a page-table record in the read path
-with a synthetic non-zero table. After that, read the remaining BLTE and
-encoding functions operation for operation and add a differential unit where
-the function is pure.
+**What would settle it.** Read the page-table writer (`DynamicIndexPageInsert`)
+operation for operation and prove its insert range with a synthetic table.
+After that, read the remaining BLTE and encoding functions operation for
+operation and add a differential unit where the function is pure.
 
 **Next anchor.** `docs/casc-1to1.md`, `formats/casc.md`,
 `crates/ow-casc/src/index.rs`, `crates/ow-casc/src/container.rs`,

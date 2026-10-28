@@ -101,6 +101,17 @@ impl Location {
     pub fn data_archive(&self) -> u32 {
         ((self.packed() + u64::from(DATA_HEADER_SIZE)) >> ARCHIVE_SHIFT) as u32
     }
+
+    /// Split a packed `archive << 30 | offset` value the way the client's
+    /// decoders do. The 18-byte entry and the 24-byte page record carry the
+    /// same five big-endian bytes, so both paths end at this decomposition.
+    pub fn from_packed(packed: u64, size: u32) -> Location {
+        Location {
+            archive: (packed >> ARCHIVE_SHIFT) as u32,
+            offset: packed & ARCHIVE_MASK,
+            size,
+        }
+    }
 }
 
 /// The client's 10-bit archive field: `location >> 30`.
@@ -346,33 +357,70 @@ impl SegmentEntries {
         lo..hi
     }
 
-    /// The entry the client resolves.
+    /// The entry the client resolves, without the interval side effects.
     ///
-    /// The 18-byte search gives the first equal entry, exactly as
-    /// `DynamicIndexDecodeEntries` (`0x1425209a0`) gives a single equal entry
-    /// type 1 and the first of several type 2. Either way the chosen location
-    /// is that first entry; type 1 additionally merges the entry's interval,
-    /// which this method does not model (the interval/residency path is open).
-    /// The client then decodes the page-table matches, in page/record order,
-    /// through the same entry sink: page type 1 or 2 replaces the chosen entry,
-    /// type 3 clears it, and types 4-7 leave the chosen entry alone (they
-    /// affect only the interval buffer or metrics). This method models that
-    /// chosen-entry effect; the interval buffer is not part of the read lookup.
+    /// This is [`SegmentEntries::key_state`]'s chosen entry: the first equal
+    /// 18-byte entry (type 1 for a singleton, type 2 for the first of several),
+    /// then every matching page record in page/record order through
+    /// `DynamicIndexEntrySink` (`0x142520590`). Page type 1 or 2 replaces the
+    /// chosen entry, type 3 clears it, and types 4-7 leave it alone. The
+    /// interval buffer only matters to [`SegmentEntries::resolve_range`], so
+    /// this method is the chosen half of the same state.
     pub fn find(&self, key: &[u8; 9]) -> Option<Location> {
+        self.key_state(key).chosen().map(ChosenEntry::to_location)
+    }
+
+    /// Build the key state in the client's decode order.
+    ///
+    /// `DynamicIndexDecodeEntries` (`0x1425209a0`) clears the interval count,
+    /// decodes the sorted equal range first (type 1 for one entry, type 2 then
+    /// type 6 for the rest), then the matching page records in page/record
+    /// order, and finally calls `DynamicIndexNormalizeIntervals`
+    /// (`0x1425208d0`). [`KeyState::sink`] is `DynamicIndexEntrySink`
+    /// (`0x142520590`) exactly, including the interval clears on types 1-5 and
+    /// the immediate normalize of a type-7 non-resident interval.
+    pub fn key_state(&self, key: &[u8; 9]) -> KeyState {
+        let mut state = KeyState::default();
         let range = self.find_range(key);
-        let mut chosen = if range.is_empty() {
-            None
-        } else {
-            Some(self.entries[range.start].1)
-        };
-        for record in self.pages.matches(key) {
-            match record.kind {
-                1 | 2 => chosen = Some(record.location),
-                3 => chosen = None,
-                _ => {}
+        match range.len() {
+            0 => {}
+            1 => state.sink(1, self.chosen_entry(range.start)),
+            _ => {
+                state.sink(2, self.chosen_entry(range.start));
+                for at in range.start + 1..range.end {
+                    state.sink(6, self.chosen_entry(at));
+                }
             }
         }
-        chosen
+        for record in self.pages.matches(key) {
+            state.sink(
+                record.kind,
+                ChosenEntry {
+                    location: record.location.packed(),
+                    size: record.location.size,
+                },
+            );
+        }
+        state.intervals.normalize();
+        state
+    }
+
+    /// `DynamicIndexResolveRange` (`0x1425115d0`) over this segment.
+    ///
+    /// The request is `(start, len)` in stored-record bytes: `start` is the
+    /// caller's offset, not an absolute location. `len == 0xffffffff` means
+    /// "to the end of the chosen entry". The result's status codes are the
+    /// client's: 0 found, 2 no entry, 3 not resident, 4 past the entry's end.
+    pub fn resolve_range(&self, key: &[u8; 9], start: u64, len: u32) -> ResolveResult {
+        self.key_state(key).resolve(start, len)
+    }
+
+    fn chosen_entry(&self, at: usize) -> ChosenEntry {
+        let location = self.entries[at].1;
+        ChosenEntry {
+            location: location.packed(),
+            size: location.size,
+        }
     }
 
     /// Number of distinct keys, using the client's non-decreasing order.
@@ -391,6 +439,375 @@ impl SegmentEntries {
 
 /// Number of buckets in a dynamic index.
 pub const BUCKET_COUNT: usize = 16;
+
+/// One 16-byte key-state interval event.
+///
+/// The client's buffer at key-state `+0x128` holds `{u64 start, i32 delta}`
+/// records with four bytes of padding. `DynamicIndexAppendInterval`
+/// (`0x142520700`) writes the pair and `DynamicIndexNormalizeIntervals`
+/// (`0x1425208d0`) rewrites the buffer in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntervalEvent {
+    /// Event position in packed `archive << 30 | offset` space.
+    pub start: u64,
+    /// Signed coverage change. Resident intervals use `+1`/`-1`; a
+    /// non-resident interval uses the two `0x40000000` magnitudes.
+    pub delta: i32,
+}
+
+/// The delta `DynamicIndexAppendInterval` writes at a non-resident interval's
+/// start. Its end event uses the negated value, `+0x40000000`.
+pub const NON_RESIDENT_DELTA: i32 = -0x4000_0000;
+
+/// The key state's interval buffer.
+///
+/// `DynamicIndexAppendInterval` (`0x142520700`) adds two events per range:
+/// `(start, +1)` and `(start + len, -1)` for a resident range, or
+/// `(start, -0x40000000)` and `(start + len, +0x40000000)` for a non-resident
+/// one. Only the non-resident append normalizes immediately; the resident
+/// appends are normalized once by `DynamicIndexDecodeEntries`.
+///
+/// The end position is `start + (u32)len` as a 64-bit add. The deltas are
+/// 32-bit wrapping values: the normalize sweep and the resident check both add
+/// them with wrap-around, exactly as the client's `ADD` instructions do.
+#[derive(Debug, Clone, Default)]
+pub struct IntervalSet {
+    events: Vec<IntervalEvent>,
+}
+
+impl IntervalSet {
+    pub fn new() -> IntervalSet {
+        IntervalSet::default()
+    }
+
+    /// Build a set from raw events without normalizing. The client's
+    /// normalize is the subject of the arithmetic tests; production callers
+    /// must use [`IntervalSet::append`] so the buffer reaches the same shape.
+    pub fn from_events(events: Vec<IntervalEvent>) -> IntervalSet {
+        IntervalSet { events }
+    }
+
+    pub fn events(&self) -> &[IntervalEvent] {
+        &self.events
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    /// `DynamicIndexAppendInterval` (`0x142520700`): append the range's two
+    /// events, and normalize immediately for a non-resident range.
+    ///
+    /// The client's capacity check grows the buffer when
+    /// `capacity <= count + 1`; the Rust `Vec` has no observable capacity
+    /// contract, and the initial client capacity of 16 is not part of any
+    /// decode result.
+    pub fn append(&mut self, start: u64, len: u32, resident: bool) {
+        let delta = if resident { 1 } else { NON_RESIDENT_DELTA };
+        self.events.push(IntervalEvent { start, delta });
+        self.events.push(IntervalEvent {
+            start: start.wrapping_add(u64::from(len)),
+            delta: delta.wrapping_neg(),
+        });
+        if !resident {
+            self.normalize();
+        }
+    }
+
+    /// Sort by start, sum equal-start deltas, and keep only coverage changes.
+    ///
+    /// `DynamicIndexNormalizeIntervals` (`0x1425208d0`) calls the client's
+    /// unstable 16-byte sort (`FUN_14251ff30`) on the start word, walks the
+    /// equal-start groups summing their deltas with 32-bit wrap, and emits
+    /// `(start, +1)` when coverage goes from `<= 0` to `> 0`, or
+    /// `(start, -1)` when it goes from `> 0` to `<= 0`. The group's start is
+    /// the first event's start. Events that do not cross a boundary are
+    /// dropped; the written count is the number of emitted events.
+    pub fn normalize(&mut self) {
+        self.events.sort_unstable_by_key(|event| event.start);
+        let mut out = Vec::with_capacity(self.events.len());
+        let mut coverage: i32 = 0;
+        let mut at = 0usize;
+        while at < self.events.len() {
+            let start = self.events[at].start;
+            let mut sum = coverage.wrapping_add(self.events[at].delta);
+            at += 1;
+            while at < self.events.len() && self.events[at].start == start {
+                sum = sum.wrapping_add(self.events[at].delta);
+                at += 1;
+            }
+            let delta = if coverage > 0 {
+                (sum <= 0).then_some(-1)
+            } else {
+                (sum > 0).then_some(1)
+            };
+            if let Some(delta) = delta {
+                out.push(IntervalEvent { start, delta });
+            }
+            coverage = sum;
+        }
+        self.events = out;
+    }
+
+    /// `DynamicIndexRangeIsResident` (`0x142520c60`) on a normalized buffer.
+    ///
+    /// Walk events while `event.start <= start`, adding each delta to the
+    /// coverage. At the end of the buffer the client returns `flag ^ 1`.
+    /// Otherwise, with `resident` (the client's flag 1) it answers "the whole
+    /// request is inside resident coverage": coverage must be `> 0` and
+    /// `start + len <= next_event.start`. With `resident == false` (flag 0) it
+    /// answers the complementary case "the whole request is in an uncovered
+    /// gap": coverage must be `<= 0` and `start + len <= next_event.start`.
+    /// The end comparison is inclusive, and the start comparison consumes an
+    /// event whose start equals the request's start. The client's flag-mismatch
+    /// return is non-zero with a zero low byte; its callers test only the low
+    /// byte, so this returns the low-byte answer as a bool.
+    pub fn range_is_resident(&self, start: u64, len: u32, resident: bool) -> bool {
+        let end = start.wrapping_add(u64::from(len));
+        let mut coverage: i32 = 0;
+        let mut at = 0usize;
+        while at < self.events.len() {
+            if start < self.events[at].start {
+                break;
+            }
+            coverage = coverage.wrapping_add(self.events[at].delta);
+            at += 1;
+        }
+        if at == self.events.len() {
+            return !resident;
+        }
+        if coverage > 0 {
+            if !resident {
+                return false;
+            }
+        } else if resident {
+            return false;
+        }
+        end <= self.events[at].start
+    }
+}
+
+/// The client's chosen entry, the first 12 meaningful bytes of the 16-byte
+/// decode result copied to `out_entry`.
+///
+/// `DynamicIndexResolveRange` copies all 16 bytes, but the decoder only
+/// initializes the packed location (8) and the size (4); the trailing dword is
+/// never read back. [`ChosenEntry`] models the two fields that carry meaning.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChosenEntry {
+    /// Packed `archive << 30 | offset` location, as the five big-endian entry
+    /// or page-record bytes decode.
+    pub location: u64,
+    /// Stored size, including the 30-byte data header when present.
+    pub size: u32,
+}
+
+impl ChosenEntry {
+    pub fn to_location(self) -> Location {
+        Location::from_packed(self.location, self.size)
+    }
+}
+
+/// The key state built by one lookup: the chosen entry plus its interval
+/// buffer, in the client's decode order.
+///
+/// This is the stack context `DynamicIndexFindContextInit` (`0x142520520`)
+/// creates: found flag at `+0x10`, chosen entry at `+0x18`, interval buffer at
+/// `+0x128`, count at `+0x130`, capacity at `+0x134`.
+#[derive(Debug, Clone, Default)]
+pub struct KeyState {
+    found: bool,
+    chosen: ChosenEntry,
+    intervals: IntervalSet,
+}
+
+impl KeyState {
+    pub fn found(&self) -> bool {
+        self.found
+    }
+
+    pub fn chosen(&self) -> Option<ChosenEntry> {
+        self.found.then_some(self.chosen)
+    }
+
+    pub fn intervals(&self) -> &IntervalSet {
+        &self.intervals
+    }
+
+    /// Whether the absolute range is covered by the resident intervals.
+    /// [`IntervalSet::range_is_resident`] with the client's flag 1.
+    pub fn is_resident(&self, start: u64, len: u32) -> bool {
+        self.intervals.range_is_resident(start, len, true)
+    }
+
+    /// `DynamicIndexEntrySink` (`0x142520590`), one type byte at a time.
+    ///
+    /// - 1: found, chosen, clear the intervals, append the interval (resident);
+    /// - 2: found, chosen, clear the intervals;
+    /// - 3: clear found and the chosen entry, clear the intervals;
+    /// - 4: clear the intervals, append the *current* chosen entry (resident);
+    /// - 5: clear the intervals;
+    /// - 6: append the interval (resident);
+    /// - 7: append the interval (non-resident; normalizes immediately).
+    ///
+    /// Any other type is ignored. Type 4 does not set the found flag: a
+    /// type-4 record with no earlier chosen entry appends the zero entry and
+    /// leaves the state unfound, exactly as the client's sink does.
+    pub fn sink(&mut self, kind: u8, entry: ChosenEntry) {
+        match kind {
+            1 => {
+                self.found = true;
+                self.chosen = entry;
+                self.intervals.clear();
+                self.intervals.append(entry.location, entry.size, true);
+            }
+            2 => {
+                self.found = true;
+                self.chosen = entry;
+                self.intervals.clear();
+            }
+            3 => {
+                self.found = false;
+                self.chosen = ChosenEntry::default();
+                self.intervals.clear();
+            }
+            4 => {
+                self.intervals.clear();
+                self.intervals
+                    .append(self.chosen.location, self.chosen.size, true);
+            }
+            5 => self.intervals.clear(),
+            6 => self.intervals.append(entry.location, entry.size, true),
+            7 => self.intervals.append(entry.location, entry.size, false),
+            _ => {}
+        }
+    }
+
+    /// `DynamicIndexResolveRange`'s body (`0x1425115d0`) after the lookup.
+    ///
+    /// The bounds are against the chosen entry's stored size:
+    /// `start > size` is status 4; `len == 0xffffffff` becomes
+    /// `size - start`; and `start + len > size` is status 4. The output range
+    /// is the absolute `chosen.location + start` with the (possibly replaced)
+    /// length and is written before the resident check. A non-zero length is
+    /// then checked with [`KeyState::is_resident`]; a failure is status 3 and
+    /// leaves the entry unwritten. Success writes the chosen entry. A zero
+    /// length skips the resident check and succeeds.
+    pub fn resolve(&self, start: u64, len: u32) -> ResolveResult {
+        if !self.found {
+            return ResolveResult::NoEntry;
+        }
+        let size = u64::from(self.chosen.size);
+        if start > size {
+            return ResolveResult::PastEnd;
+        }
+        let len = if len == u32::MAX {
+            self.chosen.size.wrapping_sub(start as u32)
+        } else {
+            len
+        };
+        if start + u64::from(len) > size {
+            return ResolveResult::PastEnd;
+        }
+        let range = ResolvedRange {
+            start: self.chosen.location.wrapping_add(start),
+            len,
+        };
+        if len != 0 && !self.is_resident(range.start, range.len) {
+            return ResolveResult::NotResident { range };
+        }
+        ResolveResult::Found {
+            range,
+            entry: self.chosen,
+        }
+    }
+}
+
+/// The 8-byte location plus 4-byte length `DynamicIndexResolveRange` writes to
+/// its `out_range` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedRange {
+    /// Absolute packed `archive << 30 | offset`.
+    pub start: u64,
+    pub len: u32,
+}
+
+/// The client's resolve status word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveStatus {
+    /// 0: the range and entry were written.
+    Found,
+    /// 2: `DynamicIndexFindEntry` did not set the found flag.
+    NoEntry,
+    /// 3: the range is inside the entry but not inside resident coverage.
+    NotResident,
+    /// 4: the request runs past the chosen entry's stored size.
+    PastEnd,
+}
+
+impl ResolveStatus {
+    pub fn code(self) -> u8 {
+        match self {
+            ResolveStatus::Found => 0,
+            ResolveStatus::NoEntry => 2,
+            ResolveStatus::NotResident => 3,
+            ResolveStatus::PastEnd => 4,
+        }
+    }
+}
+
+/// What `DynamicIndexResolveRange` (`0x1425115d0`) returns.
+///
+/// The range is present for [`ResolveStatus::Found`] and
+/// [`ResolveStatus::NotResident`] because the client writes `out_range` before
+/// the resident check. The entry is present only on success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveResult {
+    Found {
+        range: ResolvedRange,
+        entry: ChosenEntry,
+    },
+    NoEntry,
+    NotResident {
+        range: ResolvedRange,
+    },
+    PastEnd,
+}
+
+impl ResolveResult {
+    pub fn status(self) -> ResolveStatus {
+        match self {
+            ResolveResult::Found { .. } => ResolveStatus::Found,
+            ResolveResult::NoEntry => ResolveStatus::NoEntry,
+            ResolveResult::NotResident { .. } => ResolveStatus::NotResident,
+            ResolveResult::PastEnd => ResolveStatus::PastEnd,
+        }
+    }
+
+    pub fn range(self) -> Option<ResolvedRange> {
+        match self {
+            ResolveResult::Found { range, .. } | ResolveResult::NotResident { range } => {
+                Some(range)
+            }
+            ResolveResult::NoEntry | ResolveResult::PastEnd => None,
+        }
+    }
+
+    pub fn entry(self) -> Option<ChosenEntry> {
+        match self {
+            ResolveResult::Found { entry, .. } => Some(entry),
+            _ => None,
+        }
+    }
+}
 
 /// The client's key→bucket fold (`DynamicKeyStateLookup`, `0x142501b40`).
 ///
@@ -1609,5 +2026,484 @@ mod tests {
         let entries = SegmentEntries::with_pages(Vec::new(), many_pages);
         assert_eq!(entries.find(&many).unwrap().offset, 0x200);
         assert_eq!(entries.pages().page_count(), 4);
+    }
+
+    fn packed(archive: u64, offset: u64) -> u64 {
+        (archive << ARCHIVE_SHIFT) | offset
+    }
+
+    fn events(set: &IntervalSet) -> Vec<(u64, i32)> {
+        set.events()
+            .iter()
+            .map(|event| (event.start, event.delta))
+            .collect()
+    }
+
+    /// `DynamicIndexAppendInterval`/`DynamicIndexNormalizeIntervals` on one
+    /// interval, two adjacent intervals, two overlapping intervals and a gap.
+    /// Adjacent and overlapping ranges collapse to one resident interval; a
+    /// gap keeps its two crossings.
+    #[test]
+    fn interval_normalize_merges_adjacent_and_overlapping_ranges() {
+        let mut one = IntervalSet::new();
+        one.append(100, 50, true);
+        one.normalize();
+        assert_eq!(events(&one), vec![(100, 1), (150, -1)]);
+        assert!(one.range_is_resident(100, 50, true));
+        assert!(!one.range_is_resident(100, 51, true));
+        assert!(!one.range_is_resident(99, 1, true));
+
+        let mut adjacent = IntervalSet::new();
+        adjacent.append(100, 50, true);
+        adjacent.append(150, 50, true);
+        adjacent.normalize();
+        assert_eq!(events(&adjacent), vec![(100, 1), (200, -1)]);
+        assert!(adjacent.range_is_resident(100, 100, true));
+
+        let mut overlapping = IntervalSet::new();
+        overlapping.append(100, 50, true);
+        overlapping.append(120, 80, true);
+        overlapping.normalize();
+        assert_eq!(events(&overlapping), vec![(100, 1), (200, -1)]);
+        assert!(overlapping.range_is_resident(100, 100, true));
+
+        let mut gap = IntervalSet::new();
+        gap.append(100, 50, true);
+        gap.append(200, 50, true);
+        gap.normalize();
+        assert_eq!(events(&gap), vec![(100, 1), (150, -1), (200, 1), (250, -1)]);
+        assert!(gap.range_is_resident(100, 50, true));
+        assert!(!gap.range_is_resident(150, 50, true));
+        assert!(gap.range_is_resident(150, 50, false));
+        assert!(gap.range_is_resident(160, 40, false));
+        assert!(!gap.range_is_resident(160, 41, false));
+        assert!(!gap.range_is_resident(160, 40, true));
+    }
+
+    /// Equal-start events are summed with 32-bit wrap before the crossing
+    /// decision. Two adjacent appends already exercise the grouping; the raw
+    /// constructor pins the wrap: `i32::MAX + 1` becomes `i32::MIN` and does
+    /// not emit a `+1`, while `i32::MAX` alone does.
+    #[test]
+    fn normalize_sums_equal_starts_with_i32_wrapping() {
+        let mut not_crossing = IntervalSet::from_events(vec![
+            IntervalEvent {
+                start: 0,
+                delta: i32::MAX,
+            },
+            IntervalEvent { start: 0, delta: 1 },
+        ]);
+        not_crossing.normalize();
+        assert!(not_crossing.is_empty());
+
+        let mut crossing = IntervalSet::from_events(vec![IntervalEvent {
+            start: 0,
+            delta: i32::MAX,
+        }]);
+        crossing.normalize();
+        assert_eq!(events(&crossing), vec![(0, 1)]);
+
+        let mut two_minima = IntervalSet::from_events(vec![
+            IntervalEvent {
+                start: 0,
+                delta: i32::MIN,
+            },
+            IntervalEvent {
+                start: 0,
+                delta: i32::MIN,
+            },
+        ]);
+        two_minima.normalize();
+        assert!(two_minima.is_empty());
+
+        // A descending run of raw events must sort first; the client's sort
+        // compares only the start word.
+        let mut unsorted = IntervalSet::from_events(vec![
+            IntervalEvent {
+                start: 300,
+                delta: -1,
+            },
+            IntervalEvent {
+                start: 100,
+                delta: 1,
+            },
+        ]);
+        unsorted.normalize();
+        assert_eq!(events(&unsorted), vec![(100, 1), (300, -1)]);
+    }
+
+    /// A type-7 non-resident interval uses the client's `-0x40000000` /
+    /// `+0x40000000` pair. Alone it normalizes to no events; inside a resident
+    /// interval it splits that interval in two.
+    #[test]
+    fn non_resident_deltas_cut_a_hole_in_resident_coverage() {
+        let mut alone = IntervalSet::new();
+        alone.append(100, 50, false);
+        assert!(
+            alone.is_empty(),
+            "a lone non-resident interval emits nothing"
+        );
+
+        let mut split = IntervalSet::new();
+        split.append(0, 10, true);
+        split.append(2, 3, false);
+        assert_eq!(events(&split), vec![(0, 1), (2, -1), (5, 1), (10, -1)]);
+        assert!(split.range_is_resident(0, 2, true));
+        assert!(!split.range_is_resident(2, 1, true));
+        assert!(split.range_is_resident(2, 1, false));
+        assert!(split.range_is_resident(5, 5, true));
+        assert!(!split.range_is_resident(9, 2, true));
+    }
+
+    /// `DynamicIndexRangeIsResident` (`0x142520c60`) consumes an event whose
+    /// start equals the request's start, compares the end inclusively, returns
+    /// `flag ^ 1` at the end of the buffer, and has the two flag branches.
+    #[test]
+    fn resident_check_uses_the_client_start_and_end_rules() {
+        let mut set = IntervalSet::new();
+        set.append(100, 50, true);
+        set.normalize();
+
+        // The start event is consumed: coverage is 1 at exactly 100.
+        assert!(set.range_is_resident(100, 0, true));
+        // The end comparison is inclusive: 149 + 1 == 150 is still covered.
+        assert!(set.range_is_resident(149, 1, true));
+        assert!(!set.range_is_resident(149, 2, true));
+        // Before the first event the request is wholly in a gap.
+        assert!(set.range_is_resident(0, 100, false));
+        assert!(!set.range_is_resident(0, 101, false));
+        assert!(!set.range_is_resident(0, 100, true));
+        // At or past the last event the buffer ends: flag 1 is false and
+        // flag 0 is true, without an end comparison.
+        assert!(!set.range_is_resident(150, 0, true));
+        assert!(set.range_is_resident(150, 0, false));
+        assert!(!set.range_is_resident(10_000, 0, true));
+        assert!(set.range_is_resident(10_000, 0, false));
+
+        // A coverage sum that wraps from i32::MAX to i32::MIN must be read as
+        // non-positive, exactly as the client's ADD does.
+        let wrapped = IntervalSet::from_events(vec![
+            IntervalEvent {
+                start: 0,
+                delta: i32::MAX,
+            },
+            IntervalEvent { start: 0, delta: 1 },
+            IntervalEvent {
+                start: 10,
+                delta: 0,
+            },
+        ]);
+        assert!(wrapped.range_is_resident(5, 0, false));
+        assert!(!wrapped.range_is_resident(5, 0, true));
+    }
+
+    fn single_entry(key: [u8; 9], location: u64, size: u32) -> SegmentEntries {
+        SegmentEntries::new(vec![(key, Location::from_packed(location, size))])
+    }
+
+    /// The resolve statuses and bounds, on a singleton entry: found, past the
+    /// end, no entry, the `0xffffffff` length, exact start and exact end.
+    #[test]
+    fn resolve_range_matches_the_client_statuses_and_bounds() {
+        let key = [0x71u8; 9];
+        let location = packed(1, 0x1000);
+        let entries = single_entry(key, location, 0x100);
+
+        assert_eq!(
+            entries.resolve_range(&key, 0x1e, 0x100 - 0x1e),
+            ResolveResult::Found {
+                range: ResolvedRange {
+                    start: location + 0x1e,
+                    len: 0xe2,
+                },
+                entry: ChosenEntry {
+                    location,
+                    size: 0x100,
+                },
+            }
+        );
+
+        // The whole stored record, including the data header, is covered by
+        // the singleton's type-1 interval.
+        assert_eq!(
+            entries.resolve_range(&key, 0, 0x100),
+            ResolveResult::Found {
+                range: ResolvedRange {
+                    start: location,
+                    len: 0x100,
+                },
+                entry: ChosenEntry {
+                    location,
+                    size: 0x100,
+                },
+            }
+        );
+
+        // Exact end, zero length, and `0xffffffff` all behave as the client.
+        assert!(matches!(
+            entries.resolve_range(&key, 0x100, 0),
+            ResolveResult::Found {
+                range: ResolvedRange { len: 0, .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            entries.resolve_range(&key, 0x100, u32::MAX),
+            ResolveResult::Found {
+                range: ResolvedRange { len: 0, .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            entries.resolve_range(&key, 0xff, u32::MAX),
+            ResolveResult::Found {
+                range: ResolvedRange {
+                    start: location + 0xff,
+                    len: 1,
+                },
+                entry: ChosenEntry {
+                    location,
+                    size: 0x100,
+                },
+            }
+        );
+        assert_eq!(
+            entries.resolve_range(&key, 0x101, 0),
+            ResolveResult::PastEnd
+        );
+        assert_eq!(
+            entries.resolve_range(&key, 0x100, 1),
+            ResolveResult::PastEnd
+        );
+        assert_eq!(
+            entries.resolve_range(&key, 0x101, u32::MAX),
+            ResolveResult::PastEnd
+        );
+        assert_eq!(
+            entries.resolve_range(&[0x72u8; 9], 0, 0),
+            ResolveResult::NoEntry
+        );
+        assert_eq!(entries.find(&[0x72u8; 9]), None);
+    }
+
+    /// A duplicate pair decodes as type 2 (chosen, no interval) then type 6
+    /// (interval). The chosen header entry covers nothing itself; the second
+    /// entry's interval is exactly the payload range `DynamicContainerRead`
+    /// asks for (`+0x1e`, `size - 0x1e`).
+    #[test]
+    fn duplicate_pair_chooses_the_header_and_covers_the_payload() {
+        let key = [0x73u8; 9];
+        let header = packed(1, 0x2000);
+        let entries = SegmentEntries::new(vec![
+            (key, Location::from_packed(header, 0x100)),
+            (key, Location::from_packed(header + 0x1e, 0xe2)),
+        ]);
+        let state = entries.key_state(&key);
+        assert_eq!(
+            state.chosen(),
+            Some(ChosenEntry {
+                location: header,
+                size: 0x100
+            })
+        );
+        assert_eq!(
+            events(state.intervals()),
+            vec![(header + 0x1e, 1), (header + 0x100, -1)]
+        );
+        assert_eq!(
+            entries.resolve_range(&key, 0x1e, 0xe2),
+            ResolveResult::Found {
+                range: ResolvedRange {
+                    start: header + 0x1e,
+                    len: 0xe2,
+                },
+                entry: ChosenEntry {
+                    location: header,
+                    size: 0x100,
+                },
+            }
+        );
+        // The 30-byte header itself is not in the interval set.
+        assert_eq!(
+            entries.resolve_range(&key, 0, 0x1e),
+            ResolveResult::NotResident {
+                range: ResolvedRange {
+                    start: header,
+                    len: 0x1e,
+                },
+            }
+        );
+    }
+
+    fn page_record(key: [u8; 9], location: u64, size: u32, kind: u8) -> PageRecord {
+        PageRecord {
+            stored_hash: 1,
+            key,
+            location: Location::from_packed(location, size),
+            kind,
+        }
+    }
+
+    /// Every page type through `DynamicIndexEntrySink` (`0x142520590`), with
+    /// the chosen entry and interval buffer checked after the final normalize.
+    #[test]
+    fn entry_sink_page_types_build_the_client_state() {
+        let key = [0x74u8; 9];
+        let sorted = packed(1, 0x3000);
+        let page1 = packed(1, 0x4000);
+        let page2 = packed(1, 0x5000);
+
+        // Type 1: chosen plus a resident interval.
+        let pages =
+            PageTable::from_records(1, vec![page_record(key, page1, 0x40, 1)], Some((0, 1)));
+        let entries = SegmentEntries::with_pages(Vec::new(), pages);
+        let state = entries.key_state(&key);
+        assert_eq!(state.chosen().unwrap().location, page1);
+        assert_eq!(
+            events(state.intervals()),
+            vec![(page1, 1), (page1 + 0x40, -1)]
+        );
+        assert!(state.is_resident(page1, 0x40));
+
+        // Type 2: chosen, no interval, so a non-empty request is not resident.
+        let pages =
+            PageTable::from_records(1, vec![page_record(key, page2, 0x40, 2)], Some((0, 1)));
+        let entries = SegmentEntries::with_pages(Vec::new(), pages);
+        let state = entries.key_state(&key);
+        assert_eq!(state.chosen().unwrap().location, page2);
+        assert!(state.intervals().is_empty());
+        assert_eq!(
+            entries.resolve_range(&key, 0, 1),
+            ResolveResult::NotResident {
+                range: ResolvedRange {
+                    start: page2,
+                    len: 1,
+                },
+            }
+        );
+        assert!(matches!(
+            entries.resolve_range(&key, 0, 0),
+            ResolveResult::Found { .. }
+        ));
+
+        // Type 3: the chosen entry is cleared and the type-1 interval is gone.
+        let pages = PageTable::from_records(
+            1,
+            vec![
+                page_record(key, page1, 0x40, 1),
+                page_record(key, page2, 0x40, 3),
+            ],
+            Some((0, 2)),
+        );
+        let entries =
+            SegmentEntries::with_pages(vec![(key, Location::from_packed(sorted, 0x80))], pages);
+        let state = entries.key_state(&key);
+        assert!(!state.found());
+        assert!(state.intervals().is_empty());
+        assert_eq!(entries.find(&key), None);
+        assert_eq!(entries.resolve_range(&key, 0, 0), ResolveResult::NoEntry);
+
+        // Type 4: clear the buffer and mark the current chosen entry resident;
+        // type 5 then clears the buffer again.
+        let pages = PageTable::from_records(
+            1,
+            vec![
+                page_record(key, page2, 0x40, 2),
+                page_record(key, page2, 0x40, 4),
+            ],
+            Some((0, 2)),
+        );
+        let entries = SegmentEntries::with_pages(Vec::new(), pages);
+        let state = entries.key_state(&key);
+        assert_eq!(state.chosen().unwrap().location, page2);
+        assert_eq!(
+            events(state.intervals()),
+            vec![(page2, 1), (page2 + 0x40, -1)]
+        );
+        assert!(state.is_resident(page2, 0x40));
+
+        let pages = PageTable::from_records(
+            1,
+            vec![
+                page_record(key, page1, 0x40, 1),
+                page_record(key, page2, 0x40, 5),
+            ],
+            Some((0, 2)),
+        );
+        let entries = SegmentEntries::with_pages(Vec::new(), pages);
+        let state = entries.key_state(&key);
+        assert_eq!(state.chosen().unwrap().location, page1);
+        assert!(state.intervals().is_empty());
+        assert_eq!(
+            entries.resolve_range(&key, 0, 1),
+            ResolveResult::NotResident {
+                range: ResolvedRange {
+                    start: page1,
+                    len: 1,
+                },
+            }
+        );
+
+        // A type 4 with no earlier chosen entry leaves the state unfound and
+        // appends the zero entry, whose two events cancel.
+        let pages =
+            PageTable::from_records(1, vec![page_record(key, page2, 0x40, 4)], Some((0, 1)));
+        let entries = SegmentEntries::with_pages(Vec::new(), pages);
+        let state = entries.key_state(&key);
+        assert!(!state.found());
+        assert!(state.intervals().is_empty());
+        assert_eq!(entries.resolve_range(&key, 0, 0), ResolveResult::NoEntry);
+
+        // Type 6 only adds an interval; it never sets the chosen entry.
+        let pages =
+            PageTable::from_records(1, vec![page_record(key, page2, 0x40, 6)], Some((0, 1)));
+        let entries = SegmentEntries::with_pages(Vec::new(), pages);
+        let state = entries.key_state(&key);
+        assert!(!state.found());
+        assert_eq!(
+            events(state.intervals()),
+            vec![(page2, 1), (page2 + 0x40, -1)]
+        );
+        assert_eq!(entries.resolve_range(&key, 0, 0), ResolveResult::NoEntry);
+    }
+
+    /// A type-7 page record removes a hole from the chosen entry's coverage.
+    /// The final normalize runs after the page records, as
+    /// `DynamicIndexDecodeEntries` does.
+    #[test]
+    fn type_7_page_record_splits_the_chosen_interval() {
+        let key = [0x75u8; 9];
+        let sorted = packed(1, 0x6000);
+        let hole = sorted + 0x40;
+        let pages = PageTable::from_records(1, vec![page_record(key, hole, 0x20, 7)], Some((0, 1)));
+        let entries =
+            SegmentEntries::with_pages(vec![(key, Location::from_packed(sorted, 0x100))], pages);
+        let state = entries.key_state(&key);
+        assert_eq!(state.chosen().unwrap().location, sorted);
+        assert_eq!(
+            events(state.intervals()),
+            vec![
+                (sorted, 1),
+                (hole, -1),
+                (hole + 0x20, 1),
+                (sorted + 0x100, -1)
+            ]
+        );
+        assert!(state.is_resident(sorted, 0x40));
+        assert!(!state.is_resident(hole, 1));
+        assert!(state.is_resident(hole + 0x20, 0x100 - 0x60));
+        assert_eq!(
+            entries.resolve_range(&key, 0x50, 1),
+            ResolveResult::NotResident {
+                range: ResolvedRange {
+                    start: hole + 0x10,
+                    len: 1,
+                },
+            }
+        );
+        assert!(matches!(
+            entries.resolve_range(&key, 0x70, 1),
+            ResolveResult::Found { .. }
+        ));
     }
 }

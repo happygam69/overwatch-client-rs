@@ -12,7 +12,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ow_casc::index::{bucket_of, parse_bucket_file, parse_segment_file_name, SegmentEntries};
+use ow_casc::index::{
+    bucket_of, parse_bucket_file, parse_segment_file_name, ChosenEntry, ResolveStatus,
+    ResolvedRange, SegmentEntries, DATA_HEADER_SIZE,
+};
 use ow_casc::{Install, Store};
 
 fn idx_files(dir: &Path) -> Vec<(u8, u32, PathBuf)> {
@@ -99,12 +102,57 @@ fn find_range_and_duplicate_choice_match_the_install() {
             if bucket_of(&key, 0) == bucket {
                 real_keys += end - at;
                 assert_eq!(resolved, Some(first), "salt-0 key {key:02x?}");
+
+                // `DynamicContainerRead` asks for `(0x1e, size - 0x1e)`; the
+                // client's absolute answer is `packed + 0x1e`, the payload.
+                let payload_len = first
+                    .size
+                    .checked_sub(DATA_HEADER_SIZE)
+                    .expect("every real record carries the 30-byte data header");
+                let result = store
+                    .resolve_range(&key, u64::from(DATA_HEADER_SIZE), payload_len)
+                    .expect("the salt-0 bucket has a segment");
+                assert_eq!(
+                    result.status(),
+                    ResolveStatus::Found,
+                    "salt-0 payload range {key:02x?}"
+                );
+                assert_eq!(
+                    result.range(),
+                    Some(ResolvedRange {
+                        start: first.packed() + u64::from(DATA_HEADER_SIZE),
+                        len: payload_len,
+                    }),
+                    "absolute payload range {key:02x?}"
+                );
+                assert_eq!(
+                    result.entry(),
+                    Some(ChosenEntry {
+                        location: first.packed(),
+                        size: first.size,
+                    }),
+                    "out_entry {key:02x?}"
+                );
             } else {
                 // The 1,488 archive placeholders were written with salt 1;
                 // the read lookup uses salt 0 and does not find them.
                 placeholders += end - at;
                 assert!(bucket_of(&key, 1) == bucket, "placeholder salt 1");
                 assert_eq!(resolved, None, "salt-1 placeholder must not resolve");
+                let result = store
+                    .resolve_range(&key, u64::from(DATA_HEADER_SIZE), 0)
+                    .expect("the salt-0 bucket has a segment");
+                assert_eq!(
+                    result.status(),
+                    ResolveStatus::NoEntry,
+                    "salt-1 placeholder resolve {key:02x?}"
+                );
+                assert_eq!(result.range(), None);
+                assert_eq!(result.entry(), None);
+                assert!(matches!(
+                    store.read_stored(&key),
+                    Err(ow_casc::container::Error::KeyNotFound(_))
+                ));
             }
 
             if end - at > 1 {
@@ -116,6 +164,29 @@ fn find_range_and_duplicate_choice_match_the_install() {
                 assert_eq!(first.offset + 30, second.offset, "payload offset");
                 assert_eq!(first.size, second.size + 30, "payload size");
                 assert_eq!(resolved, Some(first), "first duplicate wins");
+
+                // The header entry is type 2 (chosen, no interval); the second
+                // equal entry is type 6 and contributes the payload interval
+                // `[second, second + size - 30)`, which is exactly the request.
+                let payload_len = first
+                    .size
+                    .checked_sub(DATA_HEADER_SIZE)
+                    .expect("duplicate records carry the data header");
+                let result = store
+                    .resolve_range(&key, u64::from(DATA_HEADER_SIZE), payload_len)
+                    .expect("the salt-0 bucket has a segment");
+                assert_eq!(result.status(), ResolveStatus::Found);
+                let range = result.range().expect("a found resolve writes the range");
+                assert_eq!(
+                    range.start,
+                    second.packed(),
+                    "the second entry's interval starts the payload"
+                );
+                assert_eq!(
+                    range.start + u64::from(range.len),
+                    first.packed() + u64::from(first.size),
+                    "the payload ends at the header entry's end"
+                );
                 let stored = store.read_stored(&key).expect("duplicate record is local");
                 assert_eq!(stored.len(), first.size as usize);
                 let blte_at = if stored.starts_with(b"BLTE") {
