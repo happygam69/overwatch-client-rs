@@ -334,17 +334,25 @@ the `E` keys (six distinct ids in the 32nd-key sample), so their inner modes
 are not measurable and an inner `4` cannot be ruled out. The committed test
 samples every 32nd key and decodes 34 records.
 
-The remaining open parts are the page-table writer/insert path,
-`DynamicIndexSegmentParse`'s asynchronous load (`0x14250fcf0`),
+The page-table writer (`DynamicIndexPageInsert`, `0x142511d20`) is now read
+operation for operation: first zero hash, the 24-byte record fields, the
+payload-then-hash order with a full fence, the type/range status machine
+(0/1/2/4/`0xa`/`0xc`/`0xf`), the eight-page flush at record 20 with
+`page & 7 == 7`, and the one-retry segment creation in `DynamicIndexKeyInsert`
+(`0x1425032d0`). It is documented, not implemented: all five type-3 call sites
+pass a null range (for example `FUN_142500430` at `0x142500541`), so the
+record's location and size come from uninitialised stack slots, and the writer
+is allocator/I/O state that the read path never calls. The remaining open
+parts are `DynamicIndexSegmentParse`'s asynchronous load (`0x14250fcf0`),
 `DynamicContainerRead`'s page cache (`0x1424f48d0`), `EncodingSectionsRead`
 (`0x1424d1c60`) and the CDN index-page formula. Type `0x10` is absent and no
 outer `4` block was observed; the `E` inner modes are unreadable, so LZ4's
 proof is synthetic only.
 
-**What would settle it.** Read the page-table writer (`DynamicIndexPageInsert`)
-operation for operation and prove its insert range with a synthetic table.
-Then read the asynchronous segment load and the encoding page walk, and add a
-differential unit where the function is pure.
+**What would settle it.** Read the asynchronous segment load and the encoding
+page walk, and add a differential unit where the function is pure. The writer
+needs no further read: its remaining question is whether a bit-exact vector can
+exist for the type-3 null-range call, and it cannot exist.
 
 **Next anchor.** `docs/casc-1to1.md`, `formats/casc.md`,
 `crates/ow-casc/src/index.rs`, `crates/ow-casc/src/container.rs`,

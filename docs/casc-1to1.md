@@ -68,7 +68,8 @@ earned. The rest of the container is not.
 
 | area | client address | state |
 |---|---|---|
-| `DynamicIndexSegmentParse` | `0x14250fcf0` | header/section/entry/page-table layout parsed by `ow-casc`; the asynchronous segment load and the page-table **writer** remain open |
+| `DynamicIndexSegmentParse` | `0x14250fcf0` | header/section/entry/page-table layout parsed by `ow-casc`; the asynchronous segment load remains open. The page-table writer is read and documented but not implemented |
+| page-table writer | `0x142511d20`, `0x142511c90`, `0x142520cc0`, `0x1426a8ce0` | read operation for operation: 24-byte record at `page * 0x200 + record * 0x18`, first zero hash, payload-then-hash with a full fence, the type/range status machine (0/1/2/4/`0xa`/`0xc`/`0xf`), the eight-page flush at record 20 with `page & 7 == 7`, and the one-retry segment creation above it. **Not implemented:** all five type-3 call sites pass a null range and write location/size from uninitialised stack slots, the writer is allocator and I/O state, and the read path never calls it; all 2,560 install pages are zero, so the positive path is synthetic-only |
 | `DynamicContainerRead` | `0x1424f48d0` | the `(offset + 0x1e, len)` key-state request and payload resolve are implemented in `Store::read_stored`; no page cache or page-reader path |
 | `EncodingSectionsRead` | `0x1424d1c60` | page reader is format-derived; no client function and no real-file test |
 | CDN index-page reader | none | reference/measured; no client handler read |
@@ -105,17 +106,23 @@ earned. The rest of the container is not.
   has six: `DynamicIndexSegmentParse` validates every page record; the page
   writer (`DynamicIndexPageInsert`) stores the same hash; four other index
   families call it too. The page-table read path is now implemented.
+- The page-table writer was listed as the first open read item. It is now read
+  operation for operation and documented in section D. It stays unimplemented
+  for two reasons: all five type-3 call sites pass a null range and write
+  location/size from uninitialised stack slots, and the writer is allocator and
+  I/O state that the read path never calls. "Read" is not "implemented", and
+  the row says so.
 
 ## Next order
 
-1. The page-table writer (`DynamicIndexPageInsert`, `0x142511d20`): the read
-   path, the sink types, the interval merge and the resident-range check are in
-   place and tested, but the insert range is not.
-2. `DynamicIndexSegmentParse` (`0x14250fcf0`) asynchronous load beyond the
+The page-table writer is no longer a read item; section D records it with the
+reason it stays unimplemented. The remaining read order is:
+
+1. `DynamicIndexSegmentParse` (`0x14250fcf0`) asynchronous load beyond the
    already-parsed header/entry/page-table layout.
-3. `EncodingSectionsRead` (`0x1424d1c60`) and a real encoding page walk.
-4. `DynamicContainerRead`'s page cache (`0x1424f48d0`/`0x1424fcd20`).
-5. The CDN index-page formula from the client's handler.
+2. `EncodingSectionsRead` (`0x1424d1c60`) and a real encoding page walk.
+3. `DynamicContainerRead`'s page cache (`0x1424f48d0`/`0x1424fcd20`).
+4. The CDN index-page formula from the client's handler.
 
 ## Closing a row
 

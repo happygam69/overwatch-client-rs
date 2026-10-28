@@ -92,10 +92,13 @@ claim. `ow-sim` is parked reference code.
   are deleted.
 - **Materials:** the viewer is not the client's renderer; 55 placeholder draws
   remain diagnostics, not a finished material path.
-- **Remaining CASC units:** `DynamicIndexSegmentParse` asynchronous load, the
-  page-table writer/insert path (`DynamicIndexPageInsert`),
+- **Remaining CASC units:** `DynamicIndexSegmentParse` asynchronous load,
   `DynamicContainerRead` (page cache), `EncodingSectionsRead`, and the CDN
-  index-page formula. The BLTE frame header and `N`/`Z`/`E`/`4` blocks are read
+  index-page formula. The page-table writer (`DynamicIndexPageInsert`,
+  `0x142511d20`) is read and documented but not implemented: the type-3
+  callers pass a null range and write location/size from uninitialised stack
+  slots, the writer is allocator/I/O state, and the read path never calls it.
+  The BLTE frame header and `N`/`Z`/`E`/`4` blocks are read
   and install-tested; type `0x10` is absent and no outer `4` block was
   observed, so `4` is synthetic-only here (E inner modes are unreadable), and
   `A`/`F` are not block modes. The bucket

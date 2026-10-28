@@ -39,10 +39,13 @@ branch sites and their scored mutants killed. The oracle found and fixed two
 real index-hash defects: the zero-length return and the trailing whole
 twelve-byte group.
 
-Still open: `DynamicIndexSegmentParse` (`0x14250fcf0`), the page-table writer
-`DynamicIndexPageInsert` (`0x142511d20`), `DynamicContainerRead`'s page cache
-(`0x1424f48d0`) and `EncodingSectionsRead` (`0x1424d1c60`). `BlteFrameHeaderParse`
-(`0x1424a90e0`) and `BlteBlockRead` (`0x1424d61b0`) are read and tested.
+Still open: `DynamicIndexSegmentParse` (`0x14250fcf0`),
+`DynamicContainerRead`'s page cache (`0x1424f48d0`) and `EncodingSectionsRead`
+(`0x1424d1c60`). `BlteFrameHeaderParse` (`0x1424a90e0`) and `BlteBlockRead`
+(`0x1424d61b0`) are read and tested. The page-table writer
+`DynamicIndexPageInsert` (`0x142511d20`) is read and documented but not
+implemented: no read-path caller exists, and its type-3 calls pass a null
+range and write location/size from uninitialised stack slots.
 
 ## Stage 2 - the build-154504 manifest
 

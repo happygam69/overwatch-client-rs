@@ -231,6 +231,8 @@ Overwatch.exe,0x142520700,0x142520700,DynamicIndexAppendInterval,Adds an entry r
 Overwatch.exe,0x1425208d0,0x1425208d0,DynamicIndexNormalizeIntervals,Merges adjacent intervals and writes the key state's interval count
 Overwatch.exe,0x1425209a0,0x1425209a0,DynamicIndexDecodeEntries,"Decodes entry payloads: 5-byte big-endian location, 4-byte little-endian size"
 Overwatch.exe,0x142520c60,0x142520c60,DynamicIndexRangeIsResident,Tests whether a requested range lies inside one resident interval
+Overwatch.exe,0x142520cc0,0x142520cc0,DynamicIndexInsertRangeCheck,"Validates a page-table insert against the chosen entry and reports whether the requested residency state already holds"
+Overwatch.exe,0x1426a8ce0,0x1426a8ce0,IndexViewFlush,Flushes a 4 KiB span of a mapped index view with an optional file-handle flush fallback
 Overwatch.exe,0x142cbcee0,0x142cbcee0,RunCharacterControllerSweep,Runs the character controller collision sweep for the desired position
 Overwatch.exe,0x142cbd1b0,0x142cbd1b0,SetCharacterControllerVelocity,Forwards a 4-float velocity to the character controller
 Overwatch.exe,0x142cbdc60,0x142cbdc60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0)

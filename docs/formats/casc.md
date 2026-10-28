@@ -282,13 +282,10 @@ and the decode order. The type byte is passed to `DynamicIndexEntrySink`
 (`0x142520590`); `ow-casc` models every type (see "Key-state intervals and
 resolve" below): 1 and 2 replace the chosen entry, 3 clears it, 4 appends the
 current chosen entry as a resident interval, 5 clears the intervals, and 6/7
-append the record's interval resident/non-resident. The writer is
-`DynamicIndexPageInsert`
-(`0x142511d20`): it asks `DynamicIndexFindEntry` for the first empty slot,
-writes the key/location/size and the caller's type byte there, and stores
-`DynamicIndexKeyHash(payload, 0x13, 0) | 0x80000000`. The write wrapper at
-`0x1425033e0` passes type 6 or 7; the read path never supplies a page type on
-this install because every page table is empty.
+append the record's interval resident/non-resident. The page-table writer is
+`DynamicIndexPageInsert` (`0x142511d20`); see "Page-table writer" below. The
+write wrapper at `0x1425033e0` passes type 6 or 7, and the read path never
+supplies a page type on this install because every page table is empty.
 
 On this install every page table is dormant: 2,560 pages, 53,760 record slots,
 **0** non-zero stored hashes, and the first zero is page 0 record 0 in every
@@ -297,6 +294,94 @@ is non-zero (144-176 pages per file; 152 for `0300000159.idx`) and stops at the
 first record, so no key resolves through the page table here. The synthetic
 tests build non-zero tables and exercise first/middle/last records, type
 1/2/3/6, a zero sentinel and page counts one and many.
+
+### Page-table writer
+
+`DynamicIndexPageInsert` (`0x142511d20`) is the only writer for this table; the
+wrapper at `0x142511c90` forwards its five arguments, returns the insert's
+status, and then calls `FUN_142520f50` (`0x142520f50`) with zero and the
+context's word at `+8`; that call is a no-op because the logger acts only on 1
+or 2. The arguments are the find context, the 9-byte key, the record type, an
+optional range `{u64 start, u32 len}` and an optional 16-byte out-entry. With a
+type other than 3 the range is required; a null range with any other type
+returns `0xa` before any state is touched. The function runs the same
+`DynamicIndexFindEntry` walk as the read path into a fresh find context, and
+the record index it returns is the first zero stored hash in page/record order,
+or 21 when no slot is free. There is no free list and no per-page header, so
+records fill the table sequentially.
+
+If the table is full (record index 21, the find function's `0x15` sentinel),
+the writer frees the find context and returns `0xf`; the out-entry is not
+written. Otherwise it copies the chosen entry's 16 bytes to the out-entry
+first, before the range check and even when the insert later fails. A null
+out-entry is allowed. The chosen entry is the one the read path would use: the
+entry-block copy for a key with equal entries, or the page record when no
+entry-block copy exists.
+
+A record sits at `page * 0x200 + record * 0x18`. Its fields are the stored
+hash (u32, little endian), the 9-byte key, the 5-byte big-endian absolute
+location, the 4-byte little-endian size, the type byte and one pad byte. The
+absolute location is `chosen.location + range.start` and the size is
+`range.len` truncated to 32 bits. The writer stores the payload first, hashes
+exactly those 19 bytes with `DynamicIndexKeyHash(record + 4, 0x13, 0)`, sets
+bit 31, executes a full fence and stores the hash last; the pad byte at
+`record + 23` is neither written nor hashed. The fence orders the payload
+before the hash that publishes it.
+
+`FUN_142520cc0` (`0x142520cc0`) is the insert gate and is called with the find
+context, the type, the absolute range and a one-byte no-write flag that starts
+clear. It applies the read path's chosen-entry and interval state but answers
+with a status instead of appending intervals: type 1/2 returns `0xc` when the
+key is already chosen; type 3 returns 2 when it is not chosen; types 6/7 return
+2 when it is not chosen, 4 when the absolute range leaves the chosen entry, and
+set the no-write flag when the range is already fully resident (6) or fully
+non-resident (7). Any other type returns 1. A non-zero status is returned
+unchanged; a set no-write flag returns 0 without a record.
+
+The status word is therefore: 0 written, or already in the requested state;
+1 unknown type; 2 no chosen entry for type 3/6/7; 4 range outside the chosen
+entry; `0xa` invalid arguments; `0xc` a type-1/2 key that is already present;
+`0xf` table full. Every insert appends; there is no in-place update, so an
+older record with the same key stays where it is, page-record order is append
+order, and an equal entry-block range still wins the read path's choice.
+
+After a successful write, a record index of 20 (the last slot of a page) with
+`page & 7 == 7` flushes the preceding eight pages. The call is
+`FUN_1426a8ce0` (`0x1426a8ce0`) with the mapped-view record at context
+`+0x18`, a zero flag, the byte offset
+`table_base + (page - 7) * 0x200 - segment_base` (context words `+0x68` and
+`+0x48`) and length `0x1000`. The callee rejects a null view, a view shorter
+than the length, or an offset past `size - length` with `0x57`
+(`ERROR_INVALID_PARAMETER`); otherwise it flushes the 4 KiB span through one
+indirect slot; when that succeeds and the caller's flag is zero it also flushes
+the view's file handle through a second indirect slot, and a zero return from
+either slot is reported as an error. It returns 0 on success or a non-zero
+error code, and the writer formats a non-zero result with `FUN_142511f10`
+(`0x142511f10`), which writes the message into a stack buffer and discards it.
+The two import names are not readable in this image because the on-disk name
+table is zeroed; the call shapes identify a mapped-view flush and a file-handle
+flush, not their exact APIs.
+
+`DynamicIndexKeyInsert` (`0x1425032d0`) is the layer above. It calls the
+wrapper at `0x142511c90`; on `0xf` it asks `FUN_14250dc30` (`0x14250dc30`) to
+create the bucket's next segment, stores the new segment number at
+`(manager[0x68] + 0x110 + bucket * 4)` and retries the insert once. If the
+retry still fails and the result is not the type-3 `2`, `FUN_14250d170`
+(`0x14250d170`) passes the key to the error formatter at `0x14269acd0`, which
+writes into a 24-byte local that is not used again. Twelve functions call this
+layer, fourteen call sites in all; the read path never calls it.
+
+`ow-casc` does not implement the writer, for two reasons that a test cannot
+remove. The writer is allocator and I/O state rather than a pure function: its
+inputs are the client's find context and its page-table/mapped-view state, and
+its observable effects are the record, the out-entry and the flush. More
+decisively, all five type-3 call sites pass a null range (for example
+`FUN_142500430` at `0x142500541`), so the location and size written into those
+records come from uninitialised stack slots. The type-3 sink ignores both, so
+the calls are functionally deletes, but the record bytes are not a function of
+the arguments and no bit-exact golden vector can exist. The install has no
+positive page record either: all 2,560 pages are zero, so the positive write
+path is synthetic-only. The writer is read and documented, not ported.
 
 ### Key-state intervals and resolve
 
@@ -568,8 +653,10 @@ any one of them is not verified.
   `DynamicIndexSegmentParse` is now mirrored by `PageTable::parse`, and the
   synthetic page-table fixtures validate the hash; the function's contract is
   verified from the client's bytes. The page-table read path and the key-state
-  interval/resolve path are implemented; the page-table write path
-  (`DynamicIndexPageInsert`) remains open.
+  interval/resolve path are implemented. The page-table write path
+  (`DynamicIndexPageInsert`) is read and documented in "Page-table writer"
+  above but not implemented: no read-path caller exists, and the type-3 calls
+  write location and size from uninitialised stack slots.
 
 `EncodingHeaderParse`:
 

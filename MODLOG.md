@@ -4,6 +4,24 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-28 - CASC page-table writer read: record layout, status machine, flush
+
+- `DynamicIndexPageInsert` (`0x142511d20`) is read operation for operation:
+  the first zero stored hash, the 24-byte record at
+  `page * 0x200 + record * 0x18`, the 19-byte payload hashed with
+  `DynamicIndexKeyHash(payload, 0x13, 0) | 0x80000000` after a full fence, and
+  the status machine 0/1/2/4/`0xa`/`0xc`/`0xf` in `FUN_142520cc0`
+  (`0x142520cc0`). A record index of 20 with `page & 7 == 7` flushes the
+  preceding eight pages through `FUN_1426a8ce0` (`0x1426a8ce0`).
+- `DynamicIndexKeyInsert` (`0x1425032d0`) creates the bucket's next segment on
+  `0xf` and retries once; twelve callers, fourteen call sites, and no
+  read-path caller.
+- Not implemented, and the docs say why: the writer is allocator and I/O
+  state, and all five type-3 call sites pass a null range (for example
+  `FUN_142500430` at `0x142500541`), so those records' location and size are
+  uninitialised stack bytes. The writer leaves the CASC open list;
+  asynchronous segment load is now first.
+
 ## 2026-10-28 - CASC BLTE frame header and block reader
 
 - `BlteFrameHeaderParse` (`0x1424a90e0`) is implemented operation for
