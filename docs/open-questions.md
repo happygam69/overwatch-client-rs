@@ -318,19 +318,33 @@ every file, so the positive page path is synthetic-only here. The entry sink's
 seven types, the interval merge (`0x142520700`, `0x1425208d0`), the resident
 check (`0x142520c60`) and `DynamicIndexResolveRange` (`0x1425115d0`) are now
 read and implemented; every salt-0 key's `(0x1e, size - 0x1e)` request resolves
-to its payload and the 1,488 salt-1 placeholders return status 2. The remaining
-open parts are the page-table writer/insert path,
+to its payload and the 1,488 salt-1 placeholders return status 2.
+
+The BLTE path is now read too. `BlteFrameHeaderParse` (`0x1424a90e0`) accepts
+type `0x0F`/`0x10`, requires `header_size == 12 + record_size*count`, hashes
+exactly the header and compares the caller's digest only when the check flag is
+set; the read path passes it clear. `BlteBlockRead` (`0x1424d61b0`) accepts an
+`E` IV of 0..8 and dispatches `N`/`Z`/`4`; `BlteBlockReadLz4`
+(`0x1424d6e50`) is the stateless LZ4 path. `F`/`O` are status 5 at the
+top-level reader `FUN_1424eb510` and `A` is not a block mode. A one-off scan of
+all 1,146,326 unique salt-0 keys found 1,146,325 type-`0x0F` containers, one
+non-BLTE orphan, 1,714,597 chunks (`N` 284,878, `Z` 1,386,658, `E` 43,061),
+and no `0x10`, direct container or outer `4` block; the 63-key keyring lacks
+the `E` keys (six distinct ids in the 32nd-key sample), so their inner modes
+are not measurable and an inner `4` cannot be ruled out. The committed test
+samples every 32nd key and decodes 34 records.
+
+The remaining open parts are the page-table writer/insert path,
 `DynamicIndexSegmentParse`'s asynchronous load (`0x14250fcf0`),
-`BlteFrameHeaderParse` (`0x1424a90e0`), `BlteBlockRead` (`0x1424d61b0`),
-`BlteBlockReadLz4` (`0x1424d6e50`), `DynamicContainerRead`
-(`0x1424f48d0`; no page cache) and `EncodingSectionsRead` (`0x1424d1c60`).
-The shipped decoder accepts only BLTE type `0x0F`, does not check
-`12 + 24*count`, skips the frame/chunk MD5s, and has no LZ4/ARC4/frame modes.
+`DynamicContainerRead`'s page cache (`0x1424f48d0`), `EncodingSectionsRead`
+(`0x1424d1c60`) and the CDN index-page formula. Type `0x10` is absent and no
+outer `4` block was observed; the `E` inner modes are unreadable, so LZ4's
+proof is synthetic only.
 
 **What would settle it.** Read the page-table writer (`DynamicIndexPageInsert`)
 operation for operation and prove its insert range with a synthetic table.
-After that, read the remaining BLTE and encoding functions operation for
-operation and add a differential unit where the function is pure.
+Then read the asynchronous segment load and the encoding page walk, and add a
+differential unit where the function is pure.
 
 **Next anchor.** `docs/casc-1to1.md`, `formats/casc.md`,
 `crates/ow-casc/src/index.rs`, `crates/ow-casc/src/container.rs`,

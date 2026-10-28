@@ -49,7 +49,7 @@ earned. The rest of the container is not.
 | page table layout, hash and lookup | `0x14250fcf0`, `0x1425111a0`, `0x1425209a0`, `0x142513230` | parsed at the client's offset with 21 records per 0x200 page; a record is a u32 hash + key9 + location5 + size4 + type1; the stored hash is `DynamicIndexKeyHash(payload, 0x13, 0)` OR `0x80000000`; the client scans pages and records linearly and stops at the first zero hash. Synthetic non-zero tables cover first/middle/last, type 1/2/3/6, a zero sentinel, a same-key collision and page counts one/many; all 2,560 install pages have zero hashes, so the branch is dormant there |
 | bucket index header/entries | `0x14250fcf0` | header/section/entry/page-table layout and both widths; synthetic tests plus real hash/page counts |
 | encoding header/real values | `0x142498920` | header verified; installed 16/16 keys, 4 KiB pages, 16025 + 10519 pages and the 1,484,507-byte espec block are pinned |
-| BLTE N/Z/E blocks | `0x1424e3230`, `0x1424e32c0` | Salsa20 verified; the N/Z/E container walk is synthetic and self-consistent, not client-compared |
+| BLTE frame header and N/Z/E/4 blocks | `0x1424a90e0`, `0x1424d61b0`, `0x1424d6e50` | the client's parse order, `0x0F`/`0x10` records, `12 + record_size*count`, the optional header-MD5 check, the chunk table, the `E` header and Salsa20, and the `N`/`Z`/`4` dispatch are implemented. Synthetic tests cover every reject, both frame types, LZ4, encrypted LZ4 and multi-chunk walking. A one-off full install scan found 1,146,326 unique salt-0 keys: 1,146,325 type-`0x0F` containers, one known non-BLTE orphan, 1,714,597 chunks split `N`/`Z`/`E` = 284,878/1,386,658/43,061, and no `0x10`, direct container or outer `4` block. The install's 63-key keyring lacks the `E` keys (six distinct ids in the 32nd-key sample), so their inner modes are unreadable and an inner `4` cannot be ruled out. The committed test samples every 32nd key and decodes 34 records. Salsa20 itself is harness-verified; the container walk is not |
 | `.cmf` header/record/flags | `0x141fda1f0`, `0x141feff80`, `0x141fef610`, `0x141fd4a50` | the flag chain and the store/bundle branch open 305/305 map headers |
 | bundle entry lookup | `0x141fd5820` (ow-tank) | `fn/BundleLookup`: verified, 100%, 12/12 |
 | bundle directory lookup | `0x141fd5160` (ow-tank) | `fn/BundleDirectoryLookup`: verified, 93.3% with the loaded-bundle false edge as a named gap |
@@ -69,19 +69,16 @@ earned. The rest of the container is not.
 | area | client address | state |
 |---|---|---|
 | `DynamicIndexSegmentParse` | `0x14250fcf0` | header/section/entry/page-table layout parsed by `ow-casc`; the asynchronous segment load and the page-table **writer** remain open |
-| `BlteFrameHeaderParse` | `0x1424a90e0` | accepts only type `0x0F`; does not check `12 + 24*count`; skips the frame and chunk MD5s |
-| `BlteBlockRead` | `0x1424d61b0` | N/Z/E only; no LZ4 (`4`, `BlteBlockReadLz4` `0x1424d6e50`), no ARC4 `A`, no frame `F`, no type `0x10` |
 | `DynamicContainerRead` | `0x1424f48d0` | the `(offset + 0x1e, len)` key-state request and payload resolve are implemented in `Store::read_stored`; no page cache or page-reader path |
 | `EncodingSectionsRead` | `0x1424d1c60` | page reader is format-derived; no client function and no real-file test |
 | CDN index-page reader | none | reference/measured; no client handler read |
-| content key = MD5(decoded) | none | measured 300/300; no MD5 code and no test in the tree |
-| LZ4 / ARC4 / frame modes | `0x1424d6e50` etc. | not implemented; no asset on this install exercises them |
+| content key = MD5(decoded) | none | measured 300/300; `blte` now has MD5 for the frame header, but the content-key relation has no code or test |
 
 ## E. What the docs got wrong (corrected in this pass)
 
-- `docs/formats/casc.md` said LZ4 mode `4` was **implemented**. The code
-  rejects every mode except `N`/`Z`/`E`, and there is no LZ4 dependency. It is
-  now marked not implemented.
+- `docs/formats/casc.md` once said LZ4 mode `4` was implemented when it was
+  not. The client's `BlteBlockReadLz4` (`0x1424d6e50`) is now implemented and
+  synthetic-tested; no asset on this install uses it.
 - `docs/formats/casc.md` called `CmfKey154504`/`CmfIv154504` a "Harness proof"
   although their coverage gate is `0`; they are differential + mutation only.
 - `docs/formats/casc.md` and `manifest.rs` called the 154088/150851
@@ -114,13 +111,11 @@ earned. The rest of the container is not.
 1. The page-table writer (`DynamicIndexPageInsert`, `0x142511d20`): the read
    path, the sink types, the interval merge and the resident-range check are in
    place and tested, but the insert range is not.
-2. `BlteFrameHeaderParse` (`0x1424a90e0`) and `BlteBlockRead`
-   (`0x1424d61b0`): type `0x10`, size equality and the MD5s; then the missing
-   modes.
-3. `DynamicIndexSegmentParse` (`0x14250fcf0`) asynchronous load beyond the
+2. `DynamicIndexSegmentParse` (`0x14250fcf0`) asynchronous load beyond the
    already-parsed header/entry/page-table layout.
-4. `EncodingSectionsRead` (`0x1424d1c60`) and a real encoding page walk.
-5. The CDN index-page formula from the client's handler, then LZ4.
+3. `EncodingSectionsRead` (`0x1424d1c60`) and a real encoding page walk.
+4. `DynamicContainerRead`'s page cache (`0x1424f48d0`/`0x1424fcd20`).
+5. The CDN index-page formula from the client's handler.
 
 ## Closing a row
 

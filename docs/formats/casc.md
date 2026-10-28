@@ -383,31 +383,77 @@ check that a wrong section order fails.
 
 ## BLTE
 
-`BlteFrameHeaderParse` (`0x1424a90e0`) expects `12 + 24*count` bytes, accepts
-frame type `0x0F` or `0x10`, and validates the frame header's MD5; chunk 0
-starts at that size and no hash sits between the table and the chunk.
-`BlteBlockRead` (`0x1424d61b0`) accepts an `E` IV of 0..8 bytes, not only 4/8.
-The shipped `decode` currently accepts only type `0x0F`, does not check the
-declared frame size against `12 + 24*count`, and skips both MD5 fields; those
-are open gaps in `ow-casc`, not claims about the client.
+`BlteFrameHeaderParse` (`0x1424a90e0`) is implemented operation for operation.
+It first requires at least `0x24` bytes, then checks the `BLTE` magic, a
+non-zero big-endian header size at `+4`, a frame type at `+8` of `0x0F`
+(24-byte records) or `0x10` (40-byte records), and a non-zero big-endian `u24`
+count at `+9`. The header size must equal `12 + record_size*count` and the
+buffer must contain that many bytes. It computes MD5 over exactly
+`header_size` bytes; the caller's optional digest is compared only when the
+check flag is non-zero. Status 7 means need-more (`0x24` or the declared
+size); status 8 means invalid. `BlteFrameHeaderOpen` (`0x1424a9590`) and
+`BlteFrameHeaderOpenEx` (`0x1424a9670`) are the wrappers.
+
+Each record is `stored u32 BE`, `decoded u32 BE`, `md5[16]`; type `0x10` adds
+`extra[16]`, held in the client's parallel array. The read path parses with
+the check flag clear and never compares the per-chunk MD5s. The only read-path
+use of the type-`0x10` extras is an existence check in `FUN_1424a9a20` when it
+computes the on-disk size; no consumer of their contents was found. Chunk 0
+starts at `header_size`; no hash sits between the table and the first chunk.
 
 Block modes:
 
-- `N` — stored;
-- `Z` — zlib;
-- `E` — Salsa20-encrypted, key from the keyring;
-- `4` - LZ4 (**not implemented**; the client's reader is `BlteBlockReadLz4`
-  at `0x1424d6e50`; no asset on this install uses it);
-- `A` / `F` — ARC4 / frame variants (not used on this install).
+- `N` — stored (`BlteBlockReadStored`, `0x1424d7850`);
+- `Z` — zlib (`BlteBlockReadZlib`, `0x1424d7ca0`);
+- `E` — Salsa20-encrypted (`BlteChunkDecrypt`, `0x1424d68a0`), key from the
+  caller's keyring;
+- `4` — LZ4 (`BlteBlockReadLz4`, `0x1424d6e50`);
+- anything else is status 8.
+
+`BlteBlockRead` (`0x1424d61b0`) accepts an `E` IV of 0..8 bytes, not only 4/8.
+`FUN_1424eb510`, the top-level direct reader, has the same four modes and
+returns status 5 for `F`/`O`; there is no `A` case in either function. `A` and
+`F` are not block modes of this build.
+
+`E` chunks carry a one-byte key-name length (must be 8), the 8-byte key id, a
+one-byte IV length (0..8), the IV, and the cipher byte `S`. A keyring miss is
+status 13. Salsa20 starts at counter 0, the IV is zero-extended to 8 bytes,
+and the chunk ordinal is XORed into its low four bytes. The plaintext's first
+byte is the real block mode.
+
+`BlteBlockReadLz4` reads an 11-byte block header: `4`, version `0x01`, a
+big-endian `u64` declared size (checked only against `0xffffffff`), and a
+block-size exponent in `5..=16`. The block size is `1 << exponent`; each slice
+is fed to the stateless `Lz4DecompressSafe` (`0x1426201d0`) with a compressed
+bound of `block_size + 0x10 + block_size/0xff`. `Lz4Decompress`
+(`0x1426207f0`) is called with a zeroed 32-byte context from `Lz4ContextCreate`
+(`0x1426201c0`), so it always takes the stateless path. A decode of zero or more
+than `block_size` is status 8. A compressed slice shorter than the bound
+returns status 0 without consuming input; `decode_lz4_chunk` treats that as an
+error because it already holds the whole chunk.
+
+MD5 is standard: `Md5Init` (`0x1426a5100`) writes the four RFC 1321 init
+words, `Md5Update` (`0x1426a4f40`) updates the byte count and buffers input,
+`Md5Final` (`0x1426a5010`) appends `0x80`, zeroes to 56 mod 64, writes the bit
+length little-endian and emits the four state words little-endian, and
+`Md5Transform` (`0x1426ab530`) is the 64-round block transform.
 
 Salsa20 is the standard 20-round cipher; `Salsa20StateInit`
 (`0x1424e3230`), `Salsa20Xor` (`0x1424e32c0`) and the block helpers match the
 Rust implementation.
 
 A 30-byte record is a header-only empty file: `DynamicContainerRead`
-(`0x1424f48d0`) adds `0x1e` and returns a zero-length range. A full scan of
-all 1,148,620 bucket entries found 1,488 such records and one orphan payload
-that is not BLTE.
+(`0x1424f48d0`) adds `0x1e` and returns a zero-length range. A full one-off
+scan of all 1,146,326 unique salt-0 keys found 1,146,325 type-`0x0F`
+containers, no direct (zero header-size) container, no type `0x10`, no outer
+`4` block, and one known orphan payload that is not BLTE. The 1,714,597 chunks
+split `N`/`Z`/`E` = 284,878/1,386,658/43,061. The install's 63-key keyring
+does not contain the keys used by the 43,061 `E` chunks (the 32nd-key sample
+saw six distinct ids) and no support keyring is present, so their inner modes
+are not measurable here; an inner `4` cannot be ruled out. The committed
+install test samples every 32nd unique salt-0 key (35,822 containers, 54,490
+chunks) and decodes 34 records in full. Type `0x10` and LZ4 therefore have
+synthetic coverage only; no observed outer `4` block exercises LZ4 here.
 
 ## Oracle
 

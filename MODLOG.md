@@ -4,6 +4,25 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-28 - CASC BLTE frame header and block reader
+
+- `BlteFrameHeaderParse` (`0x1424a90e0`) is implemented operation for
+  operation: type `0x0F`/`0x10`, `header_size == 12 + record_size*count`, the
+  `0x24` minimum, the optional header-MD5 check, the 24/40-byte records and
+  the type-`0x10` extras.
+- `BlteBlockRead` (`0x1424d61b0`) dispatches `N`/`Z`/`E`/`4`; `E` accepts an
+  IV of 0..8 bytes, and `BlteBlockReadLz4` (`0x1424d6e50`) is implemented with
+  the client's 11-byte header, `5..=16` exponent and stateless LZ4 call. There
+  is no `A` mode; `F`/`O` are status 5 at `FUN_1424eb510`.
+- A one-off full scan of 1,146,326 unique salt-0 keys found 1,146,325
+  type-`0x0F` containers, one known non-BLTE orphan, 1,714,597 chunks
+  (`N` 284,878, `Z` 1,386,658, `E` 43,061), and no `0x10`, direct container or
+  outer `4` block. The committed install test samples every 32nd key and
+  decodes 34 records; E inner modes are unreadable because the install keyring
+  lacks their keys.
+- The `Salsa20Xor` unit's three declared-equivalent mutant line numbers moved
+  with the file; the unit is re-verified, and `cli.py casc` remains 5/5.
+
 ## 2026-10-28 - CASC key-state intervals and resident resolve
 
 - `DynamicIndexEntrySink` (`0x142520590`), `DynamicIndexAppendInterval`

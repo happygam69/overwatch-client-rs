@@ -187,12 +187,19 @@ Overwatch.exe,0x1424d1b40,0x1424d1b40,EncodingHeaderRead,Reads and parses the 22
 Overwatch.exe,0x1424d1c60,0x1424d1c60,EncodingSectionsRead,"Reads the espec block, both page indexes and both page-body arrays in the reference order"
 Overwatch.exe,0x1424d61b0,0x1424d61b0,BlteBlockRead,"Reads one BLTE block: decrypts E, then dispatches the plaintext mode to N, Z or LZ4"
 Overwatch.exe,0x1424d68a0,0x1424d68a0,BlteChunkDecrypt,"Decrypts one E block with Salsa20, XORing the chunk ordinal into the IV"
-Overwatch.exe,0x1424d6e50,0x1424d6e50,BlteBlockReadLz4,BLTE 4 block reader: LZ4-HC block header then decompression
+Overwatch.exe,0x1424d6e50,0x1424d6e50,BlteBlockReadLz4,"BLTE 4 block reader: 11-byte header, block-size exponent, stateless LZ4 decompression"
 Overwatch.exe,0x1424d7850,0x1424d7850,BlteBlockReadStored,BLTE N block reader: copies the stored bytes
 Overwatch.exe,0x1424d7ca0,0x1424d7ca0,BlteBlockReadZlib,BLTE Z block reader: inflates after the mode byte
 Overwatch.exe,0x1424d8720,0x1424d8720,BlteIsDirectContainer,"True only for BLTE magic with a zero frame-header size, the single implicit-chunk form"
 Overwatch.exe,0x1424d8770,0x1424d8770,BlteWriteDirectHeader,Writes the BLTE magic and a zero frame-header size
 Overwatch.exe,0x1424d8800,0x1424d8800,ParseBoolString,"Boolean config parser: 1/true/yes/on/enable/enabled are true, case-insensitive"
+Overwatch.exe,0x1426201c0,0x1426201c0,Lz4ContextCreate,Allocates and zeroes the 32-byte LZ4 context
+Overwatch.exe,0x1426201d0,0x1426201d0,Lz4DecompressSafe,Stateless LZ4 block decompressor used by the BLTE 4 reader
+Overwatch.exe,0x1426207f0,0x1426207f0,Lz4Decompress,"LZ4 wrapper; the BLTE path passes a zeroed context and takes the stateless branch"
+Overwatch.exe,0x1426a4f40,0x1426a4f40,Md5Update,Buffers input and advances the MD5 byte count
+Overwatch.exe,0x1426a5010,0x1426a5010,Md5Final,"Appends MD5 padding and the little-endian bit length, then emits the digest"
+Overwatch.exe,0x1426a5100,0x1426a5100,Md5Init,Writes the four RFC 1321 MD5 init words
+Overwatch.exe,0x1426ab530,0x1426ab530,Md5Transform,The 64-round MD5 block transform
 Overwatch.exe,0x1424e3230,0x1424e3230,Salsa20StateInit,"Fills the 64-byte Salsa20/20 state (expand 16-byte k) from a 16-byte key, an 8-byte nonce and a 64-bit block counter"
 Overwatch.exe,0x1424e32c0,0x1424e32c0,Salsa20Xor,XORs a buffer with the Salsa20 keystream; dispatches to the 256-byte and 64-byte block loops
 Overwatch.exe,0x1424e3370,0x1424e3370,Salsa20XorBlocks256,"Salsa20 block loop for 256 bytes or more, four blocks per iteration"

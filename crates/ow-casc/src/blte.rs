@@ -2,14 +2,34 @@
 //!
 //! A stored payload is either raw `BLTE` or preceded by a 30-byte data header
 //! (`md5[16]`, `size u32 LE`, 10 further bytes). After the magic comes a
-//! big-endian frame-header size; when it is non-zero a chunk table follows
-//! (`0x0F`, `u24` count, then `count` records of `enc u32 BE`, `dec u32 BE`,
-//! `md5[16]`). Each chunk starts with a one-byte mode:
+//! big-endian frame-header size. When it is non-zero the client's
+//! `BlteFrameHeaderParse` (`Overwatch.exe` `0x1424a90e0`) requires:
+//!
+//! * at least `0x24` bytes;
+//! * the `BLTE` magic;
+//! * a non-zero header size equal to `12 + record_size * count`;
+//! * frame type `0x0F` (24-byte records) or `0x10` (40-byte records);
+//! * a non-zero `u24` count at `+9`;
+//! * the declared header bytes present.
+//!
+//! The parser hashes exactly `header_size` bytes with MD5 and compares the
+//! digest only when the caller supplies an expected hash. Each record is
+//! `stored u32 BE`, `decoded u32 BE`, `md5[16]`; type `0x10` adds a further
+//! `extra[16]`. Chunk 0 starts at `header_size`; no hash sits between the
+//! table and the first chunk. The read path never compares the per-chunk
+//! MD5s, and no read-path consumer of the type-`0x10` extras was found.
+//!
+//! Each chunk starts with a one-byte mode:
 //!
 //! * `N` stored
 //! * `Z` zlib
 //! * `E` encrypted: `u8 key-name-len`, key name, `u8 iv-len`, iv, `u8 'S'`,
 //!   then Salsa20 ciphertext whose plaintext begins with the real mode byte.
+//! * `4` LZ4: `'4'`, version `0x01`, `u64 BE` size (checked <= `0xffffffff`),
+//!   `u8` block-size exponent in `5..=16`, then LZ4 block data.
+//!
+//! There is no `A` case in the client's block reader. `F`/`O` are rejected by
+//! the top-level direct reader, not treated as block modes.
 //!
 //! The chunk ordinal is folded into the first four IV bytes so identical chunks
 //! do not encrypt identically.
@@ -20,6 +40,13 @@ use std::io::Read;
 pub const BLTE_MAGIC: [u8; 4] = *b"BLTE";
 /// Size of the optional header in front of the BLTE payload.
 pub const DATA_HEADER_SIZE: usize = 30;
+
+/// Frame type with 24-byte records: `stored`, `decoded`, `md5[16]`.
+pub const FRAME_TYPE_NORMAL: u8 = 0x0F;
+/// Frame type with 40-byte records: the normal record plus `extra[16]`.
+pub const FRAME_TYPE_EXTENDED: u8 = 0x10;
+/// The client rejects a frame-header buffer shorter than this before parsing.
+pub const FRAME_HEADER_MIN_SIZE: usize = 0x24;
 
 #[derive(Debug)]
 pub enum Error {
@@ -43,6 +70,141 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 type Result<T> = std::result::Result<T, Error>;
+
+/// One chunk-table record, as the client parses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameChunk {
+    /// Stored byte count, including the mode byte and any encryption header.
+    pub stored: u32,
+    /// Decoded byte count after the mode byte has been consumed.
+    pub decoded: u32,
+    /// Per-chunk MD5. The read path parses and copies it but never compares it.
+    pub md5: [u8; 16],
+    /// Type-`0x10` extra bytes, stored in the client's parallel array.
+    pub extra: Option<[u8; 16]>,
+}
+
+/// A parsed BLTE frame header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameHeader {
+    /// Declared frame-header size, which is also the offset of chunk 0.
+    pub header_size: usize,
+    /// `0x0F` or `0x10`.
+    pub frame_type: u8,
+    /// MD5 over exactly `header_size` bytes.
+    pub hash: [u8; 16],
+    /// The records in file order.
+    pub chunks: Vec<FrameChunk>,
+}
+
+/// Why `parse_frame_header` did not return a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameHeaderError {
+    /// The client's status 7: the buffer is shorter than `needed`.
+    NeedMore { needed: usize },
+    /// The client's status 8: a field is invalid.
+    Invalid(&'static str),
+}
+
+impl std::fmt::Display for FrameHeaderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FrameHeaderError::NeedMore { needed } => write!(f, "need {needed} bytes"),
+            FrameHeaderError::Invalid(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl std::error::Error for FrameHeaderError {}
+
+/// Parse a BLTE frame header exactly as `BlteFrameHeaderParse` (`0x1424a90e0`).
+///
+/// `expected_hash` is the caller's optional digest. The client passes a
+/// pointer and a byte length; every read-path caller uses 16. A shorter slice
+/// compares that many bytes, and a longer one is rejected because the client's
+/// `memcmp` would read past the 16-byte digest.
+///
+/// The return value mirrors the client's two failure statuses: `NeedMore` is
+/// status 7 with `outNeeded = 0x24` or `headerSize`; `Invalid` is status 8.
+pub fn parse_frame_header(
+    data: &[u8],
+    expected_hash: Option<&[u8]>,
+) -> std::result::Result<FrameHeader, FrameHeaderError> {
+    if data.len() < FRAME_HEADER_MIN_SIZE {
+        return Err(FrameHeaderError::NeedMore {
+            needed: FRAME_HEADER_MIN_SIZE,
+        });
+    }
+    if data[0..4] != BLTE_MAGIC {
+        return Err(FrameHeaderError::Invalid("bad BLTE magic"));
+    }
+    let header_size = u32::from_be_bytes([data[4], data[5], data[6], data[7]]) as usize;
+    if header_size == 0 {
+        return Err(FrameHeaderError::Invalid("zero frame-header size"));
+    }
+    let frame_type = data[8];
+    let record_size = match frame_type {
+        FRAME_TYPE_NORMAL => 24,
+        FRAME_TYPE_EXTENDED => 40,
+        _ => return Err(FrameHeaderError::Invalid("unsupported frame type")),
+    };
+    let count = (usize::from(data[9]) << 16) | (usize::from(data[10]) << 8) | usize::from(data[11]);
+    if count == 0 {
+        return Err(FrameHeaderError::Invalid("zero chunk count"));
+    }
+    let expected_header_size = 12 + record_size * count;
+    if header_size != expected_header_size {
+        return Err(FrameHeaderError::Invalid("frame-header size mismatch"));
+    }
+    if data.len() < header_size {
+        return Err(FrameHeaderError::NeedMore {
+            needed: header_size,
+        });
+    }
+
+    // The client hashes the whole header before it looks at the expected
+    // digest, even when the check flag is zero.
+    let hash = md5(&data[..header_size]);
+    if let Some(expected) = expected_hash {
+        if expected.len() > hash.len() {
+            return Err(FrameHeaderError::Invalid(
+                "expected hash longer than 16 bytes",
+            ));
+        }
+        if hash[..expected.len()] != expected[..] {
+            return Err(FrameHeaderError::Invalid("frame-header hash mismatch"));
+        }
+    }
+
+    let mut chunks = Vec::with_capacity(count);
+    for index in 0..count {
+        let at = 12 + index * record_size;
+        let stored = u32::from_be_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+        let decoded = u32::from_be_bytes([data[at + 4], data[at + 5], data[at + 6], data[at + 7]]);
+        let mut chunk_md5 = [0u8; 16];
+        chunk_md5.copy_from_slice(&data[at + 8..at + 24]);
+        let extra = if frame_type == FRAME_TYPE_EXTENDED {
+            let mut extra = [0u8; 16];
+            extra.copy_from_slice(&data[at + 24..at + 40]);
+            Some(extra)
+        } else {
+            None
+        };
+        chunks.push(FrameChunk {
+            stored,
+            decoded,
+            md5: chunk_md5,
+            extra,
+        });
+    }
+
+    Ok(FrameHeader {
+        header_size,
+        frame_type,
+        hash,
+        chunks,
+    })
+}
 
 /// Strip a data header if present and return the BLTE container.
 pub fn strip_data_header(data: &[u8]) -> Result<&[u8]> {
@@ -82,7 +244,8 @@ pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>>
     let frame_header_size = be_u32(blte, 4)? as usize;
 
     let (chunks, mut pos) = if frame_header_size == 0 {
-        // Single implicit chunk covering the remainder; its decoded size is not
+        // `BlteIsDirectContainer` (`0x1424d8720`): magic plus a zero frame
+        // header is the single implicit-chunk form. Its decoded size is not
         // declared, so accept whatever the mode block yields.
         (
             vec![Chunk {
@@ -92,28 +255,19 @@ pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>>
             8usize,
         )
     } else {
-        if blte.len() < 12 || blte[8] != 0x0F {
-            return Err(Error::Malformed("unexpected chunk-table header"));
-        }
-        let count = u24_be(blte, 9)? as usize;
-        // Each record costs 24 bytes from offset 12, so a count larger than
-        // what the container can hold is malformed. Cap before reserving: a
-        // corrupt u24 must not allocate hundreds of MB first (ow-stu's bag
-        // parsers do the same check before their reserve).
-        let max_records = blte.len().saturating_sub(12) / 24;
-        let mut table = Vec::with_capacity(count.min(max_records));
-        let mut p = 12;
-        for _ in 0..count {
-            if p + 24 > blte.len() {
-                return Err(Error::Malformed("truncated chunk record"));
-            }
-            table.push(Chunk {
-                stored: be_u32(blte, p)? as usize,
-                decoded: Some(be_u32(blte, p + 4)? as usize),
-            });
-            p += 24;
-        }
-        (table, p)
+        // No expected hash is invented here: the read path parses the header
+        // with the client's check flag clear. Callers that have a digest use
+        // `parse_frame_header` directly.
+        let frame = parse_frame_header(blte, None).map_err(frame_header_error)?;
+        let chunks = frame
+            .chunks
+            .iter()
+            .map(|chunk| Chunk {
+                stored: chunk.stored as usize,
+                decoded: Some(chunk.decoded as usize),
+            })
+            .collect();
+        (chunks, frame.header_size)
     };
 
     let mut out = Vec::new();
@@ -130,15 +284,17 @@ pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>>
         // Decrypting yields an owned buffer whose first byte is the real mode,
         // so keep the working slice in a variable that outlives the borrow.
         let decrypted;
-        let (mode, body) = if raw[0] == b'E' {
+        let block_slice = if raw[0] == b'E' {
             decrypted = decrypt_chunk(raw, index, keyring)?;
             if decrypted.is_empty() {
                 return Err(Error::Malformed("empty decrypted chunk"));
             }
-            (decrypted[0], &decrypted[1..])
+            decrypted.as_slice()
         } else {
-            (raw[0], &raw[1..])
+            raw
         };
+        let mode = block_slice[0];
+        let body = &block_slice[1..];
 
         let block = match mode {
             b'N' => body.to_vec(),
@@ -164,6 +320,7 @@ pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>>
                 }
                 buf
             }
+            b'4' => decode_lz4_chunk(block_slice, chunk.decoded)?,
             _ => return Err(Error::Malformed("unknown BLTE chunk mode")),
         };
 
@@ -173,6 +330,147 @@ pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>>
             }
         }
         out.extend_from_slice(&block);
+    }
+    Ok(out)
+}
+
+fn frame_header_error(error: FrameHeaderError) -> Error {
+    match error {
+        FrameHeaderError::NeedMore { .. } => Error::Malformed("truncated frame header"),
+        FrameHeaderError::Invalid(message) => Error::Malformed(message),
+    }
+}
+
+/// `BlteBlockReadLz4` (`0x1424d6e50`) with the whole chunk in memory.
+///
+/// `block` includes the mode byte. The client's reader parses one 11-byte
+/// header, then feeds LZ4 up to `block_size + 0x10 + block_size/0xff`
+/// compressed bytes per slice, repeating until the stored bytes are consumed.
+/// A decode that returns zero or more than `block_size` is status 8; a short
+/// slice is need-more (status 0 with nothing consumed), which is an error when
+/// the caller already holds the complete chunk.
+fn decode_lz4_chunk(block: &[u8], expected: Option<usize>) -> Result<Vec<u8>> {
+    if block.len() < 11 {
+        return Err(Error::Malformed("truncated LZ4 header"));
+    }
+    if block[0] != b'4' {
+        return Err(Error::Malformed("LZ4 block does not start with mode 4"));
+    }
+    if block[1] != 1 {
+        return Err(Error::Malformed("unsupported LZ4 block version"));
+    }
+    let declared = u64::from_be_bytes([
+        block[2], block[3], block[4], block[5], block[6], block[7], block[8], block[9],
+    ]);
+    if declared > u64::from(u32::MAX) {
+        return Err(Error::Malformed("LZ4 declared size exceeds u32"));
+    }
+    let exponent = block[10];
+    if !(5..=16).contains(&exponent) {
+        return Err(Error::Malformed("LZ4 block-size exponent outside 5..=16"));
+    }
+    let block_size = 1usize << exponent;
+    // The client computes this in u32 and sets it to zero above 0x7e000000;
+    // the exponent cap makes the large branch unreachable here.
+    let max_compressed = block_size + 0x10 + block_size / 0xff;
+
+    let mut out = Vec::new();
+    let mut pos = 11usize;
+    while pos < block.len() {
+        let take = max_compressed.min(block.len() - pos);
+        let decoded =
+            lz4_decompress_safe(&block[pos..pos + take], block_size).map_err(Error::Malformed)?;
+        // `BlteBlockReadLz4` requires a positive result (`0 < uVar8`).
+        if decoded.is_empty() {
+            return Err(Error::Malformed("LZ4 block decoded to zero bytes"));
+        }
+        out.extend_from_slice(&decoded);
+        pos += take;
+    }
+    if let Some(expected) = expected {
+        if out.len() != expected {
+            return Err(Error::Malformed("decoded chunk size mismatch"));
+        }
+    }
+    Ok(out)
+}
+
+/// Standard LZ4 block decompression (`FUN_1426201d0`, `LZ4_decompress_safe`).
+///
+/// The client's wrapper (`FUN_1426207f0`) is called with a zeroed 32-byte
+/// context from `FUN_1426201c0`, so it always takes the stateless
+/// `param_1[3] == 0` path into this decoder. The returned error text is ours;
+/// the client only distinguishes a negative result from a positive one.
+fn lz4_decompress_safe(
+    src: &[u8],
+    max_output: usize,
+) -> std::result::Result<Vec<u8>, &'static str> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    loop {
+        let token = *src.get(pos).ok_or("truncated LZ4 token")?;
+        pos += 1;
+
+        let mut literal_len = usize::from(token >> 4);
+        if literal_len == 15 {
+            loop {
+                let byte = *src.get(pos).ok_or("truncated LZ4 literal length")?;
+                pos += 1;
+                literal_len = literal_len
+                    .checked_add(usize::from(byte))
+                    .ok_or("LZ4 literal length overflow")?;
+                if byte != 0xff {
+                    break;
+                }
+            }
+        }
+        if literal_len > src.len() - pos {
+            return Err("truncated LZ4 literals");
+        }
+        if literal_len > max_output - out.len() {
+            return Err("LZ4 output exceeds block size");
+        }
+        out.extend_from_slice(&src[pos..pos + literal_len]);
+        pos += literal_len;
+
+        // The last sequence contains literals only; the block ends there.
+        if pos == src.len() {
+            break;
+        }
+
+        if src.len() - pos < 2 {
+            return Err("truncated LZ4 match offset");
+        }
+        let offset = usize::from(u16::from_le_bytes([src[pos], src[pos + 1]]));
+        pos += 2;
+        if offset == 0 || offset > out.len() {
+            return Err("invalid LZ4 match offset");
+        }
+
+        let mut match_len = usize::from(token & 0x0f);
+        if match_len == 15 {
+            loop {
+                let byte = *src.get(pos).ok_or("truncated LZ4 match length")?;
+                pos += 1;
+                match_len = match_len
+                    .checked_add(usize::from(byte))
+                    .ok_or("LZ4 match length overflow")?;
+                if byte != 0xff {
+                    break;
+                }
+            }
+        }
+        match_len = match_len
+            .checked_add(4)
+            .ok_or("LZ4 match length overflow")?;
+        if match_len > max_output - out.len() {
+            return Err("LZ4 output exceeds block size");
+        }
+        let start = out.len() - offset;
+        for index in 0..match_len {
+            let byte = out[start + index];
+            out.push(byte);
+        }
     }
     Ok(out)
 }
@@ -241,11 +539,88 @@ fn be_u32(data: &[u8], at: usize) -> Result<u32> {
     Ok(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
-fn u24_be(data: &[u8], at: usize) -> Result<u32> {
-    let slice = data
-        .get(at..at + 3)
-        .ok_or(Error::Malformed("truncated u24"))?;
-    Ok(((slice[0] as u32) << 16) | ((slice[1] as u32) << 8) | slice[2] as u32)
+/// Standard MD5, the client's frame-header hash.
+///
+/// `FUN_1426a5100` writes the four RFC 1321 init words, `FUN_1426a4f40` updates
+/// the byte count and buffers input, `FUN_1426a5010` appends `0x80`, zeroes to
+/// 56 mod 64, writes the bit length little-endian and emits the four state
+/// words little-endian. `FUN_1426ab530` is the 64-round block transform.
+fn md5(data: &[u8]) -> [u8; 16] {
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    const K: [u32; 64] = [
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
+        0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
+        0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+        0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
+        0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+        0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+        0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+        0xeb86d391,
+    ];
+
+    fn transform(state: &mut [u32; 4], block: &[u8]) {
+        let mut words = [0u32; 16];
+        for (index, word) in words.iter_mut().enumerate() {
+            *word = u32::from_le_bytes([
+                block[index * 4],
+                block[index * 4 + 1],
+                block[index * 4 + 2],
+                block[index * 4 + 3],
+            ]);
+        }
+        let (mut a, mut b, mut c, mut d) = (state[0], state[1], state[2], state[3]);
+        for index in 0..64 {
+            let (f, g) = match index {
+                0..=15 => ((b & c) | (!b & d), index),
+                16..=31 => ((d & b) | (!d & c), (5 * index + 1) % 16),
+                32..=47 => (b ^ c ^ d, (3 * index + 5) % 16),
+                _ => (c ^ (b | !d), (7 * index) % 16),
+            };
+            let next = b.wrapping_add(
+                a.wrapping_add(f)
+                    .wrapping_add(K[index])
+                    .wrapping_add(words[g])
+                    .rotate_left(S[index]),
+            );
+            a = d;
+            d = c;
+            c = b;
+            b = next;
+        }
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+    }
+
+    let mut state = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
+    let mut blocks = data.chunks_exact(64);
+    for block in &mut blocks {
+        transform(&mut state, block);
+    }
+    let remainder = blocks.remainder();
+
+    let mut tail = [0u8; 128];
+    tail[..remainder.len()].copy_from_slice(remainder);
+    tail[remainder.len()] = 0x80;
+    let tail_len = if remainder.len() < 56 { 64 } else { 128 };
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    tail[tail_len - 8..tail_len].copy_from_slice(&bit_len.to_le_bytes());
+    for block in tail[..tail_len].chunks_exact(64) {
+        transform(&mut state, block);
+    }
+
+    let mut digest = [0u8; 16];
+    for (index, word) in state.iter().enumerate() {
+        digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    digest
 }
 
 /// Salsa20 in the BLTE configuration.
@@ -350,108 +725,235 @@ fn quarter(x: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) {
 mod tests {
     use super::*;
 
-    /// The ECRYPT reference keystream for Salsa20 with a 128-bit key and an
-    /// 8-byte nonce. This pins both choices that are easy to get wrong: the
-    /// round count and the key schedule.
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// RFC 1321's test suite. The 80-byte case crosses a block boundary; the
+    /// 62-byte case exercises a two-block padding tail.
     #[test]
-    fn matches_the_reference_keystream() {
-        let key = {
-            let mut k = [0u8; 16];
-            k[0] = 0x80;
-            k
+    fn md5_matches_rfc_1321_vectors() {
+        let cases: [(&[u8], &str); 7] = [
+            (b"", "d41d8cd98f00b204e9800998ecf8427e"),
+            (b"a", "0cc175b9c0f1b6a831c399e269772661"),
+            (b"abc", "900150983cd24fb0d6963f7d28e17f72"),
+            (b"message digest", "f96b697d7cb7938d525a2f31aaf161d0"),
+            (
+                b"abcdefghijklmnopqrstuvwxyz",
+                "c3fcd3d76192e4007dfb496cca67e13b",
+            ),
+            (
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+                "d174ab98d277d9f5a5611c2c9f419d9f",
+            ),
+            (
+                b"12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+                "57edf4a22be3c955ac49da2e2107b67a",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(hex(&md5(input)), expected);
+        }
+    }
+
+    fn build_frame(frame_type: u8, records: &[FrameChunk]) -> Vec<u8> {
+        let record_size = if frame_type == FRAME_TYPE_EXTENDED {
+            40
+        } else {
+            24
         };
-        let nonce = [0u8; 8];
-        let stream = salsa20(&key, &nonce, &[0u8; 64]);
-        let expected = "4dfa5e481da23ea09a31022050859936da52fcee218005164f267cb65f5cfd7f\
-             2b4f97e0ff16924a52df269515110a07f9e460bc65ef95da58f740b7d1dbb0aa";
-        let got: String = stream.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(got, expected.replace(['\n', ' '], ""));
+        let header_size = 12 + record_size * records.len();
+        let mut out = Vec::with_capacity(header_size);
+        out.extend_from_slice(&BLTE_MAGIC);
+        out.extend_from_slice(&(header_size as u32).to_be_bytes());
+        out.push(frame_type);
+        out.extend_from_slice(&(records.len() as u32).to_be_bytes()[1..]);
+        for record in records {
+            out.extend_from_slice(&record.stored.to_be_bytes());
+            out.extend_from_slice(&record.decoded.to_be_bytes());
+            out.extend_from_slice(&record.md5);
+            if frame_type == FRAME_TYPE_EXTENDED {
+                out.extend_from_slice(&record.extra.unwrap_or([0u8; 16]));
+            }
+        }
+        assert_eq!(out.len(), header_size);
+        out
     }
 
-    /// The ECRYPT vector has a zero nonce and one non-zero key byte, so it
-    /// does not exercise most state words. This vector is the output of the
-    /// client's own `Salsa20StateInit`/`Salsa20Xor` under Ghidra's emulator
-    /// with key `01..10`, nonce `10..17`, counter 0 and 128 zero bytes; it
-    /// pins every key, nonce and constant word.
+    fn record(stored: u32, decoded: u32, fill: u8) -> FrameChunk {
+        FrameChunk {
+            stored,
+            decoded,
+            md5: [fill; 16],
+            extra: None,
+        }
+    }
+
     #[test]
-    fn matches_the_client_state_layout_with_every_word_nonzero() {
-        let key: [u8; 16] = core::array::from_fn(|i| (i + 1) as u8);
-        let nonce = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17];
-        let stream = salsa20(&key, &nonce, &[0u8; 128]);
-        let got: String = stream.iter().map(|b| format!("{b:02x}")).collect();
+    fn parses_a_normal_frame_with_the_client_size_and_records() {
+        let records = [
+            record(7, 5, 0x11),
+            FrameChunk {
+                stored: 0x1122_3344,
+                decoded: 0x5566_7788,
+                md5: core::array::from_fn(|i| i as u8),
+                extra: None,
+            },
+        ];
+        let data = build_frame(FRAME_TYPE_NORMAL, &records);
+        let parsed = parse_frame_header(&data, None).expect("valid frame");
+        assert_eq!(parsed.header_size, 12 + 24 * 2);
+        assert_eq!(parsed.frame_type, FRAME_TYPE_NORMAL);
+        assert_eq!(parsed.hash, md5(&data));
+        assert_eq!(parsed.chunks, records);
+    }
+
+    #[test]
+    fn parses_a_type_0x10_frame_and_its_parallel_extras() {
+        let records = [
+            FrameChunk {
+                stored: 100,
+                decoded: 200,
+                md5: [0x21; 16],
+                extra: Some([0x31; 16]),
+            },
+            FrameChunk {
+                stored: 101,
+                decoded: 201,
+                md5: [0x22; 16],
+                extra: Some([0x32; 16]),
+            },
+        ];
+        let data = build_frame(FRAME_TYPE_EXTENDED, &records);
+        let parsed = parse_frame_header(&data, None).expect("valid extended frame");
+        assert_eq!(parsed.header_size, 12 + 40 * 2);
+        assert_eq!(parsed.frame_type, FRAME_TYPE_EXTENDED);
+        assert_eq!(parsed.chunks, records);
+        assert_eq!(parsed.hash, md5(&data));
+    }
+
+    #[test]
+    fn a_short_buffer_reports_the_client_need_more_size() {
+        let records = [record(1, 1, 0), record(2, 2, 0)];
+        let data = build_frame(FRAME_TYPE_NORMAL, &records); // 60-byte header
+
         assert_eq!(
-            got,
-            "6655b5ece02c1f27eae19661e68d39b6a9d2e2581e7dc624ff0b1ed83185e648\
-             57107cd186f82f50e4fbe28881df243bb6f61c0716ca613bebbe319339c637c7\
-             5c81b569d1b11156314bf040649b9ca133f8a4abc4704248def7d7ac23c27fe7\
-             204577e0fa45b754944b68bfc2727e4ca88c7a26a4a82f62385b66239d1b907b"
+            parse_frame_header(&data[..35], None),
+            Err(FrameHeaderError::NeedMore { needed: 0x24 })
+        );
+        // The 36-byte prefix passes the field checks but is shorter than the
+        // declared 60-byte header, so the client reports the header size.
+        assert_eq!(
+            parse_frame_header(&data[..36], None),
+            Err(FrameHeaderError::NeedMore { needed: 60 })
         );
     }
 
-    /// `Salsa20StateInit` (`0x1424e3230`) under the emulator for key
-    /// `01..10`, nonce `10..17` and counter 0: the exact 64 bytes it stores.
-    /// This pins the client's diagonal order as its own value, independent of
-    /// the ciphertext vector above.
     #[test]
-    fn state_init_matches_the_client_state_vector() {
-        let key: [u8; 16] = core::array::from_fn(|i| (i + 1) as u8);
-        let nonce = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17];
-        let state = salsa20_state_init(&key, &nonce, 0);
-        let got: String = state
-            .iter()
-            .flat_map(|w| w.to_le_bytes())
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        assert_eq!(
-            got,
-            "657870616e642031362d62797465206b05060708010203041011121301020304\
-             00000000090a0b0c05060708141516170d0e0f10000000000d0e0f10090a0b0c"
-        );
-    }
+    fn rejects_each_header_field_the_client_rejects() {
+        let data = build_frame(FRAME_TYPE_NORMAL, &[record(1, 1, 0)]);
 
-    /// The 64-bit counter is split little-endian across words 8 (low) and 13
-    /// (high); both halves and the key words around them stay distinct.
-    #[test]
-    fn state_init_splits_the_counter_at_words_eight_and_thirteen() {
-        let key: [u8; 16] = core::array::from_fn(|i| (i + 20) as u8);
-        let nonce = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7];
-        let state = salsa20_state_init(&key, &nonce, 0x1122_3344_5566_7788);
-        assert_eq!(state[8], 0x5566_7788);
-        assert_eq!(state[13], 0x1122_3344);
-        assert_eq!(
-            state[9],
-            u32::from_le_bytes([key[8], key[9], key[10], key[11]])
-        );
-        assert_eq!(
-            state[10],
-            u32::from_le_bytes([key[4], key[5], key[6], key[7]])
-        );
-    }
+        let mut wrong_magic = data.clone();
+        wrong_magic[0] = b'X';
+        assert!(matches!(
+            parse_frame_header(&wrong_magic, None),
+            Err(FrameHeaderError::Invalid("bad BLTE magic"))
+        ));
 
-    #[test]
-    fn stripping_a_data_header_is_idempotent() {
-        let bare = b"BLTE\0\0\0\0rest";
-        assert_eq!(strip_data_header(bare).unwrap(), bare);
+        let mut zero_size = data.clone();
+        zero_size[4..8].copy_from_slice(&0u32.to_be_bytes());
+        assert!(matches!(
+            parse_frame_header(&zero_size, None),
+            Err(FrameHeaderError::Invalid("zero frame-header size"))
+        ));
 
-        let mut wrapped = vec![0u8; DATA_HEADER_SIZE];
-        wrapped.extend_from_slice(bare);
-        assert_eq!(strip_data_header(&wrapped).unwrap(), bare);
+        let mut wrong_type = data.clone();
+        wrong_type[8] = 0x0e;
+        assert!(matches!(
+            parse_frame_header(&wrong_type, None),
+            Err(FrameHeaderError::Invalid("unsupported frame type"))
+        ));
+
+        let mut zero_count = data.clone();
+        zero_count[9..12].copy_from_slice(&[0, 0, 0]);
+        assert!(matches!(
+            parse_frame_header(&zero_count, None),
+            Err(FrameHeaderError::Invalid("zero chunk count"))
+        ));
+
+        let mut wrong_size = data.clone();
+        wrong_size[4..8].copy_from_slice(&(data.len() as u32 + 1).to_be_bytes());
+        assert!(matches!(
+            parse_frame_header(&wrong_size, None),
+            Err(FrameHeaderError::Invalid("frame-header size mismatch"))
+        ));
     }
 
     #[test]
-    fn rejects_a_non_blte_payload() {
-        assert!(strip_data_header(b"not a container at all").is_err());
+    fn a_type_0x10_record_cannot_use_the_normal_stride() {
+        let data = build_frame(FRAME_TYPE_NORMAL, &[record(1, 1, 0)]);
+        let mut typed = data.clone();
+        typed[8] = FRAME_TYPE_EXTENDED;
+        assert!(matches!(
+            parse_frame_header(&typed, None),
+            Err(FrameHeaderError::Invalid("frame-header size mismatch"))
+        ));
     }
 
-    /// A record that is only the 30-byte data header is a zero-length file,
-    /// not a malformed container. The client's read path skips the header and
-    /// succeeds with a zero-byte range; this is the shape of 20 records in a
-    /// 20,000-entry sample of the reference install.
+    #[test]
+    fn the_optional_hash_check_compares_only_the_given_length() {
+        let data = build_frame(FRAME_TYPE_NORMAL, &[record(1, 1, 0)]);
+        let hash = md5(&data);
+        assert!(parse_frame_header(&data, Some(&hash)).is_ok());
+        assert!(parse_frame_header(&data, Some(&hash[..4])).is_ok());
+
+        let mut wrong = hash;
+        wrong[0] ^= 1;
+        assert!(matches!(
+            parse_frame_header(&data, Some(&wrong)),
+            Err(FrameHeaderError::Invalid("frame-header hash mismatch"))
+        ));
+        assert!(matches!(
+            parse_frame_header(&data, Some(&hash[..4])).map(|_| ()),
+            Ok(())
+        ));
+        let mut short_wrong = hash[..4].to_vec();
+        short_wrong[0] ^= 1;
+        assert!(matches!(
+            parse_frame_header(&data, Some(&short_wrong)),
+            Err(FrameHeaderError::Invalid("frame-header hash mismatch"))
+        ));
+        assert!(matches!(
+            parse_frame_header(&data, Some(&[0u8; 17])),
+            Err(FrameHeaderError::Invalid(
+                "expected hash longer than 16 bytes"
+            ))
+        ));
+    }
+
+    #[test]
+    fn the_hash_covers_exactly_the_declared_header() {
+        let data = build_frame(FRAME_TYPE_NORMAL, &[record(1, 1, 0)]);
+        let header_hash = md5(&data);
+        let mut with_trailing = data.clone();
+        with_trailing.extend_from_slice(b"trailing bytes are not hashed");
+        let parsed = parse_frame_header(&with_trailing, Some(&header_hash)).expect("valid frame");
+        assert_eq!(parsed.header_size, data.len());
+        assert_eq!(parsed.hash, header_hash);
+    }
+
     #[test]
     fn a_header_only_record_decodes_to_no_bytes() {
         let mut record = vec![0u8; DATA_HEADER_SIZE];
         record[16..20].copy_from_slice(&(DATA_HEADER_SIZE as u32).to_le_bytes());
         assert_eq!(decode(&record, &BTreeMap::new()).unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn a_direct_container_with_no_frame_header_keeps_its_single_chunk() {
+        let mut data = b"BLTE\0\0\0\0".to_vec();
+        data.extend_from_slice(b"Ndirect");
+        assert_eq!(decode(&data, &BTreeMap::new()).unwrap(), b"direct".to_vec());
     }
 
     /// Multi-chunk layout: the frame header is 12 bytes plus 24 per chunk and
@@ -504,6 +1006,158 @@ mod tests {
         assert_eq!(decode(&record, &BTreeMap::new()).unwrap(), b"helloworld");
     }
 
+    /// Type `0x10` records are 40 bytes; the extra 16 bytes sit after the
+    /// chunk MD5 and do not move the first chunk, which still starts at the
+    /// declared header size.
+    #[test]
+    fn a_type_0x10_container_decodes_from_the_40_byte_stride() {
+        let plain = b"extended records";
+        let chunk = {
+            let mut c = vec![b'N'];
+            c.extend_from_slice(plain);
+            c
+        };
+        let header_size = 12 + 40;
+        let mut blte = Vec::new();
+        blte.extend_from_slice(b"BLTE");
+        blte.extend_from_slice(&(header_size as u32).to_be_bytes());
+        blte.push(FRAME_TYPE_EXTENDED);
+        blte.extend_from_slice(&[0, 0, 1]);
+        blte.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
+        blte.extend_from_slice(&(plain.len() as u32).to_be_bytes());
+        blte.extend_from_slice(&[0u8; 16]);
+        blte.extend_from_slice(&[0xAB; 16]);
+        assert_eq!(blte.len(), header_size);
+        blte.extend_from_slice(&chunk);
+
+        assert_eq!(decode(&blte, &BTreeMap::new()).unwrap(), plain);
+    }
+
+    /// A literals-only LZ4 block. The reference decoder accepts this shape;
+    /// it is enough to prove the `4` header and the slice loop.
+    fn lz4_literals(data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut rest = data.len();
+        if rest < 15 {
+            out.push((rest as u8) << 4);
+        } else {
+            out.push(0xF0);
+            rest -= 15;
+            while rest >= 255 {
+                out.push(255);
+                rest -= 255;
+            }
+            out.push(rest as u8);
+        }
+        out.extend_from_slice(data);
+        out
+    }
+
+    fn lz4_chunk(data: &[u8], exponent: u8) -> Vec<u8> {
+        let compressed = lz4_literals(data);
+        let mut out = vec![b'4', 1];
+        out.extend_from_slice(&(compressed.len() as u64).to_be_bytes());
+        out.push(exponent);
+        out.extend_from_slice(&compressed);
+        out
+    }
+
+    fn container(frame_type: u8, chunks: &[&[u8]], decoded: &[usize]) -> Vec<u8> {
+        let record_size = if frame_type == FRAME_TYPE_EXTENDED {
+            40
+        } else {
+            24
+        };
+        let header_size = 12 + record_size * chunks.len();
+        let mut out = Vec::new();
+        out.extend_from_slice(b"BLTE");
+        out.extend_from_slice(&(header_size as u32).to_be_bytes());
+        out.push(frame_type);
+        out.extend_from_slice(&(chunks.len() as u32).to_be_bytes()[1..]);
+        for (chunk, decoded) in chunks.iter().zip(decoded) {
+            out.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
+            out.extend_from_slice(&(*decoded as u32).to_be_bytes());
+            out.extend_from_slice(&[0u8; 16]);
+            if frame_type == FRAME_TYPE_EXTENDED {
+                out.extend_from_slice(&[0xCD; 16]);
+            }
+        }
+        assert_eq!(out.len(), header_size);
+        for chunk in chunks {
+            out.extend_from_slice(chunk);
+        }
+        out
+    }
+
+    #[test]
+    fn an_lz4_chunk_decodes_through_the_client_header() {
+        let plain = b"the quick brown fox jumps over the lazy dog";
+        let chunk = lz4_chunk(plain, 9);
+        let data = container(FRAME_TYPE_NORMAL, &[&chunk], &[plain.len()]);
+        assert_eq!(decode(&data, &BTreeMap::new()).unwrap(), plain);
+    }
+
+    #[test]
+    fn an_encrypted_lz4_chunk_dispatches_the_inner_mode() {
+        let key = [0x5Au8; 16];
+        let key_name = *b"LZ4KEY!!";
+        let key_id = u64::from_le_bytes(key_name);
+        let keyring = BTreeMap::from([(key_id, key)]);
+        let plain = b"encrypted lz4 payload";
+        let inner = lz4_chunk(plain, 9);
+
+        let iv = [0x12u8, 0x34, 0x56, 0x78];
+        let mut nonce = [0u8; 8];
+        nonce[..iv.len()].copy_from_slice(&iv);
+        let cipher = salsa20(&key, &nonce, &inner);
+        let mut chunk = vec![b'E', 8];
+        chunk.extend_from_slice(&key_name);
+        chunk.push(iv.len() as u8);
+        chunk.extend_from_slice(&iv);
+        chunk.push(b'S');
+        chunk.extend_from_slice(&cipher);
+
+        let data = container(FRAME_TYPE_NORMAL, &[&chunk], &[plain.len()]);
+        assert_eq!(decode(&data, &keyring).unwrap(), plain);
+    }
+
+    #[test]
+    fn lz4_header_rejections_match_the_client_checks() {
+        let plain = b"payload";
+        let good = lz4_chunk(plain, 9);
+
+        let mut bad_version = good.clone();
+        bad_version[1] = 2;
+        let data = container(FRAME_TYPE_NORMAL, &[&bad_version], &[plain.len()]);
+        assert!(decode(&data, &BTreeMap::new()).is_err());
+
+        let mut bad_exponent = good.clone();
+        bad_exponent[10] = 4;
+        let data = container(FRAME_TYPE_NORMAL, &[&bad_exponent], &[plain.len()]);
+        assert!(decode(&data, &BTreeMap::new()).is_err());
+
+        let mut too_large = good.clone();
+        too_large[2..10].copy_from_slice(&(u64::from(u32::MAX) + 1).to_be_bytes());
+        let data = container(FRAME_TYPE_NORMAL, &[&too_large], &[plain.len()]);
+        assert!(decode(&data, &BTreeMap::new()).is_err());
+
+        let short = vec![b'4', 1, 0, 0, 0, 0, 0, 0, 0, 1];
+        let data = container(FRAME_TYPE_NORMAL, &[&short], &[plain.len()]);
+        assert!(decode(&data, &BTreeMap::new()).is_err());
+
+        let malformed = vec![b'4', 1, 0, 0, 0, 0, 0, 0, 0, 1, 9, 0xF0];
+        let data = container(FRAME_TYPE_NORMAL, &[&malformed], &[plain.len()]);
+        assert!(decode(&data, &BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn lz4_decoded_size_must_match_the_frame_record() {
+        let plain = b"size checked";
+        let chunk = lz4_chunk(plain, 9);
+        let data = container(FRAME_TYPE_NORMAL, &[&chunk], &[plain.len() + 1]);
+        assert!(decode(&data, &BTreeMap::new()).is_err());
+    }
+
     /// The `E` header's IV length is a byte, and the client accepts any value
     /// up to 8 (zero-extending it). Chunk `n` XORs `n` into the first IV word.
     #[test]
@@ -547,5 +1201,92 @@ mod tests {
 
         let decoded = decode(&blte, &keyring).unwrap();
         assert_eq!(decoded, b"xpayload");
+    }
+
+    /// The ECRYPT reference keystream for Salsa20 with a 128-bit key and an
+    /// 8-byte nonce. This pins both choices that are easy to get wrong: the
+    /// round count and the key schedule.
+    #[test]
+    fn matches_the_reference_keystream() {
+        let key = {
+            let mut k = [0u8; 16];
+            k[0] = 0x80;
+            k
+        };
+        let nonce = [0u8; 8];
+        let stream = salsa20(&key, &nonce, &[0u8; 64]);
+        let expected = "4dfa5e481da23ea09a31022050859936da52fcee218005164f267cb65f5cfd7f\
+             2b4f97e0ff16924a52df269515110a07f9e460bc65ef95da58f740b7d1dbb0aa";
+        assert_eq!(hex(&stream), expected.replace(['\n', ' '], ""));
+    }
+
+    /// The ECRYPT vector has a zero nonce and one non-zero key byte, so it
+    /// does not exercise most state words. This vector is the output of the
+    /// client's own `Salsa20StateInit`/`Salsa20Xor` under Ghidra's emulator
+    /// with key `01..10`, nonce `10..17`, counter 0 and 128 zero bytes; it
+    /// pins every key, nonce and constant word.
+    #[test]
+    fn matches_the_client_state_layout_with_every_word_nonzero() {
+        let key: [u8; 16] = core::array::from_fn(|i| (i + 1) as u8);
+        let nonce = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17];
+        let stream = salsa20(&key, &nonce, &[0u8; 128]);
+        assert_eq!(
+            hex(&stream),
+            "6655b5ece02c1f27eae19661e68d39b6a9d2e2581e7dc624ff0b1ed83185e648\
+             57107cd186f82f50e4fbe28881df243bb6f61c0716ca613bebbe319339c637c7\
+             5c81b569d1b11156314bf040649b9ca133f8a4abc4704248def7d7ac23c27fe7\
+             204577e0fa45b754944b68bfc2727e4ca88c7a26a4a82f62385b66239d1b907b"
+        );
+    }
+
+    /// `Salsa20StateInit` (`0x1424e3230`) under the emulator for key
+    /// `01..10`, nonce `10..17` and counter 0: the exact 64 bytes it stores.
+    /// This pins the client's diagonal order as its own value, independent of
+    /// the ciphertext vector above.
+    #[test]
+    fn state_init_matches_the_client_state_vector() {
+        let key: [u8; 16] = core::array::from_fn(|i| (i + 1) as u8);
+        let nonce = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17];
+        let state = salsa20_state_init(&key, &nonce, 0);
+        let bytes: Vec<u8> = state.iter().flat_map(|w| w.to_le_bytes()).collect();
+        assert_eq!(
+            hex(&bytes),
+            "657870616e642031362d62797465206b05060708010203041011121301020304\
+             00000000090a0b0c05060708141516170d0e0f10000000000d0e0f10090a0b0c"
+        );
+    }
+
+    /// The 64-bit counter is split little-endian across words 8 (low) and 13
+    /// (high); both halves and the key words around them stay distinct.
+    #[test]
+    fn state_init_splits_the_counter_at_words_eight_and_thirteen() {
+        let key: [u8; 16] = core::array::from_fn(|i| (i + 20) as u8);
+        let nonce = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7];
+        let state = salsa20_state_init(&key, &nonce, 0x1122_3344_5566_7788);
+        assert_eq!(state[8], 0x5566_7788);
+        assert_eq!(state[13], 0x1122_3344);
+        assert_eq!(
+            state[9],
+            u32::from_le_bytes([key[8], key[9], key[10], key[11]])
+        );
+        assert_eq!(
+            state[10],
+            u32::from_le_bytes([key[4], key[5], key[6], key[7]])
+        );
+    }
+
+    #[test]
+    fn stripping_a_data_header_is_idempotent() {
+        let bare = b"BLTE\0\0\0\0rest";
+        assert_eq!(strip_data_header(bare).unwrap(), bare);
+
+        let mut wrapped = vec![0u8; DATA_HEADER_SIZE];
+        wrapped.extend_from_slice(bare);
+        assert_eq!(strip_data_header(&wrapped).unwrap(), bare);
+    }
+
+    #[test]
+    fn rejects_a_non_blte_payload() {
+        assert!(strip_data_header(b"not a container at all").is_err());
     }
 }

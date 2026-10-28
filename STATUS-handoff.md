@@ -94,14 +94,16 @@ claim. `ow-sim` is parked reference code.
   remain diagnostics, not a finished material path.
 - **Remaining CASC units:** `DynamicIndexSegmentParse` asynchronous load, the
   page-table writer/insert path (`DynamicIndexPageInsert`),
-  `BlteFrameHeaderParse`, `BlteBlockRead`, `DynamicContainerRead` (page cache),
-  `EncodingSectionsRead`; the BLTE `4`/`A`/`F` and `0x10` modes, the
-  frame/chunk MD5 checks and the CDN index-page formula are also open. The
-  bucket fold, segment/archive selection, the 18-byte entry search with the
+  `DynamicContainerRead` (page cache), `EncodingSectionsRead`, and the CDN
+  index-page formula. The BLTE frame header and `N`/`Z`/`E`/`4` blocks are read
+  and install-tested; type `0x10` is absent and no outer `4` block was
+  observed, so `4` is synthetic-only here (E inner modes are unreadable), and
+  `A`/`F` are not block modes. The bucket
+  fold, segment/archive selection, the 18-byte entry search with the
   first-duplicate choice, the key-state interval merge/resident resolve
-  (`0x142520c60`/`0x142520700`/`0x1425208d0`/`0x1425115d0`), and the
-  page-table layout/hash/linear lookup are read and tested; all 2,560 install
-  pages are zero, so the page hit path is synthetic-only.
+  (`0x142520c60`/`0x142520700`/`0x1425208d0`/`0x1425115d0`), the page-table
+  layout/hash/linear lookup, and the BLTE frame/block path are read and tested;
+  all 2,560 install pages are zero, so the page hit path is synthetic-only.
   `docs/casc-1to1.md` is the register.
 
 ## Next
