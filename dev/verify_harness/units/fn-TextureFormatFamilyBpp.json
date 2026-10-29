@@ -1,0 +1,39 @@
+{
+  "id": "fn/TextureFormatFamilyBpp",
+  "title": "tier-2 shipped code: texture format family/bpp switch against FUN_142e372b0 (0x142e372b0)",
+  "address": { "v2b": "0x7ff7c7b572b0" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "texture_format_family_bpp",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "format", "kind": "u64" },
+    { "name": "family_out", "kind": "ptr", "ptr_len": 4 },
+    { "name": "bpp_out", "kind": "ptr", "ptr_len": 4 }
+  ],
+  "returns": "void",
+  "argFactory": "texture_format_fixture",
+  "options": {
+    "iterations": 310,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4247,
+    "coverageWindow": 285,
+    "allowedImageReads": [
+      "0x7ff7c7b573d0-0x7ff7c7b57491"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/texture.rs, built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the texture_format_family_bpp entry.",
+    "Oracle is FUN_142e372b0 at exe 0x142e372b0 (v2b 0x7ff7c7b572b0): void (uint format, uint *family, uint *bpp). The switch writes both out dwords on a matching case; an unmatched value leaves the caller's dwords untouched.",
+    "The unit drives every value in 0..=0xff against zeroed out dwords, so the client's untouched default and the shipped function's (0, 0) return agree. The fixture does not pass values above 0xff: the client compares the full 32-bit argument, while the Rust switch takes the stored byte, so a wider value would not be the same expression.",
+    "allowedImageReads 0x7ff7c7b573d0-0x7ff7c7b57491 (exe 0x142e373d0-0x142e37491) is the function's read-only switch dispatch block: dword jump offsets at 0x142e373d0..0x142e3741c and the byte case table at 0x142e37420..0x142e37491. It is compiler dispatch data, not a game global.",
+    "The function's callers pass `pm` on to the DXGI table at 0x14348f500; that composition is dxgi_of, already pinned by the install scan and not part of this switch.",
+    "coverageWindow 285 (0x11d) bytes is the function's exact extent from its entry 0x142e372b0 through the final `ret` at 0x142e373cc. This leaf has no .pdata RUNTIME_FUNCTION, so without the declaration the coverage sweep runs the 0x2000-byte ceiling into the jump table at 0x142e373d0 and the byte case table at 0x142e37420, disassembling their data as conditional branches. The declared window ends before the first table byte."
+  ],
+  "acknowledgedGaps": [
+    "The client's format parameter is a 32-bit uint and this unit only passes 0..=0xff (the stored byte's domain). Values 0x100..=0xffffffff are not compared because they cannot match a case and the Rust entry takes u8."
+  ]
+}

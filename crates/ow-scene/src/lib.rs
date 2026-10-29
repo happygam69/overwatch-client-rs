@@ -83,13 +83,51 @@ pub struct Draw {
 /// The bytes are RGBA8 because that is what both viewers can take; the source
 /// format is kept for the report (`docs/formats/materials.md` has the table of
 /// what the install ships).
+///
+/// `srgb` is the asset's own colour space, read from its **stored format byte**
+/// through the client's two tables (`ow_tank::texture::is_srgb_format`: stored
+/// byte → renderer format at `0x143356f50`, renderer format → DXGI at
+/// `0x14348f500`).
+/// It is not inferred from the material and not from the viewer's base-colour
+/// heuristic. An sRGB texture is uploaded with an sRGB view format so sampling
+/// linearises it; a linear data map (normal, mask, height) is uploaded raw.
+///
+/// The client's D3D12 resource descriptor (`FUN_1426545d0`) and its texture SRV
+/// (`FUN_142653b90`, written by `FUN_14264be60`) both take their DXGI id from
+/// that same table, so the asset's DXGI id decides the colour space on both
+/// sides. The resource is created from the typeless companion table
+/// (`0x14348f730`) when the object's `+0x3c` byte is set, or for a depth format
+/// whose `+4` bit 0 is set, but the view still uses the typed id from
+/// `0x14348f500`.
+#[derive(Debug, Clone)]
+pub struct SceneTextureLevel {
+    pub mip: u8,
+    /// Layer index in the asset's own order. A cube is six consecutive layers;
+    /// the cube-face direction mapping is not read.
+    pub surface: u16,
+    pub width: u16,
+    pub height: u16,
+    pub rgba: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SceneTexture {
     pub guid: u64,
     pub width: u16,
     pub height: u16,
+    /// Mip 0 of surface 0, kept for the viewers' mean/colour checks and for
+    /// the existing tests.
     pub rgba: Vec<u8>,
+    /// Every decoded subresource, surface-major and mip-minor (the D3D12
+    /// subresource order the client copies at `0x141e296a0`). The uploader
+    /// writes all of them; the viewer samples layer 0 with the full mip chain.
+    pub levels: Vec<SceneTextureLevel>,
+    pub mip_count: u8,
+    /// The header's `surfaces` byte: the array layer count, or six per cube.
+    pub surfaces: u8,
     pub format: String,
+    /// The asset's stored format resolves to an sRGB DXGI id ([`Self::decoded`]).
+    pub srgb: bool,
 }
 
 impl SceneTexture {
@@ -115,8 +153,20 @@ impl SceneTexture {
             guid: 0,
             width: N as u16,
             height: N as u16,
-            rgba,
+            rgba: rgba.clone(),
+            levels: vec![SceneTextureLevel {
+                mip: 0,
+                surface: 0,
+                width: N as u16,
+                height: N as u16,
+                rgba,
+            }],
+            mip_count: 1,
+            surfaces: 1,
             format: "uv checker (no material data)".into(),
+            // Viewer-generated, and its grey squares are authored in sRGB:
+            // sampling it as linear would shift them.
+            srgb: true,
         }
     }
 
@@ -127,7 +177,57 @@ impl SceneTexture {
             width: 1,
             height: 1,
             rgba: vec![255, 255, 255, 255],
+            levels: vec![SceneTextureLevel {
+                mip: 0,
+                surface: 0,
+                width: 1,
+                height: 1,
+                rgba: vec![255, 255, 255, 255],
+            }],
+            mip_count: 1,
+            surfaces: 1,
             format: "white".into(),
+            srgb: true,
+        }
+    }
+
+    /// A texture decoded by `ow_tank::texture`, carrying the colour space its
+    /// stored format byte names and every level the client copies.
+    pub fn decoded(guid: u64, t: &ow_tank::texture::Texture) -> SceneTexture {
+        let levels: Vec<SceneTextureLevel> = t
+            .levels
+            .iter()
+            .map(|level| SceneTextureLevel {
+                mip: level.mip,
+                surface: level.surface,
+                width: level.width,
+                height: level.height,
+                rgba: level.rgba.clone(),
+            })
+            .collect();
+        // A hand-built `Texture` (the colour tests) has no level list; keep the
+        // single mip-0 view usable.
+        let levels = if levels.is_empty() && !t.rgba.is_empty() {
+            vec![SceneTextureLevel {
+                mip: 0,
+                surface: 0,
+                width: t.width,
+                height: t.height,
+                rgba: t.rgba.clone(),
+            }]
+        } else {
+            levels
+        };
+        SceneTexture {
+            guid,
+            width: t.width,
+            height: t.height,
+            rgba: t.rgba.clone(),
+            levels,
+            mip_count: t.mip_count,
+            surfaces: t.surfaces,
+            format: format!("{:?}", t.format),
+            srgb: t.is_srgb(),
         }
     }
 }
@@ -968,15 +1068,37 @@ fn build_map_placeables(
             println!("{line}");
         }
     }
+    // Slot 0 is the white placeholder. A slot is decoded when the decode wrote
+    // the texture; the failure path keeps the GUID but names its stand-in
+    // "unreadable" (`texture_slot_loaded`), and that stand-in is sRGB because it
+    // is `SceneTexture::white()` — so it must not be counted as a decoded sRGB
+    // texture.
+    let texture_slots = scene.textures.len().saturating_sub(1);
+    let unreadable_slots = scene
+        .textures
+        .iter()
+        .skip(1)
+        .filter(|t| t.format == "unreadable")
+        .count();
+    let decoded_textures = texture_slots.saturating_sub(unreadable_slots);
+    let srgb_textures = scene
+        .textures
+        .iter()
+        .skip(1)
+        .filter(|t| t.format != "unreadable" && t.srgb)
+        .count();
     println!(
-        "  materials: {} look(s), {} material entr(ies); {} unreadable, {} with no sRGB base colour, {} flat fill(s), {} ambiguous id(s); {} texture(s) decoded, {} submesh draw(s) textured, {placeholder_submeshes} on the white placeholder",
+        "  materials: {} look(s), {} material entr(ies); {} unreadable, {} with no sRGB base colour, {} flat fill(s), {} ambiguous id(s); {} texture(s) decoded ({} sRGB, {} linear), {} unreadable slot(s), {} submesh draw(s) textured, {placeholder_submeshes} on the white placeholder",
         material_stats.looks,
         material_stats.materials,
         material_stats.unreadable,
         material_stats.no_colour,
         material_stats.flat,
         material_stats.ambiguous,
-        scene.textures.len().saturating_sub(1),
+        decoded_textures,
+        srgb_textures,
+        decoded_textures.saturating_sub(srgb_textures),
+        unreadable_slots,
         textured_submeshes,
     );
     if skin_stats.models > 0 || skin_stats.unmapped_lanes > 0 {
@@ -1774,13 +1896,15 @@ fn texture_slot_loaded(
             let mean = [mean_of(0), mean_of(1), mean_of(2)];
             let sd = [sd_of(0, mean[0]), sd_of(1, mean[1]), sd_of(2, mean[2])];
             let flat = sd.iter().cloned().fold(0.0f64, f64::max) < 2.0;
+            let srgb = t.is_srgb();
             report.push(format!(
-                "texture 0x{texture_guid:016x}: {}x{} {:?} ({} mip{}), mean RGB ({}, {}, {}), sd ({:.1}, {:.1}, {:.1}){}",
+                "texture 0x{texture_guid:016x}: {}x{} {:?} ({} mip{}), {}, mean RGB ({}, {}, {}), sd ({:.1}, {:.1}, {:.1}){}",
                 t.width,
                 t.height,
                 t.format,
                 t.mip_count,
                 if t.mip_count == 1 { "" } else { "s" },
+                if srgb { "sRGB" } else { "linear" },
                 mean[0],
                 mean[1],
                 mean[2],
@@ -1789,13 +1913,7 @@ fn texture_slot_loaded(
                 sd[2],
                 if flat { " — a flat fill, which carries no colour" } else { "" }
             ));
-            scene.textures[slot as usize] = SceneTexture {
-                guid: texture_guid,
-                width: t.width,
-                height: t.height,
-                rgba: t.rgba,
-                format: format!("{:?}", t.format),
-            };
+            scene.textures[slot as usize] = SceneTexture::decoded(texture_guid, &t);
         }
         Err(e) => {
             report.push(format!("texture 0x{texture_guid:016x}: {e}"));
@@ -2816,4 +2934,36 @@ fn tri_top_y(tri: &[Vec3; 3], x: f32, z: f32) -> Option<f32> {
         return None;
     }
     Some(a[1] + u * (b[1] - a[1]) + v * (c[1] - a[1]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decoded_with(stored: u8) -> SceneTexture {
+        let (format, _dxgi) = ow_tank::texture::Format::from_header(stored);
+        let texture = ow_tank::texture::Texture {
+            format_byte: stored,
+            format,
+            ..Default::default()
+        };
+        SceneTexture::decoded(0x0c0000000000e349, &texture)
+    }
+
+    #[test]
+    fn viewer_generated_textures_keep_their_srgb_look() {
+        assert!(SceneTexture::white().srgb);
+        assert!(SceneTexture::uv_checker().srgb);
+    }
+
+    #[test]
+    fn decoded_colour_space_follows_the_stored_format_byte() {
+        // 0x64 (100) is BC7_UNORM_SRGB; 0x49 (73) is BC1_UNORM_SRGB.
+        assert!(decoded_with(0x64).srgb, "stored 0x64 -> BC7_UNORM_SRGB");
+        assert!(decoded_with(0x49).srgb, "stored 0x49 -> BC1_UNORM_SRGB");
+        // 0x51 (81) is BC4_UNORM, a linear single-channel data map.
+        assert!(!decoded_with(0x51).srgb, "stored 0x51 -> BC4_UNORM");
+        // 0x60 (96) is BC6H_UF16, a linear HDR format.
+        assert!(!decoded_with(0x60).srgb, "stored 0x60 -> BC6H_UF16");
+    }
 }

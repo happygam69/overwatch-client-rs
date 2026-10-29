@@ -69,6 +69,13 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "cmf_iv_154504": ["crates/ow-tank/src/manifest.rs"],
     "bundle_lookup": ["crates/ow-tank/src/bundle.rs"],
     "bundle_directory_lookup": ["crates/ow-tank/src/bundle.rs"],
+    "payload_guid": ["crates/ow-tank/src/guid.rs"],
+    "crc32_seeded": ["crates/ow-tank/src/material.rs"],
+    "texture_request_count": ["crates/ow-tank/src/texture.rs"],
+    "texture_count_bits_shifted": ["crates/ow-tank/src/texture.rs"],
+    "texture_format_family_bpp": ["crates/ow-tank/src/texture.rs"],
+    "texture_descriptor": ["crates/ow-tank/src/texture.rs"],
+    "texture_descriptor_size_walk": ["crates/ow-tank/src/texture.rs"],
 }
 
 # The mutation stage rewrites the *Rust function body*, so a probe entry that
@@ -87,6 +94,13 @@ ENTRY_MUTATION: Dict[str, str] = {
     "bundle_lookup": "offset_of",
     # The entry is a thin wrapper; the walk the unit proves is `directory_lookup`.
     "bundle_directory_lookup": "directory_lookup",
+    "payload_guid": "payload_of",
+    "crc32_seeded": "crc32_seeded",
+    "texture_request_count": "request_count",
+    "texture_count_bits_shifted": "count_bits_shifted",
+    "texture_format_family_bpp": "format_family_and_bpp",
+    "texture_descriptor": "descriptor",
+    "texture_descriptor_size_walk": "descriptor_size_walk",
 }
 
 

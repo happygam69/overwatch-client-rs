@@ -1,0 +1,39 @@
+{
+  "id": "fn/TextureDescriptor",
+  "title": "tier-2 shipped code: texture descriptor builder against FUN_142e2d900 (0x142e2d900)",
+  "address": { "v2b": "0x7ff7c7b4d900" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "texture_descriptor",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "out", "kind": "ptr", "ptr_len": 16 },
+    { "name": "header", "kind": "ptr", "ptr_len": 32 }
+  ],
+  "returns": "void",
+  "argFactory": "texture_descriptor_fixture",
+  "state": {
+    "base": "0x7ff7c8fc36d0",
+    "hex": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4248
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/texture.rs, built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the texture_descriptor entry.",
+    "Oracle is FUN_142e2d900 at exe 0x142e2d900 (v2b 0x7ff7c7b4d900): object * (object *out, ushort *header). It reads the 0x20-byte header at +0..+0x13 and assembles the descriptor qword at out+0 and the flags dword at out+8. The probe parses the same header with the shipped TextureHeader::parse and writes descriptor() and object_flags() into the same 16-byte out.",
+    "The fixture keeps every header inside the loader's accepted set (format <= 0x71, mip <= 0x10, width/height nonzero, payload_count < 5, base_mips <= mip_count) because the probe calls the shipped parse, which applies the same checks in the same order.",
+    "state: 0x20 bytes at exe 0x1442a36d0 (v2b 0x7ff7c8fc36d0) covers the builder's process counters DAT_1442a36d8/e0/e8. The fixture pins total_size to 0, so DAT_1442a36d8 += total_size is a no-op; param_1[10] is set to 0 before the other two adds. The state channel therefore proves the builder's global writes stay within the declared counters and change nothing.",
+    "The out object is 16 bytes on purpose. The builder also writes -1 sentinels, the header pointers and total_size past +0x10; those are object bookkeeping, not the descriptor parsing this unit proves. The header pointee is placed at arena+0x100 so those writes cannot overlap it.",
+    "byte +0x07 is pinned to 0. The builder's flags are `flags | 0x100000` only; the loader (0x141dacf00) adds 0x4000 when +0x07 == 1, and that loader rule is read and unit-tested but is not this builder's write.",
+    "The builder's payload_count > 1 branch reads DAT_1442a36e8; the fixture includes payload 2..4 so both counter branches run."
+  ],
+  "acknowledgedGaps": [
+    "The builder's output fields past +0x10 (the -1 sentinels, header/header+0x20 pointers, total_size at +0x40, usage/format bytes at +0x60) are not compared: their pointer values differ between the guest arena and the probe's host buffers, and total_size is pinned to zero for the counter channel. The descriptor qword and flags dword, which are the parsing result, are compared."
+  ]
+}

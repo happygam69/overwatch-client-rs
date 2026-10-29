@@ -1,25 +1,77 @@
 //! Textures: the last hop of the model → material → texture chain.
 //!
-//! A texture asset (type `004`) starts with a 32-byte header and then either an
-//! *embedded* payload or the raw data:
+//! A texture asset (type `004`) starts with the 32-byte header the texture load
+//! callback at `0x141dacf00` reads:
 //!
 //! ```text
-//! +0x00  i16 flags        +0x02 u8 mip_count    +0x03 u8 format (DXGI-ish)
+//! +0x00  u16 flags        +0x02 u8 mip_count    +0x03 u8 format
 //! +0x04  u8  surfaces     +0x05 u8 usage        +0x06 u8 payload_count
 //! +0x07  u8  unknown      +0x08 u16 width       +0x0a u16 height
-//! +0x0c  u16 data_size    +0x0e u16 unknown     +0x10 u64 unknown (two)
+//! +0x0c  u32 total_size   +0x10 u8 base_mips    +0x11 u8 chunk_mask
+//! +0x12  u8  reserved     +0x13..+0x1f unread by the loader
 //! ```
 //!
-//! When `data_size == 0` or `payload_count > 0`, a payload sits at `+0x20` with
-//! its own header (`mips`, `surfaces`, `image_size`, `header_size`, four `u32`)
-//! and the compressed blocks after `header_size`. Otherwise `data_size` bytes of
-//! blocks follow the 32-byte header. Formats are block compressed and named by
-//! DXGI id: 71/72 BC1, 74/75 BC2, 77/78 BC3, 80/81 BC4, 83/84 BC5, 98/99 BC7;
-//! the client stores one value higher from 26 up, so the byte is decremented
-//! first (the "ow2 hack" the TankLib reference records).
+//! The format byte is the **client's engine enum**, not a DXGI id. The client
+//! maps it through two tables: `0x143356f50` (0x72 8-byte records, byte 0) gives
+//! an internal renderer format number, and `0x14348f500` (u32) gives the DXGI
+//! id for that number. [`dxgi_of`] is that composition. `total_size` is the sum
+//! over every mip and surface; it is a u32, not a u16. The stored value is the
+//! on-disk block sum ([`cooked_size`]), which equals the runtime size walk
+//! (`0x142e37070`, [`size_walk`]) whenever the halved dimensions stay on block
+//! boundaries — on 5 of 400 sampled assets (non-power-of-two) the runtime walk
+//! is slightly smaller. The loader's validation (`0x141dacf00`) is exactly:
+//! format <= 0x71, mip_count <= 0x10, width != 0, height != 0,
+//! payload_count < 5, base_mips <= mip_count.
+//!
+//! With `payload_count == 0` the block run starts at `+0x20` and is
+//! `total_size` bytes long; the descriptor's `+0x38`/`+0x40` fields are exactly
+//! that pointer and size, and the renderer's no-payload branch (`0x141e29210`)
+//! builds the whole chain from them. With `payload_count >= 1` an embedded
+//! chunk header sits at `+0x20`:
+//!
+//! ```text
+//! +0x00 u32 first_from_smallest   +0x04 u32 level_count
+//! +0x08 u32 image_size            +0x0c u32 header_size
+//! ```
+//!
+//! The four fields are read through `0x142e38740` (first), `0x142255e10`
+//! (count), `0x142e38750` (image size) and `0x142e38730` (the data pointer is
+//! `chunk + header_size`). Its data starts at `+0x20 + header_size`.
+//! `first_from_smallest` is the distance from the *smallest* mip, so the
+//! chunk's first level is `mip_count - 1 - first_from_smallest`. A separate
+//! payload asset (GUID from [`crate::guid::payload_of`]) has the same 16-byte
+//! header at its own `+0x00`, and its chunk header says which levels it holds.
+//! That is the selection rule: the decoder reads every payload the header
+//! names (`1..=payload_count-1`) and places each run by its own
+//! `first_from_smallest`/`level_count`. The loader requests the immediate set
+//! from [`TextureHeader::requested_payloads`] and fetches the highest index
+//! lazily when `chunk_mask` bit 3 marks it streamed; the bytes are the same.
+//! On the six pinned assets the highest index happens to hold level 0 — an
+//! install observation, not the rule.
+//!
+//! The byte order inside one run is read from the client's record builder
+//! `0x141e296a0`: the outer loop is the array element (six faces for a cube),
+//! the inner loop is the mip from `first_from_smallest`'s level upwards, and
+//! the data pointer advances by each level's own size. The level's resource
+//! dimensions are `max(w >> mip, 1)` (`0x142e2db70`/`0x142e2db50`,
+//! [`level_dimensions`]); its stored size is `0x142e36ec0`'s block-ceil
+//! arithmetic ([`level_byte_size`]). The record index is the D3D12 subresource
+//! number `(array * faces + face) * mip_count + mip` (`0x142e36e80`; `faces`
+//! is 6 for renderer texture types 4/7), and the copy loop in `0x141f0a000`
+//! walks those records with its record-array flag bit 1 set, so its index is
+//! `mip + surface * mip_count` (`0x141f0a53a`), where `surface` is the flat
+//! `array * faces + face`. A run is therefore **surface-major, largest mip
+//! first within each surface**. The D3D12 resource descriptor
+//! (`0x1426545d0`) gets `mip_count` levels and `surfaces` array layers (six
+//! per cube, from the renderer kind; kinds 0/1 are 1D and 8 is 3D). The viewer
+//! uploads the same subresources/levels as RGBA8 but always creates a 2D
+//! texture and binds a 2D view of layer 0: the 1D resource/SRV dimension, the
+//! cube-vs-array view dimension and the cube-face direction are open.
 //!
 //! Decoding is ours: BC1/BC2/BC3/BC4/BC5/BC6H/BC7 and the uncompressed families
-//! are implemented here, with synthetic block tests.
+//! are implemented here, with synthetic block tests. Formats the client maps but
+//! this decoder has no path for (the signed BC4/BC5 variants, BGRA, the depth
+//! and video families) are reported as unsupported rather than mis-decoded.
 //!
 //! BC7's eight modes, its 64 2-subset and 64 3-subset partition patterns and
 //! the anchor tables are tables, not derivable code: they are the ones the BC7
@@ -47,16 +99,37 @@ use std::fmt;
 #[derive(Debug)]
 pub enum Error {
     Truncated(&'static str),
+    /// The client's loader would reject this header. The payload is the client
+    /// check that failed, in the order the loader applies them.
+    Invalid(&'static str),
+    /// A mapped format this decoder does not implement. The value is the DXGI
+    /// id when the client's tables resolve one, otherwise the stored engine
+    /// byte.
     UnsupportedFormat(u8),
     NoData,
+    /// A layout this decoder does not implement yet: the volume depth axis.
+    /// The client creates a 3D resource for a `flags & 4` asset; every level
+    /// list here is 2D. No such asset appears in the 400-asset sample.
+    UnsupportedLayout(&'static str),
+    /// The asset's level 0 is in a separate payload asset that the caller did
+    /// not supply (index in the payload chain).
+    Level0InPayload(u32),
+    /// Payload `n` was requested from the loader and was not present.
+    PayloadNotLoaded(u32),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Truncated(w) => write!(f, "truncated texture: {w}"),
-            Error::UnsupportedFormat(id) => write!(f, "unsupported block format {id}"),
+            Error::Invalid(w) => write!(f, "invalid texture header: {w}"),
+            Error::UnsupportedFormat(id) => write!(f, "unsupported texture format {id}"),
             Error::NoData => write!(f, "texture carries no payload data"),
+            Error::UnsupportedLayout(w) => write!(f, "unsupported texture layout: {w}"),
+            Error::Level0InPayload(i) => {
+                write!(f, "level 0 is in payload {i}, which is a separate asset")
+            }
+            Error::PayloadNotLoaded(i) => write!(f, "payload {i} is not present"),
         }
     }
 }
@@ -65,35 +138,313 @@ impl std::error::Error for Error {}
 
 type Result<T> = std::result::Result<T, Error>;
 
-/// The block-compression family, from the header's format byte.
+/// The client's engine-format → renderer-format table, at `0x143356f50`.
+///
+/// The table is 0x72 records of 8 bytes; the client reads byte 0 of the record
+/// (`(&DAT_143356f50)[format * 8]`), so only that byte is reproduced. The index
+/// is the stored engine byte; the value is the renderer's internal format
+/// number — the thing the docs call `pm`.
+#[rustfmt::skip]
+static ENGINE_TO_PM: [u8; 0x72] = [
+    0, 54, 56, 54, 55, 51, 53, 51, 52, 48, 50, 46, 48, 47,
+    49, 43, 45, 43, 44, 0, 135, 0, 0, 39, 38, 40, 39, 41,
+    34, 31, 32, 34, 33, 35, 28, 30, 26, 28, 0, 29, 23, 132,
+    25, 23, 24, 134, 134, 133, 0, 15, 12, 15, 14, 16, 9, 11,
+    131, 7, 9, 8, 10, 4, 1, 4, 3, 5, 6, 0, 42, 0,
+    0, 57, 57, 58, 59, 59, 60, 61, 61, 62, 63, 63, 64, 65,
+    65, 66, 20, 21, 36, 36, 38, 36, 37, 36, 37, 67, 68, 67,
+    69, 69, 70, 0, 0, 0, 95, 95, 81, 99, 99, 85, 102, 102,
+    88, 136,
+];
+
+/// The renderer's format → DXGI table, at `0x14348f500`, one u32 per entry.
+///
+/// The largest value [`ENGINE_TO_PM`] produces is 136, so the first 137
+/// entries are the ones the texture path can reach. Zero means the renderer
+/// format has no DXGI format (the mobile block-compression families have no D3D
+/// equivalent, and several engine ids are unused).
+#[rustfmt::skip]
+static PM_TO_DXGI: [u8; 137] = [
+    0, 61, 0, 63, 62, 64, 65, 56, 58, 57, 59, 54, 49, 0,
+    51, 50, 52, 0, 115, 0, 85, 0, 86, 42, 43, 41, 35, 37,
+    36, 38, 34, 28, 29, 31, 30, 32, 87, 91, 24, 25, 0, 26,
+    67, 17, 18, 16, 11, 13, 12, 14, 10, 7, 8, 6, 3, 4,
+    2, 71, 72, 74, 75, 77, 78, 80, 81, 83, 84, 96, 95, 98,
+    99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 55, 40, 45, 45, 20, 103,
+];
+
+/// The DXGI id a stored engine format byte resolves to, or 0 when the client's
+/// tables give it none. This is the composition the client performs:
+/// `0x14348f500[0x143356f50[byte]]`.
+pub fn dxgi_of(stored: u8) -> u8 {
+    let Some(&pm) = ENGINE_TO_PM.get(stored as usize) else {
+        return 0;
+    };
+    PM_TO_DXGI.get(pm as usize).copied().unwrap_or(0)
+}
+
+/// Whether a DXGI id is an sRGB format.
+///
+/// The five ids the install's colour textures resolve to — `R8G8B8A8_UNORM_SRGB`
+/// (29), `BC1_UNORM_SRGB` (72), `BC2_UNORM_SRGB` (75), `BC3_UNORM_SRGB` (78) and
+/// `BC7_UNORM_SRGB` (99) — plus `B8G8R8A8_UNORM_SRGB` (91), which the same
+/// tables reach through stored bytes `0x5C`/`0x5E`. The format id itself carries
+/// the sRGB view; there is no separate client predicate. The material-side set
+/// this replaces is `{30, 73, 76, 79, 100}`, exactly the stored bytes of the
+/// five the install's material lists use.
+pub fn is_srgb_dxgi(dxgi: u8) -> bool {
+    matches!(dxgi, 29 | 72 | 75 | 78 | 91 | 99)
+}
+
+/// Whether a stored engine format byte is an sRGB (colour) format.
+pub fn is_srgb_format(stored: u8) -> bool {
+    is_srgb_dxgi(dxgi_of(stored))
+}
+
+/// The client's format → (family, bits per pixel) switch at `0x142e372b0`.
+///
+/// Family 0 is linear; 1..=10 are the block families (BC1, BC2, BC3, BC4, BC5,
+/// BC6H, BC7 and the three EAC sizes). The bits-per-pixel value is what the
+/// size walk multiplies by.
+pub fn format_family_and_bpp(stored: u8) -> (u8, u32) {
+    match stored {
+        0 => (0, 0),
+        1..=4 => (0, 0x80),
+        5..=8 => (0, 0x60),
+        9..=0x16 => (0, 0x40),
+        0x17..=0x30 | 0x44..=0x46 | 0x58 | 0x59 | 0x5b | 0x5c => (0, 0x20),
+        0x31..=0x3c | 0x56 | 0x57 => (0, 0x10),
+        0x3d..=0x42 => (0, 8),
+        0x43 => (0, 1),
+        0x47..=0x49 | 0x65..=0x67 => (1, 4),
+        0x4a..=0x4c => (2, 8),
+        0x4d..=0x4f => (3, 8),
+        0x50..=0x52 => (4, 4),
+        0x53..=0x55 => (5, 8),
+        0x5f..=0x61 => (6, 8),
+        0x62..=0x64 => (7, 8),
+        0x68..=0x6a => (8, 8),
+        0x6b..=0x6d => (9, 4),
+        0x6e..=0x70 => (10, 2),
+        0x71 => (0, 0xc),
+        _ => (0, 0),
+    }
+}
+
+/// The family number from the switch above.
+pub fn format_family(stored: u8) -> u8 {
+    format_family_and_bpp(stored).0
+}
+
+/// Bits per pixel from the switch above.
+pub fn format_bits_per_pixel(stored: u8) -> u32 {
+    format_family_and_bpp(stored).1
+}
+
+/// Whether the size walk clamps the halved dimensions at 4 rather than 1.
+///
+/// This is the size walk's *own* switch (`0x142e37070`), not the family switch:
+/// the EAC families `0x65..0x71` are block formats to the renderer but are not
+/// in this list, so the walk treats them as linear and clamps at 1. That is the
+/// client's arithmetic and is reproduced as read.
+pub fn is_block_format(stored: u8) -> bool {
+    matches!(stored, 0x47..=0x55 | 0x5f..=0x64)
+}
+
+/// The client's size walk (`0x142e37070`): the byte size of `mip_count` levels.
+///
+/// Each level adds `w * h * depth`, then width and height halve (clamped at 4
+/// for the formats [`is_block_format`] names, otherwise at 1) and depth halves
+/// (clamped at 1). The total is scaled by bits per pixel and surfaces:
+/// `bpp * surfaces * total >> 3`. Zero width, height, depth, mip count or
+/// surface count gives zero, exactly as the client's guard does. The client
+/// uses 64-bit arithmetic, so this does too.
+pub fn size_walk(
+    stored: u8,
+    mut width: u32,
+    mut height: u32,
+    mut depth: u32,
+    mip_count: u32,
+    surfaces: u32,
+) -> u64 {
+    let bpp = format_bits_per_pixel(stored) as u64;
+    if width == 0 || height == 0 || depth == 0 || mip_count == 0 || surfaces == 0 {
+        return 0;
+    }
+    let min = if is_block_format(stored) { 4 } else { 1 };
+    let mut total: u64 = 0;
+    for _ in 0..mip_count {
+        total = total.wrapping_add(
+            (width as u64)
+                .wrapping_mul(height as u64)
+                .wrapping_mul(depth as u64),
+        );
+        width = (width >> 1).max(min);
+        height = (height >> 1).max(min);
+        depth = (depth >> 1).max(1);
+    }
+    bpp.wrapping_mul(surfaces as u64)
+        .wrapping_mul(total)
+        .wrapping_shr(3)
+}
+
+/// The descriptor consumer `0x142e2dbb0`: the byte size of the mip chain from
+/// `bias` down, as the renderer requests it from [`size_walk`].
+///
+/// The descriptor's width, height and (for a volume) depth fields are shifted
+/// right by `bias & 0x1f` and clamped at 1 before the walk; a non-volume
+/// descriptor has depth 1 and a volume descriptor has one surface. The mip
+/// count is the 4-bit descriptor field minus `bias` with 32-bit wrap, and the
+/// walk's 64-bit answer is truncated to 32 bits exactly as the client's
+/// `undefined4` return is.
+pub fn descriptor_size_walk(descriptor: u64, object_flags: u32, format: u8, bias: u32) -> u32 {
+    let shift = bias & 0x1f;
+    let field = (((descriptor >> 28) as u32) & 0x7ff) + 1;
+    let (surfaces, depth) = if object_flags & 4 == 0 {
+        (field, 1u32)
+    } else {
+        (1u32, field)
+    };
+    let width = ((((descriptor as u32) & 0x3fff) + 1) >> shift).max(1);
+    let height = (((((descriptor >> 14) as u32) & 0x3fff) + 1) >> shift).max(1);
+    let depth = (depth >> shift).max(1);
+    let mip_count = (((descriptor >> 39) as u32) & 0xf).wrapping_sub(bias);
+    size_walk(format, width, height, depth, mip_count, surfaces) as u32
+}
+
+/// The sum of the client's per-level sizes over the chain (`0x142e36ec0`).
+///
+/// The recorded `total_size` is the on-disk size: a block format's level is
+/// `ceil(w/4) * ceil(h/4) * block bytes` (a 4x4 block is 16 pixels times the
+/// format's bits per pixel, so BC1/BC4's 4 bpp is 8 bytes and the 8 bpp families
+/// are 16), and a linear format's level is `w * h * bpp / 8`; levels halve
+/// exactly as [`size_walk`] does. The per-level arithmetic is the read helper
+/// `0x142e36ec0` — [`level_dimensions`] and [`level_byte_size`] are its halves —
+/// and the recorded field equals this sum on all 400 sampled assets. The
+/// client's `0x142e37260` is not a universal cooked-size formula: it returns 8
+/// or 16 for a subset of ids and 0 for several accepted ones (`0x47`, `0x4A`,
+/// `0x4D`, `0x50`, `0x52`, `0x53`, `0x55`, `0x5F`, `0x65`).
+///
+/// This sum and the runtime walk (`0x142e37070`) agree for a block texture while
+/// every halved dimension stays on a multiple of 4, and the walk is smaller
+/// otherwise: on this install 5 of a 400-asset sample are non-power-of-two and
+/// their recorded `total_size` carries the block ceil.
+///
+/// Only the BC 4x4 families are handled here. The EAC/mobile groups are 6x6 or
+/// 8x8 blocks (`0x142e371c0`) but are not decoded by this module, and no such
+/// asset appeared in the 400-asset sample; their block size is **not tested**.
+pub fn cooked_size(
+    stored: u8,
+    mut width: u32,
+    mut height: u32,
+    mut depth: u32,
+    mip_count: u32,
+    surfaces: u32,
+) -> u64 {
+    let bpp = format_bits_per_pixel(stored) as u64;
+    if width == 0 || height == 0 || depth == 0 || mip_count == 0 || surfaces == 0 {
+        return 0;
+    }
+    let block = is_block_format(stored);
+    let min = if block { 4 } else { 1 };
+    let mut total: u64 = 0;
+    for _ in 0..mip_count {
+        let level = if block {
+            let bw = (width as u64).div_ceil(4);
+            let bh = (height as u64).div_ceil(4);
+            bw.wrapping_mul(bh)
+                .wrapping_mul(depth as u64)
+                .wrapping_mul(bpp * 2)
+        } else {
+            (width as u64)
+                .wrapping_mul(height as u64)
+                .wrapping_mul(depth as u64)
+                .wrapping_mul(bpp)
+                .wrapping_shr(3)
+        };
+        total = total.wrapping_add(level.wrapping_mul(surfaces as u64));
+        width = (width >> 1).max(min);
+        height = (height >> 1).max(min);
+        depth = (depth >> 1).max(1);
+    }
+    total
+}
+
+/// The client's popcount helper `0x142e374d0`: the number of set bits in
+/// `value >> ((bias + 2) & 0x1f)`.
+///
+/// The loader calls it with `bias = 1` (`0x142e376d0(DAT_143a7c390)` where the
+/// image's `DAT_143a7c390` is 1), so the shift is 3. The helper is public so a
+/// differential unit can drive the client's own function over every bias.
+pub fn count_bits_shifted(value: u32, bias: u32) -> u32 {
+    (value >> (bias.wrapping_add(2) & 0x1f)).count_ones()
+}
+
+/// The client's request-count leaf `0x142e37600`.
+///
+/// `payload_count`, `mip_count`, `base_mips` and `streamed` are the four
+/// arguments in order. It returns 0 when `mip_count - base_mips <= streamed`,
+/// otherwise `max(1, payload_count - streamed - 1)`. The loader only calls it
+/// when `payload_count > 1`; the gate is in [`TextureHeader::request_count`],
+/// not in this leaf.
+pub fn request_count(payload_count: u32, mip_count: u32, base_mips: u32, streamed: u32) -> u32 {
+    let payload = payload_count as i32;
+    let mip = mip_count as i32;
+    let base = base_mips as i32;
+    let streamed = streamed as i32;
+    if mip.wrapping_sub(base) <= streamed {
+        0
+    } else {
+        payload.wrapping_sub(streamed).wrapping_sub(1).max(1) as u32
+    }
+}
+
+/// The format family a stored engine byte decodes as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
+    /// BC1, 8 bytes per 4x4 block (DXGI 71/72).
     Bc1,
+    /// BC2, 16 bytes per 4x4 block (DXGI 74/75).
     Bc2,
+    /// BC3, 16 bytes per 4x4 block (DXGI 77/78).
     Bc3,
+    /// BC4_UNORM, 8 bytes per 4x4 block (DXGI 80).
     Bc4,
+    /// BC5_UNORM, 16 bytes per 4x4 block (DXGI 83).
     Bc5,
-    /// BC7, 8-bit RGBA (DXGI 97/98/99).
+    /// BC4_SNORM (DXGI 81). The block layout is BC4's, but the endpoints are
+    /// signed; this decoder has no signed-endpoint path, so it refuses rather
+    /// than decode the bytes as the unsigned variant.
+    Bc4Snorm,
+    /// BC5_SNORM (DXGI 84), refused for the same reason.
+    Bc5Snorm,
+    /// BC7, 16 bytes per 4x4 block (DXGI 98/99).
     Bc7,
     /// BC6H, high-dynamic-range RGB stored as half floats.
     ///
-    /// DXGI 94 is `BC6H_TYPELESS`, 95 is `BC6H_UF16` (unsigned endpoints) and
-    /// 96 is `BC6H_SF16` (signed endpoints) — that is the standard enum's
-    /// numbering, and 94 has no signedness of its own, so this variant carries
-    /// the one thing the header cannot say. The two variants decode the same
-    /// fourteen modes; the flag says whether an endpoint carries a sign bit,
-    /// which changes the arithmetic, not the layout.
-    Bc6h {
-        signed: bool,
-    },
-    /// R8G8B8A8, uncompressed (DXGI 27/28/29).
+    /// DXGI 95 is `BC6H_UF16` (unsigned endpoints) and 96 is `BC6H_SF16`
+    /// (signed endpoints). The two variants decode the same fourteen modes; the
+    /// flag says whether an endpoint carries a sign bit, which changes the
+    /// arithmetic, not the layout.
+    Bc6h { signed: bool },
+    /// R8G8B8A8 (DXGI 28 UNORM, 29 sRGB, 30 UINT), four bytes per pixel.
     Rgba8,
     /// R16G16B16A16_FLOAT (DXGI 10): four half floats, 8 B/px.
     Rgba16Float,
-    /// R16_FLOAT (DXGI 48/54): one half float, 2 B/px.
+    /// R16_FLOAT (DXGI 54): one half float, 2 B/px.
     R16Float,
-    /// R16_UNORM (DXGI 50): one 16-bit unorm, 2 B/px.
+    /// R16_UNORM (DXGI 56): one 16-bit unorm, 2 B/px.
     R16Unorm,
+    /// R8G8 UNORM or UINT (DXGI 49/50): two byte channels, 2 B/px. The bytes
+    /// are identical; UNORM is the byte/255 view and UINT is the same integer.
+    Rg8,
+    /// The stored engine byte maps to a format this decoder has no path for.
+    /// The value is the **stored byte**, so a message names what the asset says;
+    /// [`dxgi_of`] gives the DXGI id when the tables have one.
     Unknown(u8),
 }
 
@@ -104,59 +455,62 @@ impl Default for Format {
 }
 
 impl Format {
-    /// DXGI id → family, undoing the client's +1 offset from 26 up.
+    /// Stored engine format byte → (family, DXGI id).
+    ///
+    /// The second value is the DXGI id from [`dxgi_of`], or 0 when the client's
+    /// tables give none. The family is the decoder path, and is `Unknown` for
+    /// every DXGI id this module does not decode.
     pub fn from_header(byte: u8) -> (Format, u8) {
-        let id = if byte >= 0x1a { byte - 1 } else { byte };
-        let family = match id {
-            70..=72 => Format::Bc1,
-            73..=75 => Format::Bc2,
-            76..=78 => Format::Bc3,
-            79..=81 => Format::Bc4,
-            82..=84 => Format::Bc5,
-            97..=99 => Format::Bc7,
-            // The two ids BC6H owns in the standard enum are 95 (`BC6H_UF16`,
-            // unsigned) and 96 (`BC6H_SF16`, signed); 94 is `BC6H_TYPELESS`,
-            // which the header alone cannot resolve to one of the two variants,
-            // so it is decoded as the unsigned one and that is recorded as a
-            // choice, not a reading. Note the arms are on `id`, the byte after
-            // the client's -1, so the *stored* bytes that land here are 95 and
-            // 96 (typeless and unsigned) and 97 (signed).
-            //
-            // Evidence, measured on this install (evidence class *install*):
-            // a 600-asset spread census (`ow-tank-tex --census 600`) has 51
-            // BC6H assets and every one of them stores byte 96; none stores
-            // 97. So under the -1 rule they are all `BC6H_UF16`. The other
-            // candidate reading — that the stored 96 means DXGI 96 and the
-            // offset does not apply to BC6H — would make them `SF16`, and
-            // that is refuted by the pixels: decoded as UF16, 21 of the assets
-            // (2,319,360 channels over 36,240 blocks, all fourteen modes
-            // present) contain *no* negative value, their means sit at 0.26 to
-            // 0.68 and their largest value at 0.79 to 3.19, and each mode's
-            // pixels differ from their right-hand neighbour by 0.0002 to 0.08
-            // — a smooth image. Decoded as SF16 the same bytes give means of
-            // 7 to 6260, values reaching the largest finite half, negative
-            // values in up to 49% of a mode's channels, and a neighbour
-            // difference 3 to 5 orders of magnitude larger. See
-            // `docs/formats/materials.md` § "BC6H".
-            94 | 95 => Format::Bc6h { signed: false },
+        let dxgi = dxgi_of(byte);
+        let family = match dxgi {
+            71 | 72 => Format::Bc1,
+            74 | 75 => Format::Bc2,
+            77 | 78 => Format::Bc3,
+            80 => Format::Bc4,
+            81 => Format::Bc4Snorm,
+            83 => Format::Bc5,
+            84 => Format::Bc5Snorm,
+            95 => Format::Bc6h { signed: false },
             96 => Format::Bc6h { signed: true },
-            27..=29 => Format::Rgba8,
+            98 | 99 => Format::Bc7,
             10 => Format::Rgba16Float,
-            // DXGI 48 is the typeless-free `R16_FLOAT`; 54 is `R16_FLOAT` one
-            // block later (the ids the standard enum puts it at, and the one
-            // the client's own +1 can land on for either).
-            48 | 54 => Format::R16Float,
-            50 => Format::R16Unorm,
-            other => Format::Unknown(other),
+            28..=30 => Format::Rgba8,
+            49 | 50 => Format::Rg8,
+            54 => Format::R16Float,
+            56 => Format::R16Unorm,
+            _ => Format::Unknown(byte),
         };
-        (family, id)
+        (family, dxgi)
     }
 
+    /// Bytes in one 4x4 block, or 0 for a family with no block grid.
     pub fn block_bytes(self) -> usize {
         match self {
-            Format::Bc1 | Format::Bc4 => 8,
-            _ => 16,
+            Format::Bc1 | Format::Bc4 | Format::Bc4Snorm => 8,
+            Format::Bc2
+            | Format::Bc3
+            | Format::Bc5
+            | Format::Bc5Snorm
+            | Format::Bc7
+            | Format::Bc6h { .. } => 16,
+            _ => 0,
         }
+    }
+
+    /// Whether the format is block compressed.
+    pub fn is_block(self) -> bool {
+        matches!(
+            self,
+            Format::Bc1
+                | Format::Bc2
+                | Format::Bc3
+                | Format::Bc4
+                | Format::Bc4Snorm
+                | Format::Bc5
+                | Format::Bc5Snorm
+                | Format::Bc7
+                | Format::Bc6h { .. }
+        )
     }
 
     /// Whether the format stores one channel, which lands in red with the other
@@ -164,13 +518,364 @@ impl Format {
     /// shader). A viewer that wants a picture promotes it; the decode does not
     /// invent green and blue.
     pub fn single_channel(self) -> bool {
-        matches!(self, Format::Bc4 | Format::R16Float | Format::R16Unorm)
+        matches!(
+            self,
+            Format::Bc4 | Format::Bc4Snorm | Format::R16Float | Format::R16Unorm
+        )
     }
 }
 
-/// A decoded texture: mip 0 as 8-bit RGBA.
+/// The 32-byte header of a type-`004` texture asset.
+///
+/// Field order and validation are the client's texture load callback
+/// (`0x141dacf00`, reading through the descriptor builder `0x142e2d900`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextureHeader {
+    pub flags: u16,
+    pub mip_count: u8,
+    /// The client's engine format enum. Use [`dxgi_of`] for its DXGI id.
+    pub format: u8,
+    pub surfaces: u8,
+    pub usage: u8,
+    pub payload_count: u8,
+    /// Byte `+0x07`. The loader reads it: value 1 adds `0x4000` to the
+    /// object's flags at `+0x08`.
+    pub unknown: u8,
+    pub width: u16,
+    pub height: u16,
+    /// Sum of every mip and surface, as `+0x0c` stores it (a u32, not a u16).
+    pub total_size: u32,
+    pub base_mips: u8,
+    /// Byte `+0x11`. Only bit 3 is read: it marks the streamed chunk the
+    /// request arithmetic excludes. The low bits are **not read**; the install
+    /// relation `payload_count == popcount(chunk_mask)` is an observation (all
+    /// 400 sampled assets), not a per-bit meaning. See [`TextureHeader::streamed_chunks`].
+    pub chunk_mask: u8,
+    /// Byte `+0x12`; the descriptor carries it at bits 59..62.
+    pub reserved: u8,
+}
+
+impl TextureHeader {
+    pub const SIZE: usize = 0x20;
+
+    /// Parse and validate a texture header exactly as the client does.
+    ///
+    /// The loader's checks, in its order: format <= 0x71, mip_count <= 0x10,
+    /// width != 0, height != 0, payload_count < 5, base_mips <= mip_count. It
+    /// does **not** check surfaces, `total_size` or the reserved bytes.
+    pub fn parse(asset: &[u8]) -> Result<TextureHeader> {
+        if asset.len() < Self::SIZE {
+            return Err(Error::Truncated("header"));
+        }
+        let h = TextureHeader {
+            flags: u16::from_le_bytes([asset[0], asset[1]]),
+            mip_count: asset[2],
+            format: asset[3],
+            surfaces: asset[4],
+            usage: asset[5],
+            payload_count: asset[6],
+            unknown: asset[7],
+            width: u16::from_le_bytes([asset[8], asset[9]]),
+            height: u16::from_le_bytes([asset[10], asset[11]]),
+            total_size: u32::from_le_bytes([asset[12], asset[13], asset[14], asset[15]]),
+            base_mips: asset[16],
+            chunk_mask: asset[17],
+            reserved: asset[18],
+        };
+        if h.format > 0x71 {
+            return Err(Error::Invalid("format > 0x71"));
+        }
+        if h.mip_count > 0x10 {
+            return Err(Error::Invalid("mip_count > 0x10"));
+        }
+        if h.width == 0 {
+            return Err(Error::Invalid("width == 0"));
+        }
+        if h.height == 0 {
+            return Err(Error::Invalid("height == 0"));
+        }
+        if h.payload_count >= 5 {
+            return Err(Error::Invalid("payload_count >= 5"));
+        }
+        if h.base_mips > h.mip_count {
+            return Err(Error::Invalid("base_mips > mip_count"));
+        }
+        Ok(h)
+    }
+
+    /// The u64 the descriptor builder (`0x142e2d900`) assembles from the
+    /// header's fields:
+    ///
+    /// ```text
+    /// bits  0..13  width - 1        bits 39..42  mip_count (as stored)
+    /// bits 14..27  height - 1       bits 43..47  usage
+    /// bits 28..38  surfaces - 1     bits 48..50  payload_count
+    /// bits 51..54  base_mips        bits 55..58  chunk_mask
+    /// bits 59..62  byte +0x12       bit  63      clear
+    /// ```
+    pub fn descriptor(&self) -> u64 {
+        let mut d = 0u64;
+        d |= (self.width as u64).wrapping_sub(1) & 0x3fff;
+        d |= ((self.height as u64).wrapping_sub(1) & 0x3fff) << 14;
+        d |= ((self.surfaces as u64).wrapping_sub(1) & 0x7ff) << 28;
+        d |= (self.mip_count as u64 & 0xf) << 39;
+        d |= (self.usage as u64 & 0x1f) << 43;
+        d |= (self.payload_count as u64 & 0x7) << 48;
+        d |= (self.base_mips as u64 & 0xf) << 51;
+        d |= (self.chunk_mask as u64 & 0xf) << 55;
+        d |= (self.reserved as u64 & 0xf) << 59;
+        d
+    }
+
+    /// The descriptor's flags word at `+0x08`: the header's u16 flags plus the
+    /// loader's `0x100000`, and `0x4000` when byte `+0x07` is 1.
+    pub fn object_flags(&self) -> u32 {
+        let mut f = self.flags as u32 | 0x0010_0000;
+        if self.unknown == 1 {
+            f |= 0x4000;
+        }
+        f
+    }
+
+    /// Bit 2 of the flags marks a volume texture, whose `surfaces` byte is the
+    /// depth. The descriptor builder tests it as `(descriptor_flags & 4)` when
+    /// it feeds the size walk (`0x142e2dbb0`).
+    pub fn is_volume(&self) -> bool {
+        self.flags & 4 != 0
+    }
+
+    /// `(depth, surfaces)` as the descriptor's consumer sees them.
+    ///
+    /// The builder stores `(surfaces - 1) & 0x7FF` and the consumer adds one, so
+    /// a header `surfaces == 0` becomes **2048** (the client's wrap), not 0. A
+    /// volume texture has depth = that value and one surface.
+    pub fn depth_and_surfaces(&self) -> (u32, u32) {
+        let surfaces = ((self.surfaces as u32).wrapping_sub(1) & 0x7ff) + 1;
+        if self.is_volume() {
+            (surfaces, 1)
+        } else {
+            (1, surfaces)
+        }
+    }
+
+    /// The mip count as the descriptor carries it (bits 39..42).
+    ///
+    /// The loader's request arithmetic reads this field, not the header byte;
+    /// `mip_count == 16` is accepted by the loader and stored as 0.
+    pub fn descriptor_mip_count(&self) -> u8 {
+        self.mip_count & 0xf
+    }
+
+    /// The base mip count as the descriptor carries it (bits 51..54).
+    pub fn descriptor_base_mips(&self) -> u8 {
+        self.base_mips & 0xf
+    }
+
+    /// The chunk mask as the descriptor carries it (bits 55..58).
+    pub fn descriptor_chunk_mask(&self) -> u8 {
+        self.chunk_mask & 0xf
+    }
+
+    /// How many payload chunks the descriptor says are streamed: the client
+    /// popcounts `(descriptor chunk_mask) >> 3` (`0x142e374d0` with bias 1).
+    ///
+    /// The mask is the 4-bit descriptor field, so only bit 3 survives the
+    /// shift; bits 4..7 of the header byte are not in the descriptor.
+    pub fn streamed_chunks(&self) -> u32 {
+        count_bits_shifted(self.descriptor_chunk_mask() as u32, 1)
+    }
+
+    /// The descriptor's residency field at `+0x0c` as the load callback sets it
+    /// (`0x141dacf00`): zero from the builder, then the streamed chunk count
+    /// when `payload_count > 1` (`0x142e2dd70` gates that branch). The image's
+    /// `DAT_14414ce69` gate is zero, so the alternative branch that would store
+    /// `mip_count - chunk.level_count` is not the code this build runs; see
+    /// [`TextureChunk::streamed_mips`] for that formula.
+    pub fn resident_mips(&self) -> u32 {
+        if self.payload_count > 1 {
+            self.streamed_chunks()
+        } else {
+            0
+        }
+    }
+
+    /// The number of immediate payload requests the loader issues:
+    /// `0x142e37600(descriptor payload_count, descriptor mip_count, descriptor
+    /// base_mips, resident_mips)`, and only when `payload_count > 1`. Indices
+    /// are `1..=count`.
+    pub fn request_count(&self) -> u32 {
+        if self.payload_count <= 1 {
+            return 0;
+        }
+        request_count(
+            self.payload_count as u32,
+            self.descriptor_mip_count() as u32,
+            self.descriptor_base_mips() as u32,
+            self.resident_mips(),
+        )
+    }
+
+    /// The payload indices the loader requests immediately, in order.
+    pub fn requested_payloads(&self) -> Vec<u32> {
+        (1..=self.request_count()).collect()
+    }
+
+    /// This header's format family and DXGI id.
+    pub fn format(&self) -> (Format, u8) {
+        Format::from_header(self.format)
+    }
+}
+
+/// The 16-byte chunk header at `+0x20` of a texture, and at `+0x00` of a
+/// separate payload asset (type `0x04d`).
+///
+/// All four fields and their offsets are read: the first level is
+/// `0x142e38740` (`first_from_smallest`, counted from the smallest mip), the
+/// level count is `0x142255e10` (`+0x04`), the image size is `0x142e38750`
+/// (`+0x08`), and the data pointer `0x142e38730` is `chunk + header_size`
+/// (`+0x0c`). `0x141dacf00`'s dead branch also reads `+0x04`. The values on
+/// this install (every sampled chunk has `header_size == 0x10` and an
+/// `image_size` equal to the block-ceil sum of the levels it claims) are
+/// **install** evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextureChunk {
+    /// `mip_count - 1 - first_level`: the chunk's first level counted from the
+    /// smallest mip.
+    pub first_from_smallest: u32,
+    pub level_count: u32,
+    /// Block bytes in this chunk: every level it holds, times every surface.
+    pub image_size: u32,
+    /// Where the data starts, relative to the chunk header.
+    pub header_size: u32,
+}
+
+impl TextureChunk {
+    pub const SIZE: usize = 0x10;
+
+    pub fn parse(bytes: &[u8]) -> Result<TextureChunk> {
+        if bytes.len() < Self::SIZE {
+            return Err(Error::Truncated("chunk header"));
+        }
+        Ok(TextureChunk {
+            first_from_smallest: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            level_count: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            image_size: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            header_size: u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+        })
+    }
+
+    /// The chunk's first level, counted from the largest mip (level 0), or
+    /// `None` when `first_from_smallest` runs past the chain.
+    ///
+    /// `mip_count` is the header's stored byte (0..=16), not the 4-bit
+    /// descriptor field: `first_from_smallest` is an asset-side relation to the
+    /// header, not a consumer of the descriptor. (The descriptor field is what
+    /// the loader's request arithmetic reads; see
+    /// [`TextureHeader::descriptor_mip_count`].)
+    pub fn first_level(&self, mip_count: u8) -> Option<u32> {
+        (mip_count as u32)
+            .checked_sub(1)?
+            .checked_sub(self.first_from_smallest)
+    }
+
+    /// The dead branch's residency formula (`0x141dacf00`, gated by
+    /// `DAT_14414ce69`): the mips *not* in this chunk.
+    pub fn streamed_mips(&self, mip_count: u8) -> Option<u32> {
+        (mip_count as u32).checked_sub(self.level_count)
+    }
+
+    /// Offset of the block data inside the asset that carries this header.
+    pub fn data_offset(&self) -> usize {
+        self.header_size as usize
+    }
+}
+
+/// Where level 0's block run is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockPlan {
+    /// `payload_count == 0`: `total_size` bytes at `+0x20`.
+    Asset,
+    /// The embedded chunk's first level is 0.
+    Embedded(TextureChunk),
+    /// Level 0 is not in the embedded chunk. The value is the highest separate
+    /// payload index, which is where the six pinned assets put it; it is **not**
+    /// the selection rule. [`parse_asset`] reads each payload's own chunk
+    /// header and places its levels there. This value exists for `parse`'s
+    /// [`Error::Level0InPayload`] and for `block_span`.
+    Payload(u32),
+}
+
+/// Decide where level 0 lives, from the header and the embedded chunk.
+///
+/// `payload_count == 0` meaning a raw run at `+0x20`, and the chunk header's
+/// location at `+0x20`, are **read** (`0x142e2d900` stores the chunk pointer at
+/// object `+0x38`). Which level the embedded chunk starts at is **read**
+/// (`0x142e38740`/`0x142e38730`). The `Payload(index)` value is the install's
+/// highest-index convention, not a read selection rule; the levels a payload
+/// actually holds come from its own chunk header.
+pub fn block_plan(asset: &[u8]) -> Result<BlockPlan> {
+    let header = TextureHeader::parse(asset)?;
+    if header.payload_count == 0 {
+        return Ok(BlockPlan::Asset);
+    }
+    let chunk = TextureChunk::parse(
+        asset
+            .get(0x20..)
+            .ok_or(Error::Truncated("embedded chunk header"))?,
+    )?;
+    if chunk.image_size == 0 {
+        return Err(Error::NoData);
+    }
+    match chunk.first_level(header.mip_count) {
+        Some(0) => Ok(BlockPlan::Embedded(chunk)),
+        Some(_) if header.payload_count >= 2 => {
+            Ok(BlockPlan::Payload(header.payload_count as u32 - 1))
+        }
+        Some(_) => Err(Error::NoData),
+        None => Err(Error::Invalid("chunk starts past the last mip")),
+    }
+}
+
+/// One decoded subresource: one mip level of one array element (or cube face).
+///
+/// The client builds the D3D12 subresource record array at `0x141e296a0`: the
+/// outer loop is the array element, then the cube face, and the inner loop runs
+/// the mip levels of the source chunk from the largest to the smallest. The
+/// data pointer advances by each level's own byte size in that order, so a
+/// chunk's bytes are **surface-major, and within a surface mip 0 first**. The
+/// record index is the D3D12 subresource number
+/// `(array * faces + face) * mip_count + mip` (`0x142e36e80`; `faces` is 6
+/// for renderer types 4/7), and the copy loop in `0x141f0a000` walks the same
+/// order with the record-array flag bit 1 set (`0x141f0a53a`): its index is
+/// `mip + surface * mip_count`, with `surface = array * faces + face`.
+#[derive(Debug, Clone, Default)]
+pub struct TextureLevel {
+    /// Mip level, 0 = the largest.
+    pub mip: u8,
+    /// Layer index in the asset's own order (`0..surfaces`). A cube stores six
+    /// consecutive layers; the header does not name a face direction, and the
+    /// viewer's cube order is open (see the module note).
+    pub surface: u16,
+    pub width: u16,
+    pub height: u16,
+    /// This level's own block (or texel) run, exactly as stored.
+    pub blocks: Vec<u8>,
+    /// The 8-bit RGBA decode of `blocks`; for BC6H and the float families this
+    /// is the clamped view described on [`half_to_unorm8`].
+    pub rgba: Vec<u8>,
+    /// The half-float decode, four per pixel. Only BC6H fills it.
+    pub rgba16: Vec<u16>,
+    /// Which asset supplied this level.
+    pub source: BlockSource,
+    /// The level's absolute offset inside that asset.
+    pub block_offset: usize,
+}
+
+/// A decoded texture.
 #[derive(Debug, Clone, Default)]
 pub struct Texture {
+    /// The header the decode came from.
+    pub header: TextureHeader,
     pub width: u16,
     pub height: u16,
     pub mip_count: u8,
@@ -178,33 +883,56 @@ pub struct Texture {
     pub format: Format,
     /// The raw format byte, as stored.
     pub format_byte: u8,
-    /// Mip 0 as 8-bit RGBA. For a format with no byte form (BC6H, the float
-    /// families) this is the clamped view described on [`half_to_unorm8`]:
-    /// enough to draw, not enough to measure. The values themselves are in
-    /// [`Texture::rgba16`].
+    /// Mip 0 of surface 0 as 8-bit RGBA, kept for the viewer and the existing
+    /// tests. For a format with no byte form (BC6H and the two float families)
+    /// this is the clamped view described on [`half_to_unorm8`]: enough to
+    /// draw, not enough to measure. BC6H's exact halves are in
+    /// [`Texture::rgba16`]; the R16/RGBA16F families are clamped-view only
+    /// (open), so `rgba16` is empty for them too.
     pub rgba: Vec<u8>,
-    /// Mip 0 as half floats, four per pixel (`r, g, b, a`), for the formats
-    /// that produce one. Empty for every 8-bit format: a BC7 or BC1 pixel has
-    /// no second form, and inventing one would invite a reader to measure a
-    /// clamped byte and call it the data.
+    /// Mip 0 of surface 0 as half floats, four per pixel (`r, g, b, a`), for
+    /// the formats that produce one. **Only BC6H fills this.** The R16_FLOAT
+    /// and R16G16B16A16_FLOAT families are decoded into the clamped byte view
+    /// in [`Texture::rgba`] only; their exact halves are not exposed yet
+    /// (open), so this is empty for them too, as it is for every 8-bit format.
     pub rgba16: Vec<u16>,
-    /// Where the decoded blocks actually came from. A texture can carry them
+    /// Where mip 0 of surface 0 came from. A texture can carry its blocks
     /// inside its own bytes *or* in one of its payload assets, and the two are
     /// not interchangeable (measured: hero texture `0x0c00000000038c3d` embeds
     /// a descriptor table at `+0x20` and keeps mip 0 in payload 1) — a reader
     /// that assumes the embedded one reads the wrong bytes.
     pub source: BlockSource,
-    /// Offset of the block run inside its source.
+    /// Offset of that level's block run inside its source.
     pub block_offset: usize,
-    /// The exact level-0 bytes the decode used.
+    /// The exact mip-0/surface-0 bytes the decode used.
     pub blocks: Vec<u8>,
+    /// Every subresource the client copies, in D3D12 order: surface outer,
+    /// mip inner (surface 0 mips 0.., then surface 1 mips 0.., ...).
+    pub levels: Vec<TextureLevel>,
+}
+
+impl Texture {
+    /// Whether the texture's stored format is an sRGB (colour) format.
+    pub fn is_srgb(&self) -> bool {
+        is_srgb_format(self.format_byte)
+    }
+
+    /// The decoded `(mip, surface)` subresource, if it was decoded.
+    pub fn level(&self, mip: u8, surface: u16) -> Option<&TextureLevel> {
+        self.levels
+            .iter()
+            .find(|level| level.mip == mip && level.surface == surface)
+    }
 }
 
 /// Which asset the decoded blocks came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlockSource {
+    /// The raw run at `+0x20` of a `payload_count == 0` asset.
     #[default]
     Asset,
+    /// The 16-byte chunk header at `+0x20` of the texture asset itself.
+    Embedded,
     /// One of the payload assets (`guid::payload_of`).
     Payload(u32),
 }
@@ -220,16 +948,7 @@ impl Texture {
         let fourcc: u32;
         let dxgi: Option<u32>;
         let pitch: u32;
-        let is_bc = matches!(
-            self.format,
-            Format::Bc1
-                | Format::Bc2
-                | Format::Bc3
-                | Format::Bc4
-                | Format::Bc5
-                | Format::Bc7
-                | Format::Bc6h { .. }
-        );
+        let is_bc = self.format.is_block();
         if matches!(
             self.format,
             Format::Bc1 | Format::Bc2 | Format::Bc3 | Format::Bc4 | Format::Bc5
@@ -249,30 +968,19 @@ impl Texture {
             pitch = (bw * bh * self.format.block_bytes()) as u32;
         } else if matches!(self.format, Format::Bc7 | Format::Bc6h { .. }) {
             // A DX10 header, because the DXGI number is what names BC6H and
-            // BC7: fourCC "DX10" plus a 20-byte block that starts with it.
+            // BC7: fourCC "DX10" plus a 20-byte block that starts with it. The
+            // number is the one the client's own tables resolve the stored
+            // byte to (95/96 for BC6H, 98/99 for BC7).
             flags |= 0x80000;
             fourcc = u32::from_le_bytes(*b"DX10");
-            // The client's stored byte is one higher from 26 up, so undo it to
-            // get the id a DDS reader expects: 98/99 for BC7, 95/96 for BC6H
-            // (95 = unsigned float, 96 = signed float).
-            dxgi = Some(match self.format {
-                Format::Bc7 => {
-                    if self.format_byte >= 0x1a {
-                        99
-                    } else {
-                        98
-                    }
-                }
-                // The DXGI id, which is what the DX10 block wants — *not* the
-                // client's stored byte, which is one higher from 26 up. Asking
-                // `from_header` keeps the two in step: 94 (typeless), 95
-                // (unsigned float) or 96 (signed float).
-                Format::Bc6h { .. } => Format::from_header(self.format_byte).1 as u32,
-                _ => 0,
-            });
+            dxgi = Some(dxgi_of(self.format_byte) as u32);
             let bw = (self.width as usize).div_ceil(4);
             let bh = (self.height as usize).div_ceil(4);
             pitch = (bw * bh * 16) as u32;
+        } else if is_bc {
+            // BC4/BC5 SNORM: no fourCC this writer can name without claiming
+            // the unsigned variant.
+            return Err(Error::UnsupportedFormat(self.format_byte));
         } else {
             flags |= 0x8;
             fourcc = 0;
@@ -286,7 +994,7 @@ impl Texture {
         hdr[28..32].copy_from_slice(&1u32.to_le_bytes());
         let pf_off = 76usize;
         hdr[pf_off..pf_off + 4].copy_from_slice(&32u32.to_le_bytes());
-        if is_bc || matches!(self.format, Format::Bc7 | Format::Bc6h { .. }) {
+        if is_bc {
             hdr[pf_off + 4..pf_off + 8].copy_from_slice(&0x4u32.to_le_bytes());
             hdr[pf_off + 8..pf_off + 12].copy_from_slice(&fourcc.to_le_bytes());
         } else {
@@ -362,200 +1070,436 @@ fn block_bytes_needed(w: usize, h: usize, per_block: usize) -> Result<usize> {
         .ok_or(Error::Truncated("dimensions"))
 }
 
-/// Where the compressed blocks start and how many bytes they cover.
+/// Where the embedded block run starts and how many bytes it covers.
+///
+/// This is the run a caller can read from the parent asset alone: the raw
+/// `total_size` bytes at `+0x20` when `payload_count == 0`, or the embedded
+/// chunk's `image_size` bytes behind its `header_size` when that chunk holds
+/// level 0. When level 0 is a separate payload, this returns
+/// [`Error::Level0InPayload`] — the payload's own header is needed.
 pub fn block_span(d: &[u8]) -> Result<(usize, usize)> {
-    if d.len() < 0x20 {
-        return Err(Error::Truncated("header"));
-    }
-    let payload_count = d[6];
-    let data_size = u16_at(d, 0x0c).unwrap_or(0) as usize;
-    if data_size == 0 || payload_count > 0 {
-        if d.len() < 0x30 {
-            return Err(Error::Truncated("embedded payload header"));
+    let header = TextureHeader::parse(d)?;
+    match block_plan(d)? {
+        BlockPlan::Asset => Ok((0x20, header.total_size as usize)),
+        BlockPlan::Embedded(chunk) => {
+            let start = 0x20usize
+                .checked_add(chunk.header_size as usize)
+                .ok_or(Error::Truncated("chunk header"))?;
+            Ok((start, chunk.image_size as usize))
         }
-        let image_size = u32_at(d, 0x28).unwrap_or(0) as usize;
-        let header_size = u32_at(d, 0x2c).unwrap_or(0x10) as usize;
-        if image_size == 0 {
-            return Err(Error::NoData);
-        }
-        Ok((0x20 + header_size, image_size))
-    } else {
-        Ok((0x20, data_size))
+        BlockPlan::Payload(i) => Err(Error::Level0InPayload(i)),
     }
 }
 
 /// Dimensions and family from a texture header alone.
 pub fn header_dimensions(asset: &[u8]) -> Option<(u16, u16, Format)> {
-    if asset.len() < 0x20 {
-        return None;
-    }
-    let (format, _) = Format::from_header(asset[3]);
-    Some((u16_at(asset, 8)?, u16_at(asset, 10)?, format))
+    let header = TextureHeader::parse(asset).ok()?;
+    Some((header.width, header.height, header.format().0))
 }
 
-/// Parse a texture asset, following the *separate* payload asset when the
-/// embedded bytes do not hold level 0 (measured: an 8-mip 512x512 BC5 texture
-/// embeds only mips 2..7 — 21840 B — and keeps levels 0..1 in payload 1; and a
-/// 256x256 BC7 hero texture embeds a 16-byte descriptor table at `+0x20` while
-/// its mip 0 lives in payload 1).
+/// The width and height of one mip level: `max(width >> mip, 1)`, the client's
+/// width/height-at-level helpers `0x142e2db70`/`0x142e2db50`.
+///
+/// These are the resource's mip dimensions, not the block-storage grid: a 2x2
+/// BC level still occupies one 4x4 block, which is why [`level_byte_size`]
+/// rounds the dimensions up. (The client's block-pitch helper `0x142e36ec0`
+/// clamps the dimensions at the block size before rounding; the block count is
+/// the same either way.)
+pub fn level_dimensions(width: u32, height: u32, mip: u32) -> (u32, u32) {
+    let shift = mip & 0x1f;
+    ((width >> shift).max(1), (height >> shift).max(1))
+}
+
+/// Bytes in one surface's mip level: `ceil(w/4) * ceil(h/4) * block bytes` for
+/// a BC family, `w * h * bytes per pixel` for a linear one.
+///
+/// The same block count the client's pitch helper `0x142e36ec0` computes.
+pub fn level_byte_size(format: Format, width: u32, height: u32) -> usize {
+    level0_bytes(format, width as usize, height as usize)
+}
+
+/// Reject the families this decoder has no path for before their level sizes
+/// are needed. The error names the DXGI id when the client's tables have one.
+fn check_decodable(format: Format) -> Result<()> {
+    match format {
+        Format::Bc4Snorm => Err(Error::UnsupportedFormat(81)),
+        Format::Bc5Snorm => Err(Error::UnsupportedFormat(84)),
+        Format::Unknown(byte) => {
+            let id = dxgi_of(byte);
+            Err(Error::UnsupportedFormat(if id != 0 { id } else { byte }))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// One contiguous source of block data: the raw run, the embedded chunk, or a
+/// separate payload's chunk.
+#[derive(Debug, Clone, Copy)]
+struct BlockRun {
+    source: BlockSource,
+    /// Offset of the chunk's data inside `bytes`.
+    data_start: usize,
+    /// The chunk's `image_size`: every level it holds, times every surface.
+    image_size: usize,
+    first_mip: u32,
+    level_count: u32,
+}
+
+/// A run and the bytes it indexes (the texture asset or one payload asset).
+struct RunData<'a> {
+    bytes: &'a [u8],
+    run: BlockRun,
+}
+
+/// A chunk header at `base` in its asset, turned into a run.
+///
+/// The client reads these fields directly: the data pointer is
+/// `chunk + header_size` (`0x142e38730`), the first level is
+/// `mip_count - 1 - first_from_smallest` (`0x142e38740`), `image_size`
+/// (`0x142e38750`) and `level_count` (`0x142255e10`).
+fn chunk_run(
+    base: usize,
+    chunk: &TextureChunk,
+    mip_count: u8,
+    source: BlockSource,
+) -> Result<BlockRun> {
+    let first_mip = chunk
+        .first_level(mip_count)
+        .ok_or(Error::Invalid("chunk starts past the last mip"))?;
+    let data_start = base
+        .checked_add(chunk.header_size as usize)
+        .ok_or(Error::Truncated("chunk header"))?;
+    Ok(BlockRun {
+        source,
+        data_start,
+        image_size: chunk.image_size as usize,
+        first_mip,
+        level_count: chunk.level_count,
+    })
+}
+
+/// The `payload_count == 0` run: `total_size` bytes at `+0x20`, every level from
+/// the largest to the smallest (`0x141e29210`'s no-payload branch passes the
+/// descriptor's `+0x38` pointer and `+0x40` size with first mip 0 and
+/// `mip_count - 1` as the last).
+fn raw_run(header: &TextureHeader) -> BlockRun {
+    BlockRun {
+        source: BlockSource::Asset,
+        data_start: TextureHeader::SIZE,
+        image_size: header.total_size as usize,
+        first_mip: 0,
+        level_count: header.mip_count as u32,
+    }
+}
+
+/// Lay the runs out into subresources and decode every one.
+///
+/// The order inside one run is the one `0x141e296a0` walks: array element
+/// (six faces for a cube) outermost, then the mip levels in ascending order
+/// (largest first), with the data pointer advancing by each level's own byte
+/// size. The D3D12 record index for a level is
+/// `(array * faces + face) * mip_count + mip` (`0x142e36e80`; `faces` is 6
+/// for renderer types 4/7).
+fn build_texture(
+    header: TextureHeader,
+    format: Format,
+    surfaces: u32,
+    runs: &[RunData<'_>],
+) -> Result<Texture> {
+    let mip_count = header.mip_count as u32;
+    if mip_count == 0 || surfaces == 0 {
+        return Err(Error::NoData);
+    }
+    let surfaces_usize = surfaces as usize;
+    let mips_usize = mip_count as usize;
+    let count = mips_usize
+        .checked_mul(surfaces_usize)
+        .ok_or(Error::Truncated("dimensions"))?;
+    let mut slots: Vec<Option<(usize, usize)>> = vec![None; count];
+
+    for (run_index, data) in runs.iter().enumerate() {
+        let run = data.run;
+        if run.level_count == 0 {
+            continue;
+        }
+        let end_mip = run
+            .first_mip
+            .checked_add(run.level_count)
+            .filter(|end| *end <= mip_count)
+            .ok_or(Error::Invalid("chunk levels past the last mip"))?;
+        if run.image_size % surfaces_usize != 0 {
+            return Err(Error::Invalid(
+                "chunk image size is not over whole surfaces",
+            ));
+        }
+        let per_surface = run.image_size / surfaces_usize;
+        let end = run
+            .data_start
+            .checked_add(run.image_size)
+            .ok_or(Error::Truncated("blocks"))?;
+        if end > data.bytes.len() {
+            return Err(Error::Truncated("blocks"));
+        }
+        let mut prefix = 0usize;
+        for mip in run.first_mip..end_mip {
+            let (w, h) = level_dimensions(header.width as u32, header.height as u32, mip);
+            let size = level_byte_size(format, w, h);
+            for surface in 0..surfaces_usize {
+                let at = run.data_start + surface * per_surface + prefix;
+                if at + size > end {
+                    return Err(Error::Truncated("blocks"));
+                }
+                slots[surface * mips_usize + mip as usize] = Some((run_index, at));
+            }
+            prefix = prefix
+                .checked_add(size)
+                .ok_or(Error::Truncated("dimensions"))?;
+        }
+        if prefix * surfaces_usize != run.image_size {
+            return Err(Error::Invalid(
+                "chunk image size is not the sum of its levels",
+            ));
+        }
+    }
+
+    if slots.iter().any(Option::is_none) {
+        return Err(Error::Invalid("a level is in no chunk"));
+    }
+
+    let mut levels = Vec::with_capacity(count);
+    for (index, slot) in slots.iter().enumerate() {
+        let (run_index, at) = slot.ok_or(Error::Invalid("a level is in no chunk"))?;
+        let mip = (index % mips_usize) as u32;
+        let surface = (index / mips_usize) as u32;
+        let (w, h) = level_dimensions(header.width as u32, header.height as u32, mip);
+        let size = level_byte_size(format, w, h);
+        let data = &runs[run_index];
+        let blocks = &data.bytes[at..at + size];
+        let (rgba, rgba16) = decode_level(format, w as usize, h as usize, blocks)?;
+        levels.push(TextureLevel {
+            mip: mip as u8,
+            surface: surface as u16,
+            width: w as u16,
+            height: h as u16,
+            blocks: blocks.to_vec(),
+            rgba,
+            rgba16,
+            source: data.run.source,
+            block_offset: at,
+        });
+    }
+
+    let level0 = &levels[0];
+    Ok(Texture {
+        header,
+        width: header.width,
+        height: header.height,
+        mip_count: header.mip_count,
+        surfaces: header.surfaces,
+        format,
+        format_byte: header.format,
+        rgba: level0.rgba.clone(),
+        rgba16: level0.rgba16.clone(),
+        source: level0.source,
+        block_offset: level0.block_offset,
+        blocks: level0.blocks.clone(),
+        levels,
+    })
+}
+
+/// Parse a texture asset, following its separate payload assets.
+///
+/// The chunk fields are read (`0x142e38730`/`0x142e38740`/`0x142e38750`/
+/// `0x142255e10`), and so is the loader's payload GUID (`0x142e37520`). Every
+/// payload the header names (`payload_count > 1`, indices `1..=payload_count-1`)
+/// is read; the client requests the immediate set from
+/// [`TextureHeader::requested_payloads`] and fetches the highest index lazily
+/// when `chunk_mask` bit 3 marks it streamed, but the bytes and the level each
+/// payload holds are the same either way. Which levels a payload holds is its
+/// own chunk header's `first_from_smallest`/`level_count`, not its index.
 pub fn parse_asset(
     asset: &[u8],
     guid: u64,
     load: &dyn Fn(u64) -> Option<Vec<u8>>,
 ) -> Result<Texture> {
-    match parse(asset) {
-        Ok(t) => Ok(t),
-        Err(Error::Truncated(_)) => {
-            // A chain can be split over several payload assets (measured:
-            // 1024x1024 BC5 with payloads 3 keeps the big levels in payload 1
-            // *or* 2), so try them in order and keep the first whose block run
-            // covers level 0.
-            let level0 = header_dimensions(asset)
-                .map(|(w, h, f)| level0_bytes(f, w as usize, h as usize))
-                .unwrap_or(0);
-            for idx in 1..=3u32 {
-                let Some(bytes) = load(crate::guid::payload_of(guid, idx)) else {
-                    continue;
-                };
-                // The payload asset is a four-u32 header then the blocks.
-                let start = u32_at(&bytes, 12).unwrap_or(0x10) as usize;
-                let image = u32_at(&bytes, 8).unwrap_or(0) as usize;
-                if image == 0 || bytes.len() < start + image {
-                    continue;
-                }
-                let run = &bytes[start..start + image];
-                if level0 > 0 && run.len() < level0 {
-                    continue;
-                }
-                if let Ok(t) = decode(asset, run) {
-                    let mut t = t;
-                    t.source = BlockSource::Payload(idx);
-                    t.block_offset = start;
-                    return Ok(t);
-                }
-            }
-            Err(Error::NoData)
+    let header = TextureHeader::parse(asset)?;
+    let (format, _id) = header.format();
+    check_decodable(format)?;
+    if header.is_volume() {
+        return Err(Error::UnsupportedLayout("volume"));
+    }
+    let plan = block_plan(asset)?;
+    let (_depth, surfaces) = header.depth_and_surfaces();
+
+    let mut payload_bytes: Vec<Vec<u8>> = Vec::new();
+    let mut payload_runs: Vec<BlockRun> = Vec::new();
+    let mut missing: Vec<u32> = Vec::new();
+    if header.payload_count > 1 {
+        for index in 1..header.payload_count as u32 {
+            let payload_guid = crate::guid::payload_of(guid, index);
+            let Some(bytes) = load(payload_guid) else {
+                missing.push(index);
+                continue;
+            };
+            let chunk = TextureChunk::parse(&bytes)?;
+            let run = chunk_run(0, &chunk, header.mip_count, BlockSource::Payload(index))?;
+            payload_bytes.push(bytes);
+            payload_runs.push(run);
         }
-        Err(e) => Err(e),
     }
+
+    let mut runs: Vec<RunData<'_>> = Vec::new();
+    match plan {
+        BlockPlan::Asset => runs.push(RunData {
+            bytes: asset,
+            run: raw_run(&header),
+        }),
+        BlockPlan::Embedded(chunk) => runs.push(RunData {
+            bytes: asset,
+            run: chunk_run(0x20, &chunk, header.mip_count, BlockSource::Embedded)?,
+        }),
+        BlockPlan::Payload(_) => {
+            // The embedded chunk holds the tail; read it from `+0x20` and let
+            // each payload's own header place its levels.
+            let chunk = TextureChunk::parse(
+                asset
+                    .get(0x20..)
+                    .ok_or(Error::Truncated("embedded chunk header"))?,
+            )?;
+            runs.push(RunData {
+                bytes: asset,
+                run: chunk_run(0x20, &chunk, header.mip_count, BlockSource::Embedded)?,
+            });
+        }
+    }
+    for (bytes, run) in payload_bytes.iter().zip(payload_runs.iter()) {
+        runs.push(RunData { bytes, run: *run });
+    }
+
+    build_texture(header, format, surfaces, &runs).map_err(|e| match e {
+        Error::Invalid("a level is in no chunk") if !missing.is_empty() => {
+            Error::PayloadNotLoaded(missing[0])
+        }
+        other => other,
+    })
 }
 
-/// Parse a texture asset and decode mip 0.
+/// Parse a texture asset and decode every level it carries itself.
+///
+/// When level 0 lives in a separate payload this returns
+/// [`Error::Level0InPayload`]; use [`parse_asset`] with the payload loader for
+/// that case. The `payload_count == 0` asset is one raw run at `+0x20`; an
+/// asset with a chunk decodes the chunk's own levels (surface-major, mip
+/// ascending) and nothing from the payload assets it names.
 pub fn parse(asset: &[u8]) -> Result<Texture> {
-    let (start, size) = block_span(asset)?;
-    if start >= asset.len() {
-        return Err(Error::Truncated("blocks"));
+    let header = TextureHeader::parse(asset)?;
+    let (format, _id) = header.format();
+    check_decodable(format)?;
+    if header.is_volume() {
+        return Err(Error::UnsupportedLayout("volume"));
     }
-    let end = start.checked_add(size).ok_or(Error::Truncated("blocks"))?;
-    if end > asset.len() {
-        return Err(Error::Truncated("blocks"));
-    }
-    let blocks = &asset[start..end];
-    let mut t = decode(asset, blocks)?;
-    t.source = BlockSource::Asset;
-    t.block_offset = start;
-    Ok(t)
+    let plan = block_plan(asset)?;
+    let (_depth, surfaces) = header.depth_and_surfaces();
+    let run = match plan {
+        BlockPlan::Asset => raw_run(&header),
+        BlockPlan::Embedded(chunk) => {
+            chunk_run(0x20, &chunk, header.mip_count, BlockSource::Embedded)?
+        }
+        BlockPlan::Payload(index) => return Err(Error::Level0InPayload(index)),
+    };
+    build_texture(header, format, surfaces, &[RunData { bytes: asset, run }])
 }
 
-/// Decode a texture from an explicit header and block run: the entry point for
-/// a payload that came from a *separate* asset, where the header's own
-/// `data_size` (u16) cannot describe the level (measured: a 512x512 BC5 level
-/// is 262144 B).
+/// Decode one explicit run as a single mip 0 / surface 0 texture.
+///
+/// Kept for callers that hold a payload's bytes but not its parent asset. The
+/// run is trimmed to one level ([`level_byte_size`]); the full asset-level
+/// entry points are [`parse`] and [`parse_asset`].
 pub fn decode(asset: &[u8], blocks_in: &[u8]) -> Result<Texture> {
-    if asset.len() < 0x20 {
-        return Err(Error::Truncated("header"));
+    let header = TextureHeader::parse(asset)?;
+    let (format, _id) = header.format();
+    check_decodable(format)?;
+    if header.is_volume() {
+        return Err(Error::UnsupportedLayout("volume"));
     }
-    let mip_count = asset[2];
-    let format_byte = asset[3];
-    let surfaces = asset[4];
-    let width = u16_at(asset, 8).ok_or(Error::Truncated("width"))?;
-    let height = u16_at(asset, 10).ok_or(Error::Truncated("height"))?;
-    let (format, _id) = Format::from_header(format_byte);
-
-    if width == 0 || height == 0 {
-        return Err(Error::NoData);
-    }
-    let mut blocks = blocks_in;
-    // The payload may hold the whole mip chain and store it *smallest first*,
-    // in which case the level-0 blocks are at the end of the payload (measured:
-    // 162 of 400 sampled textures read as truncated from the front).  Prefer
-    // whichever end actually holds level 0.
-    let level0 = level0_bytes(format, width as usize, height as usize);
-    if level0 > 0 && blocks.len() >= level0 {
-        // A block run larger than one level is a chain; level 0 is the first
-        // run (the reference stores the chain largest-first inside a payload).
-        blocks = &blocks[..level0];
-    }
-
-    let (rgba, rgba16) = match format {
-        Format::Bc1 => (
-            decode_bc1(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::Bc2 => (
-            decode_bc2(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::Bc3 => (
-            decode_bc3(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::Bc4 => (
-            decode_bc4(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::Bc5 => (
-            decode_bc5(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::Bc7 => (
-            decode_bc7(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::Bc6h { signed } => decode_bc6h(blocks, width as usize, height as usize, signed)?,
-        Format::Rgba8 => (
-            decode_rgba8(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::Rgba16Float => (
-            decode_rgba16f(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::R16Float => (
-            decode_r16_float(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::R16Unorm => (
-            decode_r16_unorm(blocks, width as usize, height as usize)?,
-            Vec::new(),
-        ),
-        Format::Unknown(id) => return Err(Error::UnsupportedFormat(id)),
+    let width = header.width as u32;
+    let height = header.height as u32;
+    let size = level_byte_size(format, width, height);
+    let blocks = blocks_in.get(..size).ok_or(Error::Truncated("level 0"))?;
+    let (rgba, rgba16) = decode_level(format, width as usize, height as usize, blocks)?;
+    let level = TextureLevel {
+        mip: 0,
+        surface: 0,
+        width: header.width,
+        height: header.height,
+        blocks: blocks.to_vec(),
+        rgba: rgba.clone(),
+        rgba16: rgba16.clone(),
+        source: BlockSource::default(),
+        block_offset: 0,
     };
-
     Ok(Texture {
-        width,
-        height,
-        mip_count,
-        surfaces,
+        header,
+        width: header.width,
+        height: header.height,
+        mip_count: header.mip_count,
+        surfaces: header.surfaces,
         format,
-        format_byte,
+        format_byte: header.format,
         rgba,
         rgba16,
         source: BlockSource::default(),
         block_offset: 0,
         blocks: blocks.to_vec(),
+        levels: vec![level],
     })
 }
 
-/// Bytes of one level's block grid, or 0 for an unknown family.
+/// Decode one subresource's blocks. `blocks` is exactly one level of one
+/// surface, so the length checks are against that level's own dimensions.
+fn decode_level(
+    format: Format,
+    width: usize,
+    height: usize,
+    blocks: &[u8],
+) -> Result<(Vec<u8>, Vec<u16>)> {
+    Ok(match format {
+        Format::Bc1 => (decode_bc1(blocks, width, height)?, Vec::new()),
+        Format::Bc2 => (decode_bc2(blocks, width, height)?, Vec::new()),
+        Format::Bc3 => (decode_bc3(blocks, width, height)?, Vec::new()),
+        Format::Bc4 => (decode_bc4(blocks, width, height)?, Vec::new()),
+        Format::Bc5 => (decode_bc5(blocks, width, height)?, Vec::new()),
+        Format::Bc7 => (decode_bc7(blocks, width, height)?, Vec::new()),
+        Format::Bc6h { signed } => decode_bc6h(blocks, width, height, signed)?,
+        Format::Rgba8 => (decode_rgba8(blocks, width, height)?, Vec::new()),
+        Format::Rgba16Float => (decode_rgba16f(blocks, width, height)?, Vec::new()),
+        Format::R16Float => (decode_r16_float(blocks, width, height)?, Vec::new()),
+        Format::R16Unorm => (decode_r16_unorm(blocks, width, height)?, Vec::new()),
+        Format::Rg8 => (decode_rg8(blocks, width, height)?, Vec::new()),
+        // `check_decodable` rejects these before a level reaches the decoder.
+        Format::Bc4Snorm => return Err(Error::UnsupportedFormat(81)),
+        Format::Bc5Snorm => return Err(Error::UnsupportedFormat(84)),
+        Format::Unknown(byte) => {
+            let id = dxgi_of(byte);
+            return Err(Error::UnsupportedFormat(if id != 0 { id } else { byte }));
+        }
+    })
+}
+
+/// Bytes of one level's block grid for one surface, or 0 for an unknown family.
 pub fn level0_bytes(format: Format, w: usize, h: usize) -> usize {
     let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
     match format {
-        Format::Bc1 | Format::Bc4 => bw * bh * 8,
-        Format::Bc2 | Format::Bc3 | Format::Bc5 | Format::Bc7 | Format::Bc6h { .. } => bw * bh * 16,
+        Format::Bc1 | Format::Bc4 | Format::Bc4Snorm => bw * bh * 8,
+        Format::Bc2
+        | Format::Bc3
+        | Format::Bc5
+        | Format::Bc5Snorm
+        | Format::Bc7
+        | Format::Bc6h { .. } => bw * bh * 16,
         Format::Rgba8 => w * h * 4,
         Format::Rgba16Float => w * h * 8,
-        Format::R16Float | Format::R16Unorm => w * h * 2,
+        Format::R16Float | Format::R16Unorm | Format::Rg8 => w * h * 2,
         Format::Unknown(_) => 0,
     }
 }
@@ -582,6 +1526,25 @@ fn decode_rgba8(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
         return Err(Error::Truncated("rgba8 data"));
     }
     Ok(blocks[..need].to_vec())
+}
+
+/// R8G8, two byte channels: green is the second byte, blue is absent. UNORM
+/// and UINT have the same byte layout (a byte/255 view and the raw integer), so
+/// one decode serves both.
+fn decode_rg8(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
+    check_dims(w, h)?;
+    let need = pixel_bytes(w, h, 2)?;
+    if blocks.len() < need {
+        return Err(Error::Truncated("rg8 data"));
+    }
+    let count = w.checked_mul(h).ok_or(Error::Truncated("dimensions"))?;
+    let mut out = vec![0u8; pixel_bytes(w, h, 4)?];
+    for i in 0..count {
+        out[i * 4] = blocks[i * 2];
+        out[i * 4 + 1] = blocks[i * 2 + 1];
+        out[i * 4 + 3] = 255;
+    }
+    Ok(out)
 }
 
 /// R16G16B16A16_FLOAT: four half floats per pixel, 8 bytes.
@@ -655,13 +1618,19 @@ fn rgb565(c: u16) -> [u8; 3] {
 }
 
 /// The four BC1 colours and, for the 3-colour mode, the transparent index.
-fn bc1_palette(c0: u16, c1: u16) -> ([[u8; 4]; 4], bool) {
+///
+/// BC1 picks the mode from the endpoints: `c0 > c1` is the four-colour block and
+/// `c0 <= c1` the three-colour one with a transparent slot. BC2 and BC3 carry
+/// their alpha in a separate half, so their colour block is **always** the
+/// four-colour form; `four_colour` forces that branch for them and leaves BC1's
+/// endpoint test untouched.
+fn bc1_palette(c0: u16, c1: u16, four_colour: bool) -> ([[u8; 4]; 4], bool) {
     let a = rgb565(c0);
     let b = rgb565(c1);
     let mut pal = [[0u8; 4]; 4];
     pal[0] = [a[0], a[1], a[2], 255];
     pal[1] = [b[0], b[1], b[2], 255];
-    if c0 > c1 {
+    if four_colour || c0 > c1 {
         for i in 0..3 {
             pal[2][i] = ((2 * a[i] as u32 + b[i] as u32) / 3) as u8;
             pal[3][i] = ((a[i] as u32 + 2 * b[i] as u32) / 3) as u8;
@@ -679,11 +1648,17 @@ fn bc1_palette(c0: u16, c1: u16) -> ([[u8; 4]; 4], bool) {
     }
 }
 
-fn decode_bc_colour(blocks: &[u8], w: usize, h: usize, at: usize) -> Result<Vec<u8>> {
+fn decode_bc_colour(
+    blocks: &[u8],
+    w: usize,
+    h: usize,
+    at: usize,
+    four_colour: bool,
+) -> Result<Vec<u8>> {
     let c0 = u16_at(blocks, at).ok_or(Error::Truncated("bc colour block"))?;
     let c1 = u16_at(blocks, at + 2).ok_or(Error::Truncated("bc colour block"))?;
     let bits = u32_at(blocks, at + 4).ok_or(Error::Truncated("bc colour block"))?;
-    let (pal, _) = bc1_palette(c0, c1);
+    let (pal, _) = bc1_palette(c0, c1, four_colour);
     let mut out = vec![0u8; w * h * 4];
     for y in 0..4 {
         for x in 0..4 {
@@ -712,7 +1687,7 @@ fn decode_bc1(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     for by in 0..bh {
         for bx in 0..bw {
             let at = (by * bw + bx) * 8;
-            let tile = decode_bc_colour(blocks, 4, 4, at)?;
+            let tile = decode_bc_colour(blocks, 4, 4, at, false)?;
             for y in 0..4 {
                 for x in 0..4 {
                     let (px, py) = (bx * 4 + x, by * 4 + y);
@@ -836,7 +1811,7 @@ fn decode_bc2(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     for by in 0..bh {
         for bx in 0..bw {
             let at = (by * bw + bx) * 16;
-            let tile = decode_bc_colour(blocks, 4, 4, at + 8)?;
+            let tile = decode_bc_colour(blocks, 4, 4, at + 8, true)?;
             for y in 0..4 {
                 for x in 0..4 {
                     let (px, py) = (bx * 4 + x, by * 4 + y);
@@ -871,7 +1846,7 @@ fn decode_bc3(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
         for bx in 0..bw {
             let at = (by * bw + bx) * 16;
             let alpha = decode_bc4_channel(blocks, at);
-            let tile = decode_bc_colour(blocks, 4, 4, at + 8)?;
+            let tile = decode_bc_colour(blocks, 4, 4, at + 8, true)?;
             for y in 0..4 {
                 for x in 0..4 {
                     let (px, py) = (bx * 4 + x, by * 4 + y);
@@ -2594,15 +3569,17 @@ mod tests {
         (0x17e8,  8), (0x0ff0,  8), (0x718e,  2), (0x399c,  2),
     ];
 
-    fn texture_prefix(format: u8, w: u16, h: u16, data_size: u16) -> Vec<u8> {
+    /// A one-mip, one-surface, no-payload header with `total_size` set, then
+    /// no chunk header: `parse` reads the block run from `+0x20`.
+    fn texture_prefix(format: u8, w: u16, h: u16, total_size: u16) -> Vec<u8> {
         let mut d = vec![0u8; 0x20];
         d[2] = 1; // one mip
         d[3] = format;
-        d[4] = 1;
+        d[4] = 1; // one surface
         d[6] = 0;
         d[8..10].copy_from_slice(&w.to_le_bytes());
         d[10..12].copy_from_slice(&h.to_le_bytes());
-        d[12..14].copy_from_slice(&data_size.to_le_bytes());
+        d[12..16].copy_from_slice(&(total_size as u32).to_le_bytes());
         d
     }
 
@@ -2621,19 +3598,71 @@ mod tests {
         assert_eq!(t.pixel(3, 3), [255, 0, 0, 255]);
     }
 
+    /// A 4x4 BC colour-index word: the left two columns at `left`, the right
+    /// two at `right`, so two palette entries can be read back side by side.
+    fn colour_indices(left: u32, right: u32) -> u32 {
+        let mut bits = 0u32;
+        for y in 0..4 {
+            for x in 0..4 {
+                let idx = if x < 2 { left } else { right };
+                bits |= idx << (2 * (y * 4 + x));
+            }
+        }
+        bits
+    }
+
     #[test]
     fn bc1_three_colour_mode_has_a_transparent_slot() {
-        // c0 = 0 <= c1 = 0xFFFF: index 3 is transparent black.
+        // c0 = 0 <= c1 = 0xFFFF: index 2 is the integer average 127 and index 3
+        // is transparent black. BC1 is the only format that takes this branch.
         let mut d = texture_prefix(71, 4, 4, 8);
         d.extend_from_slice(&0u16.to_le_bytes());
         d.extend_from_slice(&0xFFFFu16.to_le_bytes());
-        d.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // every index = 3
+        d.extend_from_slice(&colour_indices(2, 3).to_le_bytes());
         let t = parse(&d).expect("parses");
         assert_eq!(
-            t.pixel(0, 0)[3],
-            0,
+            t.pixel(0, 0),
+            [127, 127, 127, 255],
+            "index 2 is the average"
+        );
+        assert_eq!(
+            t.pixel(3, 0),
+            [0, 0, 0, 0],
             "index 3 is transparent in 3-colour mode"
         );
+    }
+
+    #[test]
+    fn bc2_always_uses_the_four_colour_block() {
+        // c0 = 0 <= c1 = 0xFFFF would select BC1's 3-colour branch, but BC2's
+        // colour half is always four-colour: index 2 is (2*0 + 255)/3 = 85 and
+        // index 3 is (0 + 2*255)/3 = 170. Alpha comes from the 4-bit half.
+        let mut d = texture_prefix(74, 4, 4, 16);
+        d.extend_from_slice(&[0xFF; 8]); // every 4-bit alpha nibble is 15
+        d.extend_from_slice(&0u16.to_le_bytes());
+        d.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        d.extend_from_slice(&colour_indices(2, 3).to_le_bytes());
+        let t = parse(&d).expect("parses");
+        assert_eq!(t.format, Format::Bc2);
+        assert_eq!(t.pixel(0, 0), [85, 85, 85, 255], "index 2, alpha opaque");
+        assert_eq!(t.pixel(3, 0), [170, 170, 170, 255], "index 3, alpha opaque");
+    }
+
+    #[test]
+    fn bc3_always_uses_the_four_colour_block() {
+        // Same endpoints and indices as BC2. BC3's alpha half is the BC4-style
+        // block: a0 = 0xFF with index 0 gives 255 everywhere.
+        let mut d = texture_prefix(77, 4, 4, 16);
+        d.push(0xFF); // alpha a0
+        d.push(0x00); // alpha a1
+        d.extend_from_slice(&[0u8; 6]); // all indices 0 -> alpha 255
+        d.extend_from_slice(&0u16.to_le_bytes());
+        d.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        d.extend_from_slice(&colour_indices(2, 3).to_le_bytes());
+        let t = parse(&d).expect("parses");
+        assert_eq!(t.format, Format::Bc3);
+        assert_eq!(t.pixel(0, 0), [85, 85, 85, 255], "index 2, alpha opaque");
+        assert_eq!(t.pixel(3, 0), [170, 170, 170, 255], "index 3, alpha opaque");
     }
 
     #[test]
@@ -3404,17 +4433,26 @@ mod tests {
         assert_eq!(t.pixel(0, 0), [255, 0, 128, 0]);
         assert_eq!(t.pixel(1, 0), [0, 128, 255, 255]);
 
-        // R16_FLOAT: stored 49 is DXGI 48; 0.25 -> 64 in red.
-        let mut d = texture_prefix(49, 1, 1, 2);
+        // R16_FLOAT: stored 55 resolves to DXGI 54; 0.25 -> 64 in red.
+        let mut d = texture_prefix(55, 1, 1, 2);
         d.extend_from_slice(&0x3400u16.to_le_bytes());
         let t = parse(&d).expect("parses");
         assert_eq!(t.pixel(0, 0), [64, 0, 0, 255]);
 
-        // R16_UNORM: stored 51 is DXGI 50; half of full scale -> 128.
-        let mut d = texture_prefix(51, 1, 1, 2);
+        // R16_UNORM: stored 57 resolves to DXGI 56; half of full scale -> 128.
+        let mut d = texture_prefix(57, 1, 1, 2);
         d.extend_from_slice(&32768u16.to_le_bytes());
         let t = parse(&d).expect("parses");
         assert_eq!(t.pixel(0, 0), [128, 0, 0, 255]);
+
+        // R8G8_UINT: stored 51 resolves to DXGI 50 (the old code called this
+        // R16_UNORM; the client's table says two 8-bit channels).
+        let mut d = texture_prefix(51, 2, 1, 4);
+        d.extend_from_slice(&[10, 20, 30, 40]);
+        let t = parse(&d).expect("parses");
+        assert_eq!(t.format, Format::Rg8);
+        assert_eq!(t.pixel(0, 0), [10, 20, 0, 255]);
+        assert_eq!(t.pixel(1, 0), [30, 40, 0, 255]);
     }
 
     #[test]
@@ -3432,12 +4470,15 @@ mod tests {
     #[test]
     fn an_embedded_payload_is_found_behind_its_header() {
         let mut d = vec![0u8; 0x20];
+        d[2] = 1; // one mip
         d[3] = 71; // BC1
-        d[6] = 1; // payload_count > 0 -> payload at 0x20
+        d[4] = 1; // one surface
+        d[6] = 1; // payload_count > 0 -> chunk header at 0x20
         d[8..10].copy_from_slice(&4u16.to_le_bytes());
         d[10..12].copy_from_slice(&4u16.to_le_bytes());
-        // payload header: mips, surfaces, image_size, header_size
-        d.extend_from_slice(&1u32.to_le_bytes());
+        d[12..16].copy_from_slice(&8u32.to_le_bytes()); // total_size
+                                                        // chunk header: first_from_smallest, level_count, image_size, header_size
+        d.extend_from_slice(&0u32.to_le_bytes()); // level 0 is embedded
         d.extend_from_slice(&1u32.to_le_bytes());
         d.extend_from_slice(&8u32.to_le_bytes());
         d.extend_from_slice(&16u32.to_le_bytes());
@@ -3446,5 +4487,901 @@ mod tests {
         d.extend_from_slice(&0u32.to_le_bytes());
         let t = parse(&d).expect("parses");
         assert_eq!(t.pixel(0, 0), [255, 0, 0, 255]);
+        assert_eq!(t.block_offset, 0x30);
+    }
+
+    /// A texture header for the layout tests: no chunk, every field explicit.
+    fn layout_header(
+        mip_count: u8,
+        format: u8,
+        surfaces: u8,
+        width: u16,
+        height: u16,
+        total_size: u32,
+        payload_count: u8,
+    ) -> Vec<u8> {
+        let mut d = vec![0u8; TextureHeader::SIZE];
+        d[2] = mip_count;
+        d[3] = format;
+        d[4] = surfaces;
+        d[6] = payload_count;
+        d[8..10].copy_from_slice(&width.to_le_bytes());
+        d[10..12].copy_from_slice(&height.to_le_bytes());
+        d[12..16].copy_from_slice(&total_size.to_le_bytes());
+        d
+    }
+
+    fn tagged(out: &mut Vec<u8>, tag: u8, len: usize) {
+        out.extend(std::iter::repeat_n(tag, len));
+    }
+
+    /// `payload_count == 0`: one raw run at `+0x20`, surface-major and mip 0
+    /// first within each surface (`0x141e296a0`'s loop order). A mip below 4x4
+    /// is clamped to a 4x4 block by the level arithmetic (`0x142e36ec0`).
+    #[test]
+    fn a_raw_run_is_surface_major_and_mip_ascending() {
+        // 8x8 BC1, 3 mips (8, 4, 4): 32 + 8 + 8 B per surface, two surfaces.
+        let mut d = layout_header(3, 0x47, 2, 8, 8, 96, 0);
+        for (tag, len) in [
+            (0xA0, 32),
+            (0xA1, 8),
+            (0xA2, 8),
+            (0xB0, 32),
+            (0xB1, 8),
+            (0xB2, 8),
+        ] {
+            tagged(&mut d, tag, len);
+        }
+        let t = parse(&d).expect("parses");
+        assert_eq!(t.levels.len(), 6);
+        let want = [
+            (0u8, 0u16, 8u16, 8u16, 0xA0u8),
+            (1, 0, 4, 4, 0xA1),
+            (2, 0, 2, 2, 0xA2),
+            (0, 1, 8, 8, 0xB0),
+            (1, 1, 4, 4, 0xB1),
+            (2, 1, 2, 2, 0xB2),
+        ];
+        for (level, (mip, surface, w, h, tag)) in t.levels.iter().zip(want) {
+            assert_eq!(
+                (level.mip, level.surface, level.width, level.height),
+                (mip, surface, w, h)
+            );
+            assert!(level.blocks.iter().all(|b| *b == tag), "tag {tag:#x}");
+            assert_eq!(level.source, BlockSource::Asset);
+        }
+        assert_eq!(t.rgba, t.levels[0].rgba);
+        assert_eq!(t.blocks, t.levels[0].blocks);
+        assert_eq!(t.block_offset, 0x20);
+        assert_eq!(t.level(0, 1).map(|l| l.width), Some(8));
+    }
+
+    /// The embedded chunk and the separate payloads are placed by their own
+    /// chunk headers, not by their index: `first_from_smallest` names the first
+    /// level of each run, and within it the bytes are surface-major/mip
+    /// ascending. The client uploads the embedded tail at creation
+    /// (`0x141dac400` → `0x141e29210`) and each payload when it arrives
+    /// (`0x141dabee0`); the bytes and their level placement are the same.
+    #[test]
+    fn a_payload_chunk_places_its_levels_by_its_own_header() {
+        // 16x16 BC1, 3 mips (128, 32, 8 B per surface), two surfaces.
+        // Embedded chunk: first_from_smallest 1 -> mip 1, two levels,
+        // 80 B over two surfaces. Payload 1: first_from_smallest 2 -> mip 0,
+        // 256 B over two surfaces.
+        let mut asset = layout_header(3, 0x47, 2, 16, 16, 336, 2);
+        asset.extend_from_slice(&1u32.to_le_bytes());
+        asset.extend_from_slice(&2u32.to_le_bytes());
+        asset.extend_from_slice(&80u32.to_le_bytes());
+        asset.extend_from_slice(&16u32.to_le_bytes());
+        // Embedded data: per surface 32 (mip 1) + 8 (mip 2).
+        for (tag, len) in [(0xE1, 32), (0xE2, 8), (0xF1, 32), (0xF2, 8)] {
+            tagged(&mut asset, tag, len);
+        }
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&2u32.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&256u32.to_le_bytes());
+        payload.extend_from_slice(&16u32.to_le_bytes());
+        tagged(&mut payload, 0x10, 128);
+        tagged(&mut payload, 0x11, 128);
+
+        let guid = 0x0c00_0000_0000_1234u64;
+        let payload_guid = crate::guid::payload_of(guid, 1);
+        let loader = |g: u64| (g == payload_guid).then(|| payload.clone());
+        let t = parse_asset(&asset, guid, &loader).expect("parses with its payload");
+        assert_eq!(t.levels.len(), 6);
+        let want = [
+            (
+                0u8,
+                0u16,
+                16u16,
+                16u16,
+                BlockSource::Payload(1),
+                0x10usize,
+                0x10u8,
+            ),
+            (1, 0, 8, 8, BlockSource::Embedded, 0x30, 0xE1),
+            (2, 0, 4, 4, BlockSource::Embedded, 0x50, 0xE2),
+            (0, 1, 16, 16, BlockSource::Payload(1), 0x90, 0x11),
+            (1, 1, 8, 8, BlockSource::Embedded, 0x58, 0xF1),
+            (2, 1, 4, 4, BlockSource::Embedded, 0x78, 0xF2),
+        ];
+        for (level, (mip, surface, w, h, source, offset, tag)) in t.levels.iter().zip(want) {
+            assert_eq!(
+                (level.mip, level.surface, level.width, level.height),
+                (mip, surface, w, h)
+            );
+            assert_eq!(level.source, source);
+            assert_eq!(level.block_offset, offset);
+            assert!(level.blocks.iter().all(|b| *b == tag), "tag {tag:#x}");
+        }
+        assert_eq!(t.source, BlockSource::Payload(1));
+        assert_eq!(t.block_offset, 0x10);
+    }
+
+    /// Six layers and two mips is twelve subresources, in the same surface-major
+    /// order; the header's `surfaces` byte is already the layer count.
+    #[test]
+    fn a_six_layer_texture_decodes_every_layer_and_mip() {
+        // 8x8 BC1, 2 mips (32 + 8 B), six layers.
+        let mut d = layout_header(2, 0x47, 6, 8, 8, 240, 0);
+        for layer in 0..6u8 {
+            tagged(&mut d, layer, 32);
+            tagged(&mut d, 0x80 + layer, 8);
+        }
+        let t = parse(&d).expect("parses");
+        assert_eq!(t.levels.len(), 12);
+        assert_eq!(t.surfaces, 6);
+        for level in &t.levels {
+            let tag = if level.mip == 0 {
+                level.surface as u8
+            } else {
+                0x80 + level.surface as u8
+            };
+            assert!(level.blocks.iter().all(|b| *b == tag));
+        }
+        assert_eq!(t.levels[0].surface, 0);
+        assert_eq!(t.levels[2].surface, 1, "surface outer, mip inner");
+    }
+
+    /// The per-level arithmetic, independent of any asset: the 128x128 BC6H
+    /// cubemap chain is 21,872 B per face and 131,232 B over six.
+    #[test]
+    fn level_dimensions_and_sizes_follow_the_level_arithmetic() {
+        assert_eq!(level_dimensions(8, 8, 0), (8, 8));
+        assert_eq!(level_dimensions(8, 8, 1), (4, 4));
+        assert_eq!(
+            level_dimensions(8, 8, 2),
+            (2, 2),
+            "the resource dimension, not the 4x4 block grid"
+        );
+        assert_eq!(level_dimensions(8, 8, 7), (1, 1));
+        assert_eq!(level_dimensions(3, 5, 1), (1, 2));
+        assert_eq!(level_byte_size(Format::Bc1, 8, 8), 32);
+        assert_eq!(level_byte_size(Format::Bc1, 4, 4), 8);
+        assert_eq!(
+            level_byte_size(Format::Bc1, 2, 2),
+            8,
+            "a 2x2 BC level is one 4x4 block"
+        );
+        assert_eq!(
+            level_byte_size(Format::Bc6h { signed: false }, 128, 128),
+            16384
+        );
+
+        let mut face = 0usize;
+        for mip in 0..8u32 {
+            let (w, h) = level_dimensions(128, 128, mip);
+            face += level_byte_size(Format::Bc6h { signed: false }, w, h);
+        }
+        assert_eq!(face, 21872, "all eight mips of one 128x128 face");
+        assert_eq!(face * 6, 131232, "six faces");
+    }
+
+    // ------------------------------------------------------------------
+    // The client's header, format tables, size walk and payload selection.
+    //
+    // Evidence class: *read* for the code at the addresses named in the
+    // module note, *install* for the six headers, chunk headers and payload
+    // chunk headers below. Each byte sequence is copied from the operator's
+    // installation; the expected values are recomputed from it, not from the
+    // research report.
+    // ------------------------------------------------------------------
+
+    /// `TextureHeader` bytes of one real asset, and the chunk header at `+0x20`.
+    struct Golden {
+        guid: u64,
+        header: [u8; 0x20],
+        chunk: [u8; 0x10],
+        descriptor: u64,
+        dxgi: u8,
+        format: Format,
+        srgb: bool,
+        /// The separate payloads, as `(index, its own 16-byte chunk header)`.
+        payloads: &'static [(u32, [u8; 0x10])],
+        requests: &'static [u32],
+        /// The load-time value the descriptor's `+0x0C` field gets.
+        resident: u32,
+        /// `Some(index)` when level 0 is a separate payload.
+        level0_payload: Option<u32>,
+    }
+
+    const GOLDEN: [Golden; 6] = [
+        // 1024x1024 BC1_SRGB, 11 mips, 3 payloads, embedded mips 2..10.
+        Golden {
+            guid: 0x0c00_0000_0000_09c1,
+            header: [
+                0x22, 0x00, 0x0b, 0x49, 0x01, 0x02, 0x03, 0x00, 0x00, 0x04, 0x00, 0x04, 0xb8, 0xaa,
+                0x0a, 0x00, 0x09, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+            ],
+            chunk: [
+                0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0xb8, 0xaa, 0x00, 0x00, 0x10, 0x00,
+                0x00, 0x00,
+            ],
+            descriptor: 0x03cb_1580_00ff_c3ff,
+            dxgi: 72,
+            format: Format::Bc1,
+            srgb: true,
+            payloads: &[
+                (
+                    1,
+                    [
+                        0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+                        0x10, 0x00, 0x00, 0x00,
+                    ],
+                ),
+                (
+                    2,
+                    [
+                        0x0a, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00,
+                        0x10, 0x00, 0x00, 0x00,
+                    ],
+                ),
+            ],
+            requests: &[1, 2],
+            resident: 0,
+            level0_payload: Some(2),
+        },
+        // 128x128 BC6H_UF16 cubemap, 8 mips, 6 surfaces, one embedded chunk.
+        Golden {
+            guid: 0x0c00_0000_0006_a2c6,
+            header: [
+                0x08, 0x00, 0x08, 0x60, 0x06, 0x10, 0x01, 0x00, 0x80, 0x00, 0x80, 0x00, 0xa0, 0x00,
+                0x02, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+            ],
+            chunk: [
+                0x07, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0xa0, 0x00, 0x02, 0x00, 0x10, 0x00,
+                0x00, 0x00,
+            ],
+            descriptor: 0x00c1_8400_501f_c07f,
+            dxgi: 95,
+            format: Format::Bc6h { signed: false },
+            srgb: false,
+            payloads: &[],
+            requests: &[],
+            resident: 0,
+            level0_payload: None,
+        },
+        // 512x512 BC7_SRGB, 10 mips, 2 payloads; payload 1 is level 0 and the
+        // streamed chunk (bit 3), so the immediate request count is zero.
+        Golden {
+            guid: 0x0c00_0000_0003_a505,
+            header: [
+                0x22, 0x00, 0x0a, 0x64, 0x01, 0x04, 0x02, 0x00, 0x00, 0x02, 0x00, 0x02, 0x70, 0x55,
+                0x05, 0x00, 0x09, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+            ],
+            chunk: [
+                0x08, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x70, 0x55, 0x01, 0x00, 0x10, 0x00,
+                0x00, 0x00,
+            ],
+            descriptor: 0x04ca_2500_007f_c1ff,
+            dxgi: 99,
+            format: Format::Bc7,
+            srgb: true,
+            payloads: &[(
+                1,
+                [
+                    0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x10,
+                    0x00, 0x00, 0x00,
+                ],
+            )],
+            requests: &[],
+            resident: 1,
+            level0_payload: Some(1),
+        },
+        // 512x512 BC4_UNORM, 8 mips, 2 payloads.
+        Golden {
+            guid: 0x0c00_0000_0000_64d2,
+            header: [
+                0x02, 0x00, 0x08, 0x51, 0x01, 0x04, 0x02, 0x00, 0x00, 0x02, 0x00, 0x02, 0xa8, 0xaa,
+                0x02, 0x00, 0x07, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+            ],
+            chunk: [
+                0x06, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0xa8, 0xaa, 0x00, 0x00, 0x10, 0x00,
+                0x00, 0x00,
+            ],
+            descriptor: 0x02ba_2400_007f_c1ff,
+            dxgi: 80,
+            format: Format::Bc4,
+            srgb: false,
+            payloads: &[(
+                1,
+                [
+                    0x07, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x10,
+                    0x00, 0x00, 0x00,
+                ],
+            )],
+            requests: &[1],
+            resident: 0,
+            level0_payload: Some(1),
+        },
+        // 1024x1024 BC4_UNORM, 9 mips, 3 payloads; payload 2 is level 0 and is
+        // the streamed chunk, payload 1 (level 1) is requested immediately.
+        Golden {
+            guid: 0x0c00_0000_0004_70e8,
+            header: [
+                0x02, 0x00, 0x09, 0x51, 0x01, 0x04, 0x03, 0x00, 0x00, 0x04, 0x00, 0x04, 0xa8, 0xaa,
+                0x0a, 0x00, 0x07, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+            ],
+            chunk: [
+                0x06, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0xa8, 0xaa, 0x00, 0x00, 0x10, 0x00,
+                0x00, 0x00,
+            ],
+            descriptor: 0x05bb_2480_00ff_c3ff,
+            dxgi: 80,
+            format: Format::Bc4,
+            srgb: false,
+            payloads: &[
+                (
+                    1,
+                    [
+                        0x07, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+                        0x10, 0x00, 0x00, 0x00,
+                    ],
+                ),
+                (
+                    2,
+                    [
+                        0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00,
+                        0x10, 0x00, 0x00, 0x00,
+                    ],
+                ),
+            ],
+            requests: &[1],
+            resident: 1,
+            level0_payload: Some(2),
+        },
+        // 512x512 BC4_UNORM, 8 mips, 2 payloads; payload 1 is level 0 and the
+        // streamed chunk.
+        Golden {
+            guid: 0x0c00_0000_0004_70d8,
+            header: [
+                0x02, 0x00, 0x08, 0x51, 0x01, 0x04, 0x02, 0x00, 0x00, 0x02, 0x00, 0x02, 0xa8, 0xaa,
+                0x02, 0x00, 0x07, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+            ],
+            chunk: [
+                0x06, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0xa8, 0xaa, 0x00, 0x00, 0x10, 0x00,
+                0x00, 0x00,
+            ],
+            descriptor: 0x04ba_2400_007f_c1ff,
+            dxgi: 80,
+            format: Format::Bc4,
+            srgb: false,
+            payloads: &[(
+                1,
+                [
+                    0x07, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x10,
+                    0x00, 0x00, 0x00,
+                ],
+            )],
+            requests: &[],
+            resident: 1,
+            level0_payload: Some(1),
+        },
+    ];
+
+    /// The DXGI id each stored engine byte resolves to, one row per byte the
+    /// client accepts (0x00..=0x71), read from `0x143356f50` → `0x14348f500`.
+    #[rustfmt::skip]
+    const EXPECTED_DXGI: [u8; 0x72] = [
+        0, 3, 2, 3, 4, 7, 6, 7, 8, 12, 10, 11, 12, 13, 14, 17,
+        16, 17, 18, 0, 20, 0, 0, 25, 24, 0, 25, 26, 30, 28, 29, 30,
+        31, 32, 36, 34, 35, 36, 0, 38, 42, 40, 41, 42, 43, 45, 45, 45,
+        0, 50, 49, 50, 51, 52, 57, 54, 55, 56, 57, 58, 59, 62, 61, 62,
+        63, 64, 65, 0, 67, 0, 0, 71, 71, 72, 74, 74, 75, 77, 77, 78,
+        80, 80, 81, 83, 83, 84, 85, 0, 87, 87, 24, 87, 91, 87, 91, 96,
+        95, 96, 98, 98, 99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 103,
+    ];
+
+    /// A header for the pure formula tests; the fields the formula reads are
+    /// the only ones that matter.
+    fn formula_header(mip: u8, base: u8, payload: u8, mask: u8) -> TextureHeader {
+        TextureHeader {
+            mip_count: mip,
+            base_mips: base,
+            payload_count: payload,
+            chunk_mask: mask,
+            width: 4,
+            height: 4,
+            ..TextureHeader::default()
+        }
+    }
+
+    #[test]
+    fn every_engine_format_byte_maps_through_the_client_tables() {
+        for (stored, want) in EXPECTED_DXGI.iter().copied().enumerate() {
+            let stored = stored as u8;
+            assert_eq!(dxgi_of(stored), want, "stored 0x{stored:02x}");
+            assert_eq!(
+                Format::from_header(stored).1,
+                want,
+                "from_header(0x{stored:02x})"
+            );
+        }
+        // Beyond the client's 0x72-entry table there is no format at all.
+        for stored in 0x72..=0xffu8 {
+            assert_eq!(dxgi_of(stored), 0, "stored 0x{stored:02x}");
+            assert_eq!(Format::from_header(stored).0, Format::Unknown(stored));
+        }
+        // The rows the research named, and the one it had wrong: stored 0x33
+        // is R8G8_UINT (50), not R16_UNORM.
+        for (stored, want) in [
+            (0x0a, 10),
+            (0x1e, 29),
+            (0x33, 50),
+            (0x47, 71),
+            (0x49, 72),
+            (0x4a, 74),
+            (0x4c, 75),
+            (0x4d, 77),
+            (0x4f, 78),
+            (0x50, 80),
+            (0x52, 81),
+            (0x53, 83),
+            (0x55, 84),
+            (0x5f, 96),
+            (0x60, 95),
+            (0x61, 96),
+            (0x62, 98),
+            (0x64, 99),
+        ] {
+            assert_eq!(dxgi_of(stored), want, "stored 0x{stored:02x}");
+        }
+        assert_eq!(Format::from_header(0x33), (Format::Rg8, 50));
+        assert_eq!(
+            Format::from_header(0x5f),
+            (Format::Bc6h { signed: true }, 96)
+        );
+        assert_eq!(
+            Format::from_header(0x60),
+            (Format::Bc6h { signed: false }, 95)
+        );
+        assert_eq!(Format::from_header(0x52), (Format::Bc4Snorm, 81));
+        assert_eq!(Format::from_header(0x55), (Format::Bc5Snorm, 84));
+    }
+
+    #[test]
+    fn srgb_is_the_dxgi_id_and_includes_bgra_srgb() {
+        // The stored bytes the material side used to hard-code, plus the two
+        // the tables resolve to B8G8R8A8_UNORM_SRGB (91).
+        for (stored, dxgi) in [
+            (30u8, 29u8),
+            (73, 72),
+            (76, 75),
+            (79, 78),
+            (100, 99),
+            (0x5c, 91),
+            (0x5e, 91),
+        ] {
+            assert_eq!(dxgi_of(stored), dxgi, "stored {stored}");
+            assert!(is_srgb_format(stored), "stored {stored}");
+        }
+        let srgb: Vec<u8> = (0u8..=0x71).filter(|b| is_srgb_format(*b)).collect();
+        assert_eq!(srgb, [0x1e, 0x49, 0x4c, 0x4f, 0x5c, 0x5e, 0x64]);
+        // The five the install's material lists actually use are the non-BGRA
+        // five; the material-side observation is that set, not the predicate.
+        let material: Vec<u8> = srgb
+            .iter()
+            .copied()
+            .filter(|b| !matches!(b, 0x5c | 0x5e))
+            .collect();
+        assert_eq!(material, [0x1e, 0x49, 0x4c, 0x4f, 0x64]);
+        // Every other mapped format is linear.
+        for stored in 0u8..=0x71 {
+            if !srgb.contains(&stored) {
+                assert!(!is_srgb_format(stored), "stored {stored}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_six_golden_headers_pin_the_clients_fields() {
+        for g in &GOLDEN {
+            let header = TextureHeader::parse(&g.header).expect("golden header parses");
+            assert_eq!(header.format, g.header[3]);
+            assert_eq!((header.format().0, header.format().1), (g.format, g.dxgi));
+            assert_eq!(
+                is_srgb_format(header.format),
+                g.srgb,
+                "0x{:016x}: sRGB",
+                g.guid
+            );
+            let (depth, surface_count) = header.depth_and_surfaces();
+            assert_eq!(
+                header.total_size as u64,
+                cooked_size(
+                    header.format,
+                    header.width as u32,
+                    header.height as u32,
+                    depth,
+                    header.mip_count as u32,
+                    surface_count
+                )
+            );
+            assert_eq!(
+                header.total_size as u64,
+                size_walk(
+                    header.format,
+                    header.width as u32,
+                    header.height as u32,
+                    depth,
+                    header.mip_count as u32,
+                    surface_count
+                )
+            );
+            assert_eq!(header.descriptor(), g.descriptor, "0x{:016x}", g.guid);
+
+            // payload_count is the population count of the chunk mask.
+            assert_eq!(
+                header.payload_count,
+                header.chunk_mask.count_ones() as u8,
+                "0x{:016x}",
+                g.guid
+            );
+            assert!(header.base_mips <= header.mip_count);
+
+            let chunk = TextureChunk::parse(&g.chunk).expect("chunk parses");
+            let first = chunk.first_level(header.mip_count).expect("first level");
+            assert_eq!(
+                first + chunk.level_count,
+                header.mip_count as u32,
+                "0x{:016x}: the chunk's levels end at the smallest mip",
+                g.guid
+            );
+            assert_eq!(chunk.header_size, 0x10);
+            // The chunk's image size is the size walk from its first level.
+            let min = if is_block_format(header.format) { 4 } else { 1 };
+            let w = (header.width as u32 >> first).max(min);
+            let h = (header.height as u32 >> first).max(min);
+            assert_eq!(
+                chunk.image_size as u64,
+                cooked_size(header.format, w, h, depth, chunk.level_count, surface_count),
+                "0x{:016x}: chunk image size",
+                g.guid
+            );
+
+            // Level 0 is embedded iff the chunk starts at level 0.
+            let mut asset = g.header.to_vec();
+            asset.extend_from_slice(&g.chunk);
+            let plan = block_plan(&asset).expect("plan");
+            match g.level0_payload {
+                None => {
+                    assert_eq!(first, 0, "0x{:016x}: embedded level 0", g.guid);
+                    assert!(matches!(plan, BlockPlan::Embedded(_)));
+                }
+                Some(index) => {
+                    assert_ne!(first, 0, "0x{:016x}: level 0 is separate", g.guid);
+                    assert_eq!(plan, BlockPlan::Payload(index));
+                }
+            }
+
+            // Requests and residency, from the loader's own formulas.
+            assert_eq!(header.requested_payloads(), g.requests, "0x{:016x}", g.guid);
+            assert_eq!(header.resident_mips(), g.resident, "0x{:016x}", g.guid);
+
+            // The payload GUIDs are the client's formula, and each payload's
+            // own chunk header says which level it starts at.
+            for (index, bytes) in g.payloads {
+                let payload_guid = crate::guid::payload_of(g.guid, *index);
+                assert_eq!(
+                    payload_guid,
+                    0x0320_0000_0000_0000 | ((*index as u64) << 32) | (g.guid & 0xffff_ffff),
+                    "0x{:016x} payload {index}",
+                    g.guid
+                );
+                let chunk = TextureChunk::parse(bytes).expect("payload chunk");
+                assert_eq!(chunk.header_size, 0x10);
+                let first = chunk.first_level(header.mip_count).expect("first level");
+                // A separate payload holds a contiguous run of levels and does
+                // not have to reach the smallest mip; the embedded chunk does.
+                assert!(
+                    first + chunk.level_count <= header.mip_count as u32,
+                    "0x{:016x} payload {index} levels",
+                    g.guid
+                );
+                assert_eq!(chunk.level_count, 1, "0x{:016x} payload {index}", g.guid);
+                let min = if is_block_format(header.format) { 4 } else { 1 };
+                let w = (header.width as u32 >> first).max(min);
+                let h = (header.height as u32 >> first).max(min);
+                assert_eq!(
+                    chunk.image_size as u64,
+                    cooked_size(header.format, w, h, depth, chunk.level_count, surface_count),
+                    "0x{:016x} payload {index} image size",
+                    g.guid
+                );
+            }
+            if let Some(index) = g.level0_payload {
+                let (_, bytes) = g
+                    .payloads
+                    .iter()
+                    .find(|(i, _)| *i == index)
+                    .expect("the level-0 payload is listed");
+                let chunk = TextureChunk::parse(bytes).unwrap();
+                assert_eq!(
+                    chunk.first_level(header.mip_count),
+                    Some(0),
+                    "0x{:016x}: the chosen payload starts at level 0",
+                    g.guid
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_descriptor_bitfield_round_trips_every_field() {
+        for g in &GOLDEN {
+            let header = TextureHeader::parse(&g.header).unwrap();
+            let d = header.descriptor();
+            assert_eq!(d >> 63, 0, "bit 63 is clear");
+            assert_eq!((d & 0x3fff) as u16 + 1, header.width);
+            assert_eq!(((d >> 14) & 0x3fff) as u16 + 1, header.height);
+            let (depth, surfaces) = header.depth_and_surfaces();
+            assert_eq!(
+                ((d >> 28) & 0x7ff) as u32 + 1,
+                if header.is_volume() { depth } else { surfaces },
+                "the descriptor's surface/depth field"
+            );
+            assert_eq!(((d >> 39) & 0xf) as u8, header.descriptor_mip_count());
+            assert_eq!(((d >> 43) & 0x1f) as u8, header.usage);
+            assert_eq!(((d >> 48) & 0x7) as u8, header.payload_count);
+            assert_eq!(((d >> 51) & 0xf) as u8, header.descriptor_base_mips());
+            assert_eq!(((d >> 55) & 0xf) as u8, header.descriptor_chunk_mask());
+            assert_eq!(((d >> 59) & 0xf) as u8, header.reserved);
+            // The object flags are the header flags plus the loader's bits.
+            assert_eq!(
+                header.object_flags(),
+                header.flags as u32 | 0x10_0000 | if header.unknown == 1 { 0x4000 } else { 0 }
+            );
+        }
+        // Byte +0x07 == 1 adds 0x4000 (the loader's `0x141dacf00` check).
+        let mut bytes = GOLDEN[0].header;
+        bytes[7] = 1;
+        let header = TextureHeader::parse(&bytes).unwrap();
+        assert_eq!(
+            header.object_flags(),
+            0x22 | 0x10_0000 | 0x4000,
+            "byte +0x07 == 1"
+        );
+    }
+
+    #[test]
+    fn the_client_rejects_the_headers_it_rejects() {
+        let good = GOLDEN[0].header;
+        assert!(TextureHeader::parse(&good).is_ok());
+        for (at, value, why) in [
+            (3usize, 0x72u8, "format > 0x71"),
+            (2, 0x11, "mip_count > 0x10"),
+            (8, 0x00, "width == 0"),
+            (10, 0x00, "height == 0"),
+            (6, 5, "payload_count >= 5"),
+            (16, 0xff, "base_mips > mip_count"),
+        ] {
+            let mut bytes = good;
+            bytes[at] = value;
+            // Width and height are 16-bit: zero both halves.
+            if at == 8 {
+                bytes[9] = 0;
+            }
+            if at == 10 {
+                bytes[11] = 0;
+            }
+            match TextureHeader::parse(&bytes) {
+                Err(Error::Invalid(msg)) => assert_eq!(msg, why, "byte {at}"),
+                other => panic!("byte {at}: expected Invalid({why}), got {other:?}"),
+            }
+        }
+        // The loader does not validate surfaces or total_size: a zero surface
+        // count reaches the descriptor builder (which wraps it), so parse does
+        // not invent a check for it.
+        let mut bytes = good;
+        bytes[4] = 0;
+        assert!(TextureHeader::parse(&bytes).is_ok());
+    }
+
+    #[test]
+    fn the_size_walk_matches_the_install_and_the_minimum_clamp() {
+        // Every golden asset's recorded total_size is the walk's answer.
+        for g in &GOLDEN {
+            let h = TextureHeader::parse(&g.header).unwrap();
+            assert_eq!(
+                size_walk(
+                    h.format,
+                    h.width as u32,
+                    h.height as u32,
+                    1,
+                    h.mip_count as u32,
+                    h.surfaces as u32
+                ),
+                h.total_size as u64,
+                "0x{:016x}",
+                g.guid
+            );
+        }
+        // Block formats clamp at 4: 8x8 BC1 for four levels is
+        // 32 + 8 + 8 + 8 = 56 bytes.
+        assert_eq!(size_walk(0x47, 8, 8, 1, 4, 1), 56);
+        // A linear 1-bpp format clamps at 1: (64 + 16 + 4 + 1) / 8 = 10.
+        assert_eq!(size_walk(0x43, 8, 8, 1, 4, 1), 10);
+        // Depth halves and stops at 1: 64 + 8 + 1 = 73, / 8 = 9.
+        assert_eq!(size_walk(0x43, 4, 4, 4, 3, 1), 9);
+        // R8G8B8A8: 2x2 x 4 bytes.
+        assert_eq!(size_walk(0x1e, 2, 2, 1, 1, 1), 16);
+        // The client's zero guard covers every one of the five counts.
+        for (w, h, d, m, s) in [
+            (0, 1, 1, 1, 1),
+            (1, 0, 1, 1, 1),
+            (1, 1, 0, 1, 1),
+            (1, 1, 1, 0, 1),
+            (1, 1, 1, 1, 0),
+        ] {
+            assert_eq!(size_walk(0x47, w, h, d, m, s), 0);
+        }
+    }
+
+    #[test]
+    fn payload_requests_follow_the_descriptor_mask_and_the_loader_guard() {
+        // Only bit 3 is read as the streamed flag (`0x142e374d0` with bias 1).
+        // The descriptor keeps four bits, so bits 4..7 of the header byte are
+        // dropped before the popcount. With the 4-bit field only bit 3 survives
+        // the shift, so the popcount and a bit-3 test agree here; the
+        // differential unit fn/TextureCountBitsShifted is what proves the
+        // popcount expression itself. The low bits' meaning is open.
+        for (mask, streamed, requests) in [
+            (0x01u8, 0u32, vec![1, 2, 3]),
+            (0x05, 0, vec![1, 2, 3]),
+            (0x07, 0, vec![1, 2, 3]),
+            (0x09, 1, vec![1, 2]),
+            (0x0b, 1, vec![1, 2]),
+            (0x0f, 1, vec![1, 2]),
+            (0x10, 0, vec![1, 2, 3]), // bit 4 is not in the descriptor
+            (0x18, 1, vec![1, 2]),    // truncates to 0x8
+            (0x19, 1, vec![1, 2]),    // raw popcount would be 2; field is 1
+            (0x1f, 1, vec![1, 2]),
+            (0xf0, 0, vec![1, 2, 3]),
+            (0xf8, 1, vec![1, 2]),
+        ] {
+            let h = formula_header(8, 3, 4, mask);
+            assert_eq!(h.streamed_chunks(), streamed, "mask 0x{mask:02x}");
+            assert_eq!(h.resident_mips(), streamed, "mask 0x{mask:02x}");
+            assert_eq!(h.requested_payloads(), requests, "mask 0x{mask:02x}");
+        }
+        // Every bit above 3 is outside the descriptor field and does not
+        // change the streamed count.
+        for mask in 0x10u8..=0xff {
+            assert_eq!(
+                formula_header(8, 3, 4, mask).streamed_chunks(),
+                count_bits_shifted((mask & 0xf) as u32, 1),
+                "mask 0x{mask:02x}"
+            );
+        }
+        // The 4-bit descriptor fields: mip 16 and base 16 are stored as 0.
+        let h = formula_header(16, 16, 4, 0x09);
+        assert_eq!(
+            (
+                h.descriptor_mip_count(),
+                h.descriptor_base_mips(),
+                h.descriptor_chunk_mask()
+            ),
+            (0, 0, 9)
+        );
+        assert_eq!((h.descriptor() >> 39) & 0xf, 0, "mip_count field");
+        assert_eq!((h.descriptor() >> 51) & 0xf, 0, "base_mips field");
+        assert_eq!(
+            h.requested_payloads(),
+            Vec::<u32>::new(),
+            "mip 0 - base 0 <= streamed 1"
+        );
+        // The loader accepts mip_count == 16, so the truncation is reachable.
+        let mut bytes = GOLDEN[0].header;
+        bytes[2] = 16;
+        assert!(TextureHeader::parse(&bytes).is_ok());
+        // `mip_count - base_mips <= streamed` means no immediate request.
+        assert!(formula_header(4, 3, 4, 0x09)
+            .requested_payloads()
+            .is_empty());
+        // The loader skips the whole request block when payload_count <= 1
+        // (`0x142e2dd70` is false), so even the formula's max(1, …) does not
+        // turn a single embedded chunk into a request.
+        let one = formula_header(8, 3, 1, 0x01);
+        assert_eq!(one.requested_payloads(), Vec::<u32>::new());
+        assert_eq!(one.resident_mips(), 0);
+        // A payload_count of 1 with bit 3 set still has no separate payload.
+        assert!(formula_header(8, 3, 1, 0x09)
+            .requested_payloads()
+            .is_empty());
+    }
+
+    /// The pure leaves `request_count` and `count_bits_shifted` on their own,
+    /// independently of the header gate.
+    #[test]
+    fn the_request_leaf_and_the_popcount_leaf_match_the_client() {
+        // `0x142e37600` with (payload, mip, base, streamed).
+        assert_eq!(request_count(4, 8, 3, 0), 3);
+        assert_eq!(request_count(4, 8, 3, 1), 2);
+        assert_eq!(request_count(4, 8, 3, 2), 1);
+        assert_eq!(request_count(4, 4, 3, 1), 0);
+        assert_eq!(request_count(4, 0, 0, 0), 0);
+        assert_eq!(request_count(1, 8, 3, 0), 1, "the leaf clamps at 1");
+        assert_eq!(request_count(2, 8, 3, 0), 1);
+        // `0x142e374d0` shifts by `(bias + 2) & 31` then popcounts.
+        assert_eq!(count_bits_shifted(0xf, 1), 1);
+        assert_eq!(count_bits_shifted(0x1f, 1), 2);
+        assert_eq!(count_bits_shifted(0xff, 1), 5);
+        assert_eq!(count_bits_shifted(0xff, 0), 6);
+        assert_eq!(count_bits_shifted(0xff, 2), 4);
+        assert_eq!(count_bits_shifted(0xffff_ffff, 31), 31);
+        assert_eq!(count_bits_shifted(0xffff_ffff, 255), 31);
+    }
+
+    #[test]
+    fn a_zero_surface_header_has_the_clients_2048_surfaces() {
+        // The builder stores `(surfaces - 1) & 0x7ff` and the consumer adds
+        // one, so 0 wraps to 2048 rather than staying 0.
+        let mut bytes = GOLDEN[0].header;
+        bytes[4] = 0;
+        let h = TextureHeader::parse(&bytes).expect("surfaces 0 is accepted");
+        assert_eq!(h.depth_and_surfaces(), (1, 2048));
+        let mut volume = bytes;
+        volume[0] |= 4;
+        let h = TextureHeader::parse(&volume).unwrap();
+        assert_eq!(h.depth_and_surfaces(), (2048, 1));
+    }
+
+    #[test]
+    fn a_chunk_says_which_level_it_starts_at() {
+        // first_from_smallest counts back from the smallest mip.
+        let chunk = TextureChunk::parse(&GOLDEN[0].chunk).unwrap();
+        assert_eq!(chunk.first_level(11), Some(2));
+        assert_eq!(chunk.streamed_mips(11), Some(2));
+        assert_eq!(chunk.data_offset(), 0x10);
+        let embedded = TextureChunk {
+            first_from_smallest: 0,
+            ..chunk
+        };
+        assert_eq!(embedded.first_level(11), Some(10));
+        // A chunk claiming more levels than the chain has no first level.
+        let past = TextureChunk {
+            first_from_smallest: 12,
+            ..chunk
+        };
+        assert_eq!(past.first_level(11), None);
+        // The chunk relation uses the header's stored mip count, not the
+        // 4-bit descriptor field: mip_count 16 is stored as 0 in the descriptor
+        // but the asset's first_from_smallest still counts 16 levels.
+        let sixteen = TextureChunk {
+            first_from_smallest: 15,
+            level_count: 1,
+            ..chunk
+        };
+        assert_eq!(sixteen.first_level(16), Some(0));
+        assert_eq!(formula_header(16, 0, 1, 0).descriptor_mip_count(), 0);
     }
 }

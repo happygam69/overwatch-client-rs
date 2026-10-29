@@ -2,8 +2,15 @@
 //!
 //! One bind group per texture (group 1), a 1×1 white entry for draws with no
 //! readable material, and a plain linear sampler: the install's textures ship
-//! no sampler of their own that this project can read, and base colour at mip 0
-//! is what the harness needs to answer "is this the hero's own texture".
+//! no sampler of their own that this project can read.
+//!
+//! The upload writes **every** subresource the decoder produced, in the
+//! client's copy order: `mip_level_count` and `depth_or_array_layers` come from
+//! the levels, and each level is one `write_texture` at its own mip and layer.
+//! The client's texture SRV view dimension and its cube-face order are not read
+//! yet, so the bind group is still a 2D view of layer 0 — with the whole mip
+//! chain present — rather than a cube view. Sampling is therefore face 0 as
+//! before; the uploaded bytes are the client's layout.
 
 use ow_scene::SceneTexture;
 
@@ -116,6 +123,43 @@ pub fn upload_all(
         .collect()
 }
 
+/// The upload view format for a texture, from the colour space its stored
+/// format byte names.
+///
+/// An sRGB asset is uploaded as `Rgba8UnormSrgb`, so sampling linearises it the
+/// way the client's own sRGB view does; a linear data map (normal, mask,
+/// height) is uploaded as `Rgba8Unorm` and sampled raw. The client picks the
+/// same DXGI id for its resource and its texture SRV
+/// (`FUN_1426545d0`/`FUN_142653b90`), so this is the asset's format, not a
+/// renderer-wide guess.
+fn upload_format(srgb: bool) -> wgpu::TextureFormat {
+    if srgb {
+        wgpu::TextureFormat::Rgba8UnormSrgb
+    } else {
+        wgpu::TextureFormat::Rgba8Unorm
+    }
+}
+
+/// `(mip_level_count, array_layers)` for the texture that holds `levels`.
+///
+/// The decoder lists every subresource, so the shape is the highest mip and
+/// layer index plus one — the same counts the client's resource descriptor gets
+/// (`0x1426545d0`: `MipLevels`, and `DepthOrArraySize = array_count * 6` for a
+/// cube).
+fn upload_shape(levels: &[ow_scene::SceneTextureLevel]) -> (u32, u32) {
+    let mips = levels
+        .iter()
+        .map(|level| level.mip as u32 + 1)
+        .max()
+        .unwrap_or(1);
+    let layers = levels
+        .iter()
+        .map(|level| level.surface as u32 + 1)
+        .max()
+        .unwrap_or(1);
+    (mips, layers)
+}
+
 fn upload_one(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -123,59 +167,102 @@ fn upload_one(
     sampler: &wgpu::Sampler,
     tex: &SceneTexture,
 ) -> wgpu::BindGroup {
+    // The constructors always produce a level list; this keeps a hand-built
+    // SceneTexture (the tests) uploadable.
+    let fallback;
+    let levels: &[ow_scene::SceneTextureLevel] = if tex.levels.is_empty() {
+        fallback = ow_scene::SceneTextureLevel {
+            mip: 0,
+            surface: 0,
+            width: tex.width.max(1),
+            height: tex.height.max(1),
+            rgba: tex.rgba.clone(),
+        };
+        std::slice::from_ref(&fallback)
+    } else {
+        &tex.levels
+    };
+
+    let (mip_level_count, layers) = upload_shape(levels);
     let (width, height) = (tex.width.max(1) as u32, tex.height.max(1) as u32);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("surface"),
         size: wgpu::Extent3d {
             width,
             height,
-            depth_or_array_layers: 1,
+            depth_or_array_layers: layers,
         },
-        mip_level_count: 1,
+        mip_level_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        // The bytes are sRGB-encoded: a texture asset stored as BC1_UNORM_SRGB
-        // or BC7_UNORM_SRGB is meant to be *sampled* as sRGB and linearised,
-        // which is what this format does for us.
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        // sRGB assets are sampled as sRGB and linearised by the hardware;
+        // linear data maps are sampled raw. The bit came from the asset's
+        // stored format byte (`SceneTexture::srgb`), not from this call site.
+        format: upload_format(tex.srgb),
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
 
-    // `write_texture` wants rows padded to 256 bytes.
-    let unpadded = width as usize * 4;
-    let padded = unpadded.div_ceil(256) * 256;
-    let mut staging = Vec::with_capacity(padded * height as usize);
-    for y in 0..height as usize {
-        let at = y * unpadded;
-        let row = tex
-            .rgba
-            .get(at..at + unpadded)
-            .unwrap_or(&tex.rgba[0..unpadded.min(tex.rgba.len())]);
-        staging.extend_from_slice(row);
-        staging.resize((y + 1) * padded, 0);
+    // One write per decoded subresource, at its own mip level and layer. This
+    // is the client's own block-run order (`0x141e296a0`: surface outer, mip
+    // ascending); `write_texture` wants rows padded to 256 bytes.
+    for level in levels {
+        let level_width = level.width.max(1) as usize;
+        let level_height = level.height.max(1) as usize;
+        let unpadded = level_width * 4;
+        let padded = unpadded.div_ceil(256) * 256;
+        let mut staging = vec![0u8; padded * level_height];
+        for y in 0..level_height {
+            let at = y * unpadded;
+            let Some(row) = level.rgba.get(at..at + unpadded) else {
+                break;
+            };
+            staging[y * padded..y * padded + unpadded].copy_from_slice(row);
+        }
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: level.mip as u32,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: level.surface as u32,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &staging,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(level_height as u32),
+            },
+            wgpu::Extent3d {
+                width: level_width as u32,
+                height: level_height as u32,
+                depth_or_array_layers: 1,
+            },
+        );
     }
-    queue.write_texture(
-        wgpu::ImageCopyTexture {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &staging,
-        wgpu::ImageDataLayout {
-            offset: 0,
-            bytes_per_row: Some(padded as u32),
-            rows_per_image: Some(height),
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
 
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    // The client's SRV dimension/face order is open, so the shader keeps a 2D
+    // view of layer 0 (all mip levels). It samples face 0 exactly as before;
+    // the array's other layers are uploaded but not bound.
+    let view = if layers > 1 {
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("surface layer 0"),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_mip_level: 0,
+            mip_level_count: Some(mip_level_count),
+            base_array_layer: 0,
+            array_layer_count: Some(1),
+            ..Default::default()
+        })
+    } else {
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("surface"),
+            ..Default::default()
+        })
+    };
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("surface"),
         layout,
@@ -190,4 +277,39 @@ fn upload_one(
             },
         ],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upload_format_follows_the_asset_colour_space() {
+        assert_eq!(upload_format(true), wgpu::TextureFormat::Rgba8UnormSrgb);
+        assert_eq!(upload_format(false), wgpu::TextureFormat::Rgba8Unorm);
+    }
+
+    fn level(mip: u8, surface: u16) -> ow_scene::SceneTextureLevel {
+        ow_scene::SceneTextureLevel {
+            mip,
+            surface,
+            width: 4,
+            height: 4,
+            rgba: vec![0; 4 * 4 * 4],
+        }
+    }
+
+    #[test]
+    fn upload_shape_covers_every_decoded_level_and_layer() {
+        // An 8 mip x 6 layer cube: 48 subresources, 8 mips and 6 layers.
+        let cube: Vec<_> = (0..6u16)
+            .flat_map(|surface| (0..8u8).map(move |mip| level(mip, surface)))
+            .collect();
+        assert_eq!(upload_shape(&cube), (8, 6));
+        // One mip, one layer.
+        assert_eq!(upload_shape(&[level(0, 0)]), (1, 1));
+        // The list is not assumed sorted: the maximum index wins.
+        assert_eq!(upload_shape(&[level(2, 3), level(0, 0)]), (3, 4));
+        assert_eq!(upload_shape(&[]), (1, 1));
+    }
 }

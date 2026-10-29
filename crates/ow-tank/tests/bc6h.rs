@@ -214,11 +214,14 @@ fn a_reserved_mode_decodes_to_black_at_alpha_one() {
     }
 }
 
-/// The two DXGI variants, and the client's +1 offset above id 26.
+/// The two DXGI variants, through the client's own format tables.
 ///
-/// DXGI 94 is `BC6H_TYPELESS`, 95 `BC6H_UF16` (unsigned), 96 `BC6H_SF16`
-/// (signed). The install stores one higher, so a stored 96 is the unsigned
-/// variant — which is what every BC6H asset on this install carries.
+/// Stored 0x60 is DXGI 95 (`BC6H_UF16`, unsigned) and stored 0x5F/0x61 are
+/// DXGI 96 (`BC6H_SF16`, signed). That is not a +1 offset: the stored byte is
+/// the client's engine enum, and `0x143356f50[0x14348f500]` is what names it.
+/// The install's BC6H assets store 0x60, so they are the unsigned variant —
+/// which is the variant the pixel evidence in `docs/formats/materials.md`
+/// confirms.
 #[test]
 fn the_stored_byte_names_the_variant() {
     assert_eq!(
@@ -226,11 +229,9 @@ fn the_stored_byte_names_the_variant() {
         (Format::Bc6h { signed: false }, 95)
     );
     assert_eq!(Format::from_header(97), (Format::Bc6h { signed: true }, 96));
-    // The typeless id has no signedness of its own; we decode it unsigned.
-    assert_eq!(
-        Format::from_header(95),
-        (Format::Bc6h { signed: false }, 94)
-    );
+    // The typeless id is not reachable through the asset tables, and stored
+    // 0x5F is the signed variant (the old -1 rule called it unsigned).
+    assert_eq!(Format::from_header(95), (Format::Bc6h { signed: true }, 96));
 }
 
 /// A 4x4 BC6H texture through the whole public path: header in, half floats
@@ -302,6 +303,7 @@ fn a_bc6h_texture_decodes_end_to_end_and_writes_a_dds() {
 fn a_signed_bc6h_texture_names_dxgi_96() {
     let block = texture::bc6h_random_blocks(15, 1, 7)[0];
     let mut asset = vec![0u8; 0x20];
+    asset[2] = 1; // one mip; the decoder's level list needs a real chain
     asset[3] = 97; // stored byte: DXGI 96, BC6H_SF16
     asset[4] = 1;
     asset[8..10].copy_from_slice(&4u16.to_le_bytes());

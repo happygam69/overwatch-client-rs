@@ -58,8 +58,10 @@ client-side mode→variation selector.
   remain diagnostics).
 - **Data-side reads:** CASC/BLTE, STU v2, entities and health pools,
   model/skeleton/clip decoding, weapon graphs, map chunks, and the
-  bundle-aware material/texture chain. All 305 map headers are readable: 42
-  from the encoded store and 263 from bundles, as the client reads them.
+  bundle-aware material/texture chain (the texture format switch, descriptor
+  builder and descriptor size walk are differential-verified against the
+  current image). All 305 map headers are readable: 42 from the encoded store
+  and 263 from bundles, as the client reads them.
 
 The rebuild order is [`docs/rebuild-plan.md`](docs/rebuild-plan.md).
 

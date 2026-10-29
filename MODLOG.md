@@ -4,6 +4,46 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-29 - Texture parser leaves: descriptor, size-walk and format units
+
+- Corrected BC2/BC3 to the four-colour colour block (BC1 keeps three-colour)
+  and applied the texture docs audit, including the 25-unit / twelve-`ow-tank`
+  ledger line.
+- Added three tier-2 units against the current image: `fn/TextureDescriptor`
+  (`0x142e2d900`, 364 cases, 100% branch coverage, 12/12),
+  `fn/TextureDescriptorSizeWalk` (`0x142e2dbb0` over `0x142e37070`, 364 cases,
+  100% branch coverage, 11/11 with one declared equivalent mask widening) and
+  `fn/TextureFormatFamilyBpp` (`0x142e372b0`, 374 cases, 100% branch coverage,
+  12/12).
+- The format switch has no `.pdata` entry, so its unit declares an exact
+  `coverageWindow` of 285 bytes (`0x142e372b0..0x142e373cc`). This stops the
+  branch sweep before the dispatch table at `0x142e373d0..0x142e37491`; the
+  size walk's dispatch block is `0x142e37164..0x142e37189`.
+- The descriptor unit compares the 16-byte descriptor/flags prefix; fields past
+  `+0x10` are builder bookkeeping and stay outside the unit (documented gap).
+
+## 2026-10-29 - Texture chain: header/payload, material records, colour space, mip/array layout
+
+- The type-`004` header, its descriptor and its chunk/payload chain are read:
+  the embedded chunk and each payload's own header name their level range
+  (`0x142e38730`/`40`/`50`, `0x142255e10`), the payload GUID is
+  `0x142e37520`, and `0x141e29210` selects the raw run or the chunk/payload
+  runs.
+- The material record's payload shape and input-name hash are read
+  (`material.rs`); the generic material-data → shader join and the base-colour
+  rule remain open (`docs/formats/materials.md`).
+- Upload colour space is the asset's DXGI id through `0x143356f50` →
+  `0x14348f500`; the resource (`0x1426545d0`) and SRV format
+  (`0x142653b90`) use the same id, and the viewer carries it as
+  `SceneTexture::srgb`.
+- The mip/array layout is read from `0x141e296a0` and the `0x141f0a000` copy
+  loop: outer array element/face, inner mip ascending, data pointer advancing
+  by each level's size; record index `(array*faces + face)*mip_count + mip`
+  (`0x142e36e80`). `tests/texture_levels_real.rs` pins the cubemap, the two
+  multi-mip assets and one raw six-surface asset at independent offsets, and
+  scans 400 assets. 1D/cube SRV views, the sampler, volume depth and the
+  alternate `0x141f11f90` copy path remain open.
+
 ## 2026-10-28 - CASC page-table writer read: record layout, status machine, flush
 
 - `DynamicIndexPageInsert` (`0x142511d20`) is read operation for operation:

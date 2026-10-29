@@ -1,0 +1,46 @@
+{
+  "id": "fn/TextureDescriptorSizeWalk",
+  "title": "tier-2 shipped code: descriptor mip-chain size against FUN_142e2dbb0 (0x142e2dbb0)",
+  "address": { "v2b": "0x7ff7c7b4dbb0" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "texture_descriptor_size_walk",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "object", "kind": "ptr", "ptr_len": 104 },
+    { "name": "bias", "kind": "u64" }
+  ],
+  "returns": "u64",
+  "argFactory": "texture_descriptor_size_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4249,
+    "allowedImageReads": [
+      "0x7ff7c7b57164-0x7ff7c7b57189",
+      "0x7ff7c7b573d0-0x7ff7c7b57491"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/texture.rs, built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the texture_descriptor_size_walk entry.",
+    "Oracle is FUN_142e2dbb0 at exe 0x142e2dbb0 (v2b 0x7ff7c7b4dbb0): uint (object *descriptor, int bias). It reads the descriptor u64 at +0, the flags dword at +8 (only bit 2, volume) and the stored format byte at +0x60, shifts width/height/(volume depth) by bias & 31, clamps each at 1, passes `mip - bias` with 32-bit wrap to the size walk 0x142e37070, and returns the low 32 bits.",
+    "The probe extracts those same three fields and calls the new shipped descriptor_size_walk, which is the wrapper's composition over the already-verified size_walk.",
+    "allowedImageReads are the two read-only switch dispatch blocks: 0x7ff7c7b57164-0x7ff7c7b57189 (exe 0x142e37164-0x142e37189, the size walk's dword jump offsets and byte case table) and 0x7ff7c7b573d0-0x7ff7c7b57491 (exe 0x142e373d0-0x142e37491, the format switch's). They are compiler dispatch data, not game globals.",
+    "The fixture keeps bias <= the descriptor's 4-bit mip field. A bias above it makes `mip - bias` a near-2^32 loop count; that is not a loader call and cannot finish inside the oracle budget. Bias 0..=15 still covers every shift the wrapper applies.",
+    "Volume cases flip flags bit 2; the wrapper then treats the 11-bit surface/depth field as depth and the surface count as one. Non-volume cases do the reverse. Flags bit 3 is also pinned: it is not the volume flag, so a widened 0xc mask would swap surfaces and depth on the 0x100008 case."
+  ],
+  "knownEquivalentMutants": [
+    {
+      "kind": "mask widen",
+      "line": 305,
+      "rationale": "The mutation widens the shift mask from 0x1f to 0x3f. The oracle (0x142e2dbb0) masks the bias to five bits before shifting, and both it and the candidate run on x86-64 release, where a 32-bit shift masks the count to five bits: a mutant shift of 32..63 is executed as count & 31, exactly the original 0x1f mask. The shift is applied to a u32 whose value is at most 0x4000, so every bias produces the same width, height and depth. What would observe a difference: a target that traps or saturates a shift count of 32..63 instead of masking it, which is outside this unit's x86-64 ABI contract."
+    }
+  ],
+  "acknowledgedGaps": [
+    "Bias greater than the descriptor mip count is not tested: the wrapper's 32-bit subtraction makes 0x142e37070 loop almost 2^32 times, which the step budget cannot emulate. The max mip 15 with bias 0..=15 is covered.",
+    "The wrapper returns undefined4; the probe returns the same value zero-extended in u64. The upper 32 bits are not part of the client's result."
+  ]
+}

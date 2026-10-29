@@ -53,6 +53,23 @@
 //! fixed global, which the state covers). It calls
 //! `ow_tank::bundle::directory_lookup` and returns the out slot's guest
 //! address, which is the client's `param_2` return value.
+//!
+//! The texture leaves are plain integer entries: `payload_guid` calls
+//! `ow_tank::guid::payload_of` (`0x142e37520`), `texture_request_count` calls
+//! `ow_tank::texture::request_count` (`0x142e37600`) and
+//! `texture_count_bits_shifted` calls `ow_tank::texture::count_bits_shifted`
+//! (`0x142e374d0`). Each casts the u64 wire slots to the client's u32/int
+//! parameter widths. The `crc32_seeded` entry is the material name hash
+//! (`0x141b52ca0`): a plain arena buffer, its length, and the running CRC
+//! initial value.
+//!
+//! The descriptor entries follow the client's own field reads:
+//! `texture_format_family_bpp` calls `format_family_and_bpp`
+//! (`0x142e372b0`) with two 4-byte out slots, `texture_descriptor` parses the
+//! 0x20-byte header and writes `descriptor()`/`object_flags()` (`0x142e2d900`
+//! for the builder), and `texture_descriptor_size_walk` reads the u64 at
+//! `+0`, the flags at `+8` and the format at `+0x60` of the client's descriptor
+//! object before calling `descriptor_size_walk` (`0x142e2dbb0`).
 
 use std::io::{self, BufRead, Write};
 
@@ -194,6 +211,153 @@ fn chunk_guid_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     let kind = u64::from_le_bytes(table[at..at + 8].try_into().unwrap());
     let guid = ow_tank::mapguid::chunk_guid(map, kind);
     Ok((format!("{:x}", guid), vec![table]))
+}
+
+/// `PayloadGuid` (`0x142e37520`): `u64 (u64 parent, uint index)`.
+fn payload_guid_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let parent = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg0 must be u64".into()),
+    };
+    let index = match it.next() {
+        Some(Arg::U64(v)) => v as u32,
+        _ => return Err("arg1 must be u64".into()),
+    };
+    let guid = ow_tank::guid::payload_of(parent, index);
+    Ok((format!("{:x}", guid), Vec::new()))
+}
+
+/// `FUN_142e37600`: `int (int payload_count, int mip_count, int base_mips, int
+/// streamed)`.
+fn texture_request_count_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut take = || -> Result<u32, String> {
+        match it.next() {
+            Some(Arg::U64(v)) => Ok(v as u32),
+            _ => Err("args must be u64".into()),
+        }
+    };
+    let payload = take()?;
+    let mip = take()?;
+    let base = take()?;
+    let streamed = take()?;
+    let ret = ow_tank::texture::request_count(payload, mip, base, streamed);
+    Ok((format!("{:x}", ret as u64), Vec::new()))
+}
+
+/// `FUN_142e374d0`: `uint (uint value, char bias)`; popcounts
+/// `value >> ((bias + 2) & 31)`.
+fn texture_count_bits_shifted_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let value = match it.next() {
+        Some(Arg::U64(v)) => v as u32,
+        _ => return Err("arg0 must be u64".into()),
+    };
+    let bias = match it.next() {
+        Some(Arg::U64(v)) => v as u32,
+        _ => return Err("arg1 must be u64".into()),
+    };
+    let ret = ow_tank::texture::count_bits_shifted(value, bias);
+    Ok((format!("{:x}", ret as u64), Vec::new()))
+}
+
+/// `FUN_142e372b0`: `void (uint format, uint *family, uint *bpp)`.
+///
+/// The client's format switch writes both out dwords on a match and leaves
+/// them untouched otherwise. The unit's fixture zeroes both, so the shipped
+/// function's `(0, 0)` default and the client's untouched zero agree. The
+/// fixture keeps the format in 0..=0xff; the probe refuses wider values
+/// because the client compares the full 32-bit argument and the Rust switch
+/// takes the stored byte.
+fn texture_format_family_bpp_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let format = match it.next() {
+        Some(Arg::U64(v)) => v as u32,
+        _ => return Err("arg0 must be u64".into()),
+    };
+    let family = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 4 => b,
+        _ => return Err("arg1 must be the 4-byte family out".into()),
+    };
+    let bpp = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 4 => b,
+        _ => return Err("arg2 must be the 4-byte bpp out".into()),
+    };
+    if format > 0xff {
+        return Err("format-must-fit-u8".into());
+    }
+    let (family_v, bpp_v) = ow_tank::texture::format_family_and_bpp(format as u8);
+    let mut family_after = family;
+    family_after.copy_from_slice(&(family_v as u32).to_le_bytes());
+    let mut bpp_after = bpp;
+    bpp_after.copy_from_slice(&bpp_v.to_le_bytes());
+    Ok(("-".to_string(), vec![family_after, bpp_after]))
+}
+
+/// `FUN_142e2d900`: `object * (object *out, ushort *header)`.
+///
+/// The unit compares the descriptor qword and the object's flags dword. The
+/// fixture pins byte `+0x07` to 0 because the builder writes only
+/// `flags | 0x100000`; the loader (`0x141dacf00`) adds `0x4000` later when that
+/// byte is 1, so the builder unit must not claim that bit.
+fn texture_descriptor_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 12 => b,
+        _ => return Err("arg0 must be the out object".into()),
+    };
+    let header = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x20 => b,
+        _ => return Err("arg1 must be the 0x20-byte header".into()),
+    };
+    let parsed = ow_tank::texture::TextureHeader::parse(&header)
+        .map_err(|e| format!("header-parse: {e}"))?;
+    let mut out_after = out;
+    out_after[0..8].copy_from_slice(&parsed.descriptor().to_le_bytes());
+    out_after[8..12].copy_from_slice(&parsed.object_flags().to_le_bytes());
+    Ok(("-".to_string(), vec![out_after, header]))
+}
+
+/// `FUN_142e2dbb0`: `uint (object *descriptor, int bias)`.
+///
+/// The object is the client's 0x68-byte descriptor record: the u64 at `+0`, the
+/// flags dword at `+8` and the stored format byte at `+0x60`. The probe reads
+/// those three fields exactly as the client's wrapper does and calls
+/// `ow_tank::texture::descriptor_size_walk`.
+fn texture_descriptor_size_walk_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let object = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x68 => b,
+        _ => return Err("arg0 must be the 0x68-byte descriptor object".into()),
+    };
+    let bias = match it.next() {
+        Some(Arg::U64(v)) => v as u32,
+        _ => return Err("arg1 must be u64".into()),
+    };
+    let descriptor = u64::from_le_bytes(object[0..8].try_into().unwrap());
+    let flags = u32::from_le_bytes(object[8..12].try_into().unwrap());
+    let format = object[0x60];
+    let ret = ow_tank::texture::descriptor_size_walk(descriptor, flags, format, bias);
+    Ok((format!("{:x}", ret as u64), vec![object]))
 }
 
 /// The 512-byte table from the unit's `state` block.
@@ -417,6 +581,35 @@ fn bundle_directory_lookup_entry(
     ))
 }
 
+/// `FUN_141b52ca0`: `uint (byte *data, uint len, uint initial)`.
+///
+/// The client's table CRC32, called by its lazy string wrapper with initial 0.
+/// The pointee is the fixture buffer; `len` bounds the bytes the client reads.
+fn crc32_seeded_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let data = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg0 must be a plain arena buffer".into()),
+    };
+    let len = match it.next() {
+        // The client's parameter is `uint param_2`, so the wire u64 is read at
+        // the client's width. The unit's fixture only supplies 0..64 bytes, so
+        // lengths above 64 (and the u32 truncation above 2^32) are untested.
+        Some(Arg::U64(v)) => v as u32 as usize,
+        _ => return Err("arg1 must be u64".into()),
+    };
+    let initial = match it.next() {
+        Some(Arg::U64(v)) => v as u32,
+        _ => return Err("arg2 must be u64".into()),
+    };
+    let bytes = data.get(..len).ok_or("len-past-pointee")?;
+    let ret = ow_tank::material::crc32_seeded(bytes, initial);
+    Ok((format!("{:x}", ret as u64), vec![data]))
+}
+
 fn handle_call(
     entry: &str,
     args: Vec<Arg>,
@@ -431,6 +624,16 @@ fn handle_call(
         // crates/ow-tank/src/bundle.rs
         "bundle_lookup" => bundle_lookup_entry(args),
         "bundle_directory_lookup" => bundle_directory_lookup_entry(args, state),
+        // crates/ow-tank/src/guid.rs
+        "payload_guid" => payload_guid_entry(args),
+        // crates/ow-tank/src/material.rs
+        "crc32_seeded" => crc32_seeded_entry(args),
+        // crates/ow-tank/src/texture.rs
+        "texture_request_count" => texture_request_count_entry(args),
+        "texture_count_bits_shifted" => texture_count_bits_shifted_entry(args),
+        "texture_format_family_bpp" => texture_format_family_bpp_entry(args),
+        "texture_descriptor" => texture_descriptor_entry(args),
+        "texture_descriptor_size_walk" => texture_descriptor_size_walk_entry(args),
         other => Err(format!("unknown-entry-{}", other)),
     }
 }

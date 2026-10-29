@@ -1,0 +1,48 @@
+{
+  "id": "fn/Crc32NameHash",
+  "title": "tier-2 shipped code: zlib CRC32 name hash against FUN_141b52ca0",
+  "address": {
+    "v2b": "0x7ff7c6872ca0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "crc32_seeded",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "data",
+      "kind": "ptr",
+      "ptr_len": 64
+    },
+    {
+      "name": "len",
+      "kind": "u64"
+    },
+    {
+      "name": "initial",
+      "kind": "u64"
+    }
+  ],
+  "returns": "u64",
+  "argFactory": "crc32_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4244,
+    "allowedImageReads": [
+      "0x7ff7c7fa3ce0-0x7ff7c7fa40df"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/material.rs, built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the crc32_seeded entry.",
+    "Oracle is FUN_141b52ca0 at exe 0x141b52ca0 (v2b 0x7ff7c6872ca0): uint (byte *data, uint len, uint initial). It is the standard reflected zlib CRC32 with polynomial 0xEDB88320 and table at exe 0x143283ce0 (v2b 0x7ff7c7fa3ce0, 0x400 bytes); initial is complemented on entry and the result on return.",
+    "FUN_141bb9810 is the client's lazy string wrapper: it calls this function with initial 0 over exactly the string length, with no NUL terminator. CRC32(\"basecolor\") = 0xad10f602 is the input hash of the pinned material texture record.",
+    "The fixture pads every pointee to 64 bytes; bytes past len are present but must not affect either side."
+  ],
+  "acknowledgedGaps": [
+    "The client's length parameter is a uint. The probe casts the u64 wire slot through u32 to match it, but the fixture only supplies lengths 0..64, so the rest of the u32 domain and the >2^32 truncation are untested."
+  ]
+}

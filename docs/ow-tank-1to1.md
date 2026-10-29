@@ -12,7 +12,7 @@ different run; it is not evidence. Code whose only citation is a capture is
 
 **"Verified" has one meaning here:** a differential-harness unit passes all
 five stages against the client's bytes. As of this commit the harness ledger
-has 18 units and **five target `ow-tank`**: `fn/ChunkGuid` and
+has 25 units and **twelve target `ow-tank`**, including `fn/ChunkGuid` and
 `fn/BundleLookup` (section D), `fn/BundleDirectoryLookup` (section E, a
 verified consumer) and `fn/CmfKey154504` / `fn/CmfIv154504` (section B;
 differential and mutation pass, but the coverage stage cannot measure the

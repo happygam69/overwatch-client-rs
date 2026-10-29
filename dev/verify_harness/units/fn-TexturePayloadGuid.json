@@ -1,0 +1,30 @@
+{
+  "id": "fn/TexturePayloadGuid",
+  "title": "tier-2 shipped code: texture payload GUID formula against PayloadGuid (0x142e37520)",
+  "address": { "v2b": "0x7ff7c7b57520" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "payload_guid",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "parent", "kind": "u64" },
+    { "name": "index", "kind": "u64" }
+  ],
+  "returns": "u64",
+  "argFactory": "texture_payload_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/guid.rs, built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the payload_guid entry.",
+    "Oracle is PayloadGuid at exe 0x142e37520 (v2b 0x7ff7c7b57520). It returns u64 in RAX; arguments are u64 parent (RCX) and uint index (EDX).",
+    "The client keeps parent bits 0..31 and 36..39 (mask 0xF0FFFFFFFF), puts the index in bits 32..35, derives a 2-bit base from the parent type (0 for 0x004, 1 for 0x0F1, 3 otherwise) and writes the payload type 0x04D in bits 48..59. The fixture pins all three type branches, the kept and cleared bit groups, and the index nibble.",
+    "The six golden texture assets' separate payload assets resolve at the formula's output (0x03200001000009C1 and 0x03200002000009C1 for 0x0C000000000009C1), so the formula is also install-confirmed."
+  ],
+  "acknowledgedGaps": []
+}

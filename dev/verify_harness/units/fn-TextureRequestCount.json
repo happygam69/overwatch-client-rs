@@ -1,0 +1,32 @@
+{
+  "id": "fn/TextureRequestCount",
+  "title": "tier-2 shipped code: texture request count against FUN_142e37600 (0x142e37600)",
+  "address": { "v2b": "0x7ff7c7b57600" },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "texture_request_count",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "payload_count", "kind": "u64" },
+    { "name": "mip_count", "kind": "u64" },
+    { "name": "base_mips", "kind": "u64" },
+    { "name": "streamed", "kind": "u64" }
+  ],
+  "returns": "u64",
+  "argFactory": "texture_request_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/texture.rs, built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the texture_request_count entry.",
+    "Oracle is FUN_142e37600 at exe 0x142e37600 (v2b 0x7ff7c7b57600). It returns int in EAX; arguments are int payload_count (ECX), int mip_count (EDX), int base_mips (R8D), int streamed (R9D).",
+    "The function returns 0 when mip - base <= streamed, otherwise max(1, payload - streamed - 1). The fixture pins both branches, the max(1) clamp, equality, and the signed-int edges (0xFFFFFFFF is -1, 0x80000000 is INT_MIN).",
+    "The loader calls this leaf only when payload_count > 1 (0x142e2dd70); that gate lives in TextureHeader::request_count, not in the leaf."
+  ],
+  "acknowledgedGaps": []
+}

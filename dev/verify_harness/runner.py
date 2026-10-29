@@ -97,6 +97,10 @@ _KNOWN_ARG_KEYS = {"name", "kind", "ptr_len"}
 _KNOWN_OPTION_KEYS = {
     "iterations", "coverageThreshold", "mutationCount", "mutationKillRate",
     "seed", "allowedImageReads", "unreachableBranches", "mutationCallTimeout",
+    # A unit-declared exact function extent, for leaf functions the image's
+    # .pdata does not describe. Without it the sweep uses the 0x2000 ceiling
+    # and would disassemble trailing jump/dispatch tables as code.
+    "coverageWindow",
 }
 _ARG_KINDS = ("f32", "f64", "u64")
 _RET_KINDS = ("f32", "f64", "u64", "void")
@@ -487,6 +491,14 @@ def run_unit(
     mutation_count = int(opts.get("mutationCount", 12))
     kill_gate = float(opts.get("mutationKillRate", 0.8))
     seed = int(opts.get("seed", 4241))
+    cov_window = opts.get("coverageWindow")
+    if cov_window is not None:
+        cov_window = int(cov_window)
+        if not (0 < cov_window <= 0x2000):
+            raise ValueError(
+                f"unit {unit.id}: coverageWindow must be 1..0x2000 bytes, "
+                f"got {cov_window:#x}"
+            )
     if mutation_call_timeout is None:
         mutation_call_timeout = float(
             opts.get("mutationCallTimeout", DEFAULT_MUTATION_CALL_TIMEOUT)
@@ -606,8 +618,10 @@ def run_unit(
     # compared runs requires the tracker to be in place from the start.
     from coverage import BranchTracker
 
+    if cov_window is not None:
+        log(f"  coverage window: {cov_window:#x} bytes (unit-declared function extent)")
     try:
-        tracker = BranchTracker(oracle, unit.address_v2b)
+        tracker = BranchTracker(oracle, unit.address_v2b, window=cov_window)
     except Exception as e:
         log(f"  INCONCLUSIVE: coverage tracking failed: {e}")
         return entry("inconclusive", notes=[f"coverage tracking failed: {e}"])

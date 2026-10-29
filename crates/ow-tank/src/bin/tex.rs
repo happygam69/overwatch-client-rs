@@ -5,8 +5,9 @@
 //! ow-tank-tex --census 800
 //! ```
 //!
-//! Read-only: opens the install the same way the rest of the tree does and
-//! writes only what `--png` names.
+//! Read-only: opens assets through the client's bundle-aware `GameData::open_asset`
+//! (the encoded store, or the bundle the record names) and writes only what
+//! `--png` names.
 
 use std::io::Write;
 
@@ -165,7 +166,7 @@ fn main() -> std::process::ExitCode {
                 break;
             }
             tried += 1;
-            let Ok(bytes) = data.bytes_of(g) else {
+            let Ok(bytes) = data.open_asset(g) else {
                 continue;
             };
             // The header alone: a decode is exactly what fails for the formats
@@ -185,7 +186,7 @@ fn main() -> std::process::ExitCode {
             // the number this wants.
             for idx in 1..4u32 {
                 let payload = guid::payload_of(g, idx);
-                if let Ok(b) = data.bytes_of(payload) {
+                if let Ok(b) = data.open_asset(payload) {
                     if b.len() > 0x20 {
                         level0 = b.len() - 0x20;
                         break;
@@ -237,8 +238,8 @@ fn main() -> std::process::ExitCode {
         let mut failed = 0usize;
         let mut shown = 0usize;
         for g in picked {
-            match data.bytes_of(g).map_err(|e| e.to_string()).and_then(|b| {
-                texture::parse_asset(&b, g, &|p| data.bytes_of(p).ok()).map_err(|e| e.to_string())
+            match data.open_asset(g).map_err(|e| e.to_string()).and_then(|b| {
+                texture::parse_asset(&b, g, &|p| data.open_asset(p).ok()).map_err(|e| e.to_string())
             }) {
                 Ok(t) => {
                     decoded += 1;
@@ -257,15 +258,20 @@ fn main() -> std::process::ExitCode {
                     *families.entry(format!("FAILED: {e}")).or_insert(0) += 1;
                     if shown < 4 && e.to_string().contains("block data") {
                         shown += 1;
-                        if let Ok(b) = data.bytes_of(g) {
+                        if let Ok(b) = data.open_asset(g) {
                             let u16a = |at: usize| {
                                 b.get(at..at + 2)
                                     .map(|s| u16::from_le_bytes([s[0], s[1]]))
                                     .unwrap_or(0)
                             };
+                            let u32a = |at: usize| {
+                                b.get(at..at + 4)
+                                    .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+                                    .unwrap_or(0)
+                            };
                             println!(
-                                "    e.g. 0x{g:016x}: asset {} B, mips {}, fmt {}, surfaces {}, payloads {}, data_size {}, {}x{}",
-                                b.len(), b[2], b[3], b[4], b[6], u16a(0x0c), u16a(8), u16a(10)
+                                "    e.g. 0x{g:016x}: asset {} B, mips {}, fmt {}, surfaces {}, payloads {}, total_size {}, {}x{}",
+                                b.len(), b[2], b[3], b[4], b[6], u32a(0x0c), u16a(8), u16a(10)
                             );
                         }
                     }
@@ -337,10 +343,10 @@ fn main() -> std::process::ExitCode {
             if written >= n {
                 break;
             }
-            let Ok(bytes) = data.bytes_of(g) else {
+            let Ok(bytes) = data.open_asset(g) else {
                 continue;
             };
-            let Ok(t) = texture::parse_asset(&bytes, g, &|p| data.bytes_of(p).ok()) else {
+            let Ok(t) = texture::parse_asset(&bytes, g, &|p| data.open_asset(p).ok()) else {
                 continue;
             };
             let mut out = Vec::new();
@@ -387,11 +393,11 @@ fn main() -> std::process::ExitCode {
             if written >= n {
                 break;
             }
-            let Ok(bytes) = data.bytes_of(g) else {
+            let Ok(bytes) = data.open_asset(g) else {
                 skipped += 1;
                 continue;
             };
-            let Ok(t) = texture::parse_asset(&bytes, g, &|p| data.bytes_of(p).ok()) else {
+            let Ok(t) = texture::parse_asset(&bytes, g, &|p| data.open_asset(p).ok()) else {
                 skipped += 1;
                 continue;
             };
@@ -433,7 +439,7 @@ fn main() -> std::process::ExitCode {
             eprintln!("--header wants --guid 0x…");
             return std::process::ExitCode::from(2);
         };
-        let bytes = match data.bytes_of(g) {
+        let bytes = match data.open_asset(g) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("load failed: {e}");
@@ -453,16 +459,18 @@ fn main() -> std::process::ExitCode {
                 .unwrap_or(0)
         };
         println!(
-            "texture 0x{g:016x}: {} B, mips {}, format {}, surfaces {}, usage {}, payloads {}, data_size {}, {}x{}",
+            "texture 0x{g:016x}: {} B, mips {}, format {}, surfaces {}, usage {}, payloads {}, total_size {}, {}x{}, base_mips {}, chunk_mask 0x{:02x}",
             bytes.len(),
             bytes.get(2).copied().unwrap_or(0),
             bytes.get(3).copied().unwrap_or(0),
             bytes.get(4).copied().unwrap_or(0),
             bytes.get(5).copied().unwrap_or(0),
             bytes.get(6).copied().unwrap_or(0),
-            u16a(0x0c),
+            u32a(0x0c),
             u16a(8),
-            u16a(10)
+            u16a(10),
+            bytes.get(0x10).copied().unwrap_or(0),
+            bytes.get(0x11).copied().unwrap_or(0)
         );
         println!(
             "  at +0x20: {} {} {} {}",
@@ -502,7 +510,7 @@ fn main() -> std::process::ExitCode {
         println!("  runs that are >=90% valid-looking BC blocks: {offsets:?}");
         for idx in 1..4u32 {
             let p = guid::payload_of(g, idx);
-            match data.bytes_of(p) {
+            match data.open_asset(p) {
                 Ok(b) => {
                     let start = u32a_of(&b, 12);
                     let image = u32a_of(&b, 8);
@@ -540,7 +548,7 @@ fn main() -> std::process::ExitCode {
                     g |= bit40 << 40;
                     g &= !(0x0FFF_u64 << 48);
                     g |= (guid::reverse_type_bits(ty - 1) as u64) << 48;
-                    let ok = data.bytes_of(g).map(|b| b.len()).unwrap_or(0);
+                    let ok = data.open_asset(g).map(|b| b.len()).unwrap_or(0);
                     if ok > 0 {
                         println!("  resolves: type 0x{ty:03x} idx {idx} bit40 {bit40} -> 0x{g:016x} ({} B)", ok);
                     }
@@ -556,14 +564,14 @@ fn main() -> std::process::ExitCode {
         eprintln!("--guid 0x… or --census N");
         return std::process::ExitCode::from(2);
     };
-    let bytes = match data.bytes_of(g) {
+    let bytes = match data.open_asset(g) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("load failed: {e}");
             return std::process::ExitCode::from(1);
         }
     };
-    match texture::parse_asset(&bytes, g, &|p| data.bytes_of(p).ok()) {
+    match texture::parse_asset(&bytes, g, &|p| data.open_asset(p).ok()) {
         Ok(t) => {
             println!(
                 "texture 0x{g:016x}: {}x{}, {} mip(s), {} surface(s), {:?} (byte {}), {} bytes decoded",

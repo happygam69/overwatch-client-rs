@@ -145,12 +145,13 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` | 575 |
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 249 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 705 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 719 |
 | `verify_harness/chunk_guid_fixture.py` | Deterministic table-slot inputs for the `fn/ChunkGuid` unit. | 99 |
 | `verify_harness/cli.py` | Run verification units. Exit code is the gate. | 177 |
 | `verify_harness/cmf_iv_154504_fixture.py` | Deterministic inputs for the `fn/CmfIv154504` unit. | 202 |
 | `verify_harness/cmf_key_154504_fixture.py` | Deterministic inputs for the `fn/CmfKey154504` unit. | 60 |
 | `verify_harness/coverage.py` | Basic-block / branch coverage of the oracle, measured on the very runs | 254 |
+| `verify_harness/crc32_fixture.py` | Deterministic byte/initial inputs for `fn/Crc32NameHash`. | 75 |
 | `verify_harness/curve_fixture.py` | Structured input factory for fn/CurveKeySampleDual. | 150 |
 | `verify_harness/dynamic_index_hash_fixture.py` | Deterministic data/state inputs for the `fn/DynamicIndexHash` unit. | 111 |
 | `verify_harness/dynamic_index_key_hash_fixture.py` | Deterministic inputs for the `fn/DynamicIndexKeyHash` unit. | 126 |
@@ -162,13 +163,19 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/orthonormalize_basis_fixture.py` | Structured input factory for fn/OrthonormalizeCameraBasis. | 100 |
 | `verify_harness/orthonormalize_state_fixture.py` | State-mode fixture for fn/OrthonormalizeCameraBasis-state. | 26 |
 | `verify_harness/perspective_matrix_fixture.py` | Structured input factory for fn/BuildPerspectiveMatrix. | 159 |
-| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1026 |
+| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1040 |
 | `verify_harness/salsa20_fixture.py` | Deterministic Salsa20 inputs for the `fn/Salsa20Xor` unit. | 156 |
 | `verify_harness/salsa20_state_fixture.py` | Deterministic key/nonce/counter inputs for the `fn/Salsa20StateInit` unit. | 92 |
 | `verify_harness/scaffold_unit.py` | Scaffold a verification unit from an address. | 292 |
 | `verify_harness/selftest.py` | The harness's own gate: inject known defects, require detection. | 221 |
 | `verify_harness/test_harness_smoke.py` | Smoke tests for the verify_harness fixes. | 449 |
 | `verify_harness/test_run_unit_e2e.py` | End-to-end test: run the full five-stage ladder on synthetic bytes. | 139 |
+| `verify_harness/texture_count_bits_fixture.py` | Structured inputs for fn/TextureCountBitsShifted. | 53 |
+| `verify_harness/texture_descriptor_fixture.py` | Structured inputs for fn/TextureDescriptor. | 117 |
+| `verify_harness/texture_descriptor_size_fixture.py` | Structured inputs for fn/TextureDescriptorSizeWalk. | 113 |
+| `verify_harness/texture_format_fixture.py` | Structured inputs for fn/TextureFormatFamilyBpp. | 40 |
+| `verify_harness/texture_payload_fixture.py` | Structured inputs for fn/TexturePayloadGuid. | 59 |
+| `verify_harness/texture_request_fixture.py` | Structured inputs for fn/TextureRequestCount. | 63 |
 | `wall_diff.py` | Wall-pinned input diff: heap offsets that only change under a held key. | 107 |
 | `wall_watch.py` | Scan for W-only changing offsets, then behaviorally verify each candidate. | 114 |
 | `warm_merge.py` | Merge warm_poll captures over the flattened v2b image, page by page. | 164 |
