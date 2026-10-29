@@ -4,6 +4,22 @@ Newest first. Milestones only; findings and addresses live in
 `docs/formats/`, current state in `STATUS-handoff.md`, the work queue in
 `docs/open-questions.md`.
 
+## 2026-10-29 - Texture upload: exact 16-bit and HDR values
+
+- `Texture::rgba16` and `SceneTextureLevel::rgba16` now carry exact half words
+  for R16G16B16A16_FLOAT (DXGI 10) and R16_FLOAT (54) as well as BC6H (95/96);
+  R16_FLOAT is padded `(r, 0, 0, 1.0)`. `SceneTexture` also carries the stored
+  format byte, so the uploader no longer needs the display string.
+- `ow-client` uploads those levels as `Rgba16Float` (8 B/px, 256-byte row
+  pitch), a documented **viewer substitution** for the client's DXGI ids; the
+  format switch is `TextureFormat::sample_type`-checked against the existing
+  `Float { filterable: true }` layout. R16_UNORM, UINT, the BC CPU decode and
+  the sampler remain open.
+- Format ids re-read from the current image: stored `0x0A`→PM `0x32`→10,
+  `0x37`→`0x0B`→54, `0x39`→`0x07`→56, `0x60`→`0x44`→95, `0x61`→`0x43`→96
+  (`0x143356f50` → `0x14348f500`); `0x1426545d0` writes the id and
+  `0x141f0a000` copies the blocks with no CPU conversion.
+
 ## 2026-10-29 - Texture parser leaves: descriptor, size-walk and format units
 
 - Corrected BC2/BC3 to the four-colour colour block (BC1 keeps three-colour)

@@ -606,9 +606,10 @@ fn main() -> std::process::ExitCode {
                     Err(e) => eprintln!("write failed: {e}"),
                 }
             }
-            // The 16-bit dump for a real BC6H asset, the same container the
-            // synthetic sweep writes: the exact level-0 blocks next to our own
-            // half floats.
+            // The 16-bit dump for any half-float asset (BC6H,
+            // R16G16B16A16_FLOAT, R16_FLOAT), the same container the synthetic
+            // sweep writes: the exact level-0 blocks next to our own half
+            // floats.
             if let Some(path) = flag("--dump16") {
                 if t.rgba16.is_empty() {
                     eprintln!(

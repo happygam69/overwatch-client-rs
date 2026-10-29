@@ -15,17 +15,18 @@ model          MDLC: an array of 64-bit material values
 - **Chain: read and joined** on the install side. The join has an ambiguity
   decline.
 - **Textures: decoded.** BC1, BC2, BC3, BC4_UNORM, BC5_UNORM and BC7 decode to
-  RGBA8; BC6H decodes to half floats plus a clamped 8-bit view; R8G8, R16 and
-  RGBA16F decode their channels. R16G16_FLOAT (DXGI 34), the signed BC4/BC5
-  variants and the BGRA/depth/video formats the client's tables can name are
-  reported as unsupported, not mis-decoded. The in-tree BC6H and BC7 tests are
-  derived from the published specifications (Microsoft's BC6H/BC7 pages and the
-  Khronos `EXT_texture_compression_bptc` extension); this document has no
-  separate BC6H or BC7 section. `dev/tex_oracle.py` is a cross-check against an
-  external `texture2ddecoder` wheel that is not in the repository, and it
-  refuses BC6H by default. The `dev/bc6h_oracle.py` and `dev/bc6h_tables.py`
-  files its docstring names are not present in this tree, so there is no
-  reproducible `bcdec`/`bc7decomp` cross-check here.
+  RGBA8; BC6H decodes to half floats plus a clamped 8-bit view; BC6H,
+  R16G16B16A16_FLOAT and R16_FLOAT keep their exact half words for the upload,
+  while R8G8, R16_UNORM and RGBA8 keep the 8-bit view. R16G16_FLOAT (DXGI 34),
+  the signed BC4/BC5 variants and the BGRA/depth/video formats the client's
+  tables can name are reported as unsupported, not mis-decoded. The in-tree
+  BC6H and BC7 tests are derived from the published specifications (Microsoft's
+  BC6H/BC7 pages and the Khronos `EXT_texture_compression_bptc` extension);
+  this document has no separate BC6H or BC7 section. `dev/tex_oracle.py` is a
+  cross-check against an external `texture2ddecoder` wheel that is not in the
+  repository, and it refuses BC6H by default. The `dev/bc6h_oracle.py` and
+  `dev/bc6h_tables.py` files its docstring names are not present in this tree,
+  so there is no reproducible `bcdec`/`bc7decomp` cross-check here.
 - **Bundle-aware reads:** models, looks, materials, material data and textures
   open through `GameData::open_asset`, so bundle-hosted assets are included.
 - **Practice-range result (re-measured after the record parser):** the
@@ -543,19 +544,65 @@ The client uses the same table on both sides of the upload:
 
 So the asset's own DXGI id is the rule: the client neither promotes a linear
 texture to sRGB nor drops an sRGB texture to linear at the view. The viewer
-carries the predicate through `SceneTexture::srgb` and uploads
-`Rgba8UnormSrgb` when it is true and `Rgba8Unorm` when it is false
-(`ow-client/src/surface.rs::upload_format`). The 1×1 white slot and the UV
-checker are viewer-generated and stay sRGB so the grey checker does not shift.
+carries the predicate through `SceneTexture::srgb` and, on the 8-bit path,
+uploads `Rgba8UnormSrgb` when it is true and `Rgba8Unorm` when it is false
+(`ow-client/src/surface.rs::upload_format`). The formats with exact half values
+take the `Rgba16Float` substitution described below. The 1×1 white slot and the
+UV checker are viewer-generated and stay sRGB so the grey checker does not
+shift.
 
 Evidence: both tables and both builders are read from the current image. The
-viewer's upload is **not** the client's D3D12 call — it writes RGBA8 through
-wgpu, with no client sampler — but it now uploads every decoded subresource
+viewer's upload is **not** the client's D3D12 call — it writes RGBA8, or
+`Rgba16Float` for the exact-half formats, through wgpu with no client sampler —
+but it now uploads every decoded subresource
 (mip levels and array layers) in the client's copy order. The mip chain, the
 array layout and the SRV format are read (`0x141e296a0`, `0x141f0a000`,
 `0x1426545d0`, and the format at `0x142653b90`); only the plane selection, the
 view dimension, the cube-face direction order and the sampler remain open, so
 the viewer binds a 2D view of layer 0 rather than a cube view.
+
+### 16-bit and HDR upload (2026-10-29)
+
+The client's resource keeps the DXGI format; it does not expand 16-bit or HDR
+values to bytes on the CPU. Re-read from the current image:
+
+| stored byte | `0x143356f50[stored]` (PM) | `0x14348f500[PM]` (DXGI) | format |
+|---|---|---|---|
+| 0x0A | 0x32 | 10 | R16G16B16A16_FLOAT |
+| 0x37 | 0x0B | 54 | R16_FLOAT |
+| 0x39 | 0x07 | 56 | R16_UNORM |
+| 0x60 | 0x44 | 95 | BC6H_UF16 |
+| 0x61 | 0x43 | 96 | BC6H_SF16 |
+
+The resource builder `0x1426545d0` writes `0x14348f500[pm]` into the resource
+descriptor's Format field (the `param_1[8]` store), and the copy path
+`0x141f0a000` copies the stored block records without CPU pixel expansion. The
+identities are **read**; they were checked against the image again on
+2026-10-29.
+
+Decoding is the viewer's, and so is the upload resource:
+
+- BC6H (DXGI 95/96), R16G16B16A16_FLOAT (10) and R16_FLOAT (54) now decode to
+  exact half words, four per pixel in `r, g, b, a` order
+  (`Texture::rgba16`, `SceneTextureLevel::rgba16`). R16_FLOAT is padded
+  `(r, 0, 0, 1.0)` because that is what a D3D one-channel float view supplies
+  for the missing channels. No value is rounded or clamped on this path; a
+  test compares the stored bytes and a value outside [0, 1] survives bit for
+  bit.
+- `ow-client/src/surface.rs` uploads those levels as
+  `wgpu::TextureFormat::Rgba16Float`, eight bytes per pixel with a 256-byte
+  row pitch. **`Rgba16Float` is a viewer substitution** for the client's DXGI
+  10/54/95/96, not a claim that the client creates that resource: it has the
+  same four 16-bit float channels, and the client's own resource is the DXGI
+  format above. `Rgba16Float` is a filterable float sample type in WebGPU
+  without an optional feature, so the existing
+  `TextureSampleType::Float { filterable: true }` bind layout accepts it (a
+  unit test asks `TextureFormat::sample_type`).
+- R16_UNORM (56) is **still clamped**: the decoder rounds it to the 8-bit view
+  and does not keep its raw `u16`, so no `R16Unorm` upload path exists. UINT
+  formats likewise use the UNORM path (see "Open"). BC1–BC5 and BC7 are
+  decoded on the CPU to RGBA8 for the viewer; the client keeps them compressed
+  and the GPU decodes. Those, and the sampler, remain open below.
 
 ### The six pinned assets
 
@@ -715,7 +762,8 @@ is albedo for a given material class is not read.
 - The model's `MSTU` field hashes are the install-local route to texture
   references inside the model, skipping the material wrapper.
 - The texture sampler path is not read, and the viewer's upload is not the
-  client's D3D12 call: it writes RGBA8 through wgpu. The uploaded
+  client's D3D12 call: it writes RGBA8 through wgpu, and `Rgba16Float` for the
+  exact-half formats (the substitution documented above). The uploaded
   subresources/levels now follow the client's copy order (surface-major, mip
   ascending) and the resource shape (`mip_count` levels, `surfaces` layers),
   but the client samples a DXGI-format resource through its own sampler, so
@@ -746,9 +794,17 @@ is albedo for a given material class is not read.
   likewise, including their 6x6/8x8 block sizes. They are reported unsupported,
   and `cooked_size`/`level_byte_size` have no exact arithmetic for them: they
   fall back to a 4x4 block or a linear size.
-- `Texture::rgba16` carries BC6H only; R16_FLOAT and R16G16B16A16_FLOAT expose
-  the clamped byte view, not their exact halves. `SceneTexture` drops
-  `rgba16`, so a BC6H asset also uploads only the clamped 8-bit view.
+- R16_UNORM (DXGI 56) is still clamped: the decoder rounds the raw 16-bit
+  value to the 8-bit view and does not keep it, so there is no `R16Unorm`
+  upload path. `R16Unorm` is a filterable float sample type, so adding it would
+  not need a second bind layout, but the exact-value decode is not implemented
+  and is open.
+- BC1–BC5 and BC7 are decoded on the CPU to RGBA8 for the viewer, with the BC
+  palette and block arithmetic coming from the published formats (the client
+  leaves the blocks to the GPU). That CPU decode, the `Rgba16Float`
+  substitution for DXGI 10/54/95/96 and the sampler path are viewer choices,
+  not the client's D3D12 calls; the 8-bit formats and UINT values are therefore
+  not 1:1 at the upload.
 - `chunk_mask`'s low bits remain unread (only bit 3 is the streamed flag); the
   install relation `payload_count == popcount(chunk_mask)` is an observation.
 - A header `mip_count == 16` is accepted by the loader, but the descriptor's

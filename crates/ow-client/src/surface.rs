@@ -123,20 +123,48 @@ pub fn upload_all(
         .collect()
 }
 
-/// The upload view format for a texture, from the colour space its stored
-/// format byte names.
+/// The upload format and its bytes per pixel.
 ///
-/// An sRGB asset is uploaded as `Rgba8UnormSrgb`, so sampling linearises it the
-/// way the client's own sRGB view does; a linear data map (normal, mask,
-/// height) is uploaded as `Rgba8Unorm` and sampled raw. The client picks the
-/// same DXGI id for its resource and its texture SRV
-/// (`FUN_1426545d0`/`FUN_142653b90`), so this is the asset's format, not a
-/// renderer-wide guess.
-fn upload_format(srgb: bool) -> wgpu::TextureFormat {
-    if srgb {
-        wgpu::TextureFormat::Rgba8UnormSrgb
+/// A texture whose decoded levels carry exact half floats (BC6H,
+/// R16G16B16A16_FLOAT, R16_FLOAT — the client's DXGI 95/96/10/54) is uploaded
+/// as `Rgba16Float`, eight bytes per pixel, so the values reach the GPU
+/// unchanged. The client's own resource is those DXGI ids; `Rgba16Float` is a
+/// **viewer substitution** with the same four 16-bit float channels, not a
+/// claim that the client creates that resource.
+///
+/// Every other texture is uploaded as 8-bit RGBA in the asset's colour space:
+/// an sRGB asset is `Rgba8UnormSrgb`, so sampling linearises it the way the
+/// client's own sRGB view does; a linear data map (normal, mask, height) is
+/// `Rgba8Unorm` and sampled raw. The client picks the same DXGI id for its
+/// resource and its texture SRV (`FUN_1426545d0`/`FUN_142653b90`), so this is
+/// the asset's format, not a renderer-wide guess. R16_UNORM and the UINT
+/// families have no exact path yet and take this clamped view (open).
+fn upload_format(tex: &SceneTexture) -> (wgpu::TextureFormat, usize) {
+    if tex.has_exact_half() {
+        (wgpu::TextureFormat::Rgba16Float, 8)
+    } else if tex.srgb {
+        (wgpu::TextureFormat::Rgba8UnormSrgb, 4)
     } else {
-        wgpu::TextureFormat::Rgba8Unorm
+        (wgpu::TextureFormat::Rgba8Unorm, 4)
+    }
+}
+
+/// The staging row pitch: `write_texture` wants rows padded to
+/// `COPY_BYTES_PER_ROW_ALIGNMENT` (256 bytes), which is the same padding the
+/// RGBA8 path has always used.
+fn row_pitch(row_bytes: usize) -> usize {
+    row_bytes.div_ceil(256) * 256
+}
+
+/// Copy one level's rows into a staging buffer whose rows are `pitch` bytes.
+/// A short source leaves the remaining rows zero rather than reading past it.
+fn stage_rows(staging: &mut [u8], source: &[u8], row_bytes: usize, rows: usize, pitch: usize) {
+    for y in 0..rows {
+        let at = y * row_bytes;
+        let Some(row) = source.get(at..at + row_bytes) else {
+            break;
+        };
+        staging[y * pitch..y * pitch + row_bytes].copy_from_slice(row);
     }
 }
 
@@ -177,12 +205,14 @@ fn upload_one(
             width: tex.width.max(1),
             height: tex.height.max(1),
             rgba: tex.rgba.clone(),
+            rgba16: None,
         };
         std::slice::from_ref(&fallback)
     } else {
         &tex.levels
     };
 
+    let (format, bytes_per_pixel) = upload_format(tex);
     let (mip_level_count, layers) = upload_shape(levels);
     let (width, height) = (tex.width.max(1) as u32, tex.height.max(1) as u32);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -195,10 +225,10 @@ fn upload_one(
         mip_level_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        // sRGB assets are sampled as sRGB and linearised by the hardware;
-        // linear data maps are sampled raw. The bit came from the asset's
-        // stored format byte (`SceneTexture::srgb`), not from this call site.
-        format: upload_format(tex.srgb),
+        // `Rgba16Float` for an asset with exact halves, otherwise 8-bit RGBA
+        // in the asset's own colour space (`SceneTexture::srgb`, from its
+        // stored format byte) — not a guess at this call site.
+        format,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -209,15 +239,20 @@ fn upload_one(
     for level in levels {
         let level_width = level.width.max(1) as usize;
         let level_height = level.height.max(1) as usize;
-        let unpadded = level_width * 4;
-        let padded = unpadded.div_ceil(256) * 256;
+        let unpadded = level_width * bytes_per_pixel;
+        let padded = row_pitch(unpadded);
         let mut staging = vec![0u8; padded * level_height];
-        for y in 0..level_height {
-            let at = y * unpadded;
-            let Some(row) = level.rgba.get(at..at + unpadded) else {
-                break;
-            };
-            staging[y * padded..y * padded + unpadded].copy_from_slice(row);
+        // The byte source follows the format choice, so a level's rows are
+        // always interpreted as the channels the texture was created with.
+        if bytes_per_pixel == 8 {
+            let halves: &[u8] = level
+                .rgba16
+                .as_deref()
+                .map(bytemuck::cast_slice::<u16, u8>)
+                .unwrap_or(&[]);
+            stage_rows(&mut staging, halves, unpadded, level_height, padded);
+        } else {
+            stage_rows(&mut staging, &level.rgba, unpadded, level_height, padded);
         }
         queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -284,9 +319,65 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upload_format_follows_the_asset_colour_space() {
-        assert_eq!(upload_format(true), wgpu::TextureFormat::Rgba8UnormSrgb);
-        assert_eq!(upload_format(false), wgpu::TextureFormat::Rgba8Unorm);
+    fn upload_format_follows_exact_halves_and_the_asset_colour_space() {
+        // Exact halves win over the colour-space bit: BC6H, RGBA16F and R16F
+        // all carry them, and their values must not be clamped to bytes.
+        let mut hdr = SceneTexture::white();
+        hdr.srgb = false;
+        hdr.levels[0].rgba16 = Some(vec![0; 4]);
+        assert_eq!(upload_format(&hdr), (wgpu::TextureFormat::Rgba16Float, 8));
+
+        // No halves: the asset's own colour space decides, as before.
+        assert_eq!(
+            upload_format(&SceneTexture::white()),
+            (wgpu::TextureFormat::Rgba8UnormSrgb, 4)
+        );
+        let mut linear = SceneTexture::white();
+        linear.srgb = false;
+        assert_eq!(upload_format(&linear), (wgpu::TextureFormat::Rgba8Unorm, 4));
+    }
+
+    #[test]
+    fn row_pitch_is_256_for_both_pixel_sizes() {
+        // RGBA8: 4 bytes per pixel.
+        assert_eq!(row_pitch(4), 256);
+        assert_eq!(row_pitch(256), 256);
+        assert_eq!(row_pitch(260), 512);
+        // RGBA16F: 8 bytes per pixel, so half as many pixels per 256-byte row.
+        assert_eq!(row_pitch(8), 256);
+        assert_eq!(row_pitch(256), 256);
+        assert_eq!(row_pitch(264), 512);
+    }
+
+    #[test]
+    fn stage_rows_keeps_eight_byte_pixels_bit_for_bit() {
+        // 2x2 RGBA16F: 8 pixels x 4 halves = 32 half words, two 16-byte rows in
+        // a 256-byte-pitch staging buffer.
+        let halves: Vec<u16> = (1..=32).collect();
+        let source: &[u8] = bytemuck::cast_slice(&halves);
+        let mut staging = vec![0u8; row_pitch(2 * 8) * 2];
+        stage_rows(&mut staging, source, 2 * 8, 2, row_pitch(2 * 8));
+
+        assert_eq!(&staging[0..16], &source[0..16]);
+        assert_eq!(&staging[256..272], &source[16..32]);
+        assert!(staging[16..256].iter().all(|b| *b == 0));
+        // The exact half words survive: no f32 round-trip, no clamp.
+        assert_eq!(&staging[0..2], &0x0001u16.to_le_bytes());
+    }
+
+    #[test]
+    fn rgba16_float_is_the_filterable_float_sample_the_layout_asks_for() {
+        // `layout()` binds `TextureSampleType::Float { filterable: true }`.
+        // WebGPU must report the 16-bit float format with that sample type and
+        // without requiring a filtering feature, or the bind group would fail
+        // validation at runtime.
+        assert_eq!(
+            wgpu::TextureFormat::Rgba16Float.sample_type(
+                Some(wgpu::TextureAspect::All),
+                Some(wgpu::Features::empty())
+            ),
+            Some(wgpu::TextureSampleType::Float { filterable: true })
+        );
     }
 
     fn level(mip: u8, surface: u16) -> ow_scene::SceneTextureLevel {
@@ -296,6 +387,7 @@ mod tests {
             width: 4,
             height: 4,
             rgba: vec![0; 4 * 4 * 4],
+            rgba16: None,
         }
     }
 

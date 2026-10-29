@@ -80,9 +80,10 @@ pub struct Draw {
 
 /// A decoded texture, ready to be uploaded.
 ///
-/// The bytes are RGBA8 because that is what both viewers can take; the source
-/// format is kept for the report (`docs/formats/materials.md` has the table of
-/// what the install ships).
+/// The 8-bit bytes are RGBA8 because that is what both viewers can take; a
+/// format with a half-float form also carries its exact halves in
+/// [`SceneTextureLevel::rgba16`]. The source format is kept for the report
+/// (`docs/formats/materials.md` has the table of what the install ships).
 ///
 /// `srgb` is the asset's own colour space, read from its **stored format byte**
 /// through the client's two tables (`ow_tank::texture::is_srgb_format`: stored
@@ -108,6 +109,11 @@ pub struct SceneTextureLevel {
     pub width: u16,
     pub height: u16,
     pub rgba: Vec<u8>,
+    /// The exact half-float decode, four per pixel (`r, g, b, a`), for the
+    /// formats with a half-float form: BC6H, R16G16B16A16_FLOAT and R16_FLOAT.
+    /// R16_FLOAT is padded with `(0, 0, 1.0)`. `None` for every 8-bit format
+    /// and for R16_UNORM, whose exact 16-bit value is not preserved yet (open).
+    pub rgba16: Option<Vec<u16>>,
 }
 
 #[derive(Debug, Clone)]
@@ -125,7 +131,13 @@ pub struct SceneTexture {
     pub mip_count: u8,
     /// The header's `surfaces` byte: the array layer count, or six per cube.
     pub surfaces: u8,
+    /// A display name for the report; never parsed to choose a format.
     pub format: String,
+    /// The asset's stored engine format byte, exactly as the header carries it
+    /// (`ow_tank::texture::Format::from_header` is the read mapping). Zero for
+    /// the viewer-generated white/checker textures and the unreadable
+    /// stand-in, which have no asset.
+    pub format_byte: u8,
     /// The asset's stored format resolves to an sRGB DXGI id ([`Self::decoded`]).
     pub srgb: bool,
 }
@@ -160,10 +172,12 @@ impl SceneTexture {
                 width: N as u16,
                 height: N as u16,
                 rgba,
+                rgba16: None,
             }],
             mip_count: 1,
             surfaces: 1,
             format: "uv checker (no material data)".into(),
+            format_byte: 0,
             // Viewer-generated, and its grey squares are authored in sRGB:
             // sampling it as linear would shift them.
             srgb: true,
@@ -183,10 +197,12 @@ impl SceneTexture {
                 width: 1,
                 height: 1,
                 rgba: vec![255, 255, 255, 255],
+                rgba16: None,
             }],
             mip_count: 1,
             surfaces: 1,
             format: "white".into(),
+            format_byte: 0,
             srgb: true,
         }
     }
@@ -203,6 +219,7 @@ impl SceneTexture {
                 width: level.width,
                 height: level.height,
                 rgba: level.rgba.clone(),
+                rgba16: (!level.rgba16.is_empty()).then(|| level.rgba16.clone()),
             })
             .collect();
         // A hand-built `Texture` (the colour tests) has no level list; keep the
@@ -214,6 +231,7 @@ impl SceneTexture {
                 width: t.width,
                 height: t.height,
                 rgba: t.rgba.clone(),
+                rgba16: (!t.rgba16.is_empty()).then(|| t.rgba16.clone()),
             }]
         } else {
             levels
@@ -227,8 +245,19 @@ impl SceneTexture {
             mip_count: t.mip_count,
             surfaces: t.surfaces,
             format: format!("{:?}", t.format),
+            format_byte: t.format_byte,
             srgb: t.is_srgb(),
         }
+    }
+
+    /// Whether every decoded level carries exact half floats, so an upload can
+    /// use a 16-bit float resource instead of the clamped RGBA8 view.
+    ///
+    /// The decision is made per asset: `ow_tank::texture` fills `rgba16` for a
+    /// whole texture or for none of it (BC6H, R16G16B16A16_FLOAT, R16_FLOAT).
+    /// Viewer-generated textures have no levels-with-halves and answer false.
+    pub fn has_exact_half(&self) -> bool {
+        !self.levels.is_empty() && self.levels.iter().all(|level| level.rgba16.is_some())
     }
 }
 
@@ -2965,5 +2994,64 @@ mod tests {
         assert!(!decoded_with(0x51).srgb, "stored 0x51 -> BC4_UNORM");
         // 0x60 (96) is BC6H_UF16, a linear HDR format.
         assert!(!decoded_with(0x60).srgb, "stored 0x60 -> BC6H_UF16");
+    }
+
+    #[test]
+    fn decoded_carries_exact_halves_and_the_stored_format() {
+        // stored 0x0A is R16G16B16A16_FLOAT (DXGI 10): exact halves, linear.
+        let exact = vec![0xC000u16, 0x7BFF, 0x0001, 0x3C00];
+        let texture = ow_tank::texture::Texture {
+            width: 1,
+            height: 1,
+            mip_count: 1,
+            surfaces: 1,
+            format_byte: 0x0A,
+            format: ow_tank::texture::Format::Rgba16Float,
+            rgba: vec![0, 255, 0, 255],
+            rgba16: exact.clone(),
+            levels: vec![ow_tank::texture::TextureLevel {
+                mip: 0,
+                surface: 0,
+                width: 1,
+                height: 1,
+                rgba: vec![0, 255, 0, 255],
+                rgba16: exact.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let scene = SceneTexture::decoded(0x0c0000000000e349, &texture);
+        assert_eq!(scene.format_byte, 0x0A);
+        assert_eq!(scene.levels[0].rgba16.as_deref(), Some(exact.as_slice()));
+        assert!(scene.has_exact_half());
+        assert!(!scene.srgb);
+
+        // An 8-bit format carries no halves, so the uploader stays RGBA8.
+        let plain = SceneTexture::decoded(0x0c0000000000e349, &decoded_texture(0x64));
+        assert_eq!(plain.format_byte, 0x64);
+        assert_eq!(plain.levels[0].rgba16, None);
+        assert!(!plain.has_exact_half());
+    }
+
+    /// A hand-built one-level `Texture` for the carrier tests.
+    fn decoded_texture(stored: u8) -> ow_tank::texture::Texture {
+        let (format, _dxgi) = ow_tank::texture::Format::from_header(stored);
+        let rgba = vec![1, 2, 3, 255];
+        ow_tank::texture::Texture {
+            width: 1,
+            height: 1,
+            mip_count: 1,
+            surfaces: 1,
+            format_byte: stored,
+            format,
+            rgba: rgba.clone(),
+            levels: vec![ow_tank::texture::TextureLevel {
+                width: 1,
+                height: 1,
+                rgba,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
     }
 }
