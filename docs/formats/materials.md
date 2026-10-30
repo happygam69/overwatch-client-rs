@@ -1,5 +1,9 @@
 # Materials and textures
 
+The texture-specific audit is [`texture-1to1.md`](../texture-1to1.md). It lists
+the parser edges, decode/upload substitutions and proof gaps separately from the
+material chain below.
+
 The path from a model to a textured surface:
 
 ```text

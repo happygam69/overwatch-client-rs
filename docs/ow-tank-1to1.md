@@ -3,7 +3,8 @@
 The companion to [`deviations.md`](deviations.md). That file is the enforced
 `FIT-*` list of legacy code with a marker in the tree. This file is the honest
 state of everything else in `ow-tank` that is **not** proven identical to the
-client.
+client. The texture-specific detail is in
+[`texture-1to1.md`](texture-1to1.md).
 
 **Ground truth is the complete current `Overwatch.exe` image** (base
 `0x140000000`). A process capture (`0x7ff6...`) is a different build or a
