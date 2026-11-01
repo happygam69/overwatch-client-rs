@@ -5,6 +5,7 @@
 //! cargo xtask verify --fast   # the same without the install-reading tests
 //! cargo xtask dev-index       # is dev/INDEX.md up to date?
 //! cargo xtask deviation-check # does the code match the deviations table?
+//! cargo xtask frame-check     # do the docs cite only the one address frame?
 //! ```
 //!
 //! The gate is what "done" means in this project: a change is done when
@@ -79,6 +80,8 @@ fn verify(fast: bool) -> bool {
     }
     ok &= python("make_index.py", &["--check"]);
     ok &= python("deviation_check.py", &["--check"]);
+    ok &= python("frame_check.py", &["--check"]);
+    ok &= python("pe_layout.py", &["--check"]);
     ok
 }
 
@@ -89,6 +92,8 @@ fn main() -> ExitCode {
         "verify" => verify(args.iter().any(|a| a == "--fast")),
         "dev-index" => python("make_index.py", &["--check"]),
         "deviation-check" => python("deviation_check.py", &["--check"]),
+        "frame-check" => python("frame_check.py", &["--check"]),
+        "pe-layout" => python("pe_layout.py", &["--check"]),
         "help" | "--help" | "-h" => {
             println!("{}", HELP);
             true
@@ -114,4 +119,6 @@ cargo xtask <command>
   verify --fast   the same, without the tests that read the install
   dev-index       check that dev/INDEX.md matches the tools on disk
   deviation-check check that the deviations table and the code agree
+  frame-check     check that the docs cite only the one address frame
+  pe-layout       check which addresses are install bytes and which are BSS
 ";

@@ -26,7 +26,27 @@ project, never write to the game.
 - **`dev/field_index.py`** — struct-aware field-access index over the complete
   image; separates the mover component, character body and `dmBody`.
 - **`dev/pdata_lookup.py`** — `.pdata` function bounds for an RVA.
-- **`dev/imm_scan.py`, `dev/xref_rva.py`, `dev/find_refs.py`** — immediate and
+- **`dev/audit_image.py`** — the ground-truth audit: `.pdata` facts from the
+  oracle image, bridge counts, and the name-table reconciliation
+  (`--registry` for the full function-registry sweep).
+- **`dev/corpus.py`** — the standing corpus, inside the project at
+  `dev/data/corpus` (ignored): `build` a `.pdata` range, `show`/`grep`/`list`
+  it, `make-args` for the headless batch, `purge` a tag. Every `.pdata` body
+  gets an authoritative linear disassembly (`.asm`) taken from the image,
+  including bodies Ghidra has no function for. Ghidra's decompile (`.c`) is
+  added when it exists; it can truncate and is never a verification source.
+  `show <addr> --window` disassembles an interior or unlisted address, and
+  `build` is incremental (`--force` re-fetches decompiles, `--asm-only`
+  refreshes disassembly without the bridge). Storage is shared
+  (`asm/<chunk>.asm`, `c/<entry>.c`); tag membership lives in the `tagged`
+  table, so a chunk can belong to several ranges and purging one range never
+  disturbs another's files. The bridge call pins `Overwatch.exe`; a transport
+  error is retried and never recorded as a miss.
+- **`dev/frame_check.py`** — the address-frame gate (`cargo xtask frame-check`):
+  docs citations, the name table, and function-entry sanity.
+- **`dev/gh_apply_types.py`** — applies `docs/struct-layouts.csv` to the
+  Ghidra program (struct import, then the `prototype` column).
+- **`dev/imm_scan.py`, `dev/xref_rva.py`** — immediate and
   reference searches in the current image.
 
 The table below is the practical set by task.
@@ -69,6 +89,7 @@ The table below is the practical set by task.
 | `python dev/verify_harness/cli.py all` | every differential unit |
 | `python dev/verify_harness/cli.py casc` | the verified CASC subset |
 | `python dev/verify_harness/cli.py fn/<Name>` | one unit |
+| `cargo xtask frame-check` | docs addresses, the name table and function-entry sanity |
 
 `cargo xtask verify` does not run the differential harness; `python
 dev/verify_harness/cli.py casc` is the CASC gate, and `fn/<Name>` is the
@@ -79,9 +100,12 @@ per-function gate.
 
 ## Decompilation (Ghidra)
 
-The working project is `dev/ghidra_run/owmod` (on the SSD, git-ignored). The
+The working project is `dev/ghidra_run/owmod_clean` (on the SSD, git-ignored). The
 only program is `Overwatch.exe`; [`ghidra-project.md`](ghidra-project.md)
-gives the base, the address rule and the workflow.
+gives the base, the address rule and the workflow. A clean analysis PE (the
+install's headers plus the recovered `.text`) is built with
+`python dev/patch_clean_pe.py`; the output stays under the git-ignored
+`dev/data/offline_recover/`.
 
 Canonical scripts are tracked in [`ghidra/`](ghidra/) and deployed to
 `C:/Users/Happy/ghidra_scripts/` (Ghidra only loads scripts from there):
@@ -92,11 +116,21 @@ Canonical scripts are tracked in [`ghidra/`](ghidra/) and deployed to
   allowed. Functions are created if Ghidra has none.
 - `McpCallers.java <args-file> <out-file>` — callers of each target, with
   call-site context.
+- `FunctionCensus.java` — read-only `.pdata`/function census, for checking a
+  clean import against the live project.
+- `DisassemblePdataFunctions.java` — fill the real `.pdata` bodies after a
+  `-noanalysis` clean import.
+- `ExportAnnotations.java`, `ApplyAnnotations.java`, `CreateMissingNames.java`,
+  `CheckNames.java`, `ImportStructs.java` and `ConfigureQualityAnalysis.java` —
+  the clean-map migration pipeline: export and copy annotations, create the
+  no-`.pdata` leaf names, verify the CSV, import the structs and run the
+  reference/data/string analysis without function-start or body-repair
+  heuristics.
 
 Example:
 
 ```text
-analyzeHeadless.bat E:\overwatch-client-rs\dev\ghidra_run\owmod Overwatch.exe \
+analyzeHeadless.bat E:\overwatch-client-rs\dev\ghidra_run\owmod_clean Overwatch.exe \
   -noanalysis -scriptPath C:\Users\Happy\ghidra_scripts \
-  -postScript McpDecompile.java D:/ow-dumps/args.txt D:/ow-dumps/out.c
+  -postScript McpDecompile.java E:/overwatch-client-rs/dev/data/corpus/args.txt E:/overwatch-client-rs/dev/data/corpus/out.c
 ```

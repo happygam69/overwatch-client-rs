@@ -18,7 +18,7 @@ result identical. Anything else stays open.
 | 3. map resolver | practice range resolves and renders | 34/34 chunks, exact bounds |
 | 4. materials and textures | first pass in the viewer; client renderer not claimed | open |
 | 5. the one executable | done | default launch opens the practice range |
-| 6. gameplay | next | no movement/combat claim yet |
+| 6. gameplay | started: movement arithmetic leaves verified | no playable movement/combat claim yet |
 
 ## Stage 1 - CASC primitives
 
@@ -39,13 +39,21 @@ branch sites and their scored mutants killed. The oracle found and fixed two
 real index-hash defects: the zero-length return and the trailing whole
 twelve-byte group.
 
-Still open: `DynamicIndexSegmentParse` (`0x14250fcf0`),
-`DynamicContainerRead`'s page cache (`0x1424f48d0`) and `EncodingSectionsRead`
-(`0x1424d1c60`). `BlteFrameHeaderParse` (`0x1424a90e0`) and `BlteBlockRead`
-(`0x1424d61b0`) are read and tested. The page-table writer
-`DynamicIndexPageInsert` (`0x142511d20`) is read and documented but not
-implemented: no read-path caller exists, and its type-3 calls pass a null
-range and write location/size from uninitialised stack slots.
+`DynamicIndexSegmentParse` (`0x14250fcf0`) and `DynamicIndexSegmentLoad`
+(`0x14250fc60`) are read and mirrored: the read-only mode-2 path is a
+synchronous allocator buffer plus one `ReadFile`, the other modes map a
+read-only view, and both share the parse body. `ow-casc` reads the same bytes
+and matches the validation order, including the `block_size / 18` floor.
+Still open: `DynamicContainerRead`'s page cache (`0x1424f48d0`). The encoding
+page lookup is read and verified (`EncodingPageIndexSearch` `0x142498880`,
+`EncodingFindCKey` `0x142498540`, `EncodingFindEKey` `0x142498610`; no read-path
+page-hash check). `EncodingSectionsRead` (`0x1424d1c60`) now mirrors the
+client's five-section layout and is install-tested over the whole blob (no
+harness unit: allocator and I/O state). `BlteFrameHeaderParse`
+(`0x1424a90e0`) and `BlteBlockRead` (`0x1424d61b0`) are read and tested. The
+page-table writer `DynamicIndexPageInsert` (`0x142511d20`) is read and
+documented but not implemented: no read-path caller exists, and its type-3
+calls pass a null range and write location/size from uninitialised stack slots.
 
 ## Stage 2 - the build-154504 manifest
 
@@ -141,7 +149,12 @@ geometry     229 distinct models, 2,449 placements, 872 draws
 
 Only after the world is correct:
 
-1. movement: `MoverInvoker` caller -> `MoverAdvance` -> Domino;
+1. movement: the ramp (`MoverRampVector`/`MoverRampScalar*`), command
+   (`BuildMoverPhysicsCommand`) and wish spring (`MoverWishSpring`) leaves are
+   differential-verified; next is the `R15` wish source, the
+   `FUN_140cb63c0`/`FUN_140ca5c50` state transform, the `SubmitMoverPhysicsCommand`
+   velocity assembly and the Domino character controller. The `MoverInvoker`
+   caller is still wanted but may be a dead path;
 2. camera: per-frame look consumer, FP component, pose/spring;
 3. animation: reference retarget, Pose2d VM;
 4. combat: fire loop, projectile/raycast, damage and pools;

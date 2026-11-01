@@ -1,0 +1,42 @@
+{
+  "id": "fn/CollisionShapeFilter",
+  "title": "tier-2 shipped code: the query's layer filter against 0x142cbb350",
+  "address": {
+    "v2b": "0x7ff7c79db350"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_filter",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "query",
+      "kind": "ptr",
+      "ptr_len": 8
+    },
+    {
+      "name": "shape",
+      "kind": "ptr",
+      "ptr_len": 8
+    }
+  ],
+  "returns": "u64",
+  "argFactory": "collision_filter_fixture",
+  "options": {
+    "iterations": 264,
+    "coverageThreshold": 95,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 5542,
+    "coverageWindow": 110
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (shape_filter), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_filter entry.",
+    "The leaf writes only AL; the rest of RAX keeps the mask's high byte, so the compared return channel is the whole register and the probe reproduces it exactly. The fixture is a full cross of the mask pairs and the signed-id pool.",
+    "No image data is read by the leaf and it has no stack cookie, so the unit needs no allowedImageReads."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the filter predicate only. The query driver, the shape transform and the five narrowphase primitives remain open, and the filter's role in the dispatch is exercised only through the wrapper's read, not through this unit."
+  ]
+}

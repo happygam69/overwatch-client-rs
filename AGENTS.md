@@ -68,7 +68,8 @@ may be added**; `cargo xtask verify` fails on one.
    function name from `docs/function-names.csv`. Do not introduce addresses
    from another build.
 10. **The gate decides.** `cargo xtask verify` runs fmt, clippy (warnings are
-    errors), the tests, the tool index and the deviation check.
+    errors), the tests, the tool index, the deviation check and the
+    address/function-entry check.
 11. **No seed lists for content.** A map, chunk set or texture is resolved by
     the client's own path (map header or loader), never by a proximity seed or
     a hand-picked GUID list. A seed that renders overlapping maps is a bug, not
@@ -108,7 +109,7 @@ may be added**; `cargo xtask verify` fails on one.
 
 | tool | what it answers | where |
 |---|---|---|
-| Ghidra project | behaviour: decompile, callers, value flow | `dev/ghidra_run/owmod`, program `Overwatch.exe` |
+| Ghidra project | behaviour: decompile, callers, value flow | `dev/ghidra_run/owmod_clean`, program `Overwatch.exe` (pre-clean backup: `dev/ghidra_run/owmod`) |
 | `ow-tank` bins / examples | data: formats, registry, entities, weapons, graphs, animation | `crates/ow-tank/src/bin/`, `crates/ow-tank/examples/` |
 | `ow-client`, `ow-scene` | the one launchable client and map assembly; default practice range through `mapresolve` | `crates/ow-client/`, `crates/ow-scene/` |
 | `ow-sim` | parked reference; not built until a read gameplay layer needs it | `crates/ow-sim/` |

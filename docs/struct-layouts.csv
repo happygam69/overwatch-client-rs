@@ -1,0 +1,29 @@
+struct,offset,name,type,role
+MoverBody,0x1c00,,,the character object's own size (0x1c00); ConstructMoverBase builds the 0x1b70 base subobject - NO field at +0x1cd0 (docs conflict; open)
+MoverComponent,0x130,,,the registered component size (0x130, 52 fields); runtime slot = STU offset + 4
+MoverBody,0x35b,handle_35b,unsigned char,body/session handle byte
+MoverBody,0x5d0,param_block,unsigned char [0xac],movement parameter block +0x5d0..+0x67c; ApplyStateModifiers writes base/effective pairs (layout not read)
+MoverBody,0x870,state_modifier_data,void *,the inline vector's data pointer: points at +0x880
+MoverBody,0x878,state_modifier_count,unsigned int,record count
+MoverBody,0x87c,state_modifier_capacity,unsigned int,record capacity
+MoverBody,0x10d0,flags_word,unsigned int,u32 flags word
+MoverBody,0x10ec,timer,float,float timer
+MoverBody,0x1140,wishvec,float [4],local wish vector (4 floats)
+MoverBody,0x1520,state_id_pair,unsigned int [2],u32 state-id pair
+MoverBody,0x1a77,movement_state_bytes,unsigned char [2],movement state bytes; separate read is the byte at +0x1a79
+MoverBody,0x1a79,state_byte_1a79,unsigned char,the advance's character path reads the walk-state byte here
+MoverBody,0x1a90,world_transform,float [16],4x4 world transform; translation at +0x1ac0
+MoverBody,0x1ad8,world_handle,unsigned long long,physics world handle
+MoverBody,0x1b80,committed_transform,float [16],committed transform: position quad + three basis vectors
+MoverComponent,0x0c,schema_scalar0,float,first scalar at STU 0x08 (schema header)
+MoverComponent,0x50,jump_50_20f,float,STU_97288E54 field - the jump struct starts at slot 0x4c; these six documented floats follow it
+MoverComponent,0x54,jump_54_20f,float,STU_97288E54 field (default 20f)
+MoverComponent,0x58,jump_58_0f98,float,STU_97288E54 field (default 0.98f)
+MoverComponent,0x5c,jump_5c_0f7,float,STU_97288E54 field (default 0.7f)
+MoverComponent,0x60,jump_60_0f7,float,STU_97288E54 field (default 0.7f)
+MoverComponent,0x64,jump_64_0f2,float,STU_97288E54 field (default 0.2f)
+MoverComponent,0xb4,forward_speed,float,forward base speed (STU 0xb0)
+MoverComponent,0xb8,side_speed,float,side speed (STU 0xb4)
+MoverComponent,0xbc,back_speed,float,backpedal base speed (STU 0xb8)
+MoverComponent,0xc0,crouch_speed,float,crouch speed (STU 0xbc)
+MoverComponent,0xf0,terminal_fall_speed,float,terminal fall speed (STU 0xec)

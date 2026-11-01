@@ -2,13 +2,27 @@
 //! `Overwatch.exe`.
 //!
 //! There is no fitted gameplay here. `body` is the Domino integration order
-//! the island solve applies; `camera` is the basis orthonormaliser. Both are
-//! checked by the differential harness. The mover's input→velocity path is
-//! still open (`docs/open-questions.md`), so it is not implemented in this
-//! crate.
+//! the island solve applies; `camera` is the basis orthonormaliser; `movement`
+//! holds the read mover ramp, command, wish-spring and transform leaves;
+//! `state` is the state-record transform lookup; `frame` is the per-frame
+//! velocity law those leaves compose into; `collide` is the first stage of the
+//! swept collision query. The arithmetic is checked by the
+//! differential harness. The rest of the mover's input→velocity path (the
+//! wish source and Domino dispatch) is still open (`docs/open-questions.md`),
+//! so it is not implemented in this crate.
 
 pub mod body;
 pub mod camera;
+pub mod collide;
+pub mod fan;
+pub mod frame;
+pub mod gate;
+pub mod modifiers;
+pub mod movement;
+pub mod settings;
+pub mod shapes;
+pub mod state;
+pub mod world;
 
 /// A position and direction in metres.
 pub type Vec3 = [f32; 3];

@@ -9,7 +9,7 @@ read, it stays here and the gameplay feature stays unimplemented.
 
 ---
 
-## 1. The mover's input→velocity ramp
+## 1. The mover's input→velocity control law
 
 **Question.** `MoverInvoker` (`0x1407ffc50`, interface vtable `0x142fdbf40`
 slot 9) passes eight arguments to `MoverAdvance` (`0x140ca7f30`): the mover,
@@ -20,15 +20,190 @@ input frame? That caller is the ramp/control law.
 **What is known.** `MoverAdvance`'s character path computes
 `desired = (scale_a * body[0x18..] + wish) * scale_b + pos`, then runs
 `RunCharacterControllerSweep`; the search for a writer of `+0xc0..0xcc` is a
-dead end because that is a static local offset. `ApplyStateModifiers`
-(`0x140cbcbe0`) writes the movement parameter block at `+0x5d0..+0x67c`;
-`SubmitMoverPhysicsCommand` (`0x140cc03d0`) sends the command to Domino.
+dead end because the verified ramp leaf reads that quad as a static
+**direction**, not a stored velocity. `ApplyStateModifiers` (`0x140cbcbe0`)
+writes the movement parameter block at `+0x5d0..+0x67c`.
 
-**What would settle it.** Find the vtable-9 call site and read the caller that
-produces the wish/position/scales. Then add a state unit for the ramp.
+The arithmetic around the open caller is now ground-truth verified:
+`fn/MoverRampVector` (`0x140ca75b0`), `fn/MoverRampScalar` (`0x140ca75f0`),
+`fn/MoverRampScalarOffset` (`0x140ca7570`) and
+`fn/BuildMoverPhysicsCommand` (`0x140cb74a0`) are differential units with
+100% branch coverage and declared/killed mutants.
 
-**Next anchor.** `formats/character-controller.md`,
-`dev/verify_harness/units/fn-MoverAdvance.json`, `dev/field_index.py`.
+The corrected live chain (2026-11-01) is:
+
+```text
+MoverUpdateFrame (0x140cbb260)
+  -> ApplyStateModifiers
+  -> SubmitMoverPhysicsCommand (0x140cc03d0)
+       -> BuildMoverPhysicsCommand, FUN_1420163b0
+  -> input-source pass (body+0xf0 slot 8 / FUN_140cc1060)
+  -> FUN_140cba030 (input object: wish +0x60, gate +0x98)
+  -> FUN_140cc0dc0 (wish spring)
+  -> FUN_140ca5c50 (state vector), FUN_140ca75b0 (ramp vector)
+  -> SetCharacterControllerVelocity (0x142cbd1b0)
+```
+
+`MoverStateMachine` (`0x140cbacc0`) is a separate record handler: it calls
+`ApplyStateModifiers` then `SubmitMoverPhysicsCommand` and never sets the
+controller velocity. `SubmitMoverPhysicsCommand` does **not** call
+`SetCharacterControllerVelocity`. `FUN_140cb5760` (`MoverUpdateCommand`) is the
+second update path and sets the velocity directly at `0x140cb58b4`. The input
+object's wish comes from source `+0x00` and its gate from source `+0x40`; the
+source is filled by the body `+0xf0` records, with `FUN_140cc1060` as fallback.
+`FUN_140cba030` is an interior `.pdata` chunk, not a real entry.
+
+**The velocity law itself is read (2026-11-01).** Both update paths hand
+`state_transform(wish) + ramp_vector(body)` to
+`SetCharacterControllerVelocity`: `MoverUpdateFrame` at
+`0x140cbbdc2..0x140cbbe0b` (`movups` the wish from `+0x1140`, `FUN_140ca5c50`,
+`FUN_140ca75b0`, `addps state + ramp`, call) and `MoverUpdateCommand` at
+`0x140cb5890..0x140cb58b4` (`FUN_140ca75b0`, `addps ramp + state`, call, gated
+on `input+0x4c != 0`). Both pass `body + 0x10d0` as the ramp's third argument,
+so the ramp reads its flags at `body+0x10d0` and its offset at `body+0x10fc`.
+The two `ADDPS` operand orders differ only in the surviving NaN payload. The
+composition is implemented as `ow-sim::frame` (`state_vector`,
+`ramp_from_body`, `frame_velocity`/`command_velocity`, `update_frame`); its two
+operands are the verified units `fn/MoverStateVector` and
+`fn/MoverRampVector`, and the composition itself has no client unit.
+
+So the open part of item 1 is narrowed to the **wish producer** and the
+**velocity→position stage**, not the velocity expression.
+
+The source is partially read (2026-11-01): the first-person view object
+(vtable `0x142f87810`, slot `+0x250` = `0x140654530`) writes the actor command
+at `+0x1210` — yaw `+0x04`, pitch `+0x06` (s16 fixed-point, clamped to
+`±0x3fff`), packed bytes `+0x08..+0x0b`, button/flag `+0x0c`, flag word
+`+0x10` — and pushes 0x1c-byte usercmd entries into the ring at `+0xe30`.
+`FUN_140689930` is probably driven from `[actor+0x38]+0x178` (call site
+`0x14214170e`), then `FUN_14068cf10` builds the 0x14-byte command and
+`FUN_140cbb260` copies it to `body+0xd0/+0xe0`. That packer is now read
+exactly (current record with the next record's yaw `+0x1228` / pitch `+0x122a`
+overlaid; sequence `[actor+0xe14] + 1`). **The "external wish producer" route
+is closed:** every writer of `body+0x1140` and of `source+0x00` is accounted
+for, and none of them turns the buttons into a direction - the wish is a
+closed loop seeded only by the fan's collision-scored candidate. The state-record path reaches
+`FUN_140cb63c0`/`FUN_140cb86c0`, which writes source `+0x00` (wish), `+0x10`
+and `+0x40` (gate). The wish is **not** a direct command copy: `FUN_140cb86c0`
+builds an input vector from `body+0x1140`, the controller position and
+`body+0xc0`, then rotates it through `FUN_140ca5b90`/`FUN_140cb5350`/
+`FUN_140cb83b0`/`FUN_140c71e10`. The exact `in_vec` expression, the command
+byte meanings, the `actor+0x38` vtable and the `+0x58/+0x60/+0x68` virtuals
+remain unread. The `0x14068f1aa` variant is a dead/obfuscated duplicate.
+
+The transform is a 4x4 column-major affine: forward `v' = x*c0 + y*c1 +
+z*c2 + c3` (`FUN_140cb5510`, verified as `fn/MoverWishForward`), inverse
+`v' = R^-1*(v - c3)` with `det = c0·(c1×c2)` and `rcpps` + Newton refinement
+(`FUN_140cb5350`, verified as `fn/MoverWishInverse`; the harness's Unicorn
+`rcpps` is exact IEEE `1/x`, and the client transforms all four lanes). The
+writer is a fan solver: seed `s = d.x*body[0xc0] + d.y*body[0xc4] +
+d.z*body[0xc8]`, `d = controller_position - M*(body[0x1140].xyz,1)`, then a
+loop over `body[0x5bc]` directions (`2π/N`), `0x1420328c0` composition, and a
+back-transform through `FUN_140ca5b90` to source `+0x00`. The two call sites
+pass `dt = 0` (`FUN_140cb63c0`) and `dt = 10` (`FUN_140cba030`); the gate is
+1 normally, 0 when `body[0x610] <= 0 && dt <= 0` or no candidate is accepted.
+
+**The fan's own arithmetic is read (2026-11-01)** and written up in
+`formats/character-controller.md` ("The fan solver inside the wish writer"):
+three passes (two five-way, one `N = body[0x5bc]`-way), the speed
+`((min(|body[0x1150].xyz|, max3(cap slots)) * 1.1) * (body[0xe8]*1e-6 * E))`
+floored by `body[0x5cc]`, the radius
+`max(body[0x65c], 0.35) * body[0x5b8] - 0.015`, the `y = 0.015` lane, the
+`72°` and `2π/N` rotations, the `+0.1` seed bias, the second seed term
+`dot(query - (pos - ramp), dir)`, and both acceptance rules
+(`|score| < best && y > best_y`, then `|score| < best`). `ow-sim::fan`
+implements exactly that with unit tests. Still open: the evaluator
+`0x1420328c0`, the generic helpers `0x1426cd3d0`/`0x1426de990`, the per-pass
+record layouts, the `0x141c5d780(object, byte)` query chain and the
+`+0x41`/`+0x42` flag slot's producer.
+
+**What would settle it.** The spring itself is now verified
+(`fn/MoverWishSpring`, 264 cases, 90% branch coverage, 12/12 mutants) with a
+seeded service object: `body+8` encodes `T = 0x100000000` and the descriptor at
+`T+0x28`; the state-id sentinel makes the record transforms identity. The
+forward and inverse transforms are verified too (`fn/MoverWishForward`,
+`fn/MoverWishInverse`, each 264 cases, 100%, 5/5 mutants), as is the copy
+wrapper (`fn/MoverWishCopy`) against a synthetic state record. What remains is
+the lookup in Rust, the `R15` wish source (`+0x1210`, `+0x1220`,
+`+0x1228/+0x122a`, `+0xe14`), `FUN_140cb63c0`'s writers, the live service
+object, the `FUN_140ca5c50` state-record transform and the Domino dispatch. The
+invoker caller is still wanted, but the 2026-11-01 scan found only its own
+vtable slot; it is likely dead, not proven dead.
+
+**The next read is the candidate evaluator `0x1420328c0` — a collision query.**
+It is the last unknown between the read fan arithmetic and a wish: it takes
+`(body, &out, &block, &record)` and returns a bool plus the score and the
+height the acceptance rules compare. It is a thin wrapper (it fills a
+one-float/one-dword descriptor and calls `0x14203dae0` at `0x14203292b`), and
+its first argument is `[body+0x240]`, the spatial world the mover's other
+geometry paths use (`0x14202fb00`), so a candidate is only accepted when the
+character can reach it. `0x14203dae0` is 1158 bytes in the image's obfuscated
+region, but a trace (`dev/probe_evaluator.py`) shows its reachable code is
+just the prologue `0x14203dae0..0x14203dbd9` plus the body
+`0x14203de51..0x14203e0fe`; the scattered blocks are junk. The body is now
+read: it resolves the world's geometry object (`world+0x620`), fills the
+result record the fan reads back, builds a 0x71-byte query struct from the
+descriptor object (`[param_2+8]`) and calls `0x142cc45a0` (62-byte handle
+dispatcher) or `0x14212db80` (78 bytes). Its opaque guard is
+**pointer-keyed** (the world pointer's low byte, decoded through the nibble
+table `0x1433d158`), so a straight decompile is unusable but the two variants
+can be compared under the emulator. Remaining: the descriptor object's layout
+and producer, the two dispatchers' targets and the query itself.
+**This couples the input side to collision** — the same query is item 6 — so
+the wish producer cannot be finished before it.
+
+**Next anchor.** `fn/MoverWishForward`, `fn/MoverWishInverse`,
+`fn/MoverWishCopy`, `fn/StateTransform` and `fn/MoverStateVector` are
+verified. The state lookup is implemented in `ow-sim::state` for the leaf
+path: the gate, the bitmap/rank/table index, the `0x140543480` decode and the
+object matrix copy. The `[object+0x298]` parent path and the pose path are
+still unread.
+
+**Config path read (2026-11-01).** The verified ramp and spring read
+`+0x5a8/+0x5b4/+0x10ec` and `+0x5c0/+0x5c4/+0x688/+0x68c`; those values are
+now read at the value level. `0x1405a87d0` default-constructs the settings
+object (`+0x5a8/+0x5ac/+0x5b4 = 1.0`, `+0x5c0 = 0.0`,
+`+0x5c4..+0x5c6 = 1`, `+0x5d0 = -2`, `+0x5d4 = 1.0`, `+0x5dc = 0x10000`) and
+is verified as `fn/DefaultMoverSettings`, and the asset apply `0x140c862e0`
+is verified as `fn/ApplyMoverSettings` (11/12 mutants, 33% branch coverage
+with the vector-growth and `+0x298` edges declared); its asset-field map is in
+`formats/character-controller.md`. `+0x688`/`+0x68c` are computed in
+`ConstructMoverBody` (`0x140ca9730`) from the body's `+0x440..+0x46c`, and
+`+0x10ec` is the per-frame ramp accumulator written by `FUN_140cc079d`
+(`0x140cc079d`). `ApplyStateModifiers` (`0x140cbcbe0`) is a 37-way switch
+writing the separate `+0x5d0..+0x67c` block and touches **none** of these
+fields.
+
+**What remains open on the config path** is the asset *producer* (which
+install data builds the object `0x140c862e0` reads) and the point where the
+live body receives its copy of the settings block. Also open: the Domino
+controller is a shape/broadphase layer, not the integrator — `MoverAdvance`
+(`0x140ca7f30`) is. `body+0x1ad8` is a **slot**; `[slot]` is the variant
+object, whose tag selects a generation-checked handle. Collision reads
+precomputed triangle records and the map-chunk ingest is unread.
+`ApplyStateModifiers` is now verified (`fn/ApplyStateModifiers`: 336 cases,
+12/12 mutants, 76.5% branch coverage). The world slot, the tag dispatcher,
+both position leaves and the character velocity chain are verified on the
+no-shape path (`fn/WorldPosition`, `fn/VariantPosition`,
+`fn/CharacterPosition`, `fn/RigidPosition`, `fn/MoveCharacterController`,
+`fn/ApplyCharacterControllerMove`, `fn/SetCharacterControllerVelocity`); the
+four shape-bound leaves (`fn/ShapeSphere`, `fn/ShapeCapsule`, `fn/ShapeBox`,
+`fn/ShapePoints`), the shape dispatcher (`fn/ShapeDispatch`) and the shape
+list walk (`fn/MoveCharacterControllerShape`, contact id `-1`) are verified
+too, and the harness now has a `vec4` return channel (XMM0, 128 bits). The
+next reads are the contact event (`0x142cf32d0`), the type-3 mesh path
+(`0x142cae5a0`), the rigid velocity path
+(`0x142cb5310`), the `MoverAdvance` integration and liveness, and the fan
+writer. The harness supports `startRegs`, MS x64 stack
+arguments, range-form `allowedImageReads`, `vec4` returns and state-snapshot
+mutation; a per-case state overlay is still the remaining fixture limitation
+(the inverse matrix is fixed).
+`formats/character-controller.md`, `dev/verify_harness/units/fn-MoverWishSpring.json`,
+`dev/verify_harness/units/fn-MoverWishForward.json`,
+`dev/verify_harness/units/fn-MoverWishInverse.json`,
+`crates/ow-sim/src/movement.rs`, `MoverUpdateFrame` (`0x140cbb260`),
+`MoverUpdateCommand` (`0x140cb5760`), `FUN_140cba030`, `FUN_140cc0dc0`,
+`FUN_140cb63c0`, `FUN_14068cf10`.
 
 ---
 
@@ -124,11 +299,216 @@ map mesh is currently visual only; the default client draws the practice-range
 geometry but has no character collision. `--no-map` still offers the flat
 stand-in plane and boxes for viewer work.
 
-**What would settle it.** Read the step query and sweep path from
-`MoverAdvance`/`MoverInvoker` down to the world query, and read the map's
-collision chunks (`MAP_CHUNK_COLLISION`, `teMAP_CHUNK_ADDITIVE_COLLISION`).
+**What is read now (2026-11-01).** The sweep is `0x142cbcee0`
+(`RunCharacterControllerSweep` -> `0x142cf5660` -> `0x142cf3f80`), called from
+`MoverAdvance` with `([body+0x1ad8], world, &block)`; the resolved position
+comes back from `0x142cbcd10`. The block is `{desired vec4, scale_b,
+body[0x628]*scale_b, 0.005, step_state[0x94] clamped by body[0x1a88],
+step_state[0x9a]}`. The sweep's contacts are `[world+0x200]`, count
+`[world+0x20c]`, stride `0x20`; the advance projects each contact's first quad
+onto the normalised service vector `[service+0x40]` (fallback `(0,1,0,0)`),
+keeps the minimum in `body+0x19b8`, and calls the service object's `+0x40`
+slot per contact. The `>= 4` contacts branch (`0x140ca8643`) is unread, as is
+the `+0x40` response slot. The sweep reads precomputed triangle records
+(normal `+0xc0`, count `+0xf6`, 0x30-byte vertices from `+0x18`), never map
+chunk bytes.
 
-**Next anchor.** `formats/character-controller.md`, `formats/maps.md`.
+**What would settle it.** Read the `+0x40` response slot, the `>= 4` contact
+branch, and the map's collision chunks (`MAP_CHUNK_COLLISION`,
+`teMAP_CHUNK_ADDITIVE_COLLISION`) into the shape records the sweep consumes.
+The gap is the map-chunk-to-shape ingest: the client's spatial structure is
+built by the command triple, and the producer of the triangle records from
+chunk bytes is not read.
+
+**The wish producer's evaluator is this query, and the chain is now read to
+its narrowphase.** `0x1420328c0` (a wrapper) takes `[body+0x240]` — the
+spatial world — and calls `0x14203dae0`, whose reachable body is read; it
+resolves the geometry at `world+0x620`, takes the `u16` handle at
+`[geometry+0x31f8]`, and calls `0x142cc45a0`, which decodes the handle through
+`0x1442a0bc0` to a domino record and calls **`0x142cbd510`** — the collision
+query driver. That driver is read: four passes (one per bit of the caller's
+flag byte), each building its sweep with `0x142cd5540` (verified as
+`fn/CollisionSweepBounds`), rejecting shapes with an AABB test and a
+moving-box separation test, pushing child indices with `0x140d24b60`, and
+routing leaves to `0x142cc1610`, which builds the entry's world transform
+(`0x142cb8b80`), applies the layer filter (`0x142cbb350`) and dispatches on
+the type byte (`0x142cb8d60`) to five per-type primitives (`0x142ccdf40`,
+`0x142ccd7b0`, `0x142cd3c80`, `0x142caed10`, `0x142cd0ae0`). Type 0's
+analytic path is now read and verified (`fn/CollisionSphere`,
+`ow_sim::collide::sphere_sweep`), and the wrapper's layer filter is verified
+as `fn/CollisionShapeFilter`, and the type-1 capsule as
+`fn/CollisionCapsule`; type 0 and type 1's support-point path
+(`0x142cc9460`) and types 2, 3 and 4+ are open.
+
+**The next read is the geometry, not more query code.** The five per-type
+primitives are inventoried with their sizes and their two-path shape
+(`formats/character-controller.md`), and the shape world transform
+`0x142cb8b80` is read. What a real candidate still needs is (a) the collision
+geometry the query walks (`record+0x2b8` entries and the per-type pools at
+`+0x2d0..+0x330`), which is the map's collision chunks, and (b) the hit
+policy's live collision world (`0x14202c580` -> `0x14202bc90`). Without those,
+a candidate cannot be scored: the fan reads a record only the live hit policy
+fills. So the next anchor is the chunk ingest in `formats/maps.md`, coupled
+with the primitive bodies.
+
+**The pool side is read (2026-11-01).** The fixture/pool write path is now
+whole: `DmWorldConstruct` sizes every pool from the world config
+(`config+0x20` bodies, `+0x24` owners, `+0x28` shape entries, `+0x2c..+0x3c`
+the five shape-type pools, `+0x70` islands); `ShapePoolAlloc` (`0x142cb00c0`)
+is the per-element free-list pop (it takes the *pool record's* address, which
+is why the earlier `+0x2cc`/`+0xa0` intersection failed);
+`ShapeEntryFromDescriptor` (`0x142cb7f10`) copies a source descriptor into a
+0xc0-byte shape entry and allocates the per-type record by the source's type
+byte at `+0x67`; and `ShapeAddToBody` (`0x142cb3940`) / `ShapeAddToOwner`
+(`0x142cd4ef0`) are the two "add a shape to a world" handles. So the only
+missing Data step is the **descriptor producer**: no function yet found turns
+the collision chunk's sector data into those descriptors. The chunk payload
+itself is read as data (`formats/maps.md`, "The collision chunk payload"):
+two STUD v1 blobs, a registered 0x78-byte component class `0x9199BF6B` with
+three RVA fields into a 220-sector table, and a second, unregistered component
+`0x99F089FE`. The next anchor is exactly that converter, and the two open
+narrowphases (the type-0/1 support-point path `0x142cc9460`, types 2 and 4).
+
+**Two routes were tried and settled (2026-11-01).** (a) *Field hashes:* the
+class descriptor's field table (`desc+0x28 = 0x143c3c620`, count 4 at
+`desc+0x98`) is **all zero in the installed image**, and `0x1421cdb90` only
+sorts it (`0x1421cce50`); the registered class name decodes to **`Unknown`**
+(the XOR name format is recorded in `formats/maps.md`). So the four field
+hashes are built at runtime and a search for hash immediates cannot find the
+consumer. (b) *Geometry instantiation:* `0x14202c660` is the **owner's**
+initialise step (`owner+0x620` = the 0x3210-byte geometry, two worlds from
+`config[0x18]`), and its class is reached through the node-type registry:
+`FUN_1404f6e10` registers `FUN_142029f00` as node type 2 in `0x141c5ff40`;
+that factory builds a 0x30-byte type descriptor (vtable `0x1433654a0`) and
+registers a 0x910-byte class via `0x141c4b050` → `TypeRegistrationCore`. The
+descriptor's slot 2 (`0x1407803f0`) is **instantiate-by-key**: it
+de-obfuscates the key, calls `(*(*key))(key, 0)` (the class's own
+deserialiser) and then `[container+0x20]->vtable[0x58]`. The next read is the
+key that selects the geometry class (or the map-side node carrying the
+collision chunk); the consumer reads the fixed-up component offsets
+`+0x10`/`+0x58`/`+0x68` directly, so it will not appear in a hash search
+either.
+
+**The STU load path is read (2026-11-01), and it explains the fixup**
+(`formats/stu.md`, "The load path"): `FUN_1421d26d0` resolves each sub-record
+by class hash (`FUN_1421c14f0`), constructs it in place, and runs
+`FUN_1421d3c10`/`FUN_1421d3710`, which convert self-relative offsets by the
+class's **field types** (plain offset, array of offsets, array of pointers,
+nested instance, hash map, string). With the shipping build's field tables
+empty, nothing is converted generically — which is why the collision chunk's
+completion calls its own fixed-up pass `FUN_141ff51a0`: **17 self-relative
+qwords per `m_cellBytes` record**.
+
+**The cell container is decoded and its consumer chain is read (2026-11-01).**
+`formats/maps.md`, "The cell container, decoded": the `+0x68` field points at
+a `{count, pad, data_off}` header; the 220 entries are `{cell_off, 0}`; each
+cell is `{block_size, record_off}`; each record is 17 self-relative qword
+offsets plus a 24-byte header, and the 17 arrays tile `record..record+
+block_size`. All 220 validate and tile the payload with no gaps. The runtime
+array encoding was **observed** under the oracle (`dev/probe_cellbytes.py`):
+mode 1 = `{entries_ptr, u32 count}`, entries `{Q, 1}`, record `*Q`; mode 2 =
+`{u32 count, pad, entries_ptr}`, entries `{Q, mode}`, record `*Q` when mode is
+1 else `*(Q+8)`; offset 0 → null. The consumer chain runs
+`GeometryFinalize` (`0x14213d0b0`) → `OwnerCreateBody` (`0x142cc3d90`) →
+`ShapeAddToBody`, one body per `0x100`-byte runtime cell entry and one shape
+per `0x40`-stride matrix in it.
+
+**The container stage is implemented and the fixup is verified (2026-11-02).**
+`ow_tank::collision::parse` reads the chunk's first `STUD` blob, the
+`0x78`-byte `0x9199BF6B` component, the `m_cellBytes` header, the 220 cells and
+each cell's 17 array slices, and checks that every record and boundary stays
+inside the payload and that the cells tile it. The install test
+`crates/ow-tank/tests/collision_cells_real.rs` pins the count, the first and
+last cells and every array extent. `ow_tank::collision::fixup_cell_bytes` is
+`0x141ff51a0` operation for operation; `fn/MapChunkCellBytesFixup` (264
+iterations + edge pool, 12/12 mutants) verifies outer modes 1 and 2/3 and entry
+modes 1 and 2/3, and declares the two allocate-then-deref-null mode-0 branches
+dead. The **cell decoder** — who turns the 17 arrays into the `0x60` cell
+entries (or the `0x100` sector entries) — is still the open link, so the
+container is not yet a collider.
+
+**The cell entry is 0x60 bytes and the consumer is exact (2026-11-01).**
+`GeometryClear` (`0x1421384e0`) fixes the geometry object's arrays: `+0xf8`/
+`+0x104` 0x50-stride transforms, `+0x108`/`+0x114` **0x60-stride cell
+entries**, `+0x118`/`+0x124` 0x100-stride entries, `+0xb0`/`+0xc0` and
+`+0xc8`/`+0xd8` 0xb0 record pools. `GeometryFinalize` copies each 0x60 entry's
+five `vec4`s into a 0xb0 record, steals its `{ptr,count,flag}` u16 array from
+`+0x50/+0x58/+0x5c`, creates one body (`OwnerCreateBody`) and one **type-3
+mesh** shape per entry (`ShapeAddToBody`, mesh source = record+0x20, scale
+1.0, type byte at +0x67), and stores the shape handle at record+0x50.
+
+**The node-type-2 path is brush-built, not chunk-built (2026-11-01).**
+`GeometryBuild` (`0x14213c440`) reads the node's model
+(`node+0x88` -> `+0x38` -> `+0x40` -> `+0x48`, a brush tree), copies the
+collision params (`0x142132cf0`), allocates one 0x60 cell entry, builds its
+transform, converts the brush tree (`0x142cf23c0`) and thickens it
+(`0x142cf2010`), then creates the body and finalises. So the 220-cell STU
+chunk has a **different** consumer: another node type. The registry is now
+enumerated (2026-11-02): `0x141c5ff40` is a linked-list add to the global head
+`0x144188170`, and its 144 caller thunks each pass a `{u16 type; factory}`
+record. The types run `1..=0xb4` with holes; the factories are the
+`NodeTypeNFactory` functions (type 1 class size `0x300`, type 2 `0x910`, type 3
+`0x5c0`). No factory has yet been matched to the collision chunk; the next
+attempt can start from that full (type, factory) table instead of the size
+guess.
+
+**Search map for the decoder (2026-11-02), so the dead ends are not repeated.**
+The chunk asset's completion path only uses `ChunkSlotForGuid` to pick the
+fixup branch (its two call sites are `FinishMapChunkAsset` and the slot-8
+walker), so the chunk kind is **not** a geometry selector. The asset
+class-handler registry (`0x1421bc930`, keyed by `[class+0xb8]`, backing store
+`0x143aa51b8`) is the level streamer: its only registered handler
+(`0x1421a45b0`) handles asset types `0x0F` and `0x19` and calls
+`FUN_14219aab0`/`FUN_14219cd50` for the map asset's dependency list, not the
+collision cells. The class hash `0x9199BF6B` occurs in executable memory only
+at the registration site; no consumer compares it. Node type 1 (`0x141ff9750`,
+class `0x300`) is a level/map node (its constructor is `0x141ff90a0`, its size
+virtual `0x141ff90d0`), type 2 is the `0x910` geometry. The geometry class's
+method table at `0x143395050` has `GeometryBuild` at slot `0x80`; the sibling
+slots (`0x14213a71a`, `0x14213bbe6`, `0x14213b995`, `0x14213b8bd`,
+`0x14213bfd0`, and the 0x100-entry finaliser `0x142135030`) are the next
+candidates, together with the writer of `geometry+0x118`/`+0x124`. The 0x100
+entry itself is read: body config at `+0x50`/`+0x58`, a `0x40`-stride matrix
+array at `+0x30` (count `+0x38`), the mesh source at `+0x18`/`+0x20` (three
+vec4s from the 0x60 entry), a stolen u16 array at `+0xe0`/`+0xe8`/`+0xec`, and
+a transform/terrain flag at `+0x60`/`+0x70..0x9c`. The 17 cell arrays
+(`arr3`/`arr11` u16 runs, `arr12` interleaved, `arr13`/`arr14` 4-byte
+quantized vertices) are the likely mesh source; the connection between them
+and the 0x100 entry is exactly what is not read.
+
+**Old note, superseded:** the writer of `geometry+0x108`/`+0x114`.  Its direct
+caller is the unanalyzed geometry builder that runs from `0x14213bf60` (the
+region before `GeometryFinalize`; no function boundary exists there yet). Read
+that region with `create_function`/disassembly after the `Alloc` analysis fix
+(`docs/ghidra-project.md`), then follow its caller to the collision-component
+consumer. The 0x60 entry's own layout is fixed: five `vec4`s at `+0x00`..
+`+0x50`, u16 array pointer at `+0x50`, count at `+0x58`, flag at `+0x5c`, id
+at `+0x0a`.
+
+**Three search routes are now closed (2026-11-01)**, so they need not be
+retried: `imul reg, reg, 0xc0` finds nothing in the collision module, a raw
+disp32 scan for the pool displacements is worthless (they are ordinary stack
+offsets), and the image contains no `COLLISION`/`ADDITIVE` strings — those
+names are the install data's, not the client's. What *is* read is
+`DmBroadphaseReinit` (`0x142cbdc60`): it is a BVH builder over the fixture set,
+rebuilt on demand, writing each pass's root index at `+0x44` through a
+`0x100`-entry stack node pool and calling the verified `0x142cd5540` for the
+swept bounds. The tree is therefore a function of the fixtures, and the single
+remaining unknown is one function: **who fills `[record+0x2b8]`'s fixtures.**
+
+**The world and its pools are read; the fixture *pop* is not.**
+`0x142cc3c80` creates a world (0x4d0-byte header + eight strided pools, handle
+encoded into `0x1442a0bc0`, self-index at `record+0x194`), the pool table is
+`record+0x288 + 0x18*i`, and the fixture record's `+0xa0` dword doubles as the
+free-list link. Release and update/insert are read
+(`0x142cb0d08`/`0x142cd4555`, `0x142cd4610`), and the fill/publish side is
+`0x141d71200`. What is missing is the free-list pop, and it cannot be found by
+displacement scans: no `inc`/`add` of `record+0x2c0` exists in the image even
+though release decrements it. Next: `0x141d71200`'s head and the caller of its
+vtable slot `+0x40` (`0x142f744a0`).
+
+**Next anchor.** `formats/character-controller.md` ("Collision"),
+`formats/maps.md`.
 
 ---
 
@@ -262,6 +642,23 @@ unresolved reference or a renderer rule that is not read?
 `GameData::open_asset`; 289 looks, 594 material entries and 120 textures decode.
 The viewer's counts are diagnostics, not a finished material path.
 
+**Settled on the parsing side (2026-10-29).** The texture format switch
+(`0x142e372b0`), descriptor builder (`0x142e2d900`) and descriptor size walk
+(`0x142e2dbb0` over `0x142e37070`) are differential units against the current
+image: `fn/TextureFormatFamilyBpp`, `fn/TextureDescriptor` and
+`fn/TextureDescriptorSizeWalk`, each at 100% branch coverage with every scored
+mutant killed. The format dispatch table is
+`0x142e373d0..0x142e37491`; the size walk's is `0x142e37164..0x142e37189`.
+Parsing the header is no longer the open part. BC6H, R16G16B16A16_FLOAT and
+R16_FLOAT keep their exact half values through decode and upload (as
+`Rgba16Float`, a viewer substitution for DXGI 10/54/95/96); R16_UNORM keeps its
+exact `u16` words and uploads as `R16Unorm` when the device has
+`TEXTURE_FORMAT_16BIT_NORM`, with a clamped `Rgba8Unorm` fallback otherwise. The
+UINT families are still clamped. The loader `0x141dacf00` is read
+but not oracle-emulated, the chunk accessors are install-checked rather than
+unit-verified, the R16 upload has no live GPU readback test, and the material
+application and sampler path above remain open.
+
 **What would settle it.** Read the client's material application and texture
 sampler path, then account for every submesh. Do not assume missing install
 content; the bundle-aware path opens the assets.
@@ -284,13 +681,14 @@ dependency and the Wwise event-posting path.
 
 ---
 
-## 14. CASC: the container path after the five verified leaves
+## 14. CASC: the container path after the eight verified leaves
 
-**Question.** The five leaf units (`Salsa20Xor`, `Salsa20StateInit`,
-`DynamicIndexHash`, `DynamicIndexKeyHash`, `EncodingHeaderParse`) are verified,
+**Question.** The eight leaf units (`Salsa20Xor`, `Salsa20StateInit`,
+`DynamicIndexHash`, `DynamicIndexKeyHash`, `EncodingHeaderParse`,
+`EncodingFindCKey`, `EncodingFindEKey`, `CdnIndexFooterParse`) are verified,
 and the bucket hash, segment/archive selection, entry search, key-state
-intervals and resident resolve are now read and install-tested. Which client
-functions remain, and what do they change?
+intervals, resident resolve and CDN index layout are now read and
+install-tested. Which client functions remain, and what do they change?
 
 **What is known.** `DynamicKeyStateLookup` (`0x142501b40`) is
 `((xor9 ^ (xor9 >> 4)) + salt) & 0xf`; the read path's salt is 0 at all three
@@ -319,6 +717,17 @@ seven types, the interval merge (`0x142520700`, `0x1425208d0`), the resident
 check (`0x142520c60`) and `DynamicIndexResolveRange` (`0x1425115d0`) are now
 read and implemented; every salt-0 key's `(0x1e, size - 0x1e)` request resolves
 to its payload and the 1,488 salt-1 placeholders return status 2.
+`DynamicIndexSegmentParse` (`0x14250fcf0`) is reached only from
+`DynamicIndexSegmentLoad` (`0x14250fc60`). Its mode-2 (read-only) path is
+synchronous: the file is opened with `GENERIC_READ`, the parser allocates the
+file size and does one `ReadFile` at offset 0; every other mode maps a
+read-only view. Both paths share the parse body, so `ow-casc`'s `fs::read`
+plus parse is the mode-2 path, not an async one. The validation order and the
+client's 5/9 status split are read; the entry count is `block_size / 18`
+(floor), so a trailing partial entry is accepted and ignored. `ow-casc` now
+matches that acceptance and has a synthetic test for each rejection. Not
+modelled: writable empty-file creation, the >4 GiB and mode-2 zero-size edges,
+and the short-read continuation.
 
 The BLTE path is now read too. `BlteFrameHeaderParse` (`0x1424a90e0`) accepts
 type `0x0F`/`0x10`, requires `header_size == 12 + record_size*count`, hashes
@@ -342,21 +751,271 @@ payload-then-hash order with a full fence, the type/range status machine
 (`0x1425032d0`). It is documented, not implemented: all five type-3 call sites
 pass a null range (for example `FUN_142500430` at `0x142500541`), so the
 record's location and size come from uninitialised stack slots, and the writer
-is allocator/I/O state that the read path never calls. The remaining open
-parts are `DynamicIndexSegmentParse`'s asynchronous load (`0x14250fcf0`),
-`DynamicContainerRead`'s page cache (`0x1424f48d0`), `EncodingSectionsRead`
-(`0x1424d1c60`) and the CDN index-page formula. Type `0x10` is absent and no
-outer `4` block was observed; the `E` inner modes are unreadable, so LZ4's
-proof is synthetic only.
+is allocator/I/O state that the read path never calls.
 
-**What would settle it.** Read the asynchronous segment load and the encoding
-page walk, and add a differential unit where the function is pure. The writer
-needs no further read: its remaining question is whether a bit-exact vector can
-exist for the type-3 null-range call, and it cannot exist.
+The encoding section read (`EncodingSectionsRead`, `0x1424d1c60`) is now read
+and implemented. The five sections are the espec block at `0x16`, the
+ckey->ekey page index (`(ckey_width + 0x10) * ck_count`), the ckey->ekey page
+bodies (`ck_page_bytes * ck_count`), the ekey->espec page index
+(`(ekey_width + 0x10) * ek_count`) and the ekey->espec page bodies
+(`ek_page_bytes * ek_count`), with every offset and size in the client's
+32-bit wrapping arithmetic. The range rule is `offset > len || (offset == len
+&& size != 0)`, with a clamped short read reported as status 14 and a rejected
+request completing through the no-result lookup as status 3; the espec block's
+last byte must be zero, and its NUL bytes count the strings
+(`FUN_142498a70`, status 8). The install walk covers all 16,025 + 10,519 pages:
+1,714,571 ckey entries, 1,714,573 ekeys, 1,714,573 espec entries, 29,694
+strings, and 26,544 page hashes equal to MD5 of the page body. The section
+reader has no harness unit: it allocates through a vtable and submits and
+reaps five reads through the container's I/O engine and lock, so the
+plain-buffer oracle cannot call it; the pure part is only the offset
+arithmetic.
+
+The encoding page lookup is now read and closed: `EncodingPageIndexSearch`
+(`0x142498880`), `EncodingFindCKey` (`0x142498540`), `EncodingFindEKey`
+(`0x142498610`) and `EncodingResolve` (`0x142498700`). The search picks the
+page whose first key is the greatest `<= key` (exact first key -> that page;
+between pages -> the earlier page; below the first -> `0xFFFFFFFF`). The ckey
+scan reads only the low count byte, so a zero low byte ends the page; the ekey
+scan ends on a `0xFFFFFFFF` espec index. The resolve takes the ckey record's
+`u32` as the decoded size and the ekey record's `u40` low 32 bits as the
+stored size. The two scans are harness-verified (`fn/EncodingFindCKey`,
+`fn/EncodingFindEKey`, both 100% coverage, 100% mutants). **The read path does
+no page-hash check:** the 16-byte hash is only the index stride's padding, so
+the measured MD5 relation is a format fact. There is no standalone unit for
+`0x142498880`: its fifth argument is on the stack, and the oracle supports four
+register arguments only; the two find units compare its result on every case.
+
+`DynamicContainerRead`'s archive page cache is now read and closed.
+`DynamicContainerReadPage` (`0x1424fcd20`) opens the archive and calls the
+reader built by `ContainerReaderInit` (`0x1424fbf00`); `PageCacheInit`
+(`0x1424f8790`) builds 16 slots of `0x10000` bytes from the `.cmf` database open
+params (`+0x78 = 0x10`, `+0x7c = 0` -> default `0x10000`). A page is keyed by
+`(archive ordinal, page-aligned archive offset)`. `PageReadPlan`
+(`0x1424faa20`) splits a range into a head fragment, a whole-page run and a tail
+fragment; `PageCacheRead` (`0x1424fb1c0`) serves head and tail from whole-page
+loads and reads the whole-page run with one direct read (the cache's
+non-blocking flag is 1). `PageSlotFind` (`0x1424fa440`) is a hit only when the
+stored length covers the fragment; a miss reloads the usable slot with the
+smallest stamp (lowest index on a tie), and busy/failed slots are never evicted.
+`PageLoad` (`0x1424fa540`) reads a whole page; the completion
+(`0x1424fadf0`/`0x1424f9bf0`) copies `min(len, stored - in_page)` and zero-fills
+the rest. A short read is status 0 with the short count; an I/O error is status
+8 and resets the slot; `DynamicContainerReadPage` returns 10 for an archive
+above `0x3fe` or a cross-archive range. The read-only mode 2 skips the
+close/reopen maintenance. `Store::read_payload` is the client's exact
+`(packed + 0x1e, size - 0x1e)` range; `Store::read_stored` adds the 30-byte
+header with one un-cached read for the decoder. The install test proves a small
+record (33,885 stored / 33,855 payload) is one page read then a hit, a large
+record (248,182 / 248,152) is head + one direct whole-page run + tail, and 17
+distinct pages leave 16 resident with the first evicted.
+
+The CDN index-page formula is now read and closed. `CdnIndexFooterParse`
+(`0x1424d9af0`) is the pure footer leaf: a fixed 20-byte footer, header MD5,
+version 0/1, checksum width 0..16, `pageSize = footer[3] << 10`,
+`entrySize = footer[4] + footer[5] + footer[6]`, `entriesPerPage = pageSize /
+entrySize`, `pageCount = ceil(elements / entriesPerPage)`, and the exact
+total `checksumSize + 20 + (checksumSize + keyBytes + pageSize) * pageCount`,
+all 32-bit. `CdnIndexFileParse` (`0x1424d9c90`) checks the terminal
+`MD5(last keys + checksums)`, the total length, and `MD5(terminal + footer)`
+against the index's 16-byte key; `CdnIndexPageChecksums` (`0x1424d9f20`)
+compares every page MD5 and ignores a mismatch. The four install indexes the
+CDN config names all match the formula exactly (260,173,908 / 48,616,028 /
+576,828 / 90,668 B; 63,149 / 11,800 / 140 / 22 pages). The unit
+`fn/CdnIndexFooterParse` is verified (100% coverage, 11/11 mutants, one
+declared equivalent) with one gap: the client writes only `AL`, so the final
+length-gate status is not observable in the void/memory channel; synthetic
+tests and the real files cover that branch.
+
+**The CDN index page selection is still open.** No function in the complete
+image was found that takes a key and walks the `pageCount * keyBytes` last-key
+array. Searched: every caller of the 16-byte `memcmp` (317 functions, 25 with a
+loop), every function containing all four footer fields (`0x14`, `0x1c`,
+`0x20`, `0x24` → the parsers only), every `SHL ..., 4` function with a `0x24`
+reference, the handler classes at `0x1424e7cb0`, `0x1424e8db0` and
+`0x1424d1f40`, and the index builder at `0x1424f04f0`/`0x1424f0920`. The
+downloaded index is handed to a callback (`0x1424b0850` → `0x1424bbe60`)
+whose consumer was not found; the search may live in the launcher/agent. The
+Rust selection is reference-derived and the row stays open.
+
+The remaining CASC work is not all unread expressions: the page-table writer
+is read but not implemented because all five type-3 call sites pass a null
+range and write location/size from uninitialised stack slots; it is
+allocator/I/O state the read path never calls. Type `0x10` is absent and no
+outer `4` block was observed; the `E` inner modes are unreadable with this
+install's 63-key keyring, so LZ4's proof is synthetic only. The page-cache
+plan is a pure leaf, but its unit cannot earn the five-stage word: the same
+function publishes the refcounted archive handle, and with the null handle the
+oracle can construct the three refcount branches never execute (coverage 3/6;
+a branch that never ran cannot be declared dead). The unit was removed rather
+than shipped with a weakened gate. The CDN HTTP transport itself remains a
+TACTLib port with no real endpoint test.
 
 **Next anchor.** `docs/casc-1to1.md`, `formats/casc.md`,
-`crates/ow-casc/src/index.rs`, `crates/ow-casc/src/container.rs`,
-`crates/ow-casc/src/blte.rs`.
+`crates/ow-casc/src/pagecache.rs`, `crates/ow-casc/src/container.rs`,
+`crates/ow-casc/src/encoding.rs`.
+
+---
+
+## 15. The renderer: D3D11 production path, pass list, draw list and pipeline selection
+
+**Question.** What is the client's per-frame pass sequence on its **D3D11
+production path**, how is the world draw list built (visibility, sorting,
+instancing, per-object constants), how does a material's shader group pick a
+code GUID/tier and a pipeline state, and what vertex/index layout does the input
+assembler consume? The D3D11 device, swap chain, back-buffer texture and
+RTV/SRV/UAV, the frame step order, shader object, pipeline create,
+constant-buffer allocation and the 64-opcode command replay are read; the
+engine-side pass sequence, draw-list builder and material→pipeline join are
+not. The D3D12 backend is the **beta** path and is mapped secondarily.
+
+**What is known (D3D11).** The operator's decision of 2026-10-31 fixes D3D11 as
+the 1:1 target. The platform backend selector `FUN_1426377f0` maps request kind
+**2** to `FUN_142660e90`, whose vtable `0x143496d68` is the `pm_dx11` instance;
+every other kind goes to `FUN_14263b140`'s `pm_dx12` vtable `0x1434904a8`.
+`pm_dx11::Instance::Init` (`0x142673c80`) loads `d3d11.dll` and resolves
+`D3D11CreateDevice`; the public create `0x142666ca0` calls
+`pm_dx11::Device::Init` (`0x142673810`), which calls `FUN_142666980`
+(`0x142666980`), which builds the request and hands it to the vendor wrapper
+`0x14267d270`. The first feature level is `11_1` alone; a failure retries with
+`11_0, 10_1, 10_0, 9_3, 9_2, 9_1`. The creation flag word is `DEBUG` when
+instance `+0x34` is non-zero, `SINGLETHREADED` when the create descriptor
+`+0x40` is non-zero, and `PREVENT_ALTERING_LAYER_SETTINGS_FROM_REGISTRY` when
+instance `+0x44` is zero. `DriverType` is `UNKNOWN`, `Software` is null and the
+SDK version is 7. The adapter is the platform GPU's DXGI adapter
+(`platform GPU +0xf0`); `pm_dxgi::Instance::InitGpus` (`0x14262f0e9`)
+enumerates from adapter 0 and sorts the list, but the preference order is open.
+
+`pm_dxgi::Instance::InitSwapChain` (`0x14262f9d0`) uses
+`CreateSwapChainForHwnd` with a `DXGI_SWAP_CHAIN_DESC1` on the newer-factory
+path. The default view (`FUN_141ef6960`) is width × height, format index `0x1f`
+→ DXGI **28** (`R8G8B8A8_UNORM`), **3** buffers, buffer usage **`0x30`**
+(RENDER_TARGET_OUTPUT + SHADER_INPUT), swap effect **0**, scaling 0, alpha mode
+0, flags 0. `pm_dx11::Device::CreateSwapChainResources` (`0x14266a060`) calls
+`GetBuffer(0)` and `CreateRenderTargetView` with an explicit texture-2D
+descriptor, then creates the SRV when usage bit 0 is set and the UAV when bit 1
+is set; the view format is resolved by the D3D11 table `0x1434965d0` (index
+`0x1f` → 28). The full table (64 entries) and the six special cases are read
+and pinned; the buffer table `0x14348bf10` is byte-identical. Resize is the
+read release → `ResizeBuffers` → recreate order. `UpdateSwapChain`
+(`0x1426320f0`) writes the view's sync boolean (view `+0x54`) into the present
+object `+0x60`, and `Present` (`0x142630790`) uses it as the sync interval; the
+boolean's producer is an unresolved config global, so its shipped value is
+open.
+
+The D3D11 frame order is read: frame begin (`0x141ef0600`) -> wait/pacing
+(`0x141ef9c80`) -> scene prepare/upload (`0x141ef8140`) -> queue finish (flush,
+fence signal, blocking wait, `0x142650340` -> `0x142650430`) -> queue submit
+(`0x142677dc0` -> replay `0x14266c690`) -> fence wait (`0x14265adf0`) -> per-view
+submit (`0x141f0caa0`) -> frame end (`0x141ef0800`) -> present
+(`0x14265e8f0` -> `0x142630790`). The order is pinned by
+`crates/ow-render::frame`; only `Present` has a complete executed body, the
+rest are logged as open. A fourth shared slot, 132 (`0x1433585e8` →
+`FUN_141efa380`), advances the frame index and flushes the two batch buffers;
+its outer order is open. The outer caller of the shared frame slots, the D3D11
+fence/query wait and the engine pass writer are not read. D4/D5 add the replay
+executor and the read clear/draw/viewport handlers.
+
+The D3D11 replay (`FUN_14266c690`, reached from
+`pm_dx11::CmdQueueImpl::Submit` `0x142677dc0`) dispatches 64 opcodes from
+record `+0x10` (size `+0x14`, including the 0x18-byte header) through the table
+`0x142671154`. D4 reads all 64 handlers. The read context handlers are `0x07`
+`ClearRenderTargetView`, `0x08` `ClearDepthStencilView`, `0x25`
+`Draw`/`DrawInstanced`, `0x26` `DrawIndexed`/`DrawIndexedInstanced`, `0x29`
+`RSSetViewports`, `0x2a` `RSSetScissorRects` and `0x30` `Dispatch`; `0x00` is
+the end/flush record and `0x1d` is a no-op. The earlier names `0x09`
+`ClearDepthStencilView`, `0x25` `DrawIndexed`, `0x26` `VSSetShader` and `0x2d`
+`PSSetShader` were wrong and are corrected in `formats/renderer.md`; `0x04` is
+a **Map/Unmap** record (`context+0x70`/`+0x78`), not a depth clear. The depth
+clear is `0x08` (`ClearDepthStencilView`, `+0x1a8`), with view `+0x18`, flags
+`+0x20`, depth `+0x24` and stencil `+0x28`; the earlier "no depth clear"
+statement was wrong. The render-target bind **is** in the replay: `0x0c` reads
+the count at `+0x18`, the RTV array at `+0x20`, the DSV block at `+0x28` and
+the state id at `+0x30`, clears/releases each entry, clears the DSV, and calls
+`OMSetRenderTargets(count, array, dsv)` at `0x14266e54d`; `0x0d` resolves the
+pending MSAA entries and unbinds with `OMSetRenderTargets(0,NULL,NULL)` at
+`0x14266e6ba`. `FUN_142674980` is a separate per-draw UAV/CB/SRV state flush,
+called from `0x25`/`0x26` at `0x1426701e9`/`0x14267027e` and from
+`0x27`/`0x28` at `0x1426703bb`/`0x1426704a4`; it never calls
+`OMSetRenderTargets`. The engine ring is a **separate** stream: its records
+have the id at `+0x00` and no size field, while the replay has the opcode at
+`+0x10` and the size at `+0x14`. No equality dispatch on `0x387` exists, so
+there is no record-id -> replay-opcode translation; `0x387` is a batch
+submission, not a draw. The `0x0c..0x1b` batch is read. `0x0c` and `0x0d` are
+implemented in the executor and `ow-render::state`. The per-stage SRV/UAV
+caches at `0x29a0`, `0x49d0`, `0x6a00`, `0x8a30`, `0xaa60`, CS SRV `0xca90`
+and CS UAV `0xeef0` are modelled. The other fourteen handlers are open because
+each carries a state-block or descriptor array pointer and the per-element
+`SyncBufferForUsage`/flush path is not implemented. The other 53 opcodes are
+open by opcode. D4's executor and D5's nine context handlers are implemented
+and synthetically tested in `crates/ow-render::replay`; the remaining work is
+the cache population and the queued-SRV binder.
+
+`pm_dx11::Device::CreateShader` (`0x1426697a0`) takes a DXBC blob whose
+descriptor version is 3 and maps the client's type byte to the six
+`ID3D11Device::Create*Shader` calls; `pm_dx11::Device::CreateRenderPipeline`
+(`0x142667be0`) builds the input layout from the stream element list and the
+shader input signature and creates the blend/rasterizer/depth-stencil states;
+`pm_dx11::Device::CreateBuffer` (`0x142665750`) and
+`pm_dx11::CmdQueueImpl::UploadConstants` (`0x1426798c0`) allocate dynamic
+constant buffers with bind flag `0x10000` and 16-byte alignment. The
+material -> shader-group -> code-GUID/tier join, the element producer and the
+constant contents are open.
+
+**What is known (D3D12 beta).** The D3D12 instance vtable `0x1434904a8` (Init
+`0x14267b8b0`), `pm_dx12::Instance::CreateDevice` (`0x14267b5b0`),
+`pm_dx12::Device::Init` (`0x142654160`), the `0xb000` flags, the descriptor
+heaps, the indirect command signatures, `CreateShader` (`0x14264a940`),
+`CreateGraphicsPipelineState` (`0x14265bed0`) and the pipeline library
+(`0x14265c720`) are read. The same engine frame loop, swap chain and
+command-record substrate apply. **Negative:** no pass-name or render-graph
+strings exist; the `GBuffer.*` strings are DLSS parameters. `d3dcompiler` is
+absent, so shaders are precompiled blobs. No `0x086` shader-instance asset
+exists in this build.
+
+**What would settle it.** (1) The full 64 handlers are now read; `0x0c` and
+`0x0d` are implemented. The remaining opcode work is the 53 open opcodes listed in
+`formats/renderer.md`, chiefly the deferred constant-buffer/shader-resource
+caches, the per-draw `FUN_142674980` state flush and the query/annotation path.
+The `0x0c..0x1b` batch is read: `0x0c`/`0x0d` are the bind/unbind pair, and
+the other fourteen are open because each dereferences an out-of-band state
+block or descriptor array; the six constant-buffer / six shader-resource binds
+defer to the end-record flush. The next step is to model those tables and the
+`SyncBufferForUsage` resource objects. The `0x0c` alias-unbind test is
+`FUN_14265fb90`; the stage cache populate paths are `FUN_1426781b0` (SRV) and
+`FUN_142676130` (constant buffers), with the per-stage flushes
+`0x142678bf0`/`0x142678570`/`0x142678710`/`0x142678d90`/`0x142678a50`/
+`0x1426788b0` and the CB flush `0x142660620`. The alias predicate, cache
+ranges, flush ordering and `apply_render_targets` are implemented in
+`ow-render::state`; the cache population and the queued-SRV binder are the
+remaining read/implementation work. The population path is open:
+`FUN_1426781b0` creates an `ID3D11Buffer`; `0x16..0x1b` compare the cache slot
+with the element's first qword and enqueue the descriptor, but do not write the
+slot. The binder that writes the slot and issues the non-null
+`*SetShaderResources` call is not read. (2) Read the engine-ring consumer and
+the writer of `renderer+0x1c0`/`+0xc1f0`; the batch A/B record layout and the
+CPU→GPU / GPU→CPU transfers are read and modelled in `ow-render::batch`, but
+the item arrays and the consumer that turns them into draws are open. (3) Read the engine pipeline-cache caller and the material
+group's parallel code/source index rule. (4) Read the model render-mesh
+loader's input elements and the stream-list builder. (5) Read the outer caller
+that orders the three shared frame slots, the D3D11 fence/query wait body, the
+engine pass writer and the swap-chain RTV bind. The render-target bind itself
+is now read as `0x0c`/`0x0d`; `FUN_142674980` is a separate per-draw state
+flush whose five-stage/UAV details remain open. (6) For proof, a **client
+capture is impossible** under the anti-cheat, so there is no call-trace or
+image oracle. The proof is the read expression plus synthetic record streams
+(the recording sink is the oracle). D1-D4 and the D5 clear/viewport/`0x0c`/
+`0x0d` handlers are implemented and synthetically tested. The cache population
+and queued-SRV binder remain. They are not capture-compared, and D10 is not
+provable.
+
+**Next anchor.** `formats/renderer.md` ("D3D11 staged plan"), `FUN_14266c690`
+(`0x14266c690`), `0x142671154` (the opcode table), `FUN_141ef8140`
+(`0x141ef8140`), `FUN_141f0caa0` (`0x141f0caa0`), `FUN_142667be0`
+(`0x142667be0`), `MrnmHandler` (`0x141b88f10`),
+`crates/ow-render/src/batch.rs`, `crates/ow-render/src/state.rs`,
+`crates/ow-render/src/replay.rs`, `FUN_14265fb90` (`0x14265fb90`),
+`FUN_1426781b0` (`0x1426781b0`), `FUN_142676130` (`0x142676130`).
 
 ---
 

@@ -34,7 +34,6 @@ from typing import Optional, Tuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-DEFAULT_IMAGE = r"D:\ow-dumps\offline_recover\module_offline.bin"
 LOCAL_IMAGE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "dev",
@@ -42,6 +41,10 @@ LOCAL_IMAGE = os.path.join(
     "offline_recover",
     "module_offline.bin",
 )
+# Canonical: the repo-local copy. The D:\ow-dumps path is an old spelling of
+# the same bytes, kept as a fallback for units written before the move.
+DEFAULT_IMAGE = LOCAL_IMAGE
+FALLBACK_IMAGE = r"D:\ow-dumps\offline_recover\module_offline.bin"
 EXE_BASE = 0x140000000
 V2B_BASE = 0x7FF7C4D20000
 DECOMPILE_DIR = os.path.join(REPO_ROOT, "dev", "decompiles")
@@ -193,6 +196,8 @@ def build_unit(
     rva = to_rva(address)
     if not os.path.exists(image) and os.path.exists(LOCAL_IMAGE):
         image = LOCAL_IMAGE
+    if not os.path.exists(image) and os.path.exists(FALLBACK_IMAGE):
+        image = FALLBACK_IMAGE
     ext = pdata_extent(image, rva)
     if ext is None:
         raise RuntimeError(f"no .pdata range contains RVA {rva:#x}")

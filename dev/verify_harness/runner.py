@@ -44,9 +44,6 @@ import mutate as mutate_mod
 # `dev/offline_page_recover.py`), laid out with file offset == RVA. The v2b
 # delta equals the exe RVA (v2b - 0x7ff7c4d20000 == exe - 0x140000000), so
 # unit addresses stay in the v2b frame and the offset math is unchanged.
-DEFAULT_IMAGE = r"D:\ow-dumps\offline_recover\module_offline.bin"
-# The dumps are gitignored; on this machine they live under dev/data. The
-# fallback is the same offline recovery image, never a different build.
 LOCAL_IMAGE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "dev",
@@ -54,6 +51,10 @@ LOCAL_IMAGE = os.path.join(
     "offline_recover",
     "module_offline.bin",
 )
+# The canonical copy is repo-local (gitignored); a one-time copy of the same
+# bytes lived on the dumps drive, and old unit JSONs still cite it there.
+DEFAULT_IMAGE = LOCAL_IMAGE
+FALLBACK_IMAGE = r"D:\ow-dumps\offline_recover\module_offline.bin"
 DEFAULT_BASE = 0x7FF7C4D20000
 
 
@@ -63,11 +64,12 @@ _WARNED_IMAGES: set = set()
 def resolve_image(path: str) -> str:
     if os.path.exists(path):
         return path
-    if os.path.exists(LOCAL_IMAGE):
-        if path not in _WARNED_IMAGES:
-            _WARNED_IMAGES.add(path)
-            _warn(f"image {path} not found; using the same recovery image at {LOCAL_IMAGE}")
-        return LOCAL_IMAGE
+    for alt in (FALLBACK_IMAGE, LOCAL_IMAGE):
+        if alt != path and os.path.exists(alt):
+            if path not in _WARNED_IMAGES:
+                _WARNED_IMAGES.add(path)
+                _warn(f"image {path} not found; using the same recovery image at {alt}")
+            return alt
     return path
 
 SHIM_PATH = os.path.join(os.path.dirname(__file__), "ghidra_shim.h")
@@ -91,7 +93,7 @@ _KNOWN_UNIT_KEYS = {
     "id", "title", "address", "image", "c_file", "entry", "args",
     "returns", "options", "base", "knownEquivalentMutants",
     "acknowledgedGaps", "notes", "argFactory", "candidateLoader", "state",
-    "scaffold", "candidateCrate", "candidateProbe", "suite",
+    "scaffold", "candidateCrate", "candidateProbe", "suite", "startRegs",
 }
 _KNOWN_ARG_KEYS = {"name", "kind", "ptr_len"}
 _KNOWN_OPTION_KEYS = {
@@ -103,7 +105,7 @@ _KNOWN_OPTION_KEYS = {
     "coverageWindow",
 }
 _ARG_KINDS = ("f32", "f64", "u64")
-_RET_KINDS = ("f32", "f64", "u64", "void")
+_RET_KINDS = ("f32", "f64", "u64", "vec4", "void")
 
 
 @dataclass
@@ -163,6 +165,11 @@ class Unit:
     unreachable_branches: List[Tuple[int, int, str]] = field(default_factory=list)
     # Preloaded state snapshot, if the unit is stateful.
     state: Optional[StateSpec] = None
+    # Registers seeded after the normal argument placement. Values are
+    # integers or "argN" (the resolved arena pointer of argument N). Used for
+    # interior-start leaf blocks whose entry convention takes the pointer in a
+    # non-argument register (e.g. RBX).
+    start_regs: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -295,6 +302,7 @@ def load_unit(path: str) -> Unit:
         candidate_loader=d.get("candidateLoader", "c"),
         candidate_crate=d.get("candidateCrate", ""),
         candidate_probe=d.get("candidateProbe", ""),
+        start_regs=d.get("startRegs", {}),
         allowed_image_reads=allowed_image_reads,
         allowed_read_ranges=allowed_read_ranges,
         unreachable_branches=unreachable,
@@ -351,6 +359,11 @@ def _bits_equal(a: int, b: int, ret_kind: str) -> bool:
         fa = struct.unpack("<d", struct.pack("<Q", a & mask))[0]
         fb = struct.unpack("<d", struct.pack("<Q", b & mask))[0]
         return math.isnan(fa) and math.isnan(fb)
+    if ret_kind == "vec4":
+        # Four f32 lanes; each lane is compared exactly, including NaN
+        # payloads. A position is state, not an arithmetic result: a payload
+        # change is a divergence.
+        return a == b
     return False
 
 
@@ -373,11 +386,14 @@ def _oracle_call_cached(
     args: Sequence[ArgSpec],
     ret_kind: str,
     cache: Dict[str, Any],
+    start_regs: Optional[Dict[str, Any]] = None,
 ) -> Any:
-    key = _args_key(args)
+    key = _args_key(args) + "|" + repr(sorted((start_regs or {}).items()))
     r = cache.get(key)
     if r is None:
-        r = oracle.call(v2b_addr, args, ret_kind=ret_kind)
+        r = oracle.call(
+            v2b_addr, args, ret_kind=ret_kind, start_regs=start_regs or {}
+        )
         cache[key] = r
     return r
 
@@ -673,11 +689,18 @@ def run_unit(
             det_args = generate_args(unit.args, seed, 0)
         cache: Dict[str, Any] = {}
         tracker.begin_call()
-        r1 = _oracle_call_cached(oracle, unit.address_v2b, det_args, unit.ret_kind, cache)
+        r1 = _oracle_call_cached(
+            oracle, unit.address_v2b, det_args, unit.ret_kind, cache, unit.start_regs
+        )
         # The second run must be a REAL second run - a cache hit would make
         # the determinism claim true by construction.
         tracker.begin_call()
-        r2 = oracle.call(unit.address_v2b, det_args, ret_kind=unit.ret_kind)
+        r2 = oracle.call(
+            unit.address_v2b,
+            det_args,
+            ret_kind=unit.ret_kind,
+            start_regs=unit.start_regs,
+        )
         if not r1.ok or not r2.ok:
             log(f"  FAIL: oracle fault on determinism probe: {r1.fault or r2.fault}")
             return entry("invalid", notes=[f"oracle fault: {r1.fault or r2.fault}"])
@@ -717,7 +740,9 @@ def run_unit(
         try:
             for idx, args in enumerate(cases):
                 tracker.begin_call()
-                o = _oracle_call_cached(oracle, unit.address_v2b, args, unit.ret_kind, cache)
+                o = _oracle_call_cached(
+                    oracle, unit.address_v2b, args, unit.ret_kind, cache, unit.start_regs
+                )
                 if not o.ok:
                     log(f"  FAIL: oracle fault at iteration {idx}: {o.fault}")
                     return entry("inconclusive", notes=[f"oracle fault at {idx}: {o.fault}"])
@@ -1027,6 +1052,8 @@ def _fmt_ret(bits: int, kind: str) -> str:
             return repr(bits_f32(bits))
         if kind == "f64":
             return repr(struct.unpack("<d", struct.pack("<Q", bits & (2**64 - 1)))[0])
+        if kind == "vec4":
+            return f"0x{bits:032x}"
         return str(bits)
     except Exception:
         return "?"

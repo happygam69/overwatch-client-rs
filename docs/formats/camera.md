@@ -22,12 +22,18 @@ register the static object, set a guard byte. The camera blocks:
 
 | group | registration |
 |---|---|
-| camera / 3P animation | `RegisterCameraConfigVariables` (`0x140599740`) |
+| camera / 3P animation | per-variable registration stubs; the former group label was not a function entry (**open**) |
 | first-person overrides | `RegisterFirstPersonSettings` (`0x1406796c0`) |
 | FP clip planes | `RegisterFirstPersonClipPlanes` (`0x14096c290`) |
 | world near/far | `RegisterDefaultNearZ` (`0x1404c2980`), `RegisterDefaultFarZ` (`0x1404c2890`) |
 | world FOV | `RegisterHorizontalFov` (`0x1404bd630`) |
 | input | `RegisterInputSettings` (`0x14060ada0`) |
+
+The camera/3P group's registration body is **open**: the old
+`RegisterCameraConfigVariables` row at `0x140599740` was an offcut inside
+`FUN_140599730`, not a function entry, so it was removed. The defaults below
+are still read from the config table; the per-variable stubs that write them are
+not yet anchored.
 
 Read defaults:
 

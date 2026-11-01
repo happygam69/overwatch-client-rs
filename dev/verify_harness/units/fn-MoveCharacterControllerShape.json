@@ -1,0 +1,63 @@
+{
+  "id": "fn/MoveCharacterControllerShape",
+  "title": "tier-2 shipped code: the character controller shape-query loop against 0x142cd4bc0",
+  "address": {
+    "v2b": "0x7ff7c79f4bc0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_move_character_world",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "entry",
+      "kind": "u64"
+    },
+    {
+      "name": "record",
+      "kind": "u64"
+    },
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "world",
+      "kind": "ptr",
+      "ptr_len": 8192
+    },
+    {
+      "name": "base",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "move_character_shape_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 60,
+    "mutationCount": 10,
+    "mutationKillRate": 0.75,
+    "seed": 6161,
+    "coverageWindow": 464,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4",
+      "0x7ff7c7dc4bf0-0x7ff7c7dc4bff",
+      "0x7ff7c7dc4b40-0x7ff7c7dc4b4f",
+      "0x7ff7c87e5f40-0x7ff7c87e5f47",
+      "0x7ff7c830cf10-0x7ff7c830cf1f",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7e3e0c0-0x7ff7c7e3e0cf"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/world.rs (move_character_controller_world), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_move_character_world entry.",
+    "The oracle runs MoveCharacterController (0x142cd4bc0) with a synthetic record whose +0x2b8 points at two 0xc0-byte shape records and whose +0x2d0 points at a sphere array. The contact id +0xa4 is -1, so the open contact event is skipped.",
+    "Cases cover a single sphere, an unchanged velocity early-out, a two-shape linked list, and the no-shape path (entry+0x24 = -1). The selected sphere bounds are written into the shape record and compared."
+  ],
+  "acknowledgedGaps": [
+    "The contact event 0x142cf32d0 is open: a shape with +0xa4 != -1 returns false after its bounds. The shape types other than sphere are not exercised in this loop unit."
+  ]
+}

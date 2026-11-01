@@ -5,7 +5,10 @@
 //! typed instances; each instance's payload sits in a shared data buffer, and
 //! variable-length payloads (strings, arrays) live in a separate dynamic block.
 //!
-//! Version 1 starts with the four bytes `STUD`. Version 2 has no magic, so the
+//! Version 1 starts with the u32 `0x53545544` the client's loader compares
+//! (`StuLoadSubAssets`, `0x1421d26d0`); read little-endian on disk that is the
+//! byte sequence `DUTS`, the reverse of the format's name. Version 2 has no
+//! magic, so the
 //! absence of that marker is what selects it.
 //!
 //! Version 2 layout:
@@ -34,7 +37,7 @@ use std::fmt;
 pub mod crc;
 pub mod types;
 
-pub const MAGIC_V1: [u8; 4] = *b"STUD";
+pub const MAGIC_V1: [u8; 4] = [0x44, 0x55, 0x54, 0x53]; // u32 0x53545544, `DUTS`
 const INSTANCE_INFO_SIZE: usize = 16;
 
 #[derive(Debug)]

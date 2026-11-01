@@ -32,6 +32,11 @@ As of 2026-10-30.
 - **Decode and upload are viewer-side.** The client uploads DXGI resources and
   lets the GPU decode. The tree's CPU decode, its `Rgba16Float` substitution and
   its sampler are presentation choices, not the client's D3D12 calls.
+- **R16_UNORM is exact on the value path (2026-10-30).** The stored `u16` is
+  kept per level and uploaded unchanged as `R16Unorm` when the adapter exposes
+  `TEXTURE_FORMAT_16BIT_NORM`; without that optional WebGPU feature the viewer
+  keeps the clamped 8-bit view. The client's own DXGI 56 resource needs no
+  conversion, so this is not a format substitution.
 - **Material selection is still the largest visible gap.** The client selects a
   texture by an ordered expected-hash table; the viewer still chooses the first
   sRGB record. The eight hashes are read; their names are not.
@@ -85,8 +90,8 @@ resource bytes.
 | BC1–BC5 CPU decode | BC1/2/3/4_UNORM/5_UNORM decode to RGBA8 | resource is BC1/2/3/4/5; the GPU decodes with D3D-allowed promotion/rounding | a CPU RGBA8 view is one allowed implementation, not the client's bytes; for bit-exactness upload the blocks |
 | BC7/BC6H | CPU decode; BC6H keeps exact halves; BC7 decodes per spec | resource is BC7/BC6H; the GPU decodes | BC6H/RGBA16F/R16F values are exact, but the resource format is a viewer substitution; BC7 CPU decode is still a reference path |
 | UINT formats | DXGI 30 (`R8G8B8A8_UINT`) and 50 (`R8G8_UINT`) use the same byte path and upload as `Rgba8Unorm` | the view format is `_UINT`; the shader reads integers | 0..255 becomes 0..1; 19 install assets use stored `0x33` (DXGI 50) |
-| R16_UNORM | rounded to the 8-bit view; `rgba16` stays empty | DXGI 56 `R16_UNORM` | the exact unorm value is not preserved; no `R16Unorm` upload path |
-| HDR/16-bit upload | BC6H/RGBA16F/R16F carry exact halves and upload as `Rgba16Float` | DXGI 95/96/10/54 | values are exact; the resource format is a viewer substitution. The swapchain is `Bgra8UnormSrgb`, so values above 1.0 clamp at presentation; there is no HDR target or tonemap |
+| R16_UNORM | the stored `u16` is kept exactly (`TextureLevel::r16_unorm`, `SceneTextureLevel::r16_unorm`) and uploaded unchanged as `R16Unorm`; the rounded 8-bit view is still built for the existing callers | DXGI 56 `R16_UNORM`; `0x1426545d0` writes the typed id 56 and `0x141f0a000` copies the stored words without CPU conversion | the exact value path matches, but `R16Unorm` needs the optional WebGPU `TEXTURE_FORMAT_16BIT_NORM` at device creation. When the adapter lacks it the uploader falls back to the clamped `Rgba8Unorm` view, which is **not** exact; the unit tests cover the gate and the staged bytes, not a live GPU upload |
+| HDR/16-bit upload | BC6H/RGBA16F/R16F carry exact halves and upload as `Rgba16Float`; R16_UNORM carries exact words and uploads as `R16Unorm` | DXGI 95/96/10/54 and 56 | half values are exact but `Rgba16Float` is a viewer substitution; R16's `R16Unorm` is the client's own DXGI id, subject to the optional-feature caveat above. The swapchain is `Bgra8UnormSrgb`, so values above 1.0 clamp at presentation; there is no HDR target or tonemap |
 | BGRA / signed BC / depth / video / mobile EAC | mapped by the client tables, reported unsupported | client can name/render some of them | refused is honest, not mis-decoded, but not 1 to 1 coverage |
 | 1D / cube / volume views | viewer always creates a 2D texture and binds a D2 view of layer 0 | `0x142e2dc70` flags: bit 0 = 1D, bit 2 = 3D, bit 3 = cube; `0x1426545d0` maps kinds 0/1 to `TEXTURE1D`, 2..7 to `TEXTURE2D`, 8 to `TEXTURE3D` | `0x0C0000000006A2C6` is a six-layer cube sampled as face 0; `0x0C0000000003B039` (1024x1) is uploaded as 1-row 2D; volume is refused |
 | Sampler | repeat + linear min/mag; mip filter left at the default | client sampler state unread | wrapping, mip transitions and filtering are not the client's |
@@ -159,9 +164,10 @@ citing them as fresh.
 
 ## F. Next anchors, in order
 
-1. **Exact `R16_UNORM`:** keep the raw `u16` and add an `R16Unorm` upload path.
-   The client view is DXGI 56; the bind layout already accepts a filterable
-   float sample.
+1. **R16_UNORM upload proof:** exercise `upload_one` on a device that has
+   `TEXTURE_FORMAT_16BIT_NORM` and read the texture back, then repeat on a
+   device without it to pin the clamped fallback. The format gate and the
+   staged words are unit-tested; the live upload is not.
 2. **View dimensions:** pin the `0x14264be60` SRV-dimension switch and bind
    `D1`, `D2Array`, `Cube`/`CubeArray` and `D3` views; read the cube-face
    direction order. This closes the six-layer cubemap and the 1D asset.
@@ -173,7 +179,9 @@ citing them as fresh.
    and add the `0x0CDA8A9E` fallback and the `0x0F1` alias resolution.
 5. **Parser edges:** replace the `image_size` equality gate with a per-level
    bound; model 6x6/8x8 EAC sizes; use descriptor fields where the client does.
-6. **Oracle units:** add the loader, chunk-accessor, record-builder and
+6. **Sampler:** read the client's sampler state; the viewer is still repeat +
+   linear min/mag with the default mip filter.
+7. **Oracle units:** add the loader, chunk-accessor, record-builder and
    per-level-size units; they are the cheapest way to turn the read rows above
    into verified ones.
 
@@ -189,7 +197,17 @@ citing them as fresh.
   SRV plane format; and the unit domains/coverage caveats.
 - **2026-10-30 — 16-bit/HDR upload.** BC6H, RGBA16F and R16F keep exact half
   words and upload as `Rgba16Float`; the resource format is a documented viewer
-  substitution. R16_UNORM, UINT and the CPU BC decode remain open.
+  substitution. UINT and the CPU BC decode remain open.
+- **2026-10-30 — exact R16_UNORM.** `Texture::r16_unorm` and
+  `SceneTextureLevel::r16_unorm` now carry the stored words bit for bit, and
+  `ow-client/src/surface.rs` uploads them as `R16Unorm` (2 B/px) when the device
+  has `TEXTURE_FORMAT_16BIT_NORM`. Both device-creation sites request the
+  feature only when the adapter reports it; otherwise the R16 asset keeps the
+  clamped `Rgba8Unorm` view. Re-read for this change: `0x143356f50[0x39] = 7`,
+  `0x14348f500[7] = 56`, `0x1426545d0` writes typed 56 for PM 7 because
+  `0x143357d60[7] & 0x20 == 0`, `0x142653b90` uses the same id for the colour
+  SRV, `0x142e36ec0` sizes a level at `width * height * 2`, and `0x141f0a000`
+  copies bytes without a format switch.
 
 ## Verification
 

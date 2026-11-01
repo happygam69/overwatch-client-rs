@@ -1,0 +1,44 @@
+{
+  "id": "fn/MoverWishForward",
+  "title": "tier-2 shipped code: the forward wish transform against MoverWishForward (0x140cb5510)",
+  "address": {
+    "v2b": "0x7ff7c59d5534"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_wish_forward",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "vector", "kind": "ptr", "ptr_len": 16 },
+    { "name": "matrix", "kind": "ptr", "ptr_len": 64 }
+  ],
+  "returns": "void",
+  "startRegs": {
+    "rbx": "arg0",
+    "rsp": "0x7FFF0000EF80"
+  },
+  "state": {
+    "base": "0x7FFF0000EFB0",
+    "hex": "0000803f0000004000004040000080400000a0400000c0400000e040000000410000104100002041000030410000404100005041000060410000704100008041"
+  },
+  "argFactory": "mover_wish_forward_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "coverageWindow": 64
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/movement.rs (forward_transform), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_wish_forward entry.",
+    "The oracle starts at 0x140cb5534, after FUN_140cb83b0's TEST/JZ. The vector pointer is in RBX (not RCX); startRegs seeds RBX from arg0 and RSP=0x7FFF0000EF80 so the block's ADD RSP,0x70; POP RBX; RET lands on the harness sentinel at STACK_TOP-8.",
+    "The 4x4 column-major matrix is at [RSP+0x30]: c0 at +0x30, c1 at +0x40, c2 at +0x50, c3 at +0x60. The unit's state block at RSP+0x30 holds the same fixed matrix the probe passes as arg1.",
+    "SIMD order is ((y*c1 + x*c0) + z*c2) + c3, one f32 per operation; the input w is not used and the output w is the transform's w lane.",
+    "The fixed matrix is 1..16, so each lane has a distinct value and the column/row order is observable."
+  ],
+  "acknowledgedGaps": [
+    "The real entry 0x140cb5510 includes the FUN_140cb83b0 state lookup and the TEST/JZ; this unit starts after that branch. The state-object selection and the conditional no-op path are not covered here. The matrix is fixed; a varying-matrix unit needs a state-object fixture."
+  ]
+}

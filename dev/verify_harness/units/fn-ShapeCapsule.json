@@ -1,0 +1,48 @@
+{
+  "id": "fn/ShapeCapsule",
+  "title": "tier-2 shipped code: the type-1 capsule bounds against 0x142ccd380",
+  "address": {
+    "v2b": "0x7ff7c79ed380"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "shape_capsule",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "record",
+      "kind": "ptr",
+      "ptr_len": 36
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "matrix",
+      "kind": "ptr",
+      "ptr_len": 64
+    }
+  ],
+  "returns": "void",
+  "argFactory": "shape_capsule_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 90,
+    "mutationCount": 10,
+    "mutationKillRate": 0.75,
+    "seed": 5757,
+    "coverageWindow": 144,
+    "allowedImageReads": []
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/shapes.rs (capsule_bounds), called by crates/ow-sim/src/bin/verify_probe.rs through the shape_capsule entry.",
+    "The oracle runs the real shape-bounds leaf and the harness compares the 0x20-byte output pointee byte for byte.",
+    "The matrix is a random 4x4 column-major transform; the record and output are per-case pointees."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies one shape type's bounds leaf, not the 0x142cb9030 dispatcher or the type-3 path. The dispatcher and type 3 remain open."
+  ]
+}

@@ -29,7 +29,10 @@
 use std::io::{self, BufRead, Write};
 
 use ow_casc::blte::{salsa20, salsa20_state_init};
-use ow_casc::encoding::{write_header_fields, HEADER_FIELDS_SIZE};
+use ow_casc::container::{parse_index_footer, INDEX_FOOTER_SIZE};
+use ow_casc::encoding::{
+    find_ckey_record, find_ekey_record, write_header_fields, HEADER_FIELDS_SIZE,
+};
 use ow_casc::index::{hash_index, key_hash};
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
@@ -119,6 +122,71 @@ fn salsa20_xor(state: &mut [u8], data: &[u8], len: usize) -> Result<Vec<u8>, Str
     put_word(state, 8, next as u32);
     put_word(state, 13, (next >> 32) as u32);
     Ok(out[skip..].to_vec())
+}
+
+/// The client's 0x70-byte encoding-info struct. The fixture embeds the info
+/// buffer's own guest address at `+0x68` (the lookup never reads it) so the
+/// probe can turn the absolute section pointers into offsets in its copy and
+/// write the same absolute record address the oracle writes.
+struct EncodingInfo<'a> {
+    info: &'a [u8],
+    index: &'a [u8],
+    bodies: &'a [u8],
+    bodies_abs: u64,
+}
+
+impl<'a> EncodingInfo<'a> {
+    fn parse(info: &'a [u8], ckey_side: bool) -> Result<Self, String> {
+        let at = |off: usize| -> Result<u64, String> {
+            info.get(off..off + 8)
+                .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+                .ok_or_else(|| "info-too-short".to_string())
+        };
+        let info_abs = at(0x68)?;
+        let (index_slot, bodies_slot) = if ckey_side {
+            (0x30, 0x38)
+        } else {
+            (0x40, 0x48)
+        };
+        let index_abs = at(index_slot)?;
+        let bodies_abs = at(bodies_slot)?;
+        let index_off = index_abs.checked_sub(info_abs).ok_or("index-before-info")? as usize;
+        let bodies_off = bodies_abs
+            .checked_sub(info_abs)
+            .ok_or("bodies-before-info")? as usize;
+        let index = info.get(index_off..).ok_or("index-outside-info")?;
+        let bodies = info.get(bodies_off..).ok_or("bodies-outside-info")?;
+        Ok(Self {
+            info,
+            index,
+            bodies,
+            bodies_abs,
+        })
+    }
+
+    fn u32(&self, off: usize) -> Result<u32, String> {
+        self.info
+            .get(off..off + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .ok_or_else(|| "info-field-outside".to_string())
+    }
+
+    fn u8(&self, off: usize) -> Result<u8, String> {
+        self.info
+            .get(off)
+            .copied()
+            .ok_or_else(|| "info-field-outside".to_string())
+    }
+
+    fn write_out(&self, out: &mut [u8], offset: Option<usize>) {
+        out.fill(0);
+        if let Some(offset) = offset {
+            let address = self.bodies_abs + offset as u64;
+            if out.len() >= 8 {
+                out[..8].copy_from_slice(&address.to_le_bytes());
+            }
+        }
+    }
 }
 
 fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
@@ -249,6 +317,63 @@ fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), St
             Ok((format!("{:x}", u64::from(hash)), vec![key]))
         }
         // crates/ow-casc/src/encoding.rs
+        "encoding_find_ckey" | "encoding_find_ekey" => {
+            if args.len() != 4 {
+                return Err(format!("expected 4 args, got {}", args.len()));
+            }
+            let mut it = args.into_iter();
+            let info = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let key = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg1 must be a plain arena buffer".into()),
+            };
+            let key_len = match it.next() {
+                Some(Arg::U64(v)) => v as u8,
+                _ => return Err("arg2 must be u64".into()),
+            };
+            let mut out = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg3 must be a plain arena buffer".into()),
+            };
+            let ckey_side = entry == "encoding_find_ckey";
+            let parsed = EncodingInfo::parse(&info, ckey_side)?;
+            if ckey_side {
+                let pages = parsed.u32(0x14)?;
+                let ckey_width = parsed.u8(0x11)?;
+                let ekey_width = parsed.u8(0x12)?;
+                let page_bytes = parsed.u32(0x18)?;
+                let record = find_ckey_record(
+                    parsed.index,
+                    parsed.bodies,
+                    pages,
+                    ckey_width,
+                    ekey_width,
+                    page_bytes,
+                    &key,
+                    key_len,
+                );
+                parsed.write_out(&mut out, record);
+            } else {
+                let pages = parsed.u32(0x1c)?;
+                let ekey_width = parsed.u8(0x12)?;
+                let page_bytes = parsed.u32(0x20)?;
+                let record = find_ekey_record(
+                    parsed.index,
+                    parsed.bodies,
+                    pages,
+                    ekey_width,
+                    page_bytes,
+                    &key,
+                    key_len,
+                );
+                parsed.write_out(&mut out, record);
+            }
+            Ok(("-".to_string(), vec![info, key, out]))
+        }
+        // crates/ow-casc/src/encoding.rs
         "encoding_header_parse" => {
             if args.len() != 3 {
                 return Err(format!("expected 3 args, got {}", args.len()));
@@ -277,6 +402,45 @@ fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), St
             // wrote plus every untouched byte, and `data` proves the input was
             // not mutated.
             Ok((format!("{:x}", u64::from(code)), vec![out.to_vec(), data]))
+        }
+        // crates/ow-casc/src/container.rs
+        "cdn_index_footer_parse" => {
+            if args.len() != 4 {
+                return Err(format!("expected 4 args, got {}", args.len()));
+            }
+            let mut it = args.into_iter();
+            let data = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let len = match it.next() {
+                Some(Arg::U64(v)) => v as usize,
+                _ => return Err("arg1 must be u64".into()),
+            };
+            let total_len = match it.next() {
+                Some(Arg::U64(v)) => v as u32,
+                _ => return Err("arg2 must be u64".into()),
+            };
+            let out = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg3 must be a plain arena buffer".into()),
+            };
+            if len > data.len() {
+                return Err("len-past-data".into());
+            }
+            if len < INDEX_FOOTER_SIZE {
+                return Err("len-shorter-than-footer".into());
+            }
+            let Ok(mut out) = <[u8; 0x30]>::try_from(out) else {
+                return Err("out-must-be-48-bytes".into());
+            };
+            let code = parse_index_footer(&data, len, total_len, &mut out);
+            // `void` return: the client writes only AL and leaves RAX's upper
+            // bits from unrelated arithmetic, so callers test AL only. The
+            // memory channel compares the footer copy and every derived field;
+            // the hash-zeroing reject and every early reject are visible there.
+            let _ = code;
+            Ok(("-".to_string(), vec![data, out.to_vec()]))
         }
         other => Err(format!("unknown-entry-{}", other)),
     }

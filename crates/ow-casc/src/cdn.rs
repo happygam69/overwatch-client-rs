@@ -35,6 +35,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::container::IndexFooter;
+
 /// Response bodies larger than this are refused: a data file that big is a bug
 /// or a hostile answer, not content.
 const MAX_BODY: u64 = 1 << 30;
@@ -252,6 +254,19 @@ impl CdnClient {
     /// archive, and an obfuscated on-disk cache layout for them is complexity
     /// with nothing to show for it.
     pub fn fetch_range(&self, key: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
+        self.fetch_data_range(key, None, offset, len)
+    }
+
+    /// `data` route Range with the `.index` suffix, the client's
+    /// `CdnPathFormat` mode 1. Used for the footer, tail and page spans of an
+    /// index file.
+    fn fetch_data_range(
+        &self,
+        key: &str,
+        suffix: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> Result<Vec<u8>> {
         let key = key.to_ascii_lowercase();
         validate_key(&key)?;
         if len == 0 {
@@ -260,8 +275,56 @@ impl CdnClient {
         self.fetch_over_hosts(
             "data",
             &key,
-            None,
+            suffix,
             Some((offset, offset + len.saturating_sub(1))),
+        )
+    }
+
+    /// The 20-byte footer at the end of `indices/<key>.index`.
+    ///
+    /// The client's handler knows the file length from the CDN config's
+    /// `*-index-size` field and reads the last 20 bytes first; it does not ask
+    /// the server for the length. This is `CdnPathFormat` mode 1 followed by
+    /// the Range GET the downloader builds from `offset`/`length`
+    /// (`0x1424c1030`'s `Range: bytes=<start>-<end>`).
+    pub fn fetch_index_footer(&self, key: &str, file_len: u64) -> Result<[u8; 20]> {
+        if file_len < 20 {
+            return Err(Error::BadResponse(format!(
+                "index {key} is {file_len} B, shorter than its 20-byte footer"
+            )));
+        }
+        let bytes = self.fetch_data_range(key, Some(".index"), file_len - 20, 20)?;
+        bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::BadResponse(format!("index footer is {} B", bytes.len())))
+    }
+
+    /// The bytes after the page bodies: the last-key array, the per-page
+    /// checksums and the terminal checksum.
+    pub fn fetch_index_tail(&self, key: &str, footer: &IndexFooter) -> Result<Vec<u8>> {
+        let offset = footer.page_offset(footer.page_count);
+        let len = u64::from(footer.tail_len());
+        self.fetch_data_range(key, Some(".index"), offset, len)
+    }
+
+    /// Page `page` of an index: `pageSize` bytes at `page * pageSize`.
+    ///
+    /// The client's page layout puts page `p` at `p * pageSize`; the page body
+    /// is always the full `pageSize`, including the unused tail of the last
+    /// page. The footer must already have been read.
+    pub fn fetch_index_page(&self, key: &str, footer: &IndexFooter, page: u32) -> Result<Vec<u8>> {
+        if page >= footer.page_count {
+            return Err(Error::BadResponse(format!(
+                "index page {page} out of range 0..{}",
+                footer.page_count
+            )));
+        }
+        self.fetch_data_range(
+            key,
+            Some(".index"),
+            footer.page_offset(page),
+            u64::from(footer.page_size),
         )
     }
 
@@ -748,6 +811,67 @@ mod tests {
         out
     }
 
+    fn partial_response(body: &[u8]) -> Vec<u8> {
+        let mut out = format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// A synthetic loose index with the client's layout and `n` entries.
+    /// 1024-byte pages, 20-byte loose entries, 8-byte checksums.
+    fn build_index(n: usize) -> Vec<u8> {
+        const PAGE: usize = 1024;
+        const CK: usize = 8;
+        let epp = PAGE / 20;
+        let pages = ((n + epp - 1).max(1) / epp).max(1);
+        let mut out = Vec::new();
+        for p in 0..pages {
+            let mut page = vec![0u8; PAGE];
+            for i in 0..epp {
+                let index = p * epp + i;
+                if index >= n {
+                    break;
+                }
+                let at = i * 20;
+                page[at..at + 16].copy_from_slice(&[index as u8; 16]);
+                page[at + 16..at + 20].copy_from_slice(&(index as u32 + 7).to_be_bytes());
+            }
+            out.extend_from_slice(&page);
+        }
+        let page_end = out.len();
+        for p in 0..pages {
+            let last = (p * epp + epp - 1).min(n - 1) as u8;
+            out.extend_from_slice(&[last; 16]);
+        }
+        let keys = out[page_end..].to_vec();
+        let mut checksums = Vec::new();
+        for page in out[..page_end].chunks_exact(PAGE) {
+            checksums.extend_from_slice(&crate::blte::md5_digest(page)[..CK]);
+        }
+        out.extend_from_slice(&checksums);
+        let mut tail = keys;
+        tail.extend_from_slice(&checksums);
+        out.extend_from_slice(&crate::blte::md5_digest(&tail)[..CK]);
+        let mut footer = [0u8; 20];
+        footer[0] = 1;
+        footer[3] = (PAGE / 1024) as u8;
+        footer[4] = 0;
+        footer[5] = 4;
+        footer[6] = 16;
+        footer[7] = CK as u8;
+        footer[8..12].copy_from_slice(&(n as u32).to_le_bytes());
+        let mut header = footer;
+        header[12..20].fill(0);
+        let hash = crate::blte::md5_digest(&header);
+        footer[12..20].copy_from_slice(&hash[..8]);
+        out.extend_from_slice(&footer);
+        out
+    }
+
     fn text_response(text: &str) -> Vec<u8> {
         text.as_bytes().to_vec()
     }
@@ -943,5 +1067,109 @@ mod tests {
             .join("c3fcf2a11f2638cfdb16c6554e389b72")
             .is_file());
         let _ = fs::remove_dir_all(&cache);
+    }
+
+    /// The footer request is the CPid's mode-1 path and the last 20 bytes:
+    /// `Range: bytes=len-20-len-1` on `data/…/<key>.index`.
+    #[test]
+    fn index_footer_range_is_the_last_twenty_bytes() {
+        let index = build_index(3);
+        let key = "c3fcf2a11f2638cfdb16c6554e389b72";
+        let footer = index[index.len() - 20..].to_vec();
+        let mock = Mock::start("index-footer", vec![Some(partial_response(&footer))]);
+        let client = client(vec![mock.url()], None);
+        let bytes = client
+            .fetch_index_footer(key, index.len() as u64)
+            .expect("footer");
+        assert_eq!(bytes.as_slice(), footer.as_slice());
+        let parsed = IndexFooter::parse(&bytes, index.len() as u32).expect("footer parse");
+        assert_eq!(parsed.page_count, 1);
+        assert_eq!(parsed.element_count, 3);
+
+        let requests = mock.requests.lock().unwrap();
+        let request = &requests[0];
+        assert!(
+            request.contains(&format!("GET /tpr/ovw/data/c3/fc/{key}.index HTTP/1.1")),
+            "path: {request:?}"
+        );
+        assert!(
+            request.contains(&format!(
+                "Range: bytes={}-{}\r\n",
+                index.len() - 20,
+                index.len() - 1
+            )),
+            "range: {request:?}"
+        );
+    }
+
+    /// The tail and page ranges are the client's layout spans, and the page
+    /// decodes through the same footer geometry.
+    #[test]
+    fn index_tail_and_page_ranges_follow_the_footer() {
+        let index = build_index(52);
+        let key = "2f46d225587a744e40ec2f5fe1c3b99e";
+        let file_len = index.len();
+        let footer_bytes: [u8; 20] = index[file_len - 20..].try_into().unwrap();
+        let footer = IndexFooter::parse(&footer_bytes, file_len as u32).expect("footer");
+        assert_eq!(footer.page_count, 2);
+        assert_eq!(footer.entries_per_page, 51);
+        assert_eq!(footer.tail_len(), 2 * 16 + 2 * 8 + 8);
+
+        let tail_at = (footer.page_count * footer.page_size) as usize;
+        let tail_len = footer.tail_len() as usize;
+        let tail = index[tail_at..tail_at + tail_len].to_vec();
+        let page1_at = footer.page_offset(1) as usize;
+        let page1 = index[page1_at..page1_at + footer.page_size as usize].to_vec();
+
+        let mock = Mock::start(
+            "index-spans",
+            vec![
+                Some(partial_response(&footer_bytes)),
+                Some(partial_response(&tail)),
+                Some(partial_response(&page1)),
+            ],
+        );
+        let client = client(vec![mock.url()], None);
+        let got_footer = client
+            .fetch_index_footer(key, file_len as u64)
+            .expect("footer");
+        assert_eq!(got_footer, footer_bytes);
+        let got_tail = client.fetch_index_tail(key, &footer).expect("tail");
+        assert_eq!(got_tail, tail);
+        let got_page = client.fetch_index_page(key, &footer, 1).expect("page 1");
+        assert_eq!(got_page, page1);
+
+        let entries = footer.entries_in_page(1, &got_page).expect("decode page");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].key, [51u8; 16]);
+        assert_eq!(entries[0].size, 58);
+        assert_eq!(entries[0].offset, 0);
+        assert_eq!(entries[0].archive, 0);
+
+        let requests = mock.requests.lock().unwrap();
+        let expected = [
+            format!("Range: bytes={}-{}\r\n", file_len - 20, file_len - 1),
+            format!("Range: bytes={tail_at}-{}\r\n", tail_at + tail_len - 1),
+            format!(
+                "Range: bytes={page1_at}-{}\r\n",
+                page1_at + footer.page_size as usize - 1
+            ),
+        ];
+        for (request, range) in requests.iter().zip(expected) {
+            assert!(
+                request.contains(&format!("GET /tpr/ovw/data/2f/46/{key}.index HTTP/1.1")),
+                "path: {request:?}"
+            );
+            assert!(request.contains(&range), "want {range:?} in {request:?}");
+        }
+
+        assert!(matches!(
+            client.fetch_index_page(key, &footer, 2),
+            Err(Error::BadResponse(_))
+        ));
+        assert!(matches!(
+            client.fetch_index_footer(key, 19),
+            Err(Error::BadResponse(_))
+        ));
     }
 }

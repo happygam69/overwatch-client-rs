@@ -1,0 +1,57 @@
+{
+  "id": "fn/ShapeDispatch",
+  "title": "tier-2 shipped code: the shape-record bounds dispatcher against 0x142cb9030",
+  "address": {
+    "v2b": "0x7ff7c79d9030"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "shape_dispatch",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "record",
+      "kind": "ptr",
+      "ptr_len": 40
+    },
+    {
+      "name": "world",
+      "kind": "ptr",
+      "ptr_len": 8192
+    },
+    {
+      "name": "matrix",
+      "kind": "ptr",
+      "ptr_len": 64
+    },
+    {
+      "name": "base",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "shape_dispatch_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 75,
+    "mutationCount": 10,
+    "mutationKillRate": 0.75,
+    "seed": 5858,
+    "coverageWindow": 210,
+    "allowedImageReads": [
+      "0x7ff7c830cf10-0x7ff7c830cf1f",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7e3e0c0-0x7ff7c7e3e0cf",
+      "0x7ff7c87e5f40-0x7ff7c87e5f47"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/shapes.rs (shape_bounds), called by crates/ow-sim/src/bin/verify_probe.rs through the shape_dispatch entry.",
+    "The oracle runs 0x142cb9030: type byte at record+0x20, index at +0x24, array pointer from world+0x2d0/0x2e8/0x300/0x330, then the type-0/1/2/4 bounds leaf; the 0x20-byte result is copied back into the record.",
+    "Cases cover types 0 (sphere), 1 (capsule), 2 (point cloud) and 4 (box). The selected index is 0."
+  ],
+  "acknowledgedGaps": [
+    "Type 3 (0x142cae5a0) is not implemented; the candidate returns false for it. The branch coverage is 4/5 because the type-3 edge is not in the fixture. Types above 4 follow the client's box path and are not cased."
+  ]
+}

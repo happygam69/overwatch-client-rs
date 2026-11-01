@@ -485,6 +485,42 @@ What the unit added to the read:
 This verifies a **consumer** of the directory blob, not where the blob comes
 from: the producer row in `ow-tank-1to1.md` section A stays open.
 
+#### What the producer side reads as (2026-10-31; blob source narrowed)
+
+The job and the hand-off around it are read operation for operation; the
+*writer* of the blob is still not read. What is settled:
+
+- `BundleDirectoryRequestAssets` (`0x141fd53a0`) is phase 5 of the bundle
+  job (dispatched by `FUN_141fd48f0` at `0x141fd48f0`; phase 2 teardown is
+  `FUN_141fd5700` at `0x141fd5700`). It takes the blob pointer from the job's
+  `+0x28` slot and the type count from the content database (`FUN_141fcbb10`
+  at `0x141fcbb10` → `FUN_141fe81d0` at `0x141fe81d0`, fields `+0x70` blob and
+  `+0x264` count, moved out and zeroed), sizes the job's type-entry vector
+  (`FUN_141fd5020`, `FUN_141fd4920`), rebases every base-relative pointer in
+  the blob in place, then requests every listed GUID (`FUN_141fd3950`).
+- The per-asset request `AssetRequestBundleAware` (`0x141fd4a50`) sends a
+  bundle-hosted record (query flag `0x200`) to `BundleDirectoryLookup` and
+  `FUN_141fd6a50`, everything else to the store (`FUN_141fd3950`).
+- The content database publishes `+0x70`/`+0x264` in `FUN_141feb350` (same
+  body in `FUN_141feb4a8`/`FUN_141feb69e` at `0x141feb4a8`/`0x141feb69e`): it
+  copies four sections verbatim out of a content stream (sizes and counts
+  from the stream's `0x58`-byte header, magic check in `FUN_141feb9e0`) into
+  `+0x78` (`0x1e`-stride records), `+0x160` (variable-stride bundle records,
+  rebased and hash-inserted via `FUN_141fe79a0`), `+0x58`/`+0x50`, and the
+  `+0x70`/`+0x264` blob (`FUN_141feb190` is the dup). The grouping, the sorted
+  GUID arrays, the index arrays and the base-relative emission are **not**
+  computed here: they arrive prebuilt in the stream.
+- The `+0x160` readers are `FUN_141fe89a0` (first entry of a type) and
+  `FUN_141fe8f90` (GUID match, then the `FUN_141fcbf40` loaded-bundle guard
+  on element `+0x10`); the collector `FUN_141fea840` copies loaded-bundle
+  elements into a flat `0x20`-stride array with a compact pass.
+
+So the blob is **not** assembled from bundle payloads anywhere in the read
+path: it is copied out of the content stream. The remaining question is who
+writes that stream (its group/sort/emit and its 0x58-byte header source).
+Until that writer is read, `ow-tank` keeps its manifest scan and the
+producer row stays open.
+
 What `ow-tank` does: `GameData::open_asset` implements steps 2–3 and the entry
 lookup exactly, and builds the directory's *content* by scanning the manifest's
 type-`0x09C` records once (`BundleIndex`). That is the flat form of the
@@ -676,10 +712,289 @@ for one map GUID; a proximity list is not a substitute.
 
 ## Collision
 
-The map ships collision chunks (`MAP_CHUNK_COLLISION`,
+The map ships collision chunks (`MAP_CHUNK_COLLISION` kind `0x12`,
 `teMAP_CHUNK_ADDITIVE_COLLISION`). The client draws the visual mesh only;
-there is no character collision implementation. Reading the collision chunk
-layout and the client's step/sweep path is the next collision work.
+there is no character collision implementation.
+
+### The collision chunk payload (2026-11-01)
+
+The practice range's collision chunk `0x0DD0001200000688` is **8,792,256**
+bytes (`0x8628C0`) and is the base map's `+0x1C0` reference. Read as data, it
+is a self-describing container, not a flat mesh:
+
+```text
++0x00000  u64  RVA 0x00020      -> the first STUD blob
++0x00008  u64  RVA 0x862720     -> the second STUD blob
++0x00010  u64  1
++0x00018  u64  RVA 0x862878     -> a 0x48-byte matrix block
++0x00020  STUD v1 blob: magic u32 0x53545544 (`DUTS` on disk), count 1,
+          record {i32 0x20, u32 0}
++0x00040  the one instance of the first blob
++0x862720  STUD v1 blob: magic u32 0x53545544, count 1,
+          record {i32 0x20, u32 0}
++0x862740  the one instance of the second blob
++0x862878  4x4 matrix (1.0 diagonal, then 51.59, -10.49, -6.36, 205.8 ...)
+```
+
+**The first component is a registered client class.** Its instance starts with
+`{u32 class hash; u32 next}` = `0x9199BF6B`, `0`. The class is registered by
+`0x1400fdcb0` through `RegisterComponentTypeDescriptor` (`0x1421cd360`, the
+descriptor at BSS `0x143c3f060`): type `0x9199BF6B`, **size `0x78`**, align 8,
+constructor `0x140f91550` (vtable `0x14314acc8`, destructor `0x140f8f310`), four
+declared fields. Its field values in the practice payload are RVAs into the
+same payload: `+0x10 -> 0x98`, `+0x58 -> 0x2358`, `+0x68 -> 0x2428`, plus a
+u64 `0x0F3E456F3835B2C6` at `+0x20`. The three targets are, in order, a small
+hash/offset table at `0x98`, a per-sector table at `0x2358` (a count and
+repeated `{u32 7, quad bounds}` records) and the **cell array** at `0x2428`
+(decoded below: 220 cells that tile the payload).
+
+**The second component is not registered.** Its class hash `0x99F089FE` has no
+immediate anywhere in the image, so the client has no component class for it
+and the loader must skip it. Its fields repeat the sector pattern: `0x88`,
+`0x11C`, `6`, `0x98` and a run of `{u32 7, quad bounds}` records, so it reads
+like tool-side metadata for the same sectors and not gameplay data.
+
+**The chunk asset fixes the RVAs in place.** `FinishMapChunkAsset`
+(`0x141ff54e0`) handles the collision kind through its slot `0x1E` branch:
+`0x142e49360` converts the header's `+0x00`, `+0x08` and `+0x18` RVAs to
+pointers, `FUN_1421d26d0` (`0x1421d26d0`, the STUD loader) loads the blob at
+`+0x20`, and `FUN_141ff51a0` (`0x141ff51a0`) runs a 17-pointer fixup pass over
+the record at `+0x68`. The relocator family used by these per-slot branches is
+read: `0x142e49270` (two pointers), `0x142e492a0` (two counted arrays,
+`0x58`/`0x38` stride), `0x142e49360` (three pointers), `0x142e493a0`
+(`+0x2E8`/`+0x2F0`) and `0x142e493e0` (`+0x08`). Each treats a stored `0` as
+null and adds the payload base to every non-zero RVA.
+
+### The cell container, decoded (2026-11-01)
+
+All offsets are relative to the first STUD blob (its magic dword). The client
+compares that dword with `0x53545544` (`StuLoadSubAssets`, `0x1421d26d0`), so
+the on-disk bytes are `44 55 54 53` (`DUTS`) even though the format is called
+`STUD`. All 220 entries validate: every cell, record and offset is inside the
+payload, and the cells tile it without gaps.
+
+```text
+container + 0x2428   array header {u32 count; u32 pad; u32 data_off}
+container + data_off entries[count], 16 B each  {u64 cell_off; u64 0}
+container + cell_off cell                       {u64 block_size; u64 record_off}
+container + record_off record                  17 x u64 self-relative offsets,
+                                               then 0x18 B of header, then the
+                                               17 arrays; array k starts at
+                                               offset[k] and array 16 runs to
+                                               record + block_size
+```
+
+Practice chunk (**file** offsets; the blob starts at `0x20`): count 220,
+header at `0x2448`, entries at `0x2458` (the last of the 220 ends exactly at
+the first cell, `0x3218`), first record `0x3228`, first block size `0x67F8`,
+and the last cell ends at `0x862720` — exactly where the payload's second
+STUD blob begins. The container-relative values are `0x2428` (header),
+`0x2438` (entries), `0x31F8` (first cell), `0x3208` (first record) and
+`0x862700` (last cell's end); the Rust reader and its test use those. `record + block_size` is the
+next cell, so the
+first record's 17 offsets are `0xA0, 0xC8, 0x130, 0x1E0, 0x228, 0x280, 0x388,
+0x648, 0x888, 0x8D0, 0x998, 0xD78, 0x1188, 0x1548, 0x2A58, 0x5618, 0x65F8`.
+**Empty arrays are zero-length**: a cell with no geometry can have equal
+boundaries (cell 86 has `0xA0` six times, then `0xA8`) and zero header
+bitfields, so an offset is never a sentinel — it is a boundary, and the array
+between two equal boundaries has no elements.
+The `0x18`-byte record header carries two packed bitfields, two `0xFFFFFFFF`
+sentinels and two counts; they match array 0 (8-byte items: 5/8/15 in cells
+0/1/219) and array 9 (8-byte items: 25/16/40), so it is a real per-cell
+descriptor.
+
+The arrays are visible from their contents: `arr3`/`arr11` are u16 index runs
+with `0xFF` separators, `arr12` interleaves `{u16 index; u16 0xFF}`, `arr8`/
+`arr16` are byte attributes and `arr13`/`arr14` hold 4-byte quantized vertex
+data. Their sizes are not a single stride across cells, so the decode is
+per-array, not one uniform record.
+
+**The container and the runtime fixup are implemented and tested
+(2026-11-02).** `ow_tank::collision::parse` reads the container header, the
+v1 `STUD` record table, the `0x78`-byte component, its `+0x68` cell array and
+every cell's 17 array slices, validating the cell tiling and the boundaries.
+`crates/ow-tank/tests/collision_cells_real.rs` opens the practice range's
+`0x0DD0001200000688` from the install and pins the count (`220`), the first
+cell (`0x31F8`, record `0x3208`, block `0x67F8`), the 17 boundaries
+(`0xA0 .. 0x65F8`), the last cell's end (`0x862700`) and every array's extent.
+Those are container-relative offsets; the file offsets are `+0x20`.
+
+`ow_tank::collision::fixup_cell_bytes` is the read expression of
+`MapChunkCellBytesFixup` (`0x141ff51a0`): the outer `{inner header, mode}` pair,
+the inner header's two encodings (mode 1 count at `+8`, otherwise count at
+`+0` and entries at `+8`), the entry's two encodings (mode 1 record pointer in
+the first qword, otherwise at `+8` of the object it names), and the 17-qword
+conversion (`q == 0` stays null, otherwise `record + q`). The differential
+unit `fn/MapChunkCellBytesFixup` runs 264 iterations plus the edge pool and
+kills 12/12 mutants; the two allocate-then-deref-null mode-0 branches are
+declared dead (the allocator dereferences the process heap vtable at
+`0x144188200`, which is null in the offline image). The file-to-runtime entry
+conversion (`{cell_off, 0}` to `{record pointer, 1}`) is the loader's, not
+this function's; it is recorded as the observation in
+`formats/domino.md` and remains unverified.
+
+**The consumer path is read.** The geometry object (the `0x910`-byte class
+registered by the node-type-2 factory) is finalised by `GeometryFinalize`
+(`0x14213d0b0`). The object's layout is fixed by its clear function
+`GeometryClear` (`0x1421384e0`), which frees exactly these arrays:
+
+| field | stride | count | role |
+|---|---|---|---|
+| `+0xf8`/`+0x104` | 0x50 | | transform sources (copied to the `+0xe0` pool, `+0xf0` count) |
+| `+0x108`/`+0x114` | **0x60** | | **cell entries** |
+| `+0x118`/`+0x124` | 0x100 | | a second entry array (freed entry-wise, `+0x30` sub-array) |
+| `+0x128`/`+0x134`, `+0x138`/`+0x144` | 4 | | u32 lists |
+| `+0xb0`/`+0xc0`, `+0xc8`/`+0xd8` | 0xb0 | | record pools with free-list at `+0xa8` |
+
+Finalise then copies the `0x50`-stride transforms into the `+0xe0` pool and,
+per **0x60-byte cell entry** (`geometry+0x108`, count `geometry+0x114`):
+
+- allocates a `0xb0` record from the `+0xb0` pool, copies the entry's five
+  `vec4`s (`+0x00`, `+0x10`, `+0x20`, `+0x30`, `+0x40`) into its `+0x00..0x50`,
+  and **steals** the entry's u16 array: `{u64 ptr; u32 count; u8 flag}` at
+  `+0x50`/`+0x58`/`+0x5c` moves to the record's `+0x90`/`+0x98`/`+0x9c` and the
+  entry's copy is zeroed;
+- creates one **body** with `OwnerCreateBody` (`0x142cc3d90`) — args are the
+  owner index and an eight-float config of two quads; it rejects infinities and
+  a zero length, requires `owner+0x15c == 0`, allocates with `0x142cbff20` and
+  returns `{index, generation, owner}` (stored at the record's `+0x2c`);
+- builds a **type-3 (mesh) source on the stack** and calls `ShapeAddToBody`:
+  type byte at `+0x67`, scale `1.0f` at `+0x68`, mesh source pointer at `+0x70`
+  = **record + 0x20** (the three `vec4`s at entry `+0x20..0x50`), the shape id
+  from `geometry+0x0a`, and the geometry's own float settings from
+  `geometry+0x44..0x5c`; the returned handle is stored at the record's `+0x50`;
+- the second phase rewrites the stolen u16 indices through the id table built
+  from the transform loop, and applies `geometry+0x310`'s transform.
+
+So the **cell entry is 0x60 bytes**, not 0x100, and each entry yields exactly
+one body and one mesh shape.
+
+**The brush-built path is a different geometry (2026-11-01).** The node-type-2
+node's build (`GeometryBuild`, `0x14213c440`) never reads the collision chunk:
+it takes the node's model (`node+0x88` -> `+0x38` -> `+0x40` -> `+0x48`, a brush
+tree), copies the collision parameters (`0x142132cf0`), allocates one `0x60`
+cell entry from `geometry+0x108`, builds its transform from the object's
+`+0x98` instance array (`FUN_142ced620`), converts the brush tree to a
+triangle mesh (`0x142cf23c0`), thickens and closes it (`0x142cf2010`), appends
+the entry's u16 array to `geometry+0xf8` (`0x142139080`), creates the owner's
+body (`OwnerCreateBody`) and finalises. So the 220-cell STU chunk feeds a
+**different node type**, not this one. The node-type registry add
+(`0x141c5ff40`) has 100 caller thunks, one per node type; walking that table
+is how the chunk's consumer is found.
+
+**What that leaves.** The chunk-side navigation is exact, the payload's cell
+layout is decoded, and the consumer chain is read up to the geometry finaliser
+(`0x14213d0b0`) and `OwnerCreateBody` (`0x142cc3d90`). The one open link is the
+**cell decoder**: whoever writes `geometry+0x108`/`+0x114` from a 17-array
+record. Searching the image for the payload's 64-bit values as immediates finds
+nothing, and the class's own methods are the generic STU getters (the
+`0x140f8fxxx`/`0x140f9xxxx` module is one getter per class descriptor, no
+traversal). The Domino-side ingest is read (`formats/domino.md`:
+`ShapePoolAlloc` `0x142cb00c0`, `ShapeEntryFromDescriptor` `0x142cb7f10`,
+`ShapeAddToBody` `0x142cb3940`, `ShapeAddToOwner` `0x142cd4ef0`), and it
+consumes a descriptor with a type byte at `+0x67` and per-type data at
+`+0x68`/`+0x70`. The **array encoding the fixup expects** is now observed
+(`formats/domino.md`, "The cell array's runtime form"), so the decoder's output
+form is known; finding the decoder itself is the next anchor.
+
+**The class's field table is not in the image (2026-11-01).** The registered
+descriptor (`0x143c3f060`) stores its field table at `+0x28` (pointer) and
+`+0x98` (count = 4); `FUN_140f84590` installs `0x143c3c620` as that table, and
+`0x1421cdb90` only **sorts/finalises** it (`desc+0x28 + desc+0x98*0x38`,
+jumping to `0x1421cce50`). In the installed image both `0x143c3c620` (the
+table) and `0x143c3efc0` (`desc+0x08`) are **all zero** — the block's source
+is the file, not a runtime buffer. So the four field hashes/offsets are built
+by the registry at runtime and **do not exist as immediates**; the consumer
+cannot be found by searching for a field hash. `FUN_1421cdfd0(desc, object)`
+walks the table and calls `[field_type+0x48]` with `object + entry[8]`, so a
+field entry is `{?, offset@+8, type@+0x10}` with a 0x38 stride.
+
+**The registered name is stripped.** Class names are stored XOR-obfuscated as
+`[u32: length in the low 24 bits, 4th byte = encoded flag][name bytes]`, the
+name XORed with the eight bytes immediately before the header (`0x1438846c0`
+for this class). Decoded, the collision component's name at `0x1438846cc` is
+**`Unknown`**, and so is the 0x910-byte class registered at `0x143aa024c` by
+`0x142029f00`. The shipping client does not carry readable class/field names.
+
+**Real names come from the reference registry, matched by hash.** The class
+hash is the stable key, and the local OWLib checkout's registry resolves it
+exactly (`cargo run -p ow-tank --bin stu -- --class 0x9199BF6B`):
+
+```text
+0x9199BF6B  STU_9199BF6B  size 120 (0x78)
+  +0x08  field 0x81DEFC98  inline, 40 bytes
+  +0x30  field 0xFC6A2C09  inline, 40 bytes
+  +0x58  field 0x9DBA1F4E  array of instances, 16 bytes
+  +0x68  field 0xD7C9DAAC  m_cellBytes, array, 16 bytes
+```
+
+Size and all four offsets match the client's registration and the payload's
+instance exactly, so the mapping is a check, not an invention: field 4
+(`+0x68` = RVA `0x2428`) is **`m_cellBytes`** (the per-cell payloads, count
+`0xDC` = 220 at the head), and field 3 (`+0x58` = RVA `0x2358`) is the array
+that goes with it — the tables measured there hold repeated `{u32 7, quad
+bounds}` records and a 220-entry RVA list, so *cells* is the working reading,
+not a decoded record yet. The other three fields are hash-named in the
+reference too (`m_81DEFC98`, `m_FC6A2C09`, `m_9DBA1F4E`); there is no readable
+name for them anywhere, so they stay hash-cited rather than invented. The
+second component's hash `0x99F089FE` is not in the reference either.
+
+**The ingest's navigation is read (2026-11-01).** The chunk *asset* does not
+parse its payload:
+
+- `0x141ff33f0` registers two classes: the map asset (type `1`) and the chunk
+  asset (type `0xBC`, size `0x1f`). Their virtual slots are the map's
+  `LoadMapAssetChunks` (`0x141ff5c80`), `0x141ff5bd0` and
+  `ReleaseMapAssetChunks` (`0x141ff58b0`), and the chunk's
+  `FinishMapChunkAsset` (`0x141ff54e0`) plus `0x141ff53e0`.
+- `0x141ff53e0` is the only virtual that walks bytes: for **chunk slot `8`**
+  it treats the payload as a container of GUID-keyed sub-chunks
+  (`[+0]` count, `[+8]` offset to the first record, `0x141b32e50` to resolve a
+  GUID, `0x1421c3780` per record). Nothing there reads triangle data.
+- So the collision reader lives with the consumer, not the asset. The
+  consumer is the domino world: the query resolves a `u16` handle through the
+  table at `0x1442a0bc0` to a record whose fixture pool is `+0x2b8` and whose
+  per-type geometry pools are `+0x2d0..+0x330`.
+
+**The handle table's single writer is the registry install, not a per-record
+call.** The whole image has exactly one store to `0x1442a0bc0`:
+`0x142cc3bb0`, which stores the registry object's array pointer and, at
+`0x142cc3bd1`, the sibling global `0x1442a0bc8` (the inline-storage pointer).
+`0x142cc3c80` is the registry's teardown and `0x142cc3be0` is a per-record
+body-reset pass (it walks `[record+0x288]`'s `0x1c0`-stride bodies zeroing
+`+0x120`/`+0x130` after a `+0x15c` lock check). Handles are therefore engine
+state; the map's collision record is created by the world-side path, which is
+where the fixture/geometry fill has to be found.
+
+**Search routes tried and rejected (2026-11-01), so nobody repeats them:**
+
+- `imul reg, reg, 0xc0` (the fixture stride): 24 hits, none in the collision
+  module — the two near misses (`0x142c90be0`, `0x142c93190`) multiply by
+  `0xc0` for an unrelated `0x20`-stride matcher.
+- a raw disp32 scan for `0x2b8`/`0x2d0`/`0x2e8`/`0x300`/`0x318`/`0x330`:
+  ~1,700 functions, useless — those displacements are ordinary stack offsets.
+  A pool reference must be matched with its instruction context, not the
+  displacement alone.
+- the strings `COLLISION`, `Collision`, `collision`, `ADDITIVE`, `Additive`:
+  **absent from the image**, so the chunk-kind names come from the install's
+  data only and cannot be used as xref anchors.
+
+**The tree is built from the fixture pool, lazily.** `DmBroadphaseReinit`
+(`0x142cbdc60`) is a BVH builder, not an ingest: its first argument is the
+pass sub-record base (`record+0x1b0`), it reads the query descriptor's eight
+quads (`R8 + 0x00..0x70`), calls the verified `0x142cd5540`
+(`fn/CollisionSweepBounds`) for the swept bounds, walks the per-pass record
+array at `+0x44` (`R14 = RCX + 0x44`, where the root index lives — `-1` means
+empty), and splits with a `0x100`-entry stack node pool (`[RBP+0xa8]`,
+count at `[RBP+0x4ac]`) using the epsilons at `0x1435ecad0`/`0x1435ecaf0`.
+So the tree's *shape* is a function of the fixture set at query time; the
+open question stays exactly one level down — **who fills
+`[record+0x2b8]`'s fixtures**.
+
+**Also checked and not useful:** the region at `0x14473d800` looked like a
+function-offset table, but it is `.pdata` in an RVA+checksum encoding (its
+extents match `.pdata` exactly, including the truncated ones), so it adds no
+precision to the coverage windows the units declare.
 
 ## Verification
 

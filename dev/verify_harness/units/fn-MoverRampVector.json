@@ -1,0 +1,42 @@
+{
+  "id": "fn/MoverRampVector",
+  "title": "tier-2 shipped code: the mover ramp vector against MoverRampVector (0x140ca75b0)",
+  "address": {
+    "v2b": "0x7ff7c59c75b0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_ramp_vector",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "body", "kind": "ptr", "ptr_len": 4464 },
+    { "name": "out", "kind": "ptr", "ptr_len": 16 },
+    { "name": "flags", "kind": "ptr", "ptr_len": 48 }
+  ],
+  "returns": "void",
+  "argFactory": "mover_ramp_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "coverageWindow": 64,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/movement.rs, called by crates/ow-sim/src/bin/verify_probe.rs through the mover_ramp_vector entry.",
+    "Oracle is MoverRampVector at exe 0x140ca75b0 (v2b 0x7ff7c59c75b0), a leaf with no .pdata extent; the unit declares coverageWindow 0x40 so the sweep stops at the RET (0x140ca75ef) and does not disassemble the following INT3 padding.",
+    "Read expression: t = MINSS(body+0x10ec, 1.0); scale = (flags[0] & 2) ? body+0x5b4 : body+0x5a8; ramp = t * scale + flags[0x2c]; out[i] = ramp * body[0xc0+4*i]. The scale selection is TEST byte [flags],2 / CMOVZ, not a branch, so coverage is 100% by construction.",
+    "The third argument is the caller's body+0x10d0 block: +0 is the low byte of the flags word and +0x2c is the scalar at body+0x10fc. The fixture keeps it as a separate 0x30-byte pointee so both channels are controlled; the oracle and the probe read the same offsets.",
+    "The only image read is the 1.0f at 0x142f7aae4 (v2b 0x7ff7c7c9aae4), the MINSS second operand; it is declared in allowedImageReads.",
+    "Call sites: SubmitMoverPhysicsCommand 0x140cc03d0 (before SetCharacterControllerVelocity) and MoverAdvance 0x140ca7f30's tail; the leaf's output is the velocity-shaped four-lane ramp the Domino character controller receives."
+  ],
+  "acknowledgedGaps": [
+    "The unit proves the leaf's arithmetic and its two scale slots. It does not prove the callers, the flag producer, or the Domino character controller; those stay open in the movement question.",
+    "NaN/inf payload propagation through the four-lane multiply is not modelled. The client's input path produces finite scale, offset and direction values; which NaN operand the CPU (or the emulator) propagates is not part of the client's bytes. The timer's NaN is pinned because MINSS turns it into 1.0 before the multiply. The fixture therefore keeps the movement fields finite."
+  ]
+}

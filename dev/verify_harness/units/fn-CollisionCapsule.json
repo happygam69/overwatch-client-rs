@@ -1,0 +1,73 @@
+{
+  "id": "fn/CollisionCapsule",
+  "title": "tier-2 shipped code: the type-1 capsule narrowphase against 0x142ccd7b0",
+  "address": {
+    "v2b": "0x7ff7c79ed7b0"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_capsule",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "record",
+      "kind": "ptr",
+      "ptr_len": 48
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 72
+    },
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 120
+    },
+    {
+      "name": "xform",
+      "kind": "ptr",
+      "ptr_len": 32
+    }
+  ],
+  "returns": "void",
+  "argFactory": "collision_capsule_fixture",
+  "options": {
+    "iterations": 264,
+    "coverageThreshold": 80,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 5543,
+    "coverageWindow": 1930,
+    "allowedImageReads": [
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f",
+      "0x7ff7c87e5f40-0x7ff7c87e5f4f",
+      "0x7ff7c7e30818-0x7ff7c7e30827",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7c9aae4-0x7ff7c7c9aaf3",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff",
+      "0x7ff7c7cc62f0-0x7ff7c7cc62ff",
+      "0x7ff7c80b1030-0x7ff7c80b103f",
+      "0x7ff7c830cd70-0x7ff7c830cd7f",
+      "0x7ff7c830cd80-0x7ff7c830cd8f",
+      "0x7ff7c7d8ad20-0x7ff7c7d8ad2f"
+    ],
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c79ed817",
+        "edge": "0x7ff7c79ed81d",
+        "why": "The support-point path (count > 0) hands the block to 0x142cc9460, which is unread. Every fixture case passes count = 0."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (capsule_sweep), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_capsule entry.",
+    "The oracle runs the real 0x142ccd7b0 and the harness compares the whole 0x44-byte output pointee byte for byte, so a hit/miss difference is visible.",
+    "The unit declares the function's exact extent (0x78a) because the image's .pdata entry stops short of it.",
+    "The declared specials cover the degenerate capsule (the sphere fallback at the midpoint), both endpoint sphere recursions, the inside-cylinder/clamped-axis sphere recursion, the inside-with-flag report, the motion-budget exit and a parallel sweep."
+  ],
+  "acknowledgedGaps": [
+    "Only the count <= 0 paths are verified. The support-point path (0x142cc9460), types 2, 3 and 4+, the hit policy and the geometry ingest remain open."
+  ]
+}

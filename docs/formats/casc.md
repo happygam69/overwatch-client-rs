@@ -72,6 +72,87 @@ Only the encoding key names a stored artifact. `BuildConfigParse`
 CDN config carries `archives`, `file-index`, `archive-group` and the patch
 variants. There is no `key-layout-*`, so the bucket index is the path.
 
+### CDN index file
+
+An `indices/<hash>.index` is read by the client's own handler, not only by the
+reference:
+
+| offset | field |
+|---|---|
+| last 20 B | footer, below |
+
+The footer is a fixed **20 bytes** at `len - 20`:
+
+| footer byte | meaning |
+|---|---|
+| `0` | version, 0 or 1 |
+| `1`, `2` | zero |
+| `3` | page size in KiB (`pageSize = byte3 << 10`) |
+| `4` | offset-field width |
+| `5` | size-field width |
+| `6` | key width (16) |
+| `7` | checksum width, 0..16 |
+| `8..12` | element count, `u32` little-endian |
+| `12..20` | `MD5(footer[0..12] + 8 zero bytes)[..8]` |
+
+`CdnIndexFooterParse` (`0x1424d9af0`) copies the footer, saves the hash, zeroes
+`out[0xc..0x14]`, hashes the 20 bytes and compares the first 8. On a match it
+restores the hash, accepts version 0/1 and checksum width 0..16, then writes:
+
+```text
+out+0x14  pageSize        = footer[3] << 10
+out+0x18  entrySize       = footer[4] + footer[5] + footer[6]
+out+0x1c  entriesPerPage  = pageSize / entrySize
+out+0x20  pageCount       = (elementCount - 1 + entriesPerPage) / entriesPerPage
+out+0x24  lastKeyBytes    = pageCount * keyBytes
+out+0x28  checksumBytes   = pageCount * checksumSize
+```
+
+and accepts only when the file length is exactly
+
+```text
+checksumSize + 20 + (checksumSize + keyBytes + pageSize) * pageCount
+```
+
+with every step in 32-bit arithmetic. The function returns 8 in `AL` for a
+reject; callers test `AL` only (`fn/CdnIndexFooterParse`).
+
+The file is laid out as:
+
+```text
+page bodies    page p at p * pageSize, pageSize bytes each
+last keys      pageCount * keyBytes, the last key of each page
+checksums      pageCount * checksumSize, MD5(page body)[..checksumSize]
+terminal       checksumSize bytes, MD5(last keys + checksums)[..checksumSize]
+footer         20 bytes above
+```
+
+`CdnIndexFileParse` (`0x1424d9c90`) checks the terminal checksum and then
+`MD5(terminal + footer)` against the index's own 16-byte key (the file name).
+`CdnIndexPageChecksums` (`0x1424d9f20`) compares every page's MD5 with its
+stored checksum; a mismatch is ignored. Records are `[key keyBytes][size
+sizeBytes BE][archive ordinal (offsetBytes - 4)][offset 4 BE]`; a loose index
+has `offsetBytes = 0` and stops after the size. The main group has
+`offsetBytes = 6` (u16 ordinal), the patch group 5 (u8).
+
+The install's four config-named indexes, read with this formula:
+
+| index | file bytes | offB | stride | entries/page | pages | entries | last-page entries |
+|---|---|---|---|---|---|---|---|
+| `archive-group` | 260,173,908 | 6 | 26 | 157 | 63,149 | 9,914,328 | 92 |
+| `patch-archive-group` | 48,616,028 | 5 | 25 | 163 | 11,800 | 1,923,358 | 121 |
+| `file-index` | 576,828 | 0 | 20 | 204 | 140 | 28,374 | 18 |
+| `patch-file-index` | 90,668 | 0 | 20 | 204 | 22 | 4,426 | 142 |
+
+All four match the length formula exactly, the footer hash validates, the
+terminal hash matches, and every page MD5 matches its stored checksum
+(`crates/ow-casc/tests/cdn_index_real.rs`). The CDN client reads the 20-byte
+footer and the tail by Range GET (`CdnPathFormat` mode 1, the downloader's
+`Range: bytes=<start>-<end>`); no decompiled call site for a per-page HTTP
+request was found, so `fetch_index_page` is the layout's page span, not an
+observed request shape. The last-key binary search that chooses a page is not
+read; the array and its location are.
+
 ## Keyring
 
 ```ini
@@ -111,6 +192,69 @@ bucket 3, segment 0x159. Header:
 other than 4/5/9; it does not read the extra-bytes or offset-bits bytes. A v8
 file with the same widths reads identically.
 
+### Segment load and validation
+
+`DynamicIndexSegmentParse` is reached only from `DynamicIndexSegmentLoad`
+(`0x14250fc60`). It has two I/O paths, selected by the container mode that
+`DynamicContainerOpenIndex` (`0x142503000`) passes from `DynamicIndexOpen`
+(`0x14250e100`):
+
+- mode 2 (the read-only container): the file is opened with `GENERIC_READ`,
+  `OPEN_EXISTING`, share mode 7 and `FILE_ATTRIBUTE_NORMAL`. The parser asks
+  for the file size, allocates that many bytes, and performs one `ReadFile` at
+  offset 0. This is **synchronous**: there is no `FILE_FLAG_OVERLAPPED`, no
+  completion port and no callback.
+- every other mode: the file is opened read-write (access 6) and a read-only
+  view is mapped; the parse body reads the mapped bytes.
+
+Both paths join the same parse body. `ow-casc` is a read-only reader, so its
+`fs::read` is the mode-2 path: the same bytes and the same parse. The only
+difference is buffer ownership, an allocator buffer versus a mapped view.
+There is no async API to add.
+
+The validation order, with the client's status:
+
+1. file size `< 8` -> 9;
+2. file size `< section size + 8` (the add is 64-bit) -> 9;
+3. `DynamicIndexHash(buffer + 8, section size)` word 0 differs from the stored
+   dword at `+4` -> 9;
+4. section size `< 0x10` -> 5;
+5. header bucket byte at `+0x0A` differs from the expected bucket -> 9;
+6. version `< 7`, or the width bytes at `+0x0C`/`+0x0D`/`+0x0E` are not
+   4/5/9 -> 5;
+7. store the `u64` at `+0x10` as the maximum addressable size (not checked);
+8. entry header `(section size + 0x17) & ~0xf` is at or past the file size
+   -> 9;
+9. remaining `= file size - entry header` is `< 8` -> 9;
+10. entry block size (the `u32` at the entry header) `+ 8` exceeds the
+    remaining bytes -> 9;
+11. entry count `= block size / 0x12` (floor, with **no remainder check**);
+    rolling `DynamicIndexHash` over that many 18-byte entries, word 0 differs
+    from the stored dword at `entry header + 4` -> 9;
+12. page-table offset `= (block size + entry header + 0x1007) & ~0xfff` is at
+    or past the file size -> 9;
+13. remaining `= file size - page-table offset` is `< 0x7800` -> 9;
+14. page count `= remaining >> 9`; for each page and each of its 21 records, a
+    zero stored hash stops the scan successfully; otherwise
+    `DynamicIndexKeyHash(record + 4, 0x13, 0) | 0x80000000` must equal the
+    stored hash or -> 9;
+15. status 0 keeps the parsed fields; a non-zero status frees/unmaps the
+    buffer and zeroes them.
+
+`ow-casc` returns one `Malformed` error rather than the client's 5/9 status
+word; callers branch only on success. For a static file inside the client's
+4 GiB bound, acceptance is the same, including the entry-count floor: a
+declared block size that is not a multiple of 18 is accepted and its trailing
+partial entry is never hashed or decoded.
+
+Not modelled: the writable path creates an empty segment when the file size is
+0 (mode 2 with size 0 returns 9); a file with size above `0xffffffff` makes
+the client return 0 with zeroed fields before parsing. `fs::read` returns either all bytes
+or an error, so the client's short-read continuation after a status-0 read
+cannot occur here. A read failure is an `Io` error; the client maps the OS
+status (5 -> `0x14`, `0x70` -> 8, otherwise 7) and aborts unless the mapped
+status is 0.
+
 The section header's second word is a 32-bit hash of the section body; the
 entry block's second word is a rolling hash over the 18-byte entries. The
 client verifies both (`DynamicIndexHash`, `0x142512c60`) before using the
@@ -143,9 +287,9 @@ first digit is `0`), the last eight are the segment. The scan keeps the
 lower or temporary file, and in a read-only store it ignores it.
 `DynamicIndexSegmentOpen` (`0x14250e400`) opens
 `<base>/<bucket:02x><segment:08x>.idx` for the bucket it is asked for and
-`DynamicIndexSegmentLoad` (`0x14250fc60`) parses it. The parser rejects a
-file whose header bucket at `+0x0A` disagrees with the bucket the name
-selected, so a renamed file cannot silently load.
+`DynamicIndexSegmentLoad` (`0x14250fc60`) parses it synchronously. The parser
+rejects a file whose header bucket at `+0x0A` disagrees with the bucket the
+name selected, so a renamed file cannot silently load.
 
 The `+0x110` table is a runtime cache of the open segment number per bucket,
 not a header field: `DynamicIndexOpen` writes it after the scan.
@@ -174,9 +318,128 @@ offset with `2^30 - 1`. `DynamicContainerOpenArchive` (`0x14250c8f0`) opens
 missing archive is an error; there is no fallback. The shift and mask are set
 by the container constructor (`0x1424f3ee0` passes `0x1e`), not read from the
 index header's offset-bits byte; `index::Location::data_archive` mirrors the
-client's addition and `Store::read_stored` follows the boundary if a record
-ever crosses it. No entry in this install crosses a `2^30` boundary, so
-`(packed + 0x1e) >> 30` equals `packed >> 30` for every key.
+client's addition. `DynamicContainerReadPage` rejects a range whose first and
+last byte are not in the same archive with status 10; `Store::read_payload`
+implements that rejection and does not split the range. No entry in this
+install crosses a `2^30` boundary, so `(packed + 0x1e) >> 30` equals
+`packed >> 30` for every key.
+
+### Archive page cache
+
+`DynamicContainerReadPage` (`0x1424fcd20`) opens the archive and hands the
+archive-relative range to the reader object at `container+0xb38`. The reader is
+built by `ContainerReaderInit` (`0x1424fbf00`); its page cache is at `reader+8`
+and is built by `PageCacheInit` (`0x1424f8790`). This is the cache the old notes
+called missing.
+
+**Geometry.** The page cache does not read its geometry from the index header.
+The `.cmf` database open params carry the slot count at `+0x78` and the page
+size at `+0x7c` (`DatabaseOpenApplyParams`, `0x1424a6df0`, copies the 0xa0-byte
+params to `reader+0x58`); the open path at `0x141fd20f0` sets `+0x78 = 0x10`
+and `+0x7c = 0` ("use the default"), and `DatabaseOpenConfigureCache`
+(`0x1424a7d70`) substitutes `0x10000` for a zero page size. This install
+therefore runs **16 slots of 0x10000 bytes** (1 MiB). `PageCacheInit` allocates
+one page buffer per slot; the slot record is `0x70` bytes and the page table is
+a separate `0x38`-byte object holding the lock, the last-use clock at `+0x20`,
+the slot array at `+0x28`, and the closed flag at `+0x30`.
+
+**Key.** A page is keyed by `(archive number, page-aligned archive offset)`.
+The archive number is the qword at `handle+0x18` that
+`DynamicContainerOpenArchive` (`0x14250c8f0`) stores when it opens `data.NNN`;
+it is the archive ordinal, not a new per-open id. The archive-relative offset
+is `absolute & reader+0x1c8` (`2^30 - 1`, from `1 << shift` with the shift
+`0x1e` at `reader+0x1d0`); the page key is that offset rounded down to the
+`0x10000` page. The slot also stores the number of bytes actually read.
+
+**Read plan.** `PageReadPlan` (`0x1424faa20`) splits the range into a head
+fragment (offset to its page end), a run of whole pages, and a tail fragment.
+Its 0xb0-byte output has the head at `+0x30` (dest, page, len, slot, in-page,
+flag), the whole-page run at `+0x58` (flag, page `+0x60`, dest `+0x68`, len
+`+0x70`) and the tail at `+0x78` (dest, page `+0x80`, len `+0x88`, slot, in-page
+`+0x98`, flag). The cache reader (`PageCacheRead`, `0x1424fb1c0`) then:
+
+1. looks the head page up (`PageSlotFind`, `0x1424fa440`) and copies the
+   fragment on a hit;
+2. on a head miss loads the whole page (`PageLoad`, `0x1424fa540`);
+3. reads the whole-page run with **one direct read** because the cache's
+   non-blocking flag (`cache+0x10`, set to 1 by the open path) is set;
+4. looks the tail page up and loads it the same way, but only when the
+   whole-page run was read completely.
+
+The completion (`PageLoadComplete`, `0x1424fadf0`, and
+`PageSlotPublish`, `0x1424f9bf0`) copies `min(fragment_len, stored - in_page)`
+bytes and zero-fills the rest of the fragment, so a short page reports the short
+count rather than inventing bytes. A range whose offset and length are both
+page-aligned never enters the cache: `ArchiveRead` (`0x1424f9fe0`) sends it
+straight to the archive handle. A zero length returns 0 before any I/O. The
+middle is direct, not page-by-page, on this install: the non-blocking flag is 1,
+so only the head and tail fragments are served from the cache.
+
+**There is no read-size threshold.** The decision is purely the offset and
+length alignment: a one-byte unaligned read loads its whole 0x10000-byte page
+and copies one byte; a multi-megabyte unaligned read is one head page load, one
+direct whole-page run and one tail page load. A page-aligned, page-multiple
+read of any size is one direct read and never touches the cache.
+
+**Hit and eviction.** `PageSlotFind` scans the fixed table. A usable slot whose
+key matches *and* whose stored length covers `in_page + len` is a hit; its stamp
+is set to the incremented table clock. A miss — including a key match whose
+stored length is too short, e.g. the last page of a file — takes the usable slot
+with the smallest stamp (the largest `clock - stamp`, ties to the lowest index),
+bumps its stamp, and reloads it. Slots marked busy/failed (`+0x2e != 0`) are
+never evicted. There is no free list and no "LRU" in the general sense: it is
+this exact minimum-stamp scan over 16 fixed slots. The client also keeps a
+per-table lock and a per-slot event and can wait for another thread's in-flight
+page; a single-threaded reader cannot observe those states, and `ow-casc` keeps
+the surviving state (key, buffer, stored length, stamp) synchronously.
+
+**Maintenance.** `PageCacheClose` (`0x1424f9eb0`) sets the closed flag and
+invalidates every populated slot; `PageCacheReopen` (`0x1424f9f90`) clears it;
+`PageCacheInvalidateAll` (`0x1424fab50`) and `PageCacheInvalidateRange`
+(`0x1424fabd0`) do the same without the flag. The read path calls
+`FUN_1424fff70` (`0x1424fff70`) and these helpers only when the container mode
+is not 2; this install's read-only mode 2 skips the whole block, so the cache is
+never closed or flushed during a read here. The cache is also filtered by an
+archive-number set (`0x1424fcc80`) only in non-mode-2 opens; mode 2 skips that
+check too.
+
+**Statuses.** A page or direct read reports 0 with the bytes actually read; a
+short read at the archive's end is not an error. A read failure is status 8 at
+`DynamicContainerReadPage` and the slot returns to the empty usable state.
+`DynamicContainerReadPage` itself returns 10 for an archive above `0x3fe` or a
+range whose first and last byte are not in the same archive; it does **not**
+split a range at a 2^30 boundary. `DynamicContainerRead` returns the lookup
+status (0/2/3/4/...) or the page status; on 0 with a short count it logs
+`dynamic_container.read_truncated.count` and records the short range. No entry
+in this install takes that path.
+
+**Install proof.** `crates/ow-casc/tests/page_cache_real.rs` opens the real
+store, resolves a small record and a record larger than two pages, and compares
+`Store::read_payload` with a direct archive read:
+
+- small record: stored 33,885 B, payload 33,855 B, first read is exactly one
+  whole-page read at the page-aligned offset, second read issues no archive I/O;
+- large record: stored 248,182 B, payload 248,152 B, exactly three reads — head
+  page, one direct whole-page run, tail page — in that order;
+- after 17 distinct pages the 16-slot table still holds 16, the first page is
+  gone, and re-reading it is a miss that loads the page again.
+
+The synthetic tests in `pagecache.rs` pin every branch: an unaligned read and a
+hit, an aligned bypass, a head/middle/tail range, 17-page eviction and reuse, a
+short page that is not a hit and is zero-filled, a zero-length read, an I/O
+error that resets the slot, a closed table, and the plan fields at every
+boundary.
+
+**No harness unit.** The plan arithmetic is a pure leaf and a unit was built
+(`PageReadPlan` at `0x1424faa20`): it passed determinism and the 364-case
+differential, but it cannot earn the five-stage word. The same function also
+publishes the refcounted archive handle; with a null handle (the only kind the
+oracle can construct) the three refcount-block branches never execute, so the
+coverage gate is 3/6 reachable branches, and a branch that never ran cannot be
+declared unreachable. Reaching it needs a live C++ refcount object and, on
+release, its vtable slot. The unit is therefore not shipped; the plan is pinned
+by the Rust unit test that parses the same `plan_read_into` bytes, and the
+cache itself is locking and I/O state with no plain-buffer oracle shape.
 
 ### Proof on this install
 
@@ -428,13 +691,19 @@ A zero length skips the check and succeeds. Success writes the chosen entry's
 packed location and stored size.
 
 `DynamicContainerRead` (`0x1424f48d0`) asks for
-`(caller_offset + 0x1e, caller_len)`. `Store::read_stored` keeps the full-record
-read the decoder needs but resolves `(0x1e, size - 0x1e)` first: status 2 is
-`KeyNotFound`, and status 3/4 is a parse error. The install's 806 duplicate
+`(caller_offset + 0x1e, caller_len)`. `Store::read_payload` is that request for
+a full record: it resolves `(0x1e, size - 0x1e)`, reads exactly that payload
+range through the archive page cache, and returns the bytes without the data
+header. `Store::read_stored` is the full-record compatibility wrapper used by
+the tests (`blte::decode` accepts either form): it calls `read_payload` and
+prepends the 30-byte data header with one un-cached read, which the client's
+read path never performs. Status 2
+is `KeyNotFound`, and status 3/4 is a parse error. The install's 806 duplicate
 keys only read because the second entry's type-6 interval is exactly that
-payload range. The short-record and status-3/4 error paths of `read_stored` are
-not tested: every install record carries the 30-byte header and every install
-payload request is resident.
+payload range. The short-record and status-3/4 error paths of `read_payload` are
+not exercised: every install record carries the 30-byte header and every
+install payload request is resident. The page cache itself is tested for a
+short read with a synthetic archive.
 
 The interval arithmetic is synthetic-tested (merge, adjacency, overlap, gap,
 i32 wrap, non-resident holes, all four statuses, `0xffffffff`, every sink type,
@@ -457,14 +726,160 @@ returns 8. `ow-casc` keeps that order in `encoding::write_header_fields`, and
 `EncodingHeader::from_bytes` is the safe wrapper that calls it.
 
 The installed header is 16/16 keys, 4 KiB pages, 16025 + 10519 pages and a
-1,484,507-byte espec block. The parser accepts every key width 1..16; the page
-reader in `ow-casc` is fixed at 16-byte keys and refuses any other width
-explicitly (`Error::UnsupportedKeyWidth`). That limit belongs to the reader,
-not to the parser.
+1,484,507-byte espec block. The parser accepts every key width 1..16; the
+section reader uses the client's `width + 0x10` index stride for any width, and
+the pure `find_*` lookup helpers take the widths from the info struct (they are
+harness-tested at 1/2/4/8/16). The public `EncodingFile` wrapper still refuses
+a header that is not 16/16 (`Error::UnsupportedKeyWidth`) because the install's
+file is 16/16; that limit belongs to the wrapper, not to the client or the
+lookup.
 
-`EncodingSectionsRead` (`0x1424d1c60`) reads the sections in the client's
-order. The root file's content key must land on a page boundary; that is the
-check that a wrong section order fails.
+`EncodingSectionsRead` (`0x1424d1c60`) is the section reader. Its caller is the
+encoding state machine `FUN_1424d16c0` (state 3); it takes the read object in
+`RCX` and a one-byte "started" out-parameter in `RDX`. The parsed header lives
+in the 0x50-byte info struct that `reader+0x88` points at: the client's 40-byte
+header at `+0x00..+0x27` and five section pointers at `+0x28` (espec), `+0x30`
+(ckey index), `+0x38` (ckey bodies), `+0x40` (ekey index) and `+0x48` (ekey
+bodies). The stream descriptor at `reader+0x48` carries the stream's `u32`
+length at `+0x10`.
+
+The client reads the sections in this order, with every offset and size
+computed in a 32-bit signed register and handed to the range reader as a `u32`:
+
+| section | offset | size |
+|---|---|---|
+| espec | `0x16` | header `+0x24` |
+| ckey->ekey page index | `0x16 + espec` | `(ckey_width + 0x10) * ck_count` |
+| ckey->ekey page bodies | previous + previous size | `ck_page_bytes * ck_count` |
+| ekey->espec page index | previous + previous size | `(ekey_width + 0x10) * ek_count` |
+| ekey->espec page bodies | previous + previous size | `ek_page_bytes * ek_count` |
+
+Each allocation passes alignment `0x10`. The index entry is `first key[width]`
+plus a 16-byte page hash; the section size arithmetic is why a header with a
+different key width moves every later section. Because the arithmetic is
+32-bit, a product or offset sum that overflows wraps before the range check.
+The client allocates five separate buffers and reads into them; `ow-casc`
+slices the already-decoded stream instead. The bytes are the same; the
+client's allocation-failure path has no Rust equivalent here.
+
+The five reads go through the generic range reader (`FUN_1424d14c0` builds a
+request, `FUN_142495ee0` reaches `FUN_142494d10`, which copies the stream
+descriptor and queues the request). The function then takes the container's
+lock at `container+0x498`, drains the reader's pending list at `reader+0xb8`
+until the head points to itself (`FUN_142496bd0` per request), releases the
+lock, and returns 0. It sets `reader+0x40` to 4 and the out-parameter to 1.
+The completion callback `FUN_1424d1a60` decrements `reader+0xc8` and merges
+each read's status into `reader+0x168`; at zero it moves the state machine to
+5, or to 6 on error.
+
+The range rule is `offset > stream_len || (offset == stream_len && size != 0)`
+for a rejection; otherwise a request that crosses the end is clamped to
+`stream_len - offset` and flagged short. The read completion
+(`FUN_142495470`) turns the short flag into status 14. The rejected arm marks
+the request with state 3 (after formatting the stream key); the drain
+(`FUN_142496bd0`) notifies the completion, the result lookup finds no result,
+and the reader merges status 3. `EncodingHeaderRead` (`0x1424d1b40`) gives
+status 14 to a header read that is not exactly 22 bytes, and also remaps a
+header-parser reject (the parser's 8) to 14 before the reader sees it. Its only
+path to 8 is a redundant check of the two page-byte fields, which cannot fire
+after an accepted header. A section read clamped short is 14 through the
+completion's short flag.
+
+The client issues all five reads and merges their statuses in completion
+order; `ow-casc` reads them synchronously and reports the first failing
+section in layout order. The open fails either way; a corrupt file with two
+different failures could report a different one of the two statuses.
+
+The client's post-read step `FUN_142498a70` (`0x142498a70`) validates the
+espec block: its last byte must be zero (else status 8), and the number of NUL
+bytes is the number of strings it indexes. `ow-casc` performs the same check
+and count.
+
+The installed decoded stream is 111,058,223 bytes. The five sections end at
+111,058,161; the last 62 bytes are the builder's debug string
+`b:{22=n,1484507=z,512800=n,65638400=n,336608=n,43085824=n,*=z}`, whose five
+numbers are exactly the section sizes, and are never read by the client. The
+sections are espec 22 + 1,484,507, ck index 1,484,529 + 512,800, ck bodies
+1,997,329 + 65,638,400, ek index 67,635,729 + 336,608 and ek bodies
+67,972,337 + 43,085,824. Walking all 16,025 ckey pages gives 1,714,571 entries
+and 1,714,573 ekeys; the two pages that are physically full (7664 and 13330,
+both stopping at 4,082) carry the only two double-ekey entries. Their `u32`
+decoded sizes sum to 193,863,820,123 bytes. Walking all 10,519 ekey pages gives
+1,714,573 entries, only the last page has an `0xFFFFFFFF` terminator, and the
+espec index range is 0..=29,693. Their `u40` stored sizes sum to
+99,356,850,082 bytes; every fifth byte is zero, so the client's 32-bit read of
+the tail is the same value as the full 40-bit value on this install. The espec
+block has 29,694 NUL bytes and every index is used. All 26,544 page hashes
+equal MD5 of their page body. The first ckey page starts at
+`000029571a8ec20b5b56ba7719fbeb6f` and its page hash is
+`eb565d89ce6518e251036b616aa007f4`; the first ekey page starts at
+`000000c38d1651fc6b938f1310dedbd1`. This is measured on the install by
+`crates/ow-casc/tests/encoding_real.rs` (about 3 s in a debug build).
+
+### Page lookup
+
+`EncodingPageIndexSearch` (`0x142498880`) is the page-index binary search. Its
+arguments are the index base, the page count, the key width, the key and the
+key length. An entry is `first key[width]` followed by the page's 16-byte MD5,
+so the stride is `width + 0x10`. The client computes
+`mid = ((hi - lo) >> 1) + lo` in 32-bit unsigned arithmetic, calls
+`memcmp(key, entry, key_len)`, returns `mid` when the comparison is equal,
+raises the low bound to `mid + 1` when it is positive (the key is above the
+entry's first key), lowers the high bound to `mid` when it is negative, and
+loops while `lo < hi`. The miss is `lo - 1` with 32-bit wrap, which is
+`0xFFFFFFFF` when the key is below page 0. The chosen page is therefore the one
+whose first key is the greatest one `<= key`; it is **not** the first page
+whose first key is `>= key`. An exact first key returns its own page, and a key
+between pages `N-1` and `N` returns `N-1`. The caller compares the return with
+`-1`.
+
+`EncodingFindCKey` (`0x142498540`) uses that search with
+`min(key_len, ckey_width)` as the comparison length, then starts the page body
+at `page * ck_page_bytes` (`IMUL`, 32-bit) and walks to
+`start + ck_page_bytes`. A ckey record is `u16` count, a big-endian `u32`
+decoded size, `ckey[ckey_width]`, then `count * ekey_width` bytes of ekeys.
+**Only the low byte of the count is read**: a zero low byte ends the page, and
+a nonzero high byte is ignored. The scan compares the ckey prefix over the same
+`min(key_len, ckey_width)` length. A hit writes the record's address to the
+out slot and returns 0; a miss returns 6 and leaves the out slot zero.
+`EncodingFindEKey` (`0x142498610`) is the ekey equivalent. Its page search uses
+the caller's **full** key length (not the minimum), while its record scan uses
+`min(key_len, ekey_width)`. An ekey record is `ekey[ekey_width]`, a big-endian
+`u32` espec index and a big-endian `u40` stored size; an espec index of
+`0xFFFFFFFF` ends the page. Both scans advance with the client's 32-bit
+arithmetic.
+
+`EncodingResolve` (`0x142498700`) is the caller-level resolve. It returns 1
+when the info struct's `+0x10` ready byte is zero, copies the ckey, gets the
+ckey record's `u32` decoded size for `+0x10`, copies the first ekey to `+0x14`
+(or copies the last ekey and returns 7 when the info struct's `+8` field
+selects the multi-ekey path; that path is not reached on this install), writes
+the ekey width at `+0x30`, looks the ekey up, reads the **low four bytes** of
+the ekey's `u40` into `+0x24` (the fifth byte at `+4` is never read), and
+resolves the espec index to a string pointer through the table at `info+0x58`.
+The first sampled install record proves both sizes: the ckey's `u32` is 524,304
+and equals `Store::open_ekey`'s decoded length, while the ekey's tail is 3,530,
+the smaller stored length. The resolve's ekey is the MD5 of the stored bytes
+(`FUN_14248e250` hashes the read buffer of `+0x24` bytes and compares it with
+the ekey at `+0x14`), which is why the two sizes differ.
+
+**The read-path lookup never checks the page hash.**
+`EncodingPageIndexSearch` uses the 16 hash bytes only as part of the
+`width + 0x10` stride; `EncodingFindCKey`, `EncodingFindEKey` and
+`EncodingResolve` never read them and contain no MD5 call. The measured
+relation (`page hash == MD5(page body)` on all 26,544 pages) is a format fact,
+not a read-path check. No other read-path function was found that verifies it;
+whether a repair or write path does is not claimed.
+
+The lookup's boundary rule is checked on every install page: all 16,025 ckey
+first keys and all 10,519 ekey first keys resolve to their own page; all 16,024
+and 10,518 keys strictly between consecutive first keys resolve to the earlier
+page; and a key above the last first key resolves to the last page. The
+synthetic tests cover the empty index, the exact/between/below/above cases, a
+zero low count byte after a record, a nonzero high count byte, a record after
+the ekey terminator, duplicate keys, compare lengths 0/1/2 and widths
+1/2/4/8/16. The harness units are `fn/EncodingFindCKey` (verified 100%,
+7/7 mutants) and `fn/EncodingFindEKey` (verified 100%, 10/10 mutants).
 
 ## BLTE
 
@@ -542,7 +957,7 @@ synthetic coverage only; no observed outer `4` block exercises LZ4 here.
 
 ## Oracle
 
-Five CASC units run under `dev/verify_harness/`. The oracle is the current
+Seven CASC units run under `dev/verify_harness/`. The oracle is the current
 build's code: the installed `Overwatch.exe` PE with its `.text` decrypted by
 `dev/offline_page_recover.py` into `module_offline.bin` (same PE headers and
 timestamp; `.rdata`, `.data`, `.pdata`, `.rsrc` and `.reloc` are byte-identical
@@ -561,6 +976,10 @@ any one of them is not verified.
 | `DynamicIndexHash` | `0x142512c60` | `ow_casc::index::hash_index` | `fn/DynamicIndexHash` |
 | `DynamicIndexKeyHash` | `0x142513230` | `ow_casc::index::key_hash` | `fn/DynamicIndexKeyHash` |
 | `EncodingHeaderParse` | `0x142498920` | `ow_casc::encoding::write_header_fields` | `fn/EncodingHeaderParse` |
+| `EncodingFindCKey` | `0x142498540` | `ow_casc::encoding::find_ckey_record` | `fn/EncodingFindCKey` |
+| `EncodingFindEKey` | `0x142498610` | `ow_casc::encoding::find_ekey_record` | `fn/EncodingFindEKey` |
+| `EncodingPageIndexSearch` | `0x142498880` | `ow_casc::encoding::page_index_search` | no standalone unit: its fifth argument is on the stack; the two find units compare its results |
+| `EncodingResolve` | `0x142498700` | `ow_casc::encoding::EncodingFile` (sizes + `ekeys_for_ckey`) | no standalone unit: it composes the two finds and the espec table; the find units prove the parts |
 
 `Salsa20Xor`:
 
@@ -653,10 +1072,14 @@ any one of them is not verified.
   `DynamicIndexSegmentParse` is now mirrored by `PageTable::parse`, and the
   synthetic page-table fixtures validate the hash; the function's contract is
   verified from the client's bytes. The page-table read path and the key-state
-  interval/resolve path are implemented. The page-table write path
-  (`DynamicIndexPageInsert`) is read and documented in "Page-table writer"
-  above but not implemented: no read-path caller exists, and the type-3 calls
-  write location and size from uninitialised stack slots.
+  interval/resolve path are implemented. The segment load/parse has no
+  differential unit: it is allocator and I/O state, and the mode-2 path is
+  `fs::read` plus the shared parse. Its acceptance is install-tested on all
+  sixteen files and synthetic-tested on every rejection in the validation
+  order above. The page-table write path (`DynamicIndexPageInsert`) is read
+  and documented in "Page-table writer" above but not implemented: no
+  read-path caller exists, and the type-3 calls write location and size from
+  uninitialised stack slots.
 
 `EncodingHeaderParse`:
 
@@ -825,8 +1248,21 @@ This reproduces the published `types.txt` table and lands on known landmarks
 
 ## Gaps
 
-- The CDN index page formula is derived from the reference and measured
-  footers, not from the client's decompiled CDN handler.
+- **The CDN index page selection is not read.** The handler reads and
+  validates `indices/<hash>.index` and stops after the footer/tail checks; no
+  function in the complete image was found that chooses a page from the
+  `pageCount * keyBytes` last-key array for a lookup key. Searched: every
+  caller of the 16-byte `memcmp` (317 functions, 25 with a loop), every
+  function containing all four footer fields (`0x14`, `0x1c`, `0x20`, `0x24` —
+  the parsers only), every `SHL ..., 4` function with a `0x24` reference, the
+  index handler classes at `0x1424e7cb0`, `0x1424e8db0` and `0x1424d1f40`, and
+  the index builder at `0x1424f04f0`/`0x1424f0920`. The downloaded index is
+  handed to a callback (`0x1424b0850` → `0x1424bbe60`) whose consumer was not
+  found; the search may live in the launcher/agent rather than
+  `Overwatch.exe`. `ow-casc`'s page selection remains reference-derived and is
+  an open read item.
+- The CDN HTTP transport itself is a TACTLib port and has no real endpoint
+  test.
 - All 305 type-`0x09F` map headers now open: 42 from the encoded store and
   263 from bundles. See `formats/maps.md`.
 - The record byte's low seven bits are read as a class, not as a meaning.
@@ -835,6 +1271,7 @@ This reproduces the published `types.txt` table and lands on known landmarks
 
 ```text
 cargo test --release -p ow-casc
+cargo test --release -p ow-casc --test cdn_index_real -- --nocapture
 cargo test --release -p ow-tank
 cargo test --release -p ow-tank --test manifest_154504_real -- --nocapture
 ```

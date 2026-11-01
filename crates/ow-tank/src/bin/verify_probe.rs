@@ -610,6 +610,42 @@ fn crc32_seeded_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> 
     Ok((format!("{:x}", ret as u64), vec![data]))
 }
 
+/// `MapChunkCellBytesFixup` (`0x141ff51a0`): `void (header*, u64 base)`.
+///
+/// The client's argument is one pointer to a `{inner header, mode}` pair. The
+/// block passed by the fixture contains the inner header, the entries, the
+/// record-pointer slots and the records; its relative pointers are declared
+/// relocations, rebased here to `base` exactly as the oracle rebases them to
+/// the arena. The second argument is candidate-only: it is the block's arena
+/// base, so the converted record qwords are identical absolute values on both
+/// sides. The client sees one argument.
+fn cell_bytes_fixup_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let (mut block, relocs) = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if g.is_none() => (b, r),
+        _ => return Err("arg0 must be the cell block".into()),
+    };
+    let base = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg1 must be the block base".into()),
+    };
+    for off in relocs {
+        let bytes: [u8; 8] = block
+            .get(off..off + 8)
+            .ok_or("reloc-out-of-range")?
+            .try_into()
+            .unwrap();
+        let absolute = base.wrapping_add(u64::from_le_bytes(bytes));
+        block[off..off + 8].copy_from_slice(&absolute.to_le_bytes());
+    }
+    let mut mem = ow_tank::collision::CellMemory::new(base, &mut block);
+    ow_tank::collision::fixup_cell_bytes(&mut mem, base).map_err(|e| format!("fixup-{e}"))?;
+    Ok(("-".to_string(), vec![block]))
+}
+
 fn handle_call(
     entry: &str,
     args: Vec<Arg>,
@@ -628,6 +664,8 @@ fn handle_call(
         "payload_guid" => payload_guid_entry(args),
         // crates/ow-tank/src/material.rs
         "crc32_seeded" => crc32_seeded_entry(args),
+        // crates/ow-tank/src/collision.rs
+        "cell_bytes_fixup" => cell_bytes_fixup_entry(args),
         // crates/ow-tank/src/texture.rs
         "texture_request_count" => texture_request_count_entry(args),
         "texture_count_bits_shifted" => texture_count_bits_shifted_entry(args),

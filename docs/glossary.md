@@ -10,7 +10,8 @@ has a precise meaning here, that meaning is given once.
 - **Install** — the operator's own Overwatch installation. It is read in
   place and never written to.
 - **Current image** — the `Overwatch.exe` Ghidra program: base `0x140000000`,
-  every `.text` page, the install's plaintext `.pdata`, 151,260 functions.
+  every `.text` page and the install's plaintext `.pdata`; the function census
+  is in [`ghidra-project.md`](ghidra-project.md).
 - **RVA** — an offset from the image base. In the current image an address is
   `0x140000000 + RVA`.
 - **1 to 1** — the Rust implementation follows the client's own code or value

@@ -189,6 +189,7 @@ class EmuOracle:
         args: Sequence[ArgSpec],
         ret_kind: str = "f32",
         steps: int = MAX_STEPS,
+        start_regs: Optional[Dict[str, object]] = None,
     ) -> CallResult:
         u = self.uc
         # Reset arena, stack and registers each call - determinism by
@@ -265,7 +266,7 @@ class EmuOracle:
         xmm_regs = [x.UC_X86_REG_XMM0, x.UC_X86_REG_XMM1, x.UC_X86_REG_XMM2, x.UC_X86_REG_XMM3]
         for pos, (a, p) in enumerate(zip(args, ptrs)):
             if pos >= 4:
-                raise ValueError("stack args not supported yet (first 4 only)")
+                continue  # stack args are written after the final RSP is set
             if a.kind == "ptr":
                 u.reg_write(int_regs[pos], p)
             elif a.kind == "u64":
@@ -287,6 +288,54 @@ class EmuOracle:
         rsp = STACK_TOP - 8
         u.reg_write(x.UC_X86_REG_RSP, rsp)
         u.mem_write(rsp, struct.pack("<Q", SENTINEL))
+
+        # Interior-start leaves take their pointer in a non-argument register
+        # (e.g. RBX) or need a flag/stack register set. Seed those after the
+        # normal argument placement and the canonical RSP; "argN" resolves to
+        # that argument's arena pointer, and a string is parsed as an integer
+        # literal (hex allowed). A startRegs rsp can select a smaller frame so
+        # the block's epilogue lands on the sentinel.
+        if start_regs:
+            reg_map = {
+                "rax": x.UC_X86_REG_RAX, "rbx": x.UC_X86_REG_RBX,
+                "rcx": x.UC_X86_REG_RCX, "rdx": x.UC_X86_REG_RDX,
+                "rsi": x.UC_X86_REG_RSI, "rdi": x.UC_X86_REG_RDI,
+                "rbp": x.UC_X86_REG_RBP, "rsp": x.UC_X86_REG_RSP,
+                "r8": x.UC_X86_REG_R8, "r9": x.UC_X86_REG_R9,
+                "r10": x.UC_X86_REG_R10, "r11": x.UC_X86_REG_R11,
+                "r12": x.UC_X86_REG_R12, "r13": x.UC_X86_REG_R13,
+                "r14": x.UC_X86_REG_R14, "r15": x.UC_X86_REG_R15,
+            }
+            for name, source in start_regs.items():
+                key = name.lower()
+                if key not in reg_map:
+                    raise ValueError(f"unknown startRegs register {name!r}")
+                if isinstance(source, str) and source.startswith("arg"):
+                    value = ptrs[int(source[3:])]
+                elif isinstance(source, str):
+                    value = int(source, 0)
+                else:
+                    value = int(source)
+                u.reg_write(reg_map[key], value)
+
+        # MS x64 stack arguments. At callee entry RSP points at the return
+        # address; the caller's shadow space is [rsp+8, rsp+0x27] and the
+        # first stack argument is [rsp+0x28]. Only integer-class slots are
+        # used here (pointer/u64); f32/f64 are stored in the low bits.
+        rsp_now = u.reg_read(x.UC_X86_REG_RSP)
+        for pos in range(4, len(args)):
+            a = args[pos]
+            if a.kind == "ptr":
+                value = ptrs[pos]
+            elif a.kind == "u64":
+                value = a.bits
+            elif a.kind == "f32":
+                value = struct.unpack("<I", struct.pack("<f", a.value))[0]
+            elif a.kind == "f64":
+                value = struct.unpack("<Q", struct.pack("<d", a.value))[0]
+            else:
+                raise ValueError(f"unknown stack arg kind {a.kind!r}")
+            u.mem_write(rsp_now + 0x28 + 8 * (pos - 4), struct.pack("<Q", value))
 
         writes: List[Tuple[int, bytes]] = []
         reads_outside: List[Tuple[int, int]] = []
@@ -362,6 +411,11 @@ class EmuOracle:
                 ret_bits = u.reg_read(x.UC_X86_REG_XMM0) & 0xFFFF_FFFF
             elif ret_kind == "f64":
                 ret_bits = u.reg_read(x.UC_X86_REG_XMM0) & 0xFFFF_FFFF_FFFF_FFFF
+            elif ret_kind == "vec4":
+                # The full 128-bit XMM0 value: four little-endian f32 lanes.
+                ret_bits = u.reg_read(x.UC_X86_REG_XMM0) & (
+                    (1 << 128) - 1
+                )
             else:  # integer in RAX
                 ret_bits = u.reg_read(x.UC_X86_REG_RAX)
         except UcError as e:

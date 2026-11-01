@@ -1,0 +1,50 @@
+{
+  "id": "fn/MoverWishInverse",
+  "title": "tier-2 shipped code: the inverse wish transform against MoverWishInverse (0x140cb5350)",
+  "address": {
+    "v2b": "0x7ff7c59d537b"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_wish_inverse",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "vector", "kind": "ptr", "ptr_len": 16 },
+    { "name": "matrix", "kind": "ptr", "ptr_len": 64 }
+  ],
+  "returns": "void",
+  "startRegs": {
+    "rbx": "arg0",
+    "rsp": "0x7FFF0000EF20"
+  },
+  "state": {
+    "base": "0x7FFF0000EF50",
+    "hex": "0000003f0000803e0000003e00000000000080be0000003f00000000000000000000003e000000be0000003f000000000000c03f000010c00000403f0000803f"
+  },
+  "argFactory": "mover_wish_inverse_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4242,
+    "coverageWindow": 400,
+    "allowedImageReads": [
+      "0x7ff7c7e307f0",
+      "0x7ff7c7e307f8",
+      "0x7ff7c7facd50",
+      "0x7ff7c7facd58"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/movement.rs (inverse_transform), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_wish_inverse entry.",
+    "The oracle starts at 0x140cb537b, after FUN_140cb83b0's TEST/JZ. RBX holds the vector, [RSP+0x30] holds c0 and the rest of the matrix follows; the unit seeds RBX from arg0, RSP=0x7FFF0000EF20 and the 16-float matrix in the state block at RSP+0x30.",
+    "The matrix is fixed (the state block is fixed) and generic: c0=(0.5,0.25,0.125,0), c1=(-0.25,0.5,0,0), c2=(0.125,-0.125,0.5,0), c3=(1.5,-2.25,0.75,1); det = 39/256 exactly. The vector varies across the 264 cases.",
+    "The SIMD sequence is transcribed lane for lane: SHUFPS, MULPS, SUBPS, the horizontal det sum (lane1+lane0)+lane2, rcpps, (2-rcp*det)*rcp, the row broadcasts, the sign-mask XOR and the final add. The Unicorn rcpps used by the oracle probes as exact IEEE 1/x.",
+    "The two image reads are the (2,2,2,2) constant at 0x1431107f0 and the 0x80000000 sign mask at 0x14328cd50."
+  ],
+  "acknowledgedGaps": [
+    "The matrix is fixed because per-case state overlays are not supported by the harness; a varying-matrix unit needs a wider fixture or a state extension. The block's initial FUN_140cb83b0 state lookup and its TEST/JZ failure path are not covered (the unit starts after them)."
+  ]
+}

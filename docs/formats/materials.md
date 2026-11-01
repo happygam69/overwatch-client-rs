@@ -21,7 +21,8 @@ model          MDLC: an array of 64-bit material values
 - **Textures: decoded.** BC1, BC2, BC3, BC4_UNORM, BC5_UNORM and BC7 decode to
   RGBA8; BC6H decodes to half floats plus a clamped 8-bit view; BC6H,
   R16G16B16A16_FLOAT and R16_FLOAT keep their exact half words for the upload,
-  while R8G8, R16_UNORM and RGBA8 keep the 8-bit view. R16G16_FLOAT (DXGI 34),
+  and R16_UNORM keeps its exact `u16` words for an `R16Unorm` upload, while
+  R8G8 and RGBA8 keep the 8-bit view. R16G16_FLOAT (DXGI 34),
   the signed BC4/BC5 variants and the BGRA/depth/video formats the client's
   tables can name are reported as unsupported, not mis-decoded. The in-tree
   BC6H and BC7 tests are derived from the published specifications (Microsoft's
@@ -565,7 +566,7 @@ array layout and the SRV format are read (`0x141e296a0`, `0x141f0a000`,
 view dimension, the cube-face direction order and the sampler remain open, so
 the viewer binds a 2D view of layer 0 rather than a cube view.
 
-### 16-bit and HDR upload (2026-10-29)
+### 16-bit and HDR upload (2026-10-30)
 
 The client's resource keeps the DXGI format; it does not expand 16-bit or HDR
 values to bytes on the CPU. Re-read from the current image:
@@ -582,7 +583,20 @@ The resource builder `0x1426545d0` writes `0x14348f500[pm]` into the resource
 descriptor's Format field (the `param_1[8]` store), and the copy path
 `0x141f0a000` copies the stored block records without CPU pixel expansion. The
 identities are **read**; they were checked against the image again on
-2026-10-29.
+2026-10-29/30.
+
+For stored `0x39` the path is fully typed: `0x143356f50[0x39]` is PM `7`,
+`0x14348f500[7]` is DXGI 56, and the typeless table `0x14348f730[7]` (53,
+`R16_TYPELESS`) is not selected for an ordinary colour texture. `0x1426545d0`
+uses the typeless companion only when object `+0x3c` is non-zero, or when the
+format's row in `0x143357d60` has bit `0x20` set and the object's flags have bit
+0 set; `0x143357d60[7]` is `1`, so the second gate is false and the resource is
+typed 56. `0x142653b90` uses `0x14348f500[pm]` for the default colour SRV as
+well, with special cases only for PM `0x83..0x88`, so the view is also DXGI 56.
+`0x142e372b0` maps PM 7 to family 0 at 16 bpp, and `0x142e36ec0` sizes each
+level as `(width * 16 >> 3) * height = width * height * 2` at the mip's
+bias-shifted dimensions. The copy path is a byte copy: no CPU R16 conversion or format switch
+was found in the read upload path.
 
 Decoding is the viewer's, and so is the upload resource:
 
@@ -602,11 +616,24 @@ Decoding is the viewer's, and so is the upload resource:
   without an optional feature, so the existing
   `TextureSampleType::Float { filterable: true }` bind layout accepts it (a
   unit test asks `TextureFormat::sample_type`).
-- R16_UNORM (56) is **still clamped**: the decoder rounds it to the 8-bit view
-  and does not keep its raw `u16`, so no `R16Unorm` upload path exists. UINT
-  formats likewise use the UNORM path (see "Open"). BC1–BC5 and BC7 are
-  decoded on the CPU to RGBA8 for the viewer; the client keeps them compressed
-  and the GPU decodes. Those, and the sampler, remain open below.
+- R16_UNORM (56) now keeps the stored words exactly
+  (`Texture::r16_unorm`, `SceneTextureLevel::r16_unorm`) as well as the rounded
+  8-bit view. `ow-client/src/surface.rs` uploads them unchanged as
+  `wgpu::TextureFormat::R16Unorm`, two bytes per pixel with a 256-byte row
+  pitch, when the device was created with
+  `wgpu::Features::TEXTURE_FORMAT_16BIT_NORM`. The format is the client's own
+  DXGI 56, not a viewer substitution. Both `ow-client` device-creation sites
+  request the feature only when `adapter.features()` contains it; when it is
+  absent, `R16Unorm` cannot be created, so the uploader keeps the clamped
+  linear `Rgba8Unorm` view. The single channel is not splatted into RGB: the
+  client's D3D view returns `(r, 0, 0, 1)`, and WebGPU's `R16Unorm` sampling
+  has the same channel defaults. `R16Unorm`'s sample type is filterable float,
+  so the existing bind layout accepts it; a unit test pins both that and
+  `required_features()`. The staged bytes are tested, but no test performs a
+  live GPU upload or readback. UINT formats still use the UNORM path (see
+  "Open"). BC1–BC5 and BC7 are decoded on the CPU to RGBA8 for the viewer; the
+  client keeps them compressed and the GPU decodes. Those, and the sampler,
+  remain open below.
 
 ### The six pinned assets
 
@@ -766,12 +793,13 @@ is albedo for a given material class is not read.
 - The model's `MSTU` field hashes are the install-local route to texture
   references inside the model, skipping the material wrapper.
 - The texture sampler path is not read, and the viewer's upload is not the
-  client's D3D12 call: it writes RGBA8 through wgpu, and `Rgba16Float` for the
-  exact-half formats (the substitution documented above). The uploaded
-  subresources/levels now follow the client's copy order (surface-major, mip
-  ascending) and the resource shape (`mip_count` levels, `surfaces` layers),
-  but the client samples a DXGI-format resource through its own sampler, so
-  rendering is not 1:1.
+  client's D3D12 call: it writes RGBA8 through wgpu, `Rgba16Float` for the
+  exact-half formats (the substitution documented above), and `R16Unorm` for
+  exact R16_UNORM when the device has the optional 16-bit-norm feature. The
+  uploaded subresources/levels now follow the client's copy order
+  (surface-major, mip ascending) and the resource shape (`mip_count` levels,
+  `surfaces` layers), but the client samples a DXGI-format resource through its
+  own sampler, so rendering is not 1:1.
 - The SRV view dimension (`TEXTURECUBE` vs `TEXTURE2D_ARRAY`) and the cube-face
   direction order are not read. The resource is a 2D array of 6·N layers
   (`0x1426545d0`); the viewer binds a 2D view of layer 0 with the full mip
@@ -798,11 +826,12 @@ is albedo for a given material class is not read.
   likewise, including their 6x6/8x8 block sizes. They are reported unsupported,
   and `cooked_size`/`level_byte_size` have no exact arithmetic for them: they
   fall back to a 4x4 block or a linear size.
-- R16_UNORM (DXGI 56) is still clamped: the decoder rounds the raw 16-bit
-  value to the 8-bit view and does not keep it, so there is no `R16Unorm`
-  upload path. `R16Unorm` is a filterable float sample type, so adding it would
-  not need a second bind layout, but the exact-value decode is not implemented
-  and is open.
+- R16_UNORM (DXGI 56) has an exact value and upload path, but only on devices
+  that expose `TEXTURE_FORMAT_16BIT_NORM`; elsewhere the clamped `Rgba8Unorm`
+  view remains, and the choice is made at device creation. The unit tests cover
+  the format gate, the raw staged bytes and the sample type, not a live GPU
+  upload/readback, so the rendering result is not yet proven against the
+  client's DXGI 56 resource.
 - BC1–BC5 and BC7 are decoded on the CPU to RGBA8 for the viewer, with the BC
   palette and block arithmetic coming from the published formats (the client
   leaves the blocks to the GPU). That CPU decode, the `Rgba16Float`

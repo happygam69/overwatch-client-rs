@@ -23,6 +23,7 @@ pub mod container;
 pub mod encoding;
 pub mod index;
 pub mod install;
+pub mod pagecache;
 
 pub use container::Store;
 pub use install::Install;

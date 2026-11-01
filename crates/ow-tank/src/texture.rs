@@ -443,9 +443,9 @@ pub enum Format {
     Rgba16Float,
     /// R16_FLOAT (DXGI 54): one half float, 2 B/px.
     R16Float,
-    /// R16_UNORM (DXGI 56): one 16-bit unorm, 2 B/px. The decode keeps only a
-    /// rounded 8-bit view ([`decode_r16_unorm`]); the raw `u16` is not
-    /// preserved and `rgba16` stays empty (open).
+    /// R16_UNORM (DXGI 56): one 16-bit unorm, 2 B/px. The decode keeps the
+    /// stored `u16` exactly in [`TextureLevel::r16_unorm`] and still builds the
+    /// rounded 8-bit view ([`decode_r16_unorm`]) for the existing callers.
     R16Unorm,
     /// R8G8 UNORM or UINT (DXGI 49/50): two byte channels, 2 B/px. The bytes
     /// are identical; UNORM is the byte/255 view and UINT is the same integer.
@@ -876,9 +876,16 @@ pub struct TextureLevel {
     /// R16G16B16A16_FLOAT (10) and R16_FLOAT (54). An R16_FLOAT asset stores
     /// one channel, so its entries are `(r, 0, 0, 1.0)` — the default the D3D
     /// view applies to the missing channels, with `r` the stored half word
-    /// itself. R16_UNORM (56) is **not** here: it is still the clamped 8-bit
-    /// view only (open), and empty for every 8-bit format.
+    /// itself. Empty for every 8-bit format and for R16_UNORM, whose exact
+    /// value is in [`Self::r16_unorm`] instead.
     pub rgba16: Vec<u16>,
+    /// The exact R16_UNORM decode (DXGI 56): one stored `u16` per pixel, in
+    /// row order, with no rounding or byte conversion. The client's resource
+    /// is DXGI 56 and its copy path keeps the stored words (`0x141f0a000`),
+    /// so this is the value an `R16Unorm` upload carries. Empty for every
+    /// other format; R16_UNORM's [`Self::rgba16`] stays empty too, because the
+    /// stored word is a unorm integer, not a half float.
+    pub r16_unorm: Vec<u16>,
     /// Which asset supplied this level.
     pub source: BlockSource,
     /// The level's absolute offset inside that asset.
@@ -905,10 +912,14 @@ pub struct Texture {
     /// Mip 0 of surface 0 as half floats, four per pixel (`r, g, b, a`), for
     /// the formats that produce one: BC6H, R16G16B16A16_FLOAT and R16_FLOAT.
     /// The values are the stored half words (R16_FLOAT is padded with
-    /// `(0, 0, 1.0)`), so an upload can carry them unchanged. R16_UNORM and
-    /// every 8-bit format leave this empty; R16_UNORM is still a clamped 8-bit
-    /// view only (open).
+    /// `(0, 0, 1.0)`), so an upload can carry them unchanged. Empty for every
+    /// 8-bit format and for R16_UNORM, whose exact words are in
+    /// [`Self::r16_unorm`].
     pub rgba16: Vec<u16>,
+    /// Mip 0 of surface 0 as exact R16_UNORM words (DXGI 56), one `u16` per
+    /// pixel. Empty for every other format. This is the stored unorm, not a
+    /// half float: an upload stages these words unchanged as `R16Unorm`.
+    pub r16_unorm: Vec<u16>,
     /// Where mip 0 of surface 0 came from. A texture can carry its blocks
     /// inside its own bytes *or* in one of its payload assets, and the two are
     /// not interchangeable (measured: hero texture `0x0c00000000038c3d` embeds
@@ -1288,7 +1299,7 @@ fn build_texture(
         let size = level_byte_size(format, w, h);
         let data = &runs[run_index];
         let blocks = &data.bytes[at..at + size];
-        let (rgba, rgba16) = decode_level(format, w as usize, h as usize, blocks)?;
+        let (rgba, rgba16, r16_unorm) = decode_level(format, w as usize, h as usize, blocks)?;
         levels.push(TextureLevel {
             mip: mip as u8,
             surface: surface as u16,
@@ -1297,6 +1308,7 @@ fn build_texture(
             blocks: blocks.to_vec(),
             rgba,
             rgba16,
+            r16_unorm,
             source: data.run.source,
             block_offset: at,
         });
@@ -1313,6 +1325,7 @@ fn build_texture(
         format_byte: header.format,
         rgba: level0.rgba.clone(),
         rgba16: level0.rgba16.clone(),
+        r16_unorm: level0.r16_unorm.clone(),
         source: level0.source,
         block_offset: level0.block_offset,
         blocks: level0.blocks.clone(),
@@ -1439,7 +1452,7 @@ pub fn decode(asset: &[u8], blocks_in: &[u8]) -> Result<Texture> {
     let height = header.height as u32;
     let size = level_byte_size(format, width, height);
     let blocks = blocks_in.get(..size).ok_or(Error::Truncated("level 0"))?;
-    let (rgba, rgba16) = decode_level(format, width as usize, height as usize, blocks)?;
+    let (rgba, rgba16, r16_unorm) = decode_level(format, width as usize, height as usize, blocks)?;
     let level = TextureLevel {
         mip: 0,
         surface: 0,
@@ -1448,6 +1461,7 @@ pub fn decode(asset: &[u8], blocks_in: &[u8]) -> Result<Texture> {
         blocks: blocks.to_vec(),
         rgba: rgba.clone(),
         rgba16: rgba16.clone(),
+        r16_unorm: r16_unorm.clone(),
         source: BlockSource::default(),
         block_offset: 0,
     };
@@ -1461,6 +1475,7 @@ pub fn decode(asset: &[u8], blocks_in: &[u8]) -> Result<Texture> {
         format_byte: header.format,
         rgba,
         rgba16,
+        r16_unorm,
         source: BlockSource::default(),
         block_offset: 0,
         blocks: blocks.to_vec(),
@@ -1475,22 +1490,32 @@ fn decode_level(
     width: usize,
     height: usize,
     blocks: &[u8],
-) -> Result<(Vec<u8>, Vec<u16>)> {
+) -> Result<(Vec<u8>, Vec<u16>, Vec<u16>)> {
     Ok(match format {
-        Format::Bc1 => (decode_bc1(blocks, width, height)?, Vec::new()),
-        Format::Bc2 => (decode_bc2(blocks, width, height)?, Vec::new()),
-        Format::Bc3 => (decode_bc3(blocks, width, height)?, Vec::new()),
-        Format::Bc4 => (decode_bc4(blocks, width, height)?, Vec::new()),
-        Format::Bc5 => (decode_bc5(blocks, width, height)?, Vec::new()),
-        Format::Bc7 => (decode_bc7(blocks, width, height)?, Vec::new()),
-        Format::Bc6h { signed } => decode_bc6h(blocks, width, height, signed)?,
-        Format::Rgba8 => (decode_rgba8(blocks, width, height)?, Vec::new()),
-        Format::Rgba16Float => decode_rgba16f(blocks, width, height)?,
-        Format::R16Float => decode_r16_float(blocks, width, height)?,
-        // R16_UNORM's exact 16-bit value is not preserved: it still decodes to
-        // the rounded 8-bit view only, so `rgba16` stays empty. Open.
-        Format::R16Unorm => (decode_r16_unorm(blocks, width, height)?, Vec::new()),
-        Format::Rg8 => (decode_rg8(blocks, width, height)?, Vec::new()),
+        Format::Bc1 => (decode_bc1(blocks, width, height)?, Vec::new(), Vec::new()),
+        Format::Bc2 => (decode_bc2(blocks, width, height)?, Vec::new(), Vec::new()),
+        Format::Bc3 => (decode_bc3(blocks, width, height)?, Vec::new(), Vec::new()),
+        Format::Bc4 => (decode_bc4(blocks, width, height)?, Vec::new(), Vec::new()),
+        Format::Bc5 => (decode_bc5(blocks, width, height)?, Vec::new(), Vec::new()),
+        Format::Bc7 => (decode_bc7(blocks, width, height)?, Vec::new(), Vec::new()),
+        Format::Bc6h { signed } => {
+            let (rgba, rgba16) = decode_bc6h(blocks, width, height, signed)?;
+            (rgba, rgba16, Vec::new())
+        }
+        Format::Rgba8 => (decode_rgba8(blocks, width, height)?, Vec::new(), Vec::new()),
+        Format::Rgba16Float => {
+            let (rgba, rgba16) = decode_rgba16f(blocks, width, height)?;
+            (rgba, rgba16, Vec::new())
+        }
+        Format::R16Float => {
+            let (rgba, rgba16) = decode_r16_float(blocks, width, height)?;
+            (rgba, rgba16, Vec::new())
+        }
+        Format::R16Unorm => {
+            let (rgba, r16_unorm) = decode_r16_unorm(blocks, width, height)?;
+            (rgba, Vec::new(), r16_unorm)
+        }
+        Format::Rg8 => (decode_rg8(blocks, width, height)?, Vec::new(), Vec::new()),
         // `check_decodable` rejects these before a level reaches the decoder.
         Format::Bc4Snorm => return Err(Error::UnsupportedFormat(81)),
         Format::Bc5Snorm => return Err(Error::UnsupportedFormat(84)),
@@ -1611,10 +1636,14 @@ fn decode_r16_float(blocks: &[u8], w: usize, h: usize) -> Result<(Vec<u8>, Vec<u
     Ok((out, out16))
 }
 
-fn decode_r16_unorm(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
-    // The 16-bit value is rounded to the nearest 8-bit level for the viewer.
-    // That is a display conversion, not the stored value: `rgba16` stays empty
-    // for R16_UNORM because the exact unorm is not preserved here (open).
+/// R16_UNORM: one stored 16-bit unorm per pixel.
+///
+/// The exact words are returned separately from the rounded 8-bit view. The
+/// stored value is not a half float, so it goes in `r16_unorm`, not `rgba16`;
+/// the client's DXGI 56 resource and `0x141f0a000` keep these words unchanged.
+fn decode_r16_unorm(blocks: &[u8], w: usize, h: usize) -> Result<(Vec<u8>, Vec<u16>)> {
+    // The scalar view rounds to the nearest 8-bit level for the viewer. That is
+    // a display conversion; the exact words are preserved alongside it.
     check_dims(w, h)?;
     let need = pixel_bytes(w, h, 2)?;
     if blocks.len() < need {
@@ -1623,12 +1652,14 @@ fn decode_r16_unorm(blocks: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     let out_len = pixel_bytes(w, h, 4)?;
     let count = w.checked_mul(h).ok_or(Error::Truncated("dimensions"))?;
     let mut out = vec![0u8; out_len];
+    let mut raw16 = Vec::with_capacity(count);
     for i in 0..count {
-        let raw = u16_at(blocks, i * 2).unwrap_or(0) as u32;
-        out[i * 4] = ((raw * 255 + 32767) / 65535) as u8;
+        let raw = u16_at(blocks, i * 2).unwrap_or(0);
+        raw16.push(raw);
+        out[i * 4] = (((raw as u32) * 255 + 32767) / 65535) as u8;
         out[i * 4 + 3] = 255;
     }
-    Ok(out)
+    Ok((out, raw16))
 }
 
 /// A 565 colour as 8 bits per channel.
@@ -4482,13 +4513,18 @@ mod tests {
             "R16F is padded with the D3D view's (0, 0, 1.0) defaults"
         );
 
-        // R16_UNORM: stored 57 resolves to DXGI 56; half of full scale -> 128.
-        // Its exact 16-bit value is *not* preserved: still the 8-bit view only.
+        // R16_UNORM: stored 57 resolves to DXGI 56; half of full scale -> 128,
+        // and the stored word itself is carried unchanged.
         let mut d = texture_prefix(57, 1, 1, 2);
         d.extend_from_slice(&32768u16.to_le_bytes());
         let t = parse(&d).expect("parses");
         assert_eq!(t.pixel(0, 0), [128, 0, 0, 255]);
-        assert!(t.rgba16.is_empty(), "R16_UNORM is still clamped (open)");
+        assert_eq!(t.r16_unorm, vec![32768]);
+        assert_eq!(t.levels[0].r16_unorm, vec![32768]);
+        assert!(
+            t.rgba16.is_empty(),
+            "R16_UNORM is a unorm integer, not a half float"
+        );
 
         // R8G8_UINT: stored 51 resolves to DXGI 50 (the old code called this
         // R16_UNORM; the client's table says two 8-bit channels).
@@ -4533,6 +4569,24 @@ mod tests {
         let t = parse(&d).expect("parses");
         assert_eq!(t.rgba16, vec![0x3400, 0, 0, 0x3C00, 0xC000, 0, 0, 0x3C00]);
         assert_eq!(t.levels[0].rgba16, t.rgba16);
+    }
+
+    /// R16_UNORM's raw words are the client's stored bytes: every value must
+    /// survive without a half-float round trip or an 8-bit clamp.
+    #[test]
+    fn r16_unorm_keeps_every_stored_word_exactly() {
+        let stored = [0x0000u16, 0x0001, 0x1234, 0x8000, 0xFFFE, 0xFFFF];
+        let mut d = texture_prefix(57, 6, 1, 12);
+        for word in stored {
+            d.extend_from_slice(&word.to_le_bytes());
+        }
+        let t = parse(&d).expect("parses");
+        assert_eq!(t.format, Format::R16Unorm);
+        assert_eq!(t.r16_unorm, stored, "mip 0 keeps the stored words");
+        assert_eq!(t.levels[0].r16_unorm, stored, "the level keeps them too");
+        assert!(t.rgba16.is_empty(), "a unorm integer is not a half float");
+        assert_eq!(t.pixel(0, 0), [0, 0, 0, 255]);
+        assert_eq!(t.pixel(5, 0), [255, 0, 0, 255]);
     }
 
     #[test]

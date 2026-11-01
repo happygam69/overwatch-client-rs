@@ -22,6 +22,7 @@ use std::sync::Arc;
 use glam::{Mat4, Vec3};
 use ow_scene as scene;
 use ow_scene::Vertex;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use wgpu::util::DeviceExt;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -190,10 +191,20 @@ impl Renderer {
         }))
         .expect("a graphics adapter");
 
+        // R16_UNORM uploads need this optional feature. It is requested only
+        // when the adapter advertises it; otherwise `surface::upload_format`
+        // keeps the clamped 8-bit view instead of failing device creation.
+        let mut features = wgpu::Features::empty();
+        if adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
+        {
+            features |= wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("ow-client"),
-                required_features: wgpu::Features::empty(),
+                required_features: features,
                 // A whole map's geometry does not fit in the default 256 MB
                 // buffer cap; the adapter's own limits do.
                 required_limits: adapter.limits(),
@@ -848,23 +859,125 @@ fn make_depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgp
 struct App {
     scene: scene::Scene,
     renderer: Option<Renderer>,
+    /// The read D3D11 path, created by `--renderer d3d11`. D1 only clears and
+    /// presents; the scene is loaded but not drawn on this path yet.
+    d3d11: Option<ow_render::WindowSurface>,
+    use_d3d11: bool,
+    /// `--d3d11-frames N`: present N times and exit. A diagnostic for a
+    /// headless run; the client itself has no such frame cap.
+    d3d11_frames: Option<u32>,
+    d3d11_presented: u32,
+    window: Option<Arc<Window>>,
     last_frame: std::time::Instant,
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.renderer.is_some() {
+        if self.renderer.is_some() || self.d3d11.is_some() {
             return;
         }
         let attributes = Window::default_attributes()
             .with_title("Overwatch map, read from the install")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
         let window = Arc::new(event_loop.create_window(attributes).expect("a window"));
-        self.renderer = Some(Renderer::new(window, &self.scene));
+
+        if self.use_d3d11 {
+            let size = window.inner_size();
+            let handle = window.window_handle().expect("a window handle");
+            let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+                eprintln!("error: the D3D11 renderer needs a Win32 window handle");
+                event_loop.exit();
+                return;
+            };
+            let request = ow_render::SwapChainRequest::client_default(
+                size.width.max(1),
+                size.height.max(1),
+                1,
+            );
+            match ow_render::WindowSurface::new(
+                win32.hwnd.get(),
+                ow_render::DeviceRequest::default(),
+                request,
+            ) {
+                Ok(surface) => {
+                    println!(
+                        "renderer: d3d11 (stages {}, frame order {})",
+                        ow_render::STAGES,
+                        ow_render::frame::STAGE
+                    );
+                    println!("{}", surface.describe());
+                    if let Err(error) = surface.log_views() {
+                        eprintln!("error: D2 view description failed: {error}");
+                        event_loop.exit();
+                        return;
+                    }
+                    println!(
+                        "D1-D3 draw no scene yet: the D3 step list runs and presents; no pass, clear value or draw call is read"
+                    );
+                    self.d3d11 = Some(surface);
+                }
+                Err(error) => {
+                    eprintln!("error: the D3D11 device/swap chain could not be created: {error}");
+                    if let Some(hr) = error.hresult() {
+                        eprintln!("HRESULT: 0x{hr:08x}");
+                    }
+                    event_loop.exit();
+                    return;
+                }
+            }
+            self.window = Some(window);
+            self.last_frame = std::time::Instant::now();
+            return;
+        }
+
+        self.renderer = Some(Renderer::new(window.clone(), &self.scene));
+        self.window = Some(window);
         self.last_frame = std::time::Instant::now();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // The D3D11 D1 path has no scene draw and no camera; it only keeps the
+        // back buffer cleared and presented, and resizes the swap chain.
+        if let Some(surface) = self.d3d11.as_mut() {
+            match event {
+                WindowEvent::CloseRequested => event_loop.exit(),
+                WindowEvent::Resized(size) => {
+                    if let Err(error) = surface.resize(size.width, size.height) {
+                        eprintln!("error: swap-chain resize failed: {error}");
+                        event_loop.exit();
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } => {
+                    if event.state == ElementState::Pressed
+                        && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                    {
+                        event_loop.exit();
+                    }
+                }
+                WindowEvent::RedrawRequested => {
+                    if let Err(error) =
+                        ow_render::frame::run_frame(surface, self.d3d11_presented, true)
+                    {
+                        eprintln!("error: D3D11 frame failed: {error}");
+                        event_loop.exit();
+                        return;
+                    }
+                    self.d3d11_presented += 1;
+                    if let Some(limit) = self.d3d11_frames {
+                        if self.d3d11_presented >= limit {
+                            event_loop.exit();
+                            return;
+                        }
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -936,10 +1049,19 @@ fn shot(path: &str, scene: &scene::Scene, width: u32, height: u32) -> Result<(),
         force_fallback_adapter: false,
     }))
     .ok_or("no graphics adapter")?;
+    // Same optional feature gate as the windowed renderer: exact R16_UNORM
+    // uploads when the adapter has the feature, the 8-bit fallback otherwise.
+    let mut features = wgpu::Features::empty();
+    if adapter
+        .features()
+        .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
+    {
+        features |= wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
+    }
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: Some("ow-client shot"),
-            required_features: wgpu::Features::empty(),
+            required_features: features,
             required_limits: adapter.limits(),
             memory_hints: Default::default(),
         },
@@ -1250,6 +1372,26 @@ fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--renderer d3d11` selects the client's production backend. The default
+    // stays the wgpu viewer, which is still viewer-only (`FIT-PRE-02`).
+    let use_d3d11 = match args
+        .iter()
+        .position(|a| a == "--renderer")
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
+    {
+        Some("d3d11") => true,
+        Some(other) => {
+            eprintln!("error: unknown --renderer {other} (expected d3d11; the default is wgpu)");
+            std::process::exit(2);
+        }
+        None => false,
+    };
+    let d3d11_frames = args
+        .iter()
+        .position(|a| a == "--d3d11-frames")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse::<u32>().ok());
     let scene = match scene::build(&args) {
         Ok(scene) => scene,
         Err(e) => {
@@ -1335,6 +1477,11 @@ fn main() {
     let mut app = App {
         scene,
         renderer: None,
+        d3d11: None,
+        use_d3d11,
+        d3d11_frames,
+        d3d11_presented: 0,
+        window: None,
         last_frame: std::time::Instant::now(),
     };
     event_loop.run_app(&mut app).expect("the app runs");

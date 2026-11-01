@@ -22,6 +22,7 @@ pub mod classes;
 pub mod classreg;
 pub mod clip;
 pub mod cloth;
+pub mod collision;
 pub mod effect;
 pub mod entity;
 pub mod fieldnames;

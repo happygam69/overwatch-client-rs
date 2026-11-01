@@ -1,0 +1,62 @@
+{
+  "id": "fn/MoverWishSpring",
+  "title": "tier-2 shipped code: the wish copy and spring against MoverWishSpring (0x140cc0dc0)",
+  "address": {
+    "v2b": "0x7ff7c59e0dc0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_wish_spring",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "body", "kind": "ptr", "ptr_len": 7168 },
+    { "name": "input", "kind": "ptr", "ptr_len": 160 },
+    { "name": "dt", "kind": "f32" }
+  ],
+  "returns": "void",
+  "argFactory": "mover_wish_spring_fixture",
+  "state": {
+    "base": "0x0000000100000000",
+    "hex": "000000000000000000000000000000000000000000000000000000000000000000000000000000008f73c8d50779fc3a"
+  },
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 85,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "coverageWindow": 666,
+    "allowedImageReads": [
+      "0x7ff7c8ea80e8",
+      "0x7ff7c7c9aae4",
+      "0x7ff7c7c9aaf0",
+      "0x7ff7c7c9aaf8",
+      "0x7ff7c7ca17a0",
+      "0x7ff7c7ca17a8",
+      "0x7ff7c7ca4a00",
+      "0x7ff7c7ca4a08",
+      "0x7ff7c7ca5138",
+      "0x7ff7c7e3081c",
+      "0x7ff7c7ca8c18",
+      "0x7ff7c7e3082c",
+      "0x7ff7c7ca1780",
+      "0x7ff7c7e30780",
+      "0x7ff7c7ca0ff8",
+      "0x7ff7c7e30760",
+      "0x7ff7c7e30768",
+      "0x7ff7c7e30770"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/movement.rs (wish_spring), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_wish_spring entry.",
+    "Oracle is MoverWishSpring at exe 0x140cc0dc0 (v2b 0x7ff7c59e0dc0), extent 0x140cc0dc0..0x140cc1059 (666 bytes).",
+    "Read expression: copy input+0x60..0x6c to body+0x1140 when input[0x98] != 0 and (body[0x10d0] & 0x80000c) == 0; compute the three difference/scale terms; subtract the verified scalar ramp (0x140ca75f0); run the +0x10fc/+0x1100 spring with the +0x5c0/+0x5c4 filter and +0x688/+0x68c clamps; FUN_140ca02d0 on body+0x10d0 with the +0x688 pair; quantise +0x110c to 1/1024.",
+    "The unit pins the state-id sentinel 0xffffffff, so FUN_140ca5d00/FUN_140ca7700 leave both local vectors unchanged and the probe supplies the identity transform. Every eighth fixture case mismatches the first state id or the second; body+0x1ad8 = 0 makes FUN_142cbcec0 return the image's zero vector at 0x142f84a00.",
+    "body+8 is the encoded service pointer T = 0x0000000100000000 (encode gives 0xCA3E3A1D3D45D5CA). The state block at T holds the descriptor at T+0x28; it is read by FUN_140ca5d00 before the sentinel check and does not affect the compared result.",
+    "Result: 264 cases, 90% branch coverage (the missed edge is the |next| <= 1/512 + dt <= eps quantiser edge), 12/12 mutants killed."
+  ],
+  "acknowledgedGaps": [
+    "The state-record transform inside FUN_140ca5d00/FUN_140ca7700 is identity for the pinned sentinel; the real record transforms are separate open units. The |next| <= 1/512 + dt <= eps branch (0x140cc0f83) is not covered by the fixture; all other reachable branches are."
+  ]
+}

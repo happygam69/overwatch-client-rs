@@ -1,0 +1,58 @@
+{
+  "id": "fn/CollisionSweepBounds",
+  "title": "tier-2 shipped code: the collision sweep's bounds stage against 0x142cd5540",
+  "address": {
+    "v2b": "0x7ff7c79f5540"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_sweep_bounds",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 656
+    },
+    {
+      "name": "expansion",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "start",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "end",
+      "kind": "ptr",
+      "ptr_len": 32
+    }
+  ],
+  "returns": "void",
+  "argFactory": "collision_sweep_bounds_fixture",
+  "options": {
+    "iterations": 264,
+    "coverageThreshold": 95,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 5540,
+    "coverageWindow": 416,
+    "allowedImageReads": [
+      "0x7ff7c7dc4b40-0x7ff7c7dc4b4f",
+      "0x7ff7c7dc4bf0-0x7ff7c7dc4bff",
+      "0x7ff7c830cfc0-0x7ff7c830cfcf"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (sweep_bounds), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_sweep_bounds entry.",
+    "The oracle runs the real 0x142cd5540 and the harness compares all three 0x10-byte output quads byte for byte, plus the query block pointee.",
+    "The block and its local support-point array share one pointee so the block's +0x30 pointer is the arena address the oracle dereferences.",
+    "The image's .pdata entry for 0x142cd5540 is truncated at 0x42 bytes, so the unit declares the exact extent (0x1a0) as coverageWindow."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the sweep's start/end/expansion stage only. The query driver 0x142cbd510 (the SAT rejection and the narrowphase dispatch), the shape world transform 0x142cb8b80 and the five per-type narrowphases remain open."
+  ]
+}

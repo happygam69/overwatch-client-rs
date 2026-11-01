@@ -1,0 +1,48 @@
+{
+  "id": "fn/EncodingFindCKey",
+  "title": "tier-2 shipped code: encoding ckey page lookup against the client's FUN_142498540",
+  "address": {
+    "v2b": "0x7ff7c71b8540"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "encoding_find_ckey",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    { "name": "info", "kind": "ptr", "ptr_len": 1024 },
+    { "name": "key", "kind": "ptr", "ptr_len": 16 },
+    { "name": "key_len", "kind": "u64" },
+    { "name": "out", "kind": "ptr", "ptr_len": 8 }
+  ],
+  "returns": "void",
+  "argFactory": "encoding_find_ckey_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 20,
+    "mutationKillRate": 1.0,
+    "seed": 4247
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/encoding.rs::find_ckey_record, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the encoding_find_ckey entry. The ledger binds the verdict to encoding.rs + the probe source + the git revision.",
+    "Oracle is FUN_142498540 at exe 0x142498540. Signature: (info*, key*, u8 key_len, u64* out). It zeroes *out, calls the page-index search FUN_142498880 with the ckey width and min(key_len, ckey_width), then scans the selected page from `page * page_bytes` for a record whose ckey matches the same prefix. A zero low count byte ends the page; only the low byte is read. The return is AL=0 on a hit and AL=6 on a miss; callers use AL only.",
+    "The fixture embeds the info struct, the page index and the page bodies in one arena buffer. The info's section pointers are absolute arena addresses as in the client; the unused +0x68 slot holds the info buffer's own arena address so the probe can translate them into offsets in its copy. The out slot is compared, so the unit proves the exact record address, not merely hit/miss.",
+    "Return channel: the unit declares `void` because the client's RAX on a miss can still hold a transient body pointer (the loop's last LEA) while callers test only AL. The out slot is zeroed first and written only on a hit, so the memory channel is exactly the caller-visible hit/miss and record address; the AL value is 0 iff out is nonzero. This is an acknowledged gap on RAX's unused upper bits, not on the lookup result.",
+    "The fixture pins an empty index, one/three pages, exact first keys, keys between pages, below and above, two-ekey records, a record after a low-byte-zero terminator (unreachable), a nonzero high count byte (ignored), duplicate keys (the first record wins), compare lengths 0/1/2, and widths 1/2/4/8/16. Later cases sweep page counts 0..3, widths 1/2/4/8/16, key lengths 0..=width and query bytes that hit and miss.",
+    "Coverage: the oracle window is the 205-byte FUN_142498540. The corpus reaches both edges of its search-result test, its page-bound test, its low-count-byte test, its memcmp test and its next-record test. FUN_142498880 is a callee outside that window: its result is compared on every case, but its own branch sites are measured by no unit because the ABI passes the fifth argument on the stack and the oracle supports four register arguments only.",
+    "Mutation: the mutated Rust body is find_ckey_record, which contains the search and the scan. Every mutant must be killed by the out address or the zero-on-miss channel.",
+    "Not tested: a short page body (the client reads past it; this reader stops), a null info/key pointer (not representable), and the page-hash bytes (the lookup never reads them)."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "RAX's upper bits on a miss",
+      "why": "FUN_142498540 writes only AL; on the miss path RAX can still hold a transient page-body pointer from the loop's last LEA. Every caller tests AL. The out slot is zeroed at entry and written only on a hit, so the unit compares the hit/miss and the exact record address through the memory channel and declares the void return."
+    },
+    {
+      "what": "The branch sites inside the callee FUN_142498880",
+      "why": "The page search is called by FUN_142498540 and is inside this unit's behaviour, but its own 146-byte body is outside the coverage window. A standalone unit for 0x142498880 cannot exist: its fifth argument (the key length) is passed on the stack, and the oracle's call path rejects stack arguments. The unit's results still compare every search outcome to the client's."
+    }
+  ]
+}

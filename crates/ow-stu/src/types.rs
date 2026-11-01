@@ -1423,7 +1423,7 @@ mod tests {
 
     fn synthetic_v1() -> Vec<u8> {
         let mut blob = vec![0u8; 400];
-        put(&mut blob, 0, b"STUD");
+        put(&mut blob, 0, &0x5354_5544u32.to_le_bytes());
         put(&mut blob, 4, &3u32.to_le_bytes());
         // records
         put(&mut blob, 8, &40i32.to_le_bytes());

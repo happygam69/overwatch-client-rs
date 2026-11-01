@@ -7,16 +7,8 @@ helpers are listed here so nothing on disk is unaccounted for.
 
 | tool | what it answers | lines |
 |---|---|---|
-| `actor_watch.py` | Series-watch all actor transforms through a scripted key sequence. | 123 |
-| `air_probe.py` | Measure the airborne horizontal acceleration from a keyed trace. | 116 |
-| `analyze_mover_trace.py` | Correlate a raw mover trace's slots with the recorded key timeline. | 133 |
-| `anchor_check.py` | Do we have the code for each anchor, in this build's image? | 88 |
 | `anim_chain_args.py` | Collect the animation-chain function list (main module) for headless. | 79 |
-| `anim_input.py` | Send the animation-driving keys to a running client, on a schedule. | 115 |
-| `build_loader_wrap.py` | Build the loader's XOR regions as one PE, in the client's address frame. | 64 |
-| `build_translate.py` | Translate a function's address from one client build to the next. | 198 |
-| `capture_coverage.py` | Do we have the code for this address? | 322 |
-| `carry_names.py` | Carry the name table into the next client build. | 104 |
+| `audit_image.py` | Audit the ground-truth image's function bookkeeping: `.pdata` facts, bridge counts and the name table. | 253 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
 | `clip_fp.py` | Byte-level orientation probes for the first-person clip family 0x00020400. | 100 |
 | `clip_fp_lanes.py` | Column-consistency scanner over the FP-family clip value area. | 55 |
@@ -24,9 +16,10 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `clip_lab.py` | Analysis workbench for the animation clip chunk (asset type 0x006). | 211 |
 | `clip_layout.py` | Map a clip's reference graph and solve for the element size of each block. | 146 |
 | `clip_structure.py` | Dump the entire file structure to find pose data. | 57 |
-| `coverage_gap.py` | Coverage gap auditor for a session-coherent image. | 145 |
-| `ctrl_probe.py` | Measure crouch, jump and air-control behaviour from a captured trace. | 154 |
+| `corpus.py` | Build and query a standing corpus for the current image. | 675 |
 | `data/bc7oracle/texture2ddecoder/__init__.py` | A python wrapper for [Perfare](https://github.com/Perfare)'s [Texture2DDecoder](https://github.com/Perfare/AssetStudio/tree/master/Texture2DDecoder). | 31 |
+| `data/gen_body.py` | (no header) | 25 |
+| `data/refs.py` | (no header) | 13 |
 | `data/tmp/analyze.py` | (no header) | 16 |
 | `data/tmp/classify.py` | (no header) | 12 |
 | `data/tmp/cmp.py` | (no header) | 8 |
@@ -37,137 +30,87 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `data/tmp/stats35.py` | (no header) | 12 |
 | `data/tmp/stats42.py` | (no header) | 7 |
 | `deviation_check.py` | Check that the legacy deviations and the code agree. | 92 |
-| `disasm_field_sites.py` | Find every reference to a known field hash in the captured code, and | 182 |
-| `dump_class_descriptors.py` | Walk every class descriptor the registry knows and dump its slots. | 105 |
-| `dump_class_objects.py` | Dump the six animation-class objects' method pointers. | 94 |
-| `dump_domino_schema.py` | Dump the complete Domino physics schema from the v2b capture. | 95 |
-| `dump_exec_regions.py` | Dump the executable regions of a running client, with their addresses. | 69 |
-| `dump_object.py` | Dump an object region as qwords with pointer analysis. | 50 |
-| `dump_process.py` | Read a process's memory, and write a read-only full-memory minidump of it. | 199 |
-| `dump_qwords.py` | Dump qwords of given rvas from a module image. | 59 |
-| `emu_tls.py` | Offline Unicorn emulation of the loader's TLS callback chain (current | 288 |
-| `emu_tls_replay_fresh.py` | Replay-emu: loader flat image + captured RUNTIME .data/.rdata overlaid, then run TLS cb[0]. | 73 |
-| `etw_count.py` | (no header) | 42 |
-| `etw_raw_scan.py` | Raw qword scan of an ETL for loader code addresses. | 82 |
-| `extract_defaults.py` | Extract a class's field-default table from its descriptor's comparator/provider. | 116 |
-| `family_ramp2.py` | Ramp detector v2: long idle-constancy, rail exclusion, two walk directions. | 170 |
-| `fast_rec.py` | High-rate ramp capture: 200 Hz samples of the player node on flat ground. | 85 |
-| `faultsync_correlate.py` | Offline fault-sync flip attribution check (no live touch). | 78 |
-| `faultsync_resolve.py` | Resolve the RVA watchlist to session-absolute addresses (offline, no live touch). | 48 |
 | `field_index.py` | Field-access index over the complete client image. | 417 |
 | `find_anim_decoder.py` | Find code that reads the animation clip header, by the loads it must make. | 107 |
-| `find_broadphase.py` | Find the physics world through its broadphase trees. | 343 |
-| `find_dmworld.py` | Find the physics world instance, then enumerate its real bodies. | 342 |
-| `find_moving_objects.py` | Find memory that holds a position advancing at walking speed (shape-free). | 138 |
-| `find_node.py` | Find the player transform node by its measured layout signature. | 236 |
-| `find_referrers.py` | Find what points at an address in a live process (read-only). | 127 |
-| `find_refs.py` | Find RIP-relative references from captured code to target addresses. | 54 |
-| `find_script_instances.py` | Find live statescript runtime objects by their vtables and chase the dispatch. | 166 |
 | `find_tables.py` | Find large arrays of code pointers (jump/dispatch tables) in the module image. | 79 |
-| `find_tick.py` | Find the physics tick object in a captured heap set. | 121 |
-| `flatten.py` | Flatten captured code regions into one image Ghidra can import. | 49 |
-| `focus_window.py` | Bring a process's main window to the foreground (un-minimise + focus). | 88 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
+| `frame_check.py` | Check cited addresses and function-name entries against the one address frame. | 317 |
 | `gh.py` | Call the Ghidra bridge over HTTP. | 67 |
-| `gh_apply_names.py` | Name the client's functions in the Ghidra project. | 115 |
-| `graph_scan.py` | Find graph-container objects in a heap capture by the deserializer's shape. | 171 |
-| `hunt_actor.py` | Watch every mover, its owner, and one pointer level out, during a real walk. | 351 |
-| `hunt_node.py` | Hunt the player transform node by behaviour, not by shape. | 309 |
+| `gh_apply_names.py` | Name the client's functions in the Ghidra project, and carry the written findings with them. | 172 |
+| `gh_apply_types.py` | Apply the understood struct layouts and function prototypes to the Ghidra program. | 172 |
 | `imm_scan.py` | Scan warm .text pages for 4/8-byte little-endian immediate constants. | 78 |
 | `ks_hash_test.py` | Test hash-based keystream constructions against the known page stream. | 82 |
 | `ks_key_test.py` | Test candidate keys/counters against the known page keystream. | 109 |
 | `ks_linear.py` | Berlekamp-Massey linear-complexity test on the page keystream. | 62 |
-| `ldr_band_loops.py` | Linear capstone listing + decrypt-loop hunt over the band functions. | 78 |
-| `ldr_band_scan.py` | Targeted disassembly of the loader's cold `.text` band, from disk. | 125 |
-| `ldr_cookie_grab.py` | Read-only runtime grab of the loader's working-set memory while the game | 332 |
-| `ldr_cryptoscan.py` | Crypto-density scan of the CURRENT loader: per-.pdata-function density of | 100 |
-| `ldr_dig2.py` | Re-digest the sweep with decimal CSV fields + missed-page diff + disasm. | 83 |
-| `ldr_gxfg.py` | Parse Overwatch_loader.dll load config (dd[10]) and the .gxfg section. | 96 |
-| `ldr_iat.py` | Probe the loader offline: warm-image IAT resolution + the 0x48ffd0 page. | 152 |
-| `ldr_reloc.py` | Parse DISK loader: relocations (.reloc) -> which .data/.rdata slots are | 84 |
-| `ldr_replay_flat.py` | Build a replay flat loader image for emu_tls.py: disk flat (offset==RVA) | 76 |
-| `ldr_sweep.py` | Pdata-guided anchor sweep over the DISK loader (plaintext .text). | 117 |
-| `ldr_thunks.py` | Parse the captured heap-thunk blob (stubs.bin): decode each thunk's | 178 |
-| `ldr_tls.py` | Parse Overwatch_loader.dll headers: sections, data dirs, TLS callback array. | 62 |
-| `ldr_vehunt.py` | Find VEH/exception-handler anchors in the DISK loader: immediates | 43 |
-| `ldr_work_digest.py` | Work-digest of an engine satellite body: writes, call-indirect sites, | 53 |
-| `ldr_xref_scan.py` | .pdata-guided static xref scan over the plaintext loader code. | 161 |
-| `live_chain.py` | Chase statescript node chains in the warm live capture. | 197 |
-| `live_check_build.py` | Quick live diagnostic: is the running client the build our captures match? | 161 |
-| `live_clip_diff.py` | Diff a live clip buffer against the clip file on disk. | 153 |
-| `live_diff.py` | Paced differential capture: what changes in a live client while the *player* acts? | 295 |
-| `live_find_clip.py` | Find the client's *loaded* animation clips in memory, by their own bytes. | 86 |
-| `live_mapscan.py` | Scan a running game's whole address space for the loaded map. | 109 |
-| `live_move_rows.py` | What actually moves while the client animates: a row-level differential. | 143 |
-| `live_page_diff.py` | Protection-differential page capture for the running client (v3). | 2233 |
-| `live_page_grab.py` | Grab a page that the client keeps marked no-access, by polling for the moment | 86 |
-| `live_pose_matrix.py` | Read a live transform array: the pose, as it moves. | 173 |
-| `live_pose_rank.py` | Find a *real* runtime pose: quaternion runs that move and carry varied values. | 118 |
-| `live_pose_trace.py` | Capture the client's live pose as a trace, outside the repo. | 165 |
-| `live_trace.py` | Sample a running client's physics bodies into a trace file. | 931 |
 | `loader_imports.py` | (no header) | 60 |
-| `make_focus.py` | Build the focus file for the next capture. | 131 |
-| `mkpe.py` | Wrap raw captured regions as one minimal valid PE for analysis tools. | 99 |
 | `offline_page_recover.py` | Recover Overwatch.exe `.text` / `.pdata` offline with the known page cipher. | 1240 |
-| `outline_sites.py` | Outline the function behind each address and disassemble around it. | 54 |
-| `page_crypt_battery.py` | Cipher-structure battery for the Overwatch.exe page transform. | 104 |
-| `page_crypt_survey.py` | Classify every 4 KB page of the flattened captures against the on-disk PEs. | 171 |
-| `page_crypt_x.py` | Characterize the Overwatch.exe page-cipher transform from paired states. | 83 |
-| `pagepak_build.py` | Build the per-page keystream artifact for Overwatch.exe. | 75 |
+| `patch_clean_pe.py` | Build a clean analysis PE: the install's headers plus the recovered .text. | 96 |
 | `pdata_lookup.py` | Lookup .pdata function ranges containing given rvas. | 65 |
-| `pe_probe.py` | Identify a module dump: PE sections, entropy, and where known capture code lands. | 82 |
-| `peek.py` | Dump memory around an address from the captured regions. | 49 |
-| `pointer_check.py` | Do the pointers in an image belong to one session? | 134 |
-| `refs_image.py` | Find RIP-relative references to addresses inside the flattened module image. | 65 |
-| `regions.py` | Load captured process regions and resolve virtual addresses. | 236 |
-| `relaxed_scan.py` | Find transform-shaped records with any orientation (not just yaw). | 93 |
+| `pe_layout.py` | Classify an address in the install's PE: raw-backed, zero-fill (BSS), or unmapped. | 125 |
+| `probe_cellbytes.py` | Diagnostic: settle MapChunkCellBytesFixup's array/record indirection. | 137 |
+| `probe_evaluator.py` | Trace one call of an obfuscated function, to map its executed blocks. | 171 |
 | `remove_fns.py` | Remove a named set of functions from Rust files. | 68 |
-| `rx_diff.py` | Differential code-coverage: which module pages execute when a key is held. | 100 |
-| `scan_dump.py` | Scan a Windows minidump for the page-window table or the pad. | 235 |
-| `scan_name_pools.py` | Sweep the capture for plaintext identifier pools. | 97 |
-| `series_watch.py` | Series-watch the velocity candidates through a scripted key sequence. | 135 |
-| `session_merge.py` | Build a SESSION-COHERENT main-module image from one capture run. | 84 |
-| `spawn_diff.py` | Spawn-determinism diff: locate player fields by re-entry equality. | 131 |
-| `stub_extract.py` | Extract the descriptor-stub table from a session image. | 60 |
-| `stub_filter.py` | Filter the stub table by target ranges. | 44 |
-| `sweep_class_registry.py` | Sweep the class-registration thunks into a class registry. | 248 |
-| `sweep_consumers.py` | Rank *executable* functions by how many mover/volley/health runtime slots | 145 |
-| `sweep_mover_body.py` | Find functions that touch BOTH mover movement slots and dmBody/dmWorld | 109 |
-| `sweep_offset_uses.py` | Rank functions by which known struct offsets they touch. | 132 |
-| `sweep_physics.py` | Rank executable functions by co-occurrence of *real* dmBody/dmWorld offsets. | 107 |
-| `synth_ctrl_trace.py` | Generate a synthetic crouch/air trace to exercise the probe and the differ. | 129 |
 | `tex_oracle.py` | Cross-check our texture decoders against an independent implementation. | 300 |
-| `tight_report.py` | Measure the decrypt-window structure from a tight-tier capture run. | 107 |
-| `trace_chain.py` | Trace pointer chains inside a session-coherent image. | 116 |
-| `trace_probe.py` | Measure the client's movement per write (frame) from a captured trace. | 89 |
-| `vel_scan.py` | Velocity-signature scan: find the (vx, 0, vz) walk-velocity triple. | 135 |
 | `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 81 |
+| `verify_harness/apply_character_move_fixture.py` | Inputs for the `fn/ApplyCharacterControllerMove` unit (no-shape path). | 43 |
 | `verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` | 575 |
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 249 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 719 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 821 |
+| `verify_harness/cdn_index_footer_fixture.py` | Deterministic inputs for the `fn/CdnIndexFooterParse` unit. | 178 |
+| `verify_harness/cell_bytes_fixture.py` | Inputs for the `cell_bytes_fixup` unit (`0x141ff51a0`). | 115 |
+| `verify_harness/character_position_fixture.py` | Inputs for the `fn/CharacterPosition` unit. | 36 |
 | `verify_harness/chunk_guid_fixture.py` | Deterministic table-slot inputs for the `fn/ChunkGuid` unit. | 99 |
 | `verify_harness/cli.py` | Run verification units. Exit code is the gate. | 177 |
 | `verify_harness/cmf_iv_154504_fixture.py` | Deterministic inputs for the `fn/CmfIv154504` unit. | 202 |
 | `verify_harness/cmf_key_154504_fixture.py` | Deterministic inputs for the `fn/CmfKey154504` unit. | 60 |
+| `verify_harness/collision_capsule_fixture.py` | Inputs for the `collision_capsule` unit (`0x142ccd7b0`, type 1). | 237 |
+| `verify_harness/collision_filter_fixture.py` | Inputs for the `collision_filter` unit (`0x142cbb350`). | 74 |
+| `verify_harness/collision_sphere_fixture.py` | Inputs for the `collision_sphere` unit (`0x142ccdf40`, type 0). | 235 |
+| `verify_harness/collision_sweep_bounds_fixture.py` | Inputs for the `collision_sweep_bounds` unit (`0x142cd5540`). | 128 |
 | `verify_harness/coverage.py` | Basic-block / branch coverage of the oracle, measured on the very runs | 254 |
 | `verify_harness/crc32_fixture.py` | Deterministic byte/initial inputs for `fn/Crc32NameHash`. | 75 |
 | `verify_harness/curve_fixture.py` | Structured input factory for fn/CurveKeySampleDual. | 150 |
 | `verify_harness/dynamic_index_hash_fixture.py` | Deterministic data/state inputs for the `fn/DynamicIndexHash` unit. | 111 |
 | `verify_harness/dynamic_index_key_hash_fixture.py` | Deterministic inputs for the `fn/DynamicIndexKeyHash` unit. | 126 |
-| `verify_harness/emu_oracle.py` | Unicorn oracle: run one captured client function on one input. | 412 |
+| `verify_harness/emu_oracle.py` | Unicorn oracle: run one captured client function on one input. | 466 |
+| `verify_harness/encoding_find_ckey_fixture.py` | Deterministic inputs for the `fn/EncodingFindCKey` unit. | 262 |
+| `verify_harness/encoding_find_ekey_fixture.py` | Deterministic inputs for the `fn/EncodingFindEKey` unit. | 215 |
 | `verify_harness/encoding_header_parse_fixture.py` | Deterministic inputs for the `fn/EncodingHeaderParse` unit. | 207 |
 | `verify_harness/gen.py` | Deterministic input generation for one unit. | 258 |
 | `verify_harness/ledger.py` | Digest-bound verification records. | 155 |
+| `verify_harness/move_character_fixture.py` | Inputs for the `fn/MoveCharacterController` unit (no-shape path). | 60 |
+| `verify_harness/move_character_shape_fixture.py` | Inputs for the `fn/MoveCharacterControllerShape` unit. | 50 |
+| `verify_harness/mover_apply_modifiers_fixture.py` | Inputs for the `fn/ApplyStateModifiers` unit. | 449 |
+| `verify_harness/mover_apply_settings_fixture.py` | Inputs for the `fn/ApplyMoverSettings` unit. | 99 |
+| `verify_harness/mover_command_fixture.py` | Deterministic body inputs for the `fn/BuildMoverPhysicsCommand` unit. | 121 |
+| `verify_harness/mover_default_settings_fixture.py` | Inputs for the `fn/DefaultMoverSettings` unit. | 42 |
+| `verify_harness/mover_gate_fixture.py` | Inputs for the `fn/MoverGate` unit. | 74 |
+| `verify_harness/mover_ramp_fixture.py` | Deterministic inputs for the `fn/MoverRampVector` unit. | 143 |
+| `verify_harness/mover_ramp_scalar_fixture.py` | Inputs for the `fn/MoverRampScalar` unit. | 22 |
+| `verify_harness/mover_ramp_scalar_offset_fixture.py` | Inputs for the `fn/MoverRampScalarOffset` unit. | 26 |
+| `verify_harness/mover_state_fixture.py` | Inputs for the `fn/StateTransform` unit. | 61 |
+| `verify_harness/mover_state_vector_fixture.py` | Inputs for the `fn/MoverStateVector` unit. | 78 |
+| `verify_harness/mover_wish_copy_fixture.py` | Inputs for the `fn/MoverWishCopy` unit. | 78 |
+| `verify_harness/mover_wish_forward_fixture.py` | Inputs for the `fn/MoverWishForward` unit. | 53 |
+| `verify_harness/mover_wish_inverse_fixture.py` | Inputs for the `fn/MoverWishInverse` unit. | 64 |
+| `verify_harness/mover_wish_spring_fixture.py` | Inputs for the `fn/MoverWishSpring` unit. | 205 |
 | `verify_harness/mutate.py` | Behaviour-changing mutations of a C candidate, for measuring whether the | 268 |
 | `verify_harness/orthonormalize_basis_fixture.py` | Structured input factory for fn/OrthonormalizeCameraBasis. | 100 |
 | `verify_harness/orthonormalize_state_fixture.py` | State-mode fixture for fn/OrthonormalizeCameraBasis-state. | 26 |
 | `verify_harness/perspective_matrix_fixture.py` | Structured input factory for fn/BuildPerspectiveMatrix. | 159 |
-| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1040 |
+| `verify_harness/rigid_position_fixture.py` | Inputs for the `fn/RigidPosition` unit. | 29 |
+| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1067 |
 | `verify_harness/salsa20_fixture.py` | Deterministic Salsa20 inputs for the `fn/Salsa20Xor` unit. | 156 |
 | `verify_harness/salsa20_state_fixture.py` | Deterministic key/nonce/counter inputs for the `fn/Salsa20StateInit` unit. | 92 |
-| `verify_harness/scaffold_unit.py` | Scaffold a verification unit from an address. | 292 |
+| `verify_harness/scaffold_unit.py` | Scaffold a verification unit from an address. | 297 |
 | `verify_harness/selftest.py` | The harness's own gate: inject known defects, require detection. | 221 |
+| `verify_harness/set_velocity_fixture.py` | Inputs for the `fn/SetCharacterControllerVelocity` unit (character path). | 42 |
+| `verify_harness/shape_box_fixture.py` | Inputs for the `shape_box` shape-bounds unit. | 43 |
+| `verify_harness/shape_capsule_fixture.py` | Inputs for the `shape_capsule` shape-bounds unit. | 44 |
+| `verify_harness/shape_dispatch_fixture.py` | Inputs for the `fn/ShapeDispatch` unit. | 49 |
+| `verify_harness/shape_points_fixture.py` | Inputs for the `shape_points` shape-bounds unit. | 51 |
+| `verify_harness/shape_sphere_fixture.py` | Inputs for the `shape_sphere` shape-bounds unit. | 42 |
 | `verify_harness/test_harness_smoke.py` | Smoke tests for the verify_harness fixes. | 449 |
 | `verify_harness/test_run_unit_e2e.py` | End-to-end test: run the full five-stage ladder on synthetic bytes. | 139 |
 | `verify_harness/texture_count_bits_fixture.py` | Structured inputs for fn/TextureCountBitsShifted. | 53 |
@@ -176,37 +119,6 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/texture_format_fixture.py` | Structured inputs for fn/TextureFormatFamilyBpp. | 40 |
 | `verify_harness/texture_payload_fixture.py` | Structured inputs for fn/TexturePayloadGuid. | 59 |
 | `verify_harness/texture_request_fixture.py` | Structured inputs for fn/TextureRequestCount. | 63 |
-| `wall_diff.py` | Wall-pinned input diff: heap offsets that only change under a held key. | 107 |
-| `wall_watch.py` | Scan for W-only changing offsets, then behaviorally verify each candidate. | 114 |
-| `warm_merge.py` | Merge warm_poll captures over the flattened v2b image, page by page. | 164 |
-| `warm_poll.py` | Continuous read-only warm-page accumulator for the client. | 406 |
-| `work/blocks_around.py` | Show the candidate VM basic blocks around the tracked sites. | 86 |
-| `work/branch_targets.py` | Find the branches that guard the candidate VirtualProtect calls. | 44 |
-| `work/build_live_loader.py` | Build a flat loader image from one page-diff run. | 26 |
-| `work/build_live_main.py` | Build a flat main-module image from one page-diff run. | 28 |
-| `work/dump_cand_stack.py` | Find candidate page-path PCs on the dump's thread stacks. | 49 |
-| `work/dump_stacks.py` | Find loader code addresses on the dump's thread stacks. | 57 |
-| `work/dump_stride_search.py` | Search the full heap dump for window-start runs at strides. | 58 |
-| `work/etw_context.py` | Print the stack frames around sampled loader PCs in an ETL. | 40 |
-| `work/etw_count2.py` | Count ETL samples of the selector-chain and descriptor addresses. | 38 |
-| `work/etw_main_hot.py` | Rank the hot main-module addresses found in an ETL. | 52 |
-| `work/find_callers.py` | Find the callers of the first-person consumer and its bind. | 45 |
-| `work/find_camera_refs.py` | Find the references to the first-person camera setup. | 34 |
-| `work/find_fp_component.py` | Locate first-person component scalars in the heap dump. | 42 |
-| `work/find_getcomp35.py` | Find the code sites that read first-person component type 0x35. | 62 |
-| `work/find_meta_table.py` | Find the qword tables pointing into the page metadata range. | 58 |
-| `work/find_page_arrays.py` | Find the arrays of page VAs inside the module images. | 47 |
-| `work/find_vm_refs.py` | Find the functions holding both viewmodel constants 0x758/0x778. | 41 |
-| `work/follow_meta.py` | Follow the type-A record pointers hunting for a stored window start. | 66 |
-| `work/ghost_scan.py` | Extract the ghost loader copy and stride-search it for w. | 85 |
-| `work/meta_record_w.py` | Test the page metadata record fields for the window start. | 66 |
-| `work/padb_blocks.py` | Show the pad-family B basic blocks around its mask sites. | 84 |
-| `work/pagehash_w.py` | Test the page metadata hashes against the window start. | 97 |
-| `work/pdata_lookup.py` | Look up the loader .pdata function bounds that contain RVAs. | 59 |
-| `work/read_meta_record.py` | Dump two page metadata records field by field. | 32 |
-| `work/recursive_disasm.py` | Measure the decoded coverage of the four loader VM regions. | 85 |
-| `work/stack_field_writers.py` | Find the writes to the candidate descriptor's stack fields. | 71 |
-| `work/stackrefs.py` | List the candidate frame's slot references by stack offset. | 39 |
-| `work/stride_search.py` | Search the flat images for the window-start run at strides. | 74 |
-| `work/trace_back.py` | Print the instruction context around candidate loader addresses. | 68 |
+| `verify_harness/variant_position_fixture.py` | Inputs for the `fn/VariantPosition` unit. | 25 |
+| `verify_harness/world_position_fixture.py` | Inputs for the `fn/WorldPosition` unit. | 28 |
 | `xref_rva.py` | Scan a session image for code references to given rvas. | 81 |

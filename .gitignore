@@ -32,7 +32,7 @@
 # The analysis tools are original work and are tracked, so a re-derivation
 # survives a lost machine. Everything they *produce* is not: captures,
 # merged images, decompiles, hex dumps and the multi-MB text outputs stay on
-# the machine that made them (D:/ow-dumps, gitignored).
+# the machine that made them (dev/data/corpus, gitignored).
 /dev/*
 !/dev/*.py
 !/dev/*.ps1
@@ -40,15 +40,12 @@
 !/dev/*.txt
 !/dev/*.jsonl
 
-# dev/'s sub-folders are ignored, except dev/work/ (the page-decrypt scripts,
-# which are tracked) and dev/verify_harness/ (the differential-verification
-# harness, original work). dev/ghidra_run/ is the Ghidra project: the client's
-# own code, kept on the SSD because Ghidra reads it hard, never tracked.
-# dev/decompiles/ holds decompiled client code and stays ignored.
+# dev/'s sub-folders are ignored, except dev/verify_harness/ (the
+# differential-verification harness, original work). dev/ghidra_run/ is the
+# Ghidra project: the client's own code, kept on the SSD because Ghidra reads
+# it hard, never tracked. dev/decompiles/ holds decompiled client code and
+# stays ignored.
 /dev/*/
-!/dev/work/
-/dev/work/*
-!/dev/work/*.py
 !/dev/verify_harness/
 /dev/verify_harness/*
 !/dev/verify_harness/*.py

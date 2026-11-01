@@ -31,7 +31,8 @@ modify it. See [CREDITS.md](CREDITS.md).
 ## Status
 
 **The one client launches the real practice range.** `ow-client` and `ow-scene`
-are workspace members; `ow-sim` remains parked reference code. The default
+are workspace members; `ow-sim` is now a workspace member too and holds the
+verified movement, Domino body and camera-basis arithmetic. The default
 launch selects the practice header by its `m_mapName`
 (`Maps\TrainingRoom\Training Room - Practice`), takes the first variation whose
 paired mode's display name is exactly `Practice Range`, and loads the 34 chunks
@@ -48,22 +49,99 @@ client-side mode→variation selector.
   The practice scene requests and opens 34/34 chunks, walks 1,358 placeables
   (229 model-group references, 550 entity references), and places 2,449 model
   instances from the model groups' 304 groups.
+- **Movement arithmetic, verified:** `fn/MoverRampVector` (`0x140ca75b0`),
+  `fn/MoverRampScalar` (`0x140ca75f0`), `fn/MoverRampScalarOffset`
+  (`0x140ca7570`), `fn/BuildMoverPhysicsCommand` (`0x140cb74a0`),
+  `fn/MoverWishSpring` (`0x140cc0dc0`), `fn/MoverWishForward`
+  (`0x140cb5510`), `fn/MoverWishInverse` (`0x140cb5350`),
+  `fn/MoverWishCopy` (`0x140ca7700`), `fn/StateTransform` (`0x140cb83b0` +
+  the `FUN_140c71e10` leaf), `fn/MoverStateVector` (`0x140ca5c50`),
+  `fn/DefaultMoverSettings` (`0x1405a87d0`), `fn/ApplyMoverSettings`
+  (`0x140c862e0`), `fn/ApplyStateModifiers` (`0x140cbcbe0`),
+  `fn/MoverGate` (`0x140ca7d80`), `fn/CharacterPosition` (`0x142cd4ff0`),
+  `fn/RigidPosition` (`0x142cb4770`), `fn/VariantPosition` (`0x142cf5630`)
+  `fn/WorldPosition` (`0x142cbcec0`), `fn/MoveCharacterController`
+  (`0x142cd4bc0`), `fn/ApplyCharacterControllerMove` (`0x142cd5370`) and
+  `fn/SetCharacterControllerVelocity` (`0x142cbd1b0`) and the four
+  shape-bound leaves (`0x142ccd410`, `0x142ccd380`, `0x142ccf460`,
+  `0x142cd3720`), the shape dispatcher (`0x142cb9030`), the shape-list
+  walk (`fn/MoveCharacterControllerShape`), the collision sweep's bounds
+  stage (`fn/CollisionSweepBounds`, `0x142cd5540`), the type-0 narrowphase's
+  analytic path (`fn/CollisionSphere`, `0x142ccdf40`) and the query's layer
+  filter (`fn/CollisionShapeFilter`, `0x142cbb350`) and the type-1 capsule
+  (`fn/CollisionCapsule`, `0x142ccd7b0`) and the collision chunk's runtime
+  17-pointer cell fixup (`fn/MapChunkCellBytesFixup`, `0x141ff51a0`) are
+  differential units against the client's bytes, and the chunk's container
+  (220 cells, 17 arrays each) is parsed and pinned on the install
+  (`ow-tank::collision`, `collision_cells_real`). The wish spring proves the input copy, the
+  `+0x10fc`/`+0x1100` spring and the 1/1024 quantiser; the forward and
+  inverse units prove the 4x4 column-major transform, including the `rcpps` +
+  Newton step; the copy and state-vector units prove the wrappers against a
+  synthetic state record; the state unit implements the record lookup in
+  Rust; the settings units implement the default constructor and the
+  movement-asset apply, the modifier unit implements the 37-kind evaluator,
+  the gate unit implements the movement predicate, and the world unit
+  resolves both handle kinds to their positions, publishes the character
+  velocity on the no-shape path, computes the four shape bounds plus the
+  type-0/1/2/4 dispatch, and walks the shape list on the contact-id `-1`
+  path. The live per-frame law is read and implemented in `ow-sim::frame`:
+  both update paths publish `state_transform(wish) + ramp_vector(body)` to the
+  controller, and the two `ADDPS` operand orders are pinned. They do **not**
+  make movement playable: the wish producer, the meaning of the published
+  value (`entry+0x10`, which the client's get/set pair share) and collision
+  are open. The wish writer's fan solver is read and implemented in
+  `ow-sim::fan` (both seed terms, the `+0.1` bias, the speed, the radius, the
+  72°/`2π/N` candidate rotations, both acceptance rules and the gate); its
+  candidate evaluator `0x1420328c0` is open, so no wish is produced yet; it is
+  a wrapper over the collision query `0x14203dae0`, whose reachable body is
+  now read (geometry from `world+0x620`, the result record, a 0x71-byte query
+  struct, `0x142cc45a0`/`0x14212db80`), and the query is read down to its
+  narrowphase (`0x142cbd510`'s four passes, the verified `0x142cd5540` sweep
+  bounds, the AABB and moving-box tests, the worklist push `0x140d24b60`, and
+  `0x142cc1610`'s transform/filter/type dispatch to five per-type
+  primitives), so the input side and collision are the same read; those five
+  primitives are open.
 - **Open:** the producer of the level-load GUID lists (the client has no
   mode→variation selector; the map arrives as type-`0x002` GUIDs, so the
   practice-range launch is a viewer default, not a claim that a client caller
   is read), the streaming policy, the client's producer of the bundle
-  directory, character collision, the mover's input→velocity ramp, the
-  per-frame camera look, the FP retarget, the Pose2d VM, the weapon fire loop,
-  damage application and the client material application (55 placeholder draws
-  remain diagnostics).
-- **Data-side reads:** CASC/BLTE, STU v2, entities and health pools,
+  directory, character collision, the mover's wish source
+  (`FUN_140654730`/`FUN_140cb86c0`), the live service object, the state-record
+  transform, the Domino velocity dispatch and the per-frame camera look, the FP
+  retarget, the Pose2d VM, the weapon fire loop, damage application and the
+  client material application (55 placeholder draws remain diagnostics).
+- **Data-side reads:** CASC/BLTE, the CDN index footer and page layout,
+  STU v2, entities and health pools,
   model/skeleton/clip decoding, weapon graphs, map chunks, and the
   bundle-aware material/texture chain (the texture format switch, descriptor
   builder and descriptor size walk are differential-verified against the
-  current image). All 305 map headers are readable: 42 from the encoded store
+  current image; R16_UNORM keeps its exact words and uploads as `R16Unorm`
+  where the adapter exposes `TEXTURE_FORMAT_16BIT_NORM`). All 305 map headers
+  are readable: 42 from the encoded store
   and 263 from bundles, as the client reads them.
 
 The rebuild order is [`docs/rebuild-plan.md`](docs/rebuild-plan.md).
+
+The renderer's 1:1 target is **D3D11** (the production path); D3D12 is the
+client's beta path. `crates/ow-render` has stages **D1-D4 and the D5
+clear/draw/viewport handlers**: the client's D3D11 device and swap chain (D1),
+the back-buffer texture with its explicit RTV/SRV/UAV and the resize order
+(D2), the per-frame step order (D3), the 64-opcode replay dispatch (D4) and the
+read clear/draw/viewport handlers (D5), each with the read values pinned by
+synthetic tests. The D5 `0x0c` render-target set is implemented
+(`OMSetRenderTargets` at `0x14266e54d`) and its alias-unbind is modelled in
+`ow-render::state`; `0x0d` is implemented as the pending resolve/release pass.
+The cache population and the queued-SRV binder remain. It creates the device,
+swap chain and views and runs the frame step list; only
+`Present` has a complete executed body and every other frame step is logged as
+open (no pass list or draw call is read). The replay executor and the eight
+read context handlers are tested with synthetic record streams; the other 53
+opcodes are open by opcode. The engine's per-frame batch records (`0x387`,
+`0x60`, `0x352`) and the A/B upload/readback layout are modelled in
+`ow-render::batch`; the ring consumer is open. **A client capture is
+impossible under the anti-cheat**, so there is no capture comparison and no
+image oracle; D10/pixels are not provable. The richer `wgpu` viewer remains
+viewer-only (`FIT-PRE-02`).
 
 ## Running it
 
@@ -74,13 +152,15 @@ export OW_TACTLIB='path/to/TACTLib/TACTLib'             # older-build manifest k
 export OW_OWLIB='path/to/OWLib'                         # optional, STU class names
 export OW_SUPPORT_KEYRING='path/to/Overwatch.keyring'   # optional
 
-cargo xtask verify                                      # fmt, clippy, tests, index, deviations
+cargo xtask verify                                      # fmt, clippy, tests, index, deviations, addresses
 cargo xtask verify --fast                               # without the install-reading tests
 
-cargo run --release -p ow-client                        # the practice range
+cargo run --release -p ow-client                        # the practice range (wgpu viewer)
 cargo run --release -p ow-client -- --list-maps         # headers and variation modes
 cargo run --release -p ow-client -- --shot out.png --width 1280 --height 720
 cargo run --release -p ow-client -- --tour out --count 4
+cargo run --release -p ow-client -- --renderer d3d11 --no-map --d3d11-frames 2  # D1-D4 views + step log
+cargo run -p ow-render --example d3d11_smoke            # D1-D5 smoke: views, step log, resize
 cargo run -p ow-tank --bin look -- --why 0x0790000000000688  # the practice header
 cargo run -p ow-tank --bin look -- --why 0x080000000f69002e  # its scene map
 ```
@@ -100,12 +180,13 @@ cargo run -p ow-tank --bin anim -- --help             # clip probe
 ## Layout
 
 ```text
-crates/ow-casc   container: build info, config, keyring, buckets, BLTE, encoding, root
+crates/ow-casc   container: build info, config, keyring, buckets, page cache, BLTE, encoding, root
 crates/ow-stu    structured data, typed STU reads, class registry
 crates/ow-tank   game semantics: GUIDs, manifests, entities, weapons, graphs, animation, maps, mapresolve
 crates/ow-scene  map geometry from the resolver's chunks and the models they place
 crates/ow-client the one launchable client: renderer, HUD, free camera
-crates/ow-sim    parked reference: the read body/camera arithmetic (not built)
+crates/ow-render native D3D11 backend, stages D1-D4 + D5 handlers, engine batch records
+crates/ow-sim    workspace member: verified mover ramp/command, the read per-frame velocity law, Domino body and camera arithmetic
 crates/xtask     the project's own commands; `cargo xtask verify` is the gate
 docs/            current findings, plans and open questions
 dev/             read-only analysis and verification tools (tracked); output is not

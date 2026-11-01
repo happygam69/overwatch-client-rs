@@ -1,7 +1,9 @@
 # dev/ - the analysis tools
 
 Everything here is **read-only** against the game: the tools open the install
-and the Ghidra project, never write to the game.
+and the Ghidra project, never write to the game. `patch_clean_pe.py` writes a
+patched analysis copy under the git-ignored `dev/data/offline_recover/`; it
+never writes to the install.
 
 - **[INDEX.md](INDEX.md)** — every tool and the question it answers. Generated
   by `python make_index.py`; `--check` fails when it is stale.

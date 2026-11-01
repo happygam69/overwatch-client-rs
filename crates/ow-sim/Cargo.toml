@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Exact client arithmetic read from Overwatch.exe: Domino body integration and camera basis"
+description = "Exact client arithmetic read from Overwatch.exe: mover ramp, wish spring and command, Domino body integration and camera basis"
 
 [dependencies]
 

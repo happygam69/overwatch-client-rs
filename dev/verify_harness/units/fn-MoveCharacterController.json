@@ -1,0 +1,61 @@
+{
+  "id": "fn/MoveCharacterController",
+  "title": "tier-2 shipped code: the character controller move, no-shape path, against MoveCharacterController",
+  "address": {
+    "v2b": "0x7ff7c79f4bc0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_move_character",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "entry",
+      "kind": "ptr",
+      "ptr_len": 40
+    },
+    {
+      "name": "record",
+      "kind": "ptr",
+      "ptr_len": 404
+    },
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 32
+    }
+  ],
+  "returns": "void",
+  "argFactory": "move_character_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 50,
+    "mutationCount": 10,
+    "mutationKillRate": 0.75,
+    "seed": 5454,
+    "coverageWindow": 320,
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c79f4cfa",
+        "edge": "0x7ff7c79f4d00",
+        "why": "the fixture pins the shape index to -1, so the no-shape return is the only edge; the shape loop is open collision ingest"
+      }
+    ],
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4",
+      "0x7ff7c7dc4bf0-0x7ff7c7dc4bff",
+      "0x7ff7c7dc4b40-0x7ff7c7dc4b4f",
+      "0x7ff7c87e5f40-0x7ff7c87e5f47"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/world.rs (move_character_controller), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_move_character entry.",
+    "The oracle runs MoveCharacterController (0x142cd4bc0) with entry in RCX, record in RDX and the move block in R8. The entry's shape index at +0x24 is -1, so the shape-query loop is skipped.",
+    "Cases cover a changed velocity, an unchanged xyz velocity (the early return), unchanged xyz with a different w, an unchanged velocity with old quat equal/unequal/normalised to the entry quat, non-normalised and zero quaternions, inf/NaN quats and random quats.",
+    "The no-shape path writes the normalised quaternion to entry+0x00, the new velocity to +0x10 and the record's +0x190 flag; both pointees are compared byte for byte."
+  ],
+  "acknowledgedGaps": [
+    "Only the no-shape path is implemented: entry+0x24 != -1 returns false before any write. The shape query 0x142cb9030 and its event call 0x142cf32d0 are collision ingest and remain open. The coverage window ends at the shape-index test; the shape loop is outside it."
+  ]
+}

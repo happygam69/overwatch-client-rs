@@ -22,6 +22,7 @@ use crate::blte;
 use crate::encoding::EncodingFile;
 use crate::index::{self, Location};
 use crate::install::{Error as InstallError, Install};
+use crate::pagecache::{self, PageCache};
 
 #[derive(Debug)]
 pub enum Error {
@@ -216,8 +217,13 @@ fn discover_segments(dir: &Path) -> Result<[Option<DiscoveredSegment>; index::BU
 pub struct Store {
     install: Install,
     index: BucketIndex,
-    /// Open pack files, keyed by archive ordinal (`data/data.NNN`).
+    /// Open pack files, keyed by archive ordinal (`data/data.NNN`). This is
+    /// the client's archive-handle cache (`DynamicContainerOpenArchive`).
     archives: RefCell<HashMap<u32, fs::File>>,
+    /// The client's 16-slot `0x10000`-byte page cache. `DynamicContainerRead`
+    /// reads its payload through it; the 30-byte data header is our own read
+    /// for the decoder (the client skips the header and never reads it).
+    page_cache: RefCell<PageCache>,
     /// The decoded encoding **manifests**: this build config names more than
     /// one (`encoding = <a> <b>`), and an asset's content key can be in either.
     /// Loading only the first reported half the install as "key … is not present
@@ -235,6 +241,7 @@ impl Store {
             install,
             index,
             archives: RefCell::new(HashMap::new()),
+            page_cache: RefCell::new(PageCache::new()),
             encoding: RefCell::new(None),
             encoding_report: RefCell::new(Vec::new()),
         })
@@ -259,6 +266,32 @@ impl Store {
     /// The selected segment number of each bucket, in bucket order.
     pub fn segment_numbers(&self) -> [Option<u32>; index::BUCKET_COUNT] {
         self.index.segment_numbers()
+    }
+
+    /// Record every archive read the page cache issues. Diagnostics only; a
+    /// long-lived store keeps this off.
+    pub fn set_page_cache_tracing(&self, enabled: bool) {
+        self.page_cache.borrow_mut().set_tracing(enabled);
+    }
+
+    /// The archive reads the page cache issued since the last clear.
+    pub fn page_cache_trace(&self) -> Vec<pagecache::ReadOp> {
+        self.page_cache.borrow().trace().to_vec()
+    }
+
+    pub fn clear_page_cache_trace(&self) {
+        self.page_cache.borrow_mut().clear_trace();
+    }
+
+    /// Empty the page cache. Diagnostic/test helper; the read-only path never
+    /// calls the client's close/reopen maintenance.
+    pub fn clear_page_cache(&self) {
+        self.page_cache.borrow_mut().clear();
+    }
+
+    /// Resident page slots as `(archive, page offset, stored bytes, stamp)`.
+    pub fn page_cache_resident(&self) -> Vec<(u32, u64, u32, u64)> {
+        self.page_cache.borrow().resident()
     }
 
     /// What the local index layer found, for `look --index-stats`.
@@ -297,24 +330,22 @@ impl Store {
             .ok_or_else(|| Error::Parse("the salt-0 bucket has no segment".into()))
     }
 
-    /// Read the stored (still BLTE-encoded) record for an encoding key.
+    /// Read and resolve the payload the client's `DynamicContainerRead`
+    /// (`0x1424f48d0`) asks for.
     ///
-    /// The record starts at the entry's packed location and is `size` bytes
-    /// long, 30-byte data header included. The client reads the payload from
-    /// `(packed + 0x1e) >> 30` for `size - 0x1e` bytes; a record whose header
-    /// would cross a 2^30 boundary therefore moves into the next archive.
-    /// `DynamicContainerRead` (`0x1424f48d0`) builds the request as
-    /// `(caller_offset + 0x1e, caller_len)`, so a full-record read asks the
-    /// key state for `(0x1e, size - 0x1e)`; the absolute output range is
-    /// `(packed + 0x1e, size - 0x1e)` and must be inside resident coverage.
-    /// The install's duplicate keys rely on exactly that: the chosen header
-    /// entry has no interval of its own, and the second entry's interval is
-    /// the payload range the request asks for.
+    /// A full-record read is the caller's `(offset = 0, len = size)`, so the
+    /// key-state request is `(0x1e, size - 0x1e)` and the absolute output
+    /// range is `(packed + 0x1e, size - 0x1e)`. That range must be resident:
+    /// the install's duplicate keys rely on exactly that, because the chosen
+    /// header entry has no interval of its own and the second entry's interval
+    /// is the payload range the request asks for.
     ///
-    /// The loop below then reads the same `size` bytes as one contiguous span,
-    /// following the archive boundary, so `blte::decode` still sees the header
-    /// it strips. No entry in this install crosses.
-    pub fn read_stored(&self, ekey: &[u8]) -> Result<Vec<u8>> {
+    /// `DynamicContainerReadPage` (`0x1424fcd20`) then rejects an archive
+    /// number above `0x3fe`, and rejects a range whose first and last byte are
+    /// not in the same archive (status 10); it does **not** split a range at a
+    /// 2^30 boundary. No entry in this install crosses, so the check is
+    /// reached only by a corrupt entry.
+    fn read_payload_of(&self, ekey: &[u8]) -> Result<(Location, Vec<u8>)> {
         let key: [u8; 9] = ekey
             .get(0..9)
             .and_then(|key| key.try_into().ok())
@@ -348,55 +379,118 @@ impl Store {
             )));
         }
         let location = chosen.to_location();
+        let range = resolved.range().ok_or_else(|| {
+            Error::Parse(format!(
+                "key {}: resolve status 0 without an output range",
+                hex(ekey)
+            ))
+        })?;
 
-        let mut at = location.packed();
-        let mut remaining = u64::from(location.size);
-        let mut out = Vec::new();
-        while remaining != 0 {
-            let archive = (at >> index::ARCHIVE_SHIFT) as u32;
-            let offset = at & index::ARCHIVE_MASK;
-            // The client's page reader (`DynamicContainerReadPage`,
-            // `0x1424fcd20`) rejects an archive number above 0x3fe before
-            // opening the pack. The 10-bit field can hold 0..1023, so a
-            // corrupt entry can name 1023.
-            if archive > index::MAX_ARCHIVE {
-                return Err(Error::Parse(format!(
-                    "data archive {archive} is beyond the client's 0..=1022 range"
-                )));
-            }
-            let take = remaining.min(index::ARCHIVE_MASK + 1 - offset);
-            out.extend_from_slice(&self.read_archive_span(archive, offset, take as usize)?);
-            at += take;
-            remaining -= take;
+        let start = range.start;
+        let len = range.len;
+        let archive = (start >> index::ARCHIVE_SHIFT) as u32;
+        if archive > index::MAX_ARCHIVE {
+            return Err(Error::Parse(format!(
+                "data archive {archive} is beyond the client's 0..=1022 range"
+            )));
         }
+        let last = if len == 0 {
+            archive
+        } else {
+            ((start + u64::from(len) - 1) >> index::ARCHIVE_SHIFT) as u32
+        };
+        if last != archive {
+            return Err(Error::Parse(format!(
+                "key {}: payload range {start:#x}+{len} crosses a 2^30 archive boundary (client status 10)",
+                hex(ekey)
+            )));
+        }
+
+        let mut out = vec![0u8; len as usize];
+        let read = self.read_archive_span(archive, start & index::ARCHIVE_MASK, len, &mut out)?;
+        out.truncate(read as usize);
+        Ok((location, out))
+    }
+
+    /// Read the payload bytes `DynamicContainerRead` returns: the stored
+    /// record **without** its 30-byte data header. This is the client's exact
+    /// range and goes through the archive page cache.
+    pub fn read_payload(&self, ekey: &[u8]) -> Result<Vec<u8>> {
+        Ok(self.read_payload_of(ekey)?.1)
+    }
+
+    /// Read the stored (still BLTE-encoded) record for an encoding key,
+    /// 30-byte data header included.
+    ///
+    /// The client never reads the data header: `DynamicContainerRead` adds
+    /// `0x1e` to the caller's offset and the `.cmf` reader passes offset 0.
+    /// This wrapper exists for `blte::decode` and the install tests, and reads
+    /// the header with one un-cached 30-byte read before concatenating the
+    /// client's payload. The payload read itself is [`Store::read_payload`],
+    /// the client's range through the page cache.
+    pub fn read_stored(&self, ekey: &[u8]) -> Result<Vec<u8>> {
+        let (location, payload) = self.read_payload_of(ekey)?;
+        let mut out = vec![0u8; index::DATA_HEADER_SIZE as usize];
+        // The record starts at `packed`; `DynamicContainerRead` adds 0x1e for
+        // the payload. A range that did not cross an archive boundary keeps
+        // the header in the same archive as the payload.
+        let header_archive = (location.packed() >> index::ARCHIVE_SHIFT) as u32;
+        let header_offset = location.packed() & index::ARCHIVE_MASK;
+        let read = self.read_archive_span_direct(header_archive, header_offset, &mut out)?;
+        if read as usize != out.len() {
+            return Err(Error::Parse(format!(
+                "key {}: data header short read ({read} of {} B)",
+                hex(ekey),
+                out.len()
+            )));
+        }
+        out.extend_from_slice(&payload);
         Ok(out)
     }
 
-    /// Read one archive span, keeping the pack open in the `archives` cache.
+    /// Read one archive span through the client's page cache.
     ///
-    /// The ordinal names a pack in `data/`. `ecache/` is deliberately not a
-    /// content store here: its records are chunk manifests (see
-    /// `BucketIndex::open_dir`).
-    fn read_archive_span(&self, archive: u32, offset: u64, len: usize) -> Result<Vec<u8>> {
-        let path = self.install.data_dir().join(index::archive_name(archive));
+    /// The range is archive-local and must not cross the 2^30 boundary; the
+    /// caller has already applied `DynamicContainerReadPage`'s checks. A
+    /// whole-range bypass (aligned range, closed cache) is one direct read.
+    /// Short reads are returned as the count, not as an error; the page cache
+    /// zero-fills a fragment the archive did not supply, as the completion
+    /// `0x1424f9bf0` does.
+    fn read_archive_span(
+        &self,
+        archive: u32,
+        offset: u64,
+        len: u32,
+        out: &mut [u8],
+    ) -> Result<u32> {
+        if len == 0 {
+            return Ok(0);
+        }
         let mut archives = self.archives.borrow_mut();
-        if let std::collections::hash_map::Entry::Vacant(e) = archives.entry(archive) {
-            e.insert(fs::File::open(&path)?);
+        let file = open_archive(&mut archives, &self.install, archive)?;
+        let mut cache = self.page_cache.borrow_mut();
+        let outcome = cache.read(archive, offset, len, out, |_, at, buf| {
+            file.seek(SeekFrom::Start(at))?;
+            file.read(buf)
+        })?;
+        match outcome {
+            pagecache::Outcome::Served(bytes) => Ok(bytes),
+            pagecache::Outcome::Bypass => {
+                file.seek(SeekFrom::Start(offset))?;
+                Ok(file.read(&mut out[..len as usize])? as u32)
+            }
         }
-        let file = archives.get_mut(&archive).expect("just inserted");
+    }
+
+    /// One direct archive read, outside the page cache.
+    ///
+    /// Used only for the 30-byte data header, which the client's read path
+    /// never touches.
+    fn read_archive_span_direct(&self, archive: u32, offset: u64, out: &mut [u8]) -> Result<u32> {
+        let mut archives = self.archives.borrow_mut();
+        let file = open_archive(&mut archives, &self.install, archive)?;
         file.seek(SeekFrom::Start(offset))?;
-        // The entry claims this many bytes; a truncated archive must not turn
-        // the claim into a multi-GB zeroed allocation before `read_exact` can
-        // reject it.
-        let available = file.metadata()?.len().saturating_sub(offset);
-        if len as u64 > available {
-            return Err(Error::Parse(format!(
-                "data.{archive:03}: record at {offset:#x} claims {len} B but the pack has {available} B left"
-            )));
-        }
-        let mut buf = vec![0u8; len];
-        file.read_exact(&mut buf)?;
-        Ok(buf)
+        Ok(file.read(out)? as u32)
     }
 
     /// Decode a stored record for an encoding key.
@@ -408,7 +502,7 @@ impl Store {
     /// the same way. A decode failure of *locally present* bytes never falls
     /// back: the bytes are here; a keyring problem is not a CDN problem.
     pub fn open_ekey(&self, ekey: &[u8]) -> Result<Vec<u8>> {
-        let stored = match self.read_stored(ekey) {
+        let stored = match self.read_payload(ekey) {
             Ok(stored) => stored,
             Err(Error::KeyNotFound(_)) => match self.fetch_stored_remotely(ekey) {
                 Some(stored) => stored,
@@ -442,11 +536,13 @@ impl Store {
         }
 
         let loose_hash = config.get_str("file-index").ok()?;
-        let mut index = PageIndex::open(
+        let index_key = parse_hex_key(loose_hash).ok()?;
+        let mut index = PageIndex::open_with_key(
             &self
                 .install
                 .indices_dir()
                 .join(format!("{loose_hash}.index")),
+            Some(&index_key),
         )
         .ok()?;
         match index.loose_lookup(key) {
@@ -467,11 +563,13 @@ impl Store {
     ) -> Option<CdnRoute> {
         let group_hash = config.get_str(group_key).ok()?;
         let list = config.get(list_key)?;
-        let mut index = PageIndex::open(
+        let index_key = parse_hex_key(group_hash).ok()?;
+        let mut index = PageIndex::open_with_key(
             &self
                 .install
                 .indices_dir()
                 .join(format!("{group_hash}.index")),
+            Some(&index_key),
         )
         .ok()?;
         let (ordinal, offset, size) = match index.group_lookup(key) {
@@ -754,14 +852,33 @@ impl Store {
         String::from_utf8(bytes).map_err(|e| Error::Parse(format!("root file is not utf-8: {e}")))
     }
 
-    /// Declared decoded size for an encoding key, if any encoding manifest has
+    /// Declared decoded size for a content key, if any encoding manifest has
     /// it.
-    pub fn decoded_size(&self, ekey: &[u8; 16]) -> Result<Option<u64>> {
+    ///
+    /// This is the ckey record's `u32`, the same value `FUN_142498700` writes
+    /// to the resolve struct's `+0x10`. It is **not** the ekey record's tail;
+    /// that is the smaller stored size (`EncodingFile::stored_size`).
+    pub fn decoded_size(&self, ckey: &[u8; 16]) -> Result<Option<u64>> {
         self.ensure_encoding()?;
         let borrowed = self.encoding.borrow();
         let blobs = borrowed.as_ref().expect("just loaded");
         for blob in blobs {
-            if let Some(size) = EncodingFile::parse(blob)?.decoded_size(ekey) {
+            if let Some(size) = EncodingFile::parse(blob)?.decoded_size(ckey) {
+                return Ok(Some(size));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Declared stored size for an encoding key, if any encoding manifest has
+    /// it. This is the ekey record's 5-byte tail read as the client's 32-bit
+    /// value.
+    pub fn stored_size(&self, ekey: &[u8; 16]) -> Result<Option<u64>> {
+        self.ensure_encoding()?;
+        let borrowed = self.encoding.borrow();
+        let blobs = borrowed.as_ref().expect("just loaded");
+        for blob in blobs {
+            if let Some(size) = EncodingFile::parse(blob)?.stored_size(ekey) {
                 return Ok(Some(size));
             }
         }
@@ -803,133 +920,403 @@ impl std::fmt::Display for CdnRoute {
     }
 }
 
-/// One `indices/<hash>.index` read on demand: footer parameters plus the
-/// per-page last-key array, so a single key can be found without parsing the
-/// whole file — the archive group is 260 MB with 9.9 M entries.
+/// The 20-byte CDN index footer: a 12-byte header and the header's own
+/// 8-byte MD5.
+pub const INDEX_FOOTER_SIZE: usize = 20;
+
+/// The client's derived footer fields (the 0x30-byte output of
+/// `0x1424d9af0`). All offsets are bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexFooter {
+    pub version: u8,
+    pub page_size: u32,
+    pub offset_bytes: u8,
+    pub size_bytes: u8,
+    pub key_bytes: u8,
+    pub checksum_size: u8,
+    pub element_count: u32,
+    pub entries_per_page: u32,
+    pub page_count: u32,
+    /// `page_count * key_bytes`: the per-page last-key array.
+    pub last_key_bytes: u32,
+    /// `page_count * checksum_size`: the per-page checksum array.
+    pub checksum_bytes: u32,
+}
+
+impl IndexFooter {
+    /// The client's footer parse, `0x1424d9af0`, operation for operation.
+    ///
+    /// `footer` is the file's last 20 bytes and `total_len` is the whole file's
+    /// size (the `param_3` the client compares against the computed length).
+    /// The leaf's output is a 0x30-byte buffer: the 20 footer bytes at
+    /// `0..0x14`, then `pageSize` at `0x14`, `entrySize` at `0x18`,
+    /// `entriesPerPage` at `0x1c`, `pageCount` at `0x20`, `lastKeyBytes` at
+    /// `0x24` and `checksumBytes` at `0x28`. The leaf returns 0 in `AL` for an
+    /// accepted footer and 8 for a rejection; this wrapper maps 8 to an error.
+    ///
+    /// Order and side effects copied from the bytes:
+    /// 1. copy the last 20 bytes to `out`, remember `out[0xc..0x14]`;
+    /// 2. zero `out[0xc..0x14]`, MD5 the 20 bytes, compare the first 8 with the
+    ///    remembered hash; a mismatch returns 8 and leaves the hash zeroed;
+    /// 3. restore the hash, accept version 0/1 only, checksum size 0..=16;
+    /// 4. `pageSize = out[3] << 10`,
+    ///    `entrySize = out[4] + out[5] + out[6]`; either zero returns 8;
+    /// 5. `entriesPerPage = pageSize / entrySize`,
+    ///    `pageCount = (elementCount - 1 + entriesPerPage) / entriesPerPage`;
+    /// 6. `lastKeyBytes = pageCount * keyBytes`,
+    ///    `checksumBytes = pageCount * checksumSize`;
+    /// 7. the file must be exactly
+    ///    `checksumSize + 20 + (checksumSize + keyBytes + pageSize) * pageCount`
+    ///    bytes, in 32-bit arithmetic; anything else returns 8.
+    ///
+    /// The client has no divide-by-zero guard after step 4: a page size smaller
+    /// than the entry size would fault. This port returns 8 for that input
+    /// instead of faulting.
+    pub fn parse(footer: &[u8; INDEX_FOOTER_SIZE], total_len: u32) -> Result<IndexFooter> {
+        let mut out = [0u8; 0x30];
+        let status = parse_index_footer(footer, INDEX_FOOTER_SIZE, total_len, &mut out);
+        if status != 0 {
+            return Err(Error::Parse(format!(
+                "index footer rejected (client status {status})"
+            )));
+        }
+        Ok(IndexFooter::from_out(&out))
+    }
+
+    fn from_out(out: &[u8; 0x30]) -> IndexFooter {
+        let dword = |at: usize| u32::from_le_bytes(out[at..at + 4].try_into().unwrap());
+        IndexFooter {
+            version: out[0],
+            offset_bytes: out[4],
+            size_bytes: out[5],
+            key_bytes: out[6],
+            checksum_size: out[7],
+            element_count: dword(8),
+            page_size: dword(0x14),
+            entries_per_page: dword(0x1c),
+            page_count: dword(0x20),
+            last_key_bytes: dword(0x24),
+            checksum_bytes: dword(0x28),
+        }
+    }
+
+    /// `out[4] + out[5] + out[6]`, the client's per-entry stride.
+    pub fn entry_size(&self) -> u32 {
+        u32::from(self.offset_bytes) + u32::from(self.size_bytes) + u32::from(self.key_bytes)
+    }
+
+    /// The bytes after the page bodies: last keys, checksums and the terminal
+    /// checksum. `checksumSize + (keyBytes + checksumSize) * pageCount`.
+    pub fn tail_len(&self) -> u32 {
+        u32::from(self.checksum_size)
+            .wrapping_add(self.last_key_bytes)
+            .wrapping_add(self.checksum_bytes)
+    }
+
+    /// The whole-file length the client's footer check demands, in its 32-bit
+    /// arithmetic.
+    pub fn expected_len(&self) -> u32 {
+        u32::from(self.checksum_size)
+            .wrapping_add(INDEX_FOOTER_SIZE as u32)
+            .wrapping_add(
+                u32::from(self.checksum_size)
+                    .wrapping_add(u32::from(self.key_bytes))
+                    .wrapping_add(self.page_size)
+                    .wrapping_mul(self.page_count),
+            )
+    }
+
+    /// Page `page` starts here; a page body is always `page_size` bytes.
+    pub fn page_offset(&self, page: u32) -> u64 {
+        u64::from(page) * u64::from(self.page_size)
+    }
+
+    /// Offset of page `page`'s stored checksum, inside the checksum array.
+    pub fn checksum_offset(&self, page: u32) -> u64 {
+        u64::from(self.page_count) * u64::from(self.page_size)
+            + u64::from(self.last_key_bytes)
+            + u64::from(page) * u64::from(self.checksum_size)
+    }
+
+    /// Entries on `page`: a full page except the last, capped by the footer's
+    /// element count. Mirrors the cap the client applies while scanning.
+    pub fn page_entries(&self, page: u32) -> u32 {
+        if page >= self.page_count {
+            return 0;
+        }
+        let before = u64::from(self.entries_per_page) * u64::from(page);
+        (u64::from(self.element_count)
+            .saturating_sub(before)
+            .min(u64::from(self.entries_per_page))) as u32
+    }
+
+    /// Decode the entries of one page body. The page body is the client's
+    /// `pageSize` bytes; the first `page_entries(page)` records are used.
+    ///
+    /// Record order is key, size, archive ordinal, offset. The ordinal width
+    /// is `offset_bytes - 4` (2 for the main group, 1 for the patch group, 0
+    /// for a loose index); every value is big-endian. A loose record ends after
+    /// its size.
+    pub fn entries_in_page(&self, page: u32, body: &[u8]) -> Result<Vec<IndexEntry>> {
+        if page >= self.page_count {
+            return Err(Error::Parse(format!(
+                "index page {page} out of range 0..{}",
+                self.page_count
+            )));
+        }
+        if self.key_bytes != 16 || self.size_bytes != 4 || self.offset_bytes > 6 {
+            return Err(Error::Parse(format!(
+                "unsupported index entry geometry (key {}, size {}, offset {})",
+                self.key_bytes, self.size_bytes, self.offset_bytes
+            )));
+        }
+        let stride = self.entry_size() as usize;
+        if stride == 0 || body.len() < self.page_size as usize {
+            return Err(Error::Parse("short index page body".into()));
+        }
+        let ordinal_width = usize::from(self.offset_bytes.saturating_sub(4));
+        let mut out = Vec::with_capacity(self.page_entries(page) as usize);
+        for i in 0..self.page_entries(page) {
+            let at = i as usize * stride;
+            let entry = &body[at..at + stride];
+            let key: [u8; 16] = entry[..16].try_into().unwrap();
+            let size = u32::from_be_bytes(entry[16..20].try_into().unwrap());
+            let mut archive = 0u16;
+            for b in &entry[20..20 + ordinal_width] {
+                archive = (archive << 8) | u16::from(*b);
+            }
+            let o = 20 + ordinal_width;
+            let offset = if self.offset_bytes == 0 {
+                0
+            } else {
+                u32::from_be_bytes(entry[o..o + 4].try_into().unwrap())
+            };
+            out.push(IndexEntry {
+                key,
+                size,
+                archive,
+                offset,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// One CDN index record decoded from a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexEntry {
+    pub key: [u8; 16],
+    /// Big-endian size, the record's payload length.
+    pub size: u32,
+    /// Group ordinal (main group u16, patch group u8); 0 for a loose index.
+    pub archive: u16,
+    /// Big-endian offset inside the archive.
+    pub offset: u32,
+}
+
+/// `0x1424d9af0`, the pure footer leaf. See [`IndexFooter::parse`].
+pub fn parse_index_footer(data: &[u8], len: usize, total_len: u32, out: &mut [u8; 0x30]) -> u8 {
+    if len < INDEX_FOOTER_SIZE || data.len() < len {
+        return 8;
+    }
+    let footer = &data[len - INDEX_FOOTER_SIZE..len];
+    out[..INDEX_FOOTER_SIZE].copy_from_slice(footer);
+    let stored_hash: [u8; 8] = footer[12..20].try_into().unwrap();
+    out[12..20].fill(0);
+    if blte::md5_digest(&out[..INDEX_FOOTER_SIZE])[..8] != stored_hash {
+        return 8;
+    }
+    out[12..20].copy_from_slice(&stored_hash);
+    if out[0] > 1 || out[7] > 16 {
+        return 8;
+    }
+    let page_size = u32::from(out[3]) << 10;
+    let entry_size = u32::from(out[4]) + u32::from(out[5]) + u32::from(out[6]);
+    out[0x14..0x18].copy_from_slice(&page_size.to_le_bytes());
+    out[0x18..0x1c].copy_from_slice(&entry_size.to_le_bytes());
+    if page_size == 0 || entry_size == 0 {
+        return 8;
+    }
+    let entries_per_page = page_size / entry_size;
+    if entries_per_page == 0 {
+        // The client divides by this value and would fault; no real file has
+        // an entry larger than a page.
+        return 8;
+    }
+    out[0x1c..0x20].copy_from_slice(&entries_per_page.to_le_bytes());
+    let elements = u32::from_le_bytes(out[8..12].try_into().unwrap());
+    let page_count = elements.wrapping_sub(1).wrapping_add(entries_per_page) / entries_per_page;
+    out[0x20..0x24].copy_from_slice(&page_count.to_le_bytes());
+    let last_key_bytes = page_count.wrapping_mul(u32::from(out[6]));
+    out[0x24..0x28].copy_from_slice(&last_key_bytes.to_le_bytes());
+    let checksum_bytes = page_count.wrapping_mul(u32::from(out[7]));
+    out[0x28..0x2c].copy_from_slice(&checksum_bytes.to_le_bytes());
+    let expected = u32::from(out[7])
+        .wrapping_add(INDEX_FOOTER_SIZE as u32)
+        .wrapping_add(
+            u32::from(out[7])
+                .wrapping_add(u32::from(out[6]))
+                .wrapping_add(page_size)
+                .wrapping_mul(page_count),
+        );
+    if expected != total_len {
+        return 8;
+    }
+    0
+}
+
+/// One `indices/<hash>.index`, opened by the client's own layout.
 ///
-/// Page geometry, from the reference's `CDNIndexHandler`:
+/// The client's handler reads the last 20 bytes first, parses the footer with
+/// `0x1424d9af0`, then reads the tail that begins after the page bodies:
 ///
 /// ```text
-/// page p at p * pageSize     entries: [key 16][size u32 BE] then, for a
-///                            group index, the archive ordinal (u16 BE in the
-///                            main group, offsetBytes = 6; u8 in the patch
-///                            group, offsetBytes = 5) before the u32 BE
-///                            offset; a loose entry stops after the size
-/// n * 16                     the last key of each page, at n * pageSize
-/// n * checksumSize           the per-page checksums, then 8 pad bytes
-/// footer at len - checksumSize - 12
+/// page bodies     page p at p * pageSize, pageSize bytes each
+/// last keys       pageCount * keyBytes, the last key of each page
+/// checksums       pageCount * checksumSize, MD5(page body)[..checksumSize]
+/// terminal        checksumSize bytes, MD5(last keys + checksums)
+/// footer          20 bytes: header 12 + MD5(header 12 + 8 zero bytes)[..8]
 /// ```
 ///
-/// `pageCount` follows the reference's `GetTableParameters`, `(length -
-/// DynamicSize) / (pageSize + keyBytes + checksumSize)` with `DynamicSize =
-/// 12 + 2 * checksumSize`; in terms of the footer's position that is
-/// `(footerAt - checksumSize) / perPage`. The full-file parser above uses the
-/// same expression (it spent a while applying `DynamicSize` to the footer's
-/// position, which is one page short on every file — measured 2026-10-17).
+/// The full-file validator `0x1424d9c90` checks the terminal checksum and then
+/// MD5(terminal + footer) against the index's own 16-byte key (the file name).
+/// This type performs those checks; `open` skips only the key comparison, for
+/// synthetic files whose names are not keys.
+#[derive(Debug)]
 struct PageIndex {
     file: fs::File,
-    page_size: u64,
-    entries_per_page: u64,
-    per_entry: u64,
-    entry_count: u64,
-    page_count: u64,
-    /// 0 for the loose file index, 6 for a group index.
-    offset_bytes: usize,
-    /// `page_count * 16` bytes of per-page last keys.
+    footer: IndexFooter,
+    /// `page_count * key_bytes` bytes of per-page last keys.
     last_keys: Vec<u8>,
+    /// `page_count * checksum_size` bytes of per-page MD5s.
+    checksums: Vec<u8>,
 }
 
 impl PageIndex {
+    #[cfg(test)]
     fn open(path: &Path) -> Result<PageIndex> {
-        const FOOTER_SIZE: u64 = 12;
+        PageIndex::open_with_key(path, None)
+    }
+
+    fn open_with_key(path: &Path, key: Option<&[u8; 16]>) -> Result<PageIndex> {
         let mut file = fs::File::open(path)?;
         let len = file.metadata()?.len();
-        if len < FOOTER_SIZE + 16 {
-            return Err(Error::Parse(format!("{}: index too small", path.display())));
-        }
-        let tail_len = (FOOTER_SIZE + 16 * 2).min(len);
-        let mut tail = vec![0u8; tail_len as usize];
-        file.seek(SeekFrom::End(-(tail_len as i64)))?;
-        file.read_exact(&mut tail)?;
-        let tail_start = len - tail_len;
-
-        let mut footer = None;
-        for checksum_size in (8u64..=16).rev() {
-            let Some(at) = len.checked_sub(checksum_size + FOOTER_SIZE) else {
-                continue;
-            };
-            if at < tail_start {
-                continue;
-            }
-            let at = (at - tail_start) as usize;
-            let f = &tail[at..at + FOOTER_SIZE as usize];
-            if f[0] == 1 && f[1] == 0 && f[2] == 0 && f[7] as u64 == checksum_size {
-                footer = Some((at as u64 + tail_start, f, checksum_size));
-                break;
-            }
-        }
-        let Some((footer_at, f, checksum_size)) = footer else {
-            return Err(Error::Parse(format!("{}: no index footer", path.display())));
-        };
-        let page_size = u64::from(f[3]) * 1024;
-        let offset_bytes = f[4] as usize;
-        let size_bytes = f[5] as usize;
-        let key_bytes = f[6] as usize;
-        if page_size == 0 || key_bytes != 16 || size_bytes != 4 {
+        if len < INDEX_FOOTER_SIZE as u64 {
             return Err(Error::Parse(format!(
-                "{}: unsupported index geometry (page {page_size}, key {key_bytes}, size {size_bytes})",
+                "{}: index too small ({len} B)",
                 path.display()
             )));
         }
-        let per_entry = (key_bytes + size_bytes + offset_bytes) as u64;
-        let per_page = page_size + key_bytes as u64 + checksum_size;
-        let page_count = (footer_at - checksum_size) / per_page;
-        let entry_count = u64::from(u32::from_le_bytes([f[8], f[9], f[10], f[11]]));
-        let mut last_keys = vec![0u8; (page_count * key_bytes as u64) as usize];
-        file.seek(SeekFrom::Start(page_count * page_size))?;
-        file.read_exact(&mut last_keys)?;
+        let Ok(total_len) = u32::try_from(len) else {
+            return Err(Error::Parse(format!(
+                "{}: index is larger than the client's 32-bit length",
+                path.display()
+            )));
+        };
+        let mut footer_bytes = [0u8; INDEX_FOOTER_SIZE];
+        file.seek(SeekFrom::End(-(INDEX_FOOTER_SIZE as i64)))?;
+        file.read_exact(&mut footer_bytes)?;
+        let footer = IndexFooter::parse(&footer_bytes, total_len)
+            .map_err(|e| Error::Parse(format!("{}: {e}", path.display())))?;
+
+        let tail_len = u64::from(footer.tail_len());
+        if tail_len < u64::from(footer.checksum_size) {
+            return Err(Error::Parse(format!(
+                "{}: tail shorter than its checksum",
+                path.display()
+            )));
+        }
+        let mut tail = vec![0u8; tail_len as usize];
+        file.seek(SeekFrom::Start(footer.page_offset(footer.page_count)))?;
+        file.read_exact(&mut tail)?;
+        let ck = footer.checksum_size as usize;
+        let terminal = &tail[tail_len as usize - ck..];
+        let digest = blte::md5_digest(&tail[..tail_len as usize - ck]);
+        if digest[..ck] != *terminal {
+            return Err(Error::Parse(format!(
+                "{}: terminal checksum does not match the last keys and checksums",
+                path.display()
+            )));
+        }
+        if let Some(expected) = key {
+            let mut hashed = Vec::with_capacity(ck + INDEX_FOOTER_SIZE);
+            hashed.extend_from_slice(terminal);
+            hashed.extend_from_slice(&footer_bytes);
+            let digest = blte::md5_digest(&hashed);
+            if &digest[..16] != expected {
+                return Err(Error::Parse(format!(
+                    "{}: index key does not match MD5(terminal + footer)",
+                    path.display()
+                )));
+            }
+        }
+        let key_array = &tail[..footer.last_key_bytes as usize];
+        let checksums = &tail[footer.last_key_bytes as usize
+            ..footer.last_key_bytes as usize + footer.checksum_bytes as usize];
         Ok(PageIndex {
             file,
-            page_size,
-            entries_per_page: page_size / per_entry,
-            per_entry,
-            entry_count,
-            page_count,
-            offset_bytes,
-            last_keys,
+            footer,
+            last_keys: key_array.to_vec(),
+            checksums: checksums.to_vec(),
         })
     }
 
-    /// First page whose last key is `>= key`, over the last-key array — the
-    /// reference's `SearchLastKeys`.
-    fn find_page(&self, key: &[u8; 16]) -> Option<u64> {
-        let (mut lo, mut hi) = (0u64, self.page_count);
+    /// First page whose last key is `>= key`, over the last-key array.
+    ///
+    /// No client function that performs this selection was found in the
+    /// complete image; the handler reads and validates the index but no
+    /// consumer walks the last-key array. This search is reference-derived and
+    /// the row is open, unlike the footer/page math above.
+    fn find_page(&self, key: &[u8; 16]) -> Option<u32> {
+        let (mut lo, mut hi) = (0u32, self.footer.page_count);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let at = (mid * 16) as usize;
+            let at = mid as usize * 16;
             if self.last_keys[at..at + 16] < key[..] {
                 lo = mid + 1;
             } else {
                 hi = mid;
             }
         }
-        (lo < self.page_count).then_some(lo)
+        (lo < self.footer.page_count).then_some(lo)
     }
 
-    fn read_page(&mut self, page: u64) -> Result<Vec<u8>> {
-        let mut data = vec![0u8; self.page_size as usize];
-        self.file.seek(SeekFrom::Start(page * self.page_size))?;
+    /// Page `page`, always `pageSize` bytes, at the client's `page * pageSize`.
+    fn read_page(&mut self, page: u32) -> Result<Vec<u8>> {
+        if page >= self.footer.page_count {
+            return Err(Error::Parse(format!(
+                "index page {page} out of range 0..{}",
+                self.footer.page_count
+            )));
+        }
+        let mut data = vec![0u8; self.footer.page_size as usize];
+        self.file
+            .seek(SeekFrom::Start(self.footer.page_offset(page)))?;
         self.file.read_exact(&mut data)?;
         Ok(data)
     }
 
+    /// Whether a page body's MD5 matches the stored per-page checksum. The
+    /// client's full-file check `0x1424d9f20` compares every page and ignores
+    /// a mismatch; this exposes the same comparison for a test.
+    fn page_checksum_matches(&self, page: u32, body: &[u8]) -> bool {
+        if page >= self.footer.page_count {
+            return false;
+        }
+        let ck = self.footer.checksum_size as usize;
+        let at = page as usize * ck;
+        if at + ck > self.checksums.len() || body.len() < self.footer.page_size as usize {
+            return false;
+        }
+        blte::md5_digest(&body[..self.footer.page_size as usize])[..ck]
+            == self.checksums[at..at + ck]
+    }
+
     /// Entries on a page, capped by the footer's element count so a
     /// partly-filled last page does not read zeros.
-    fn page_entry_count(&self, page: u64) -> u64 {
-        let remaining = self
-            .entry_count
-            .saturating_sub(self.entries_per_page * page);
-        remaining.min(self.entries_per_page)
+    #[cfg(test)]
+    fn page_entry_count(&self, page: u32) -> u32 {
+        self.footer.page_entries(page)
     }
 
     /// Find a key in a group index: `(archive ordinal, offset, size)`.
@@ -939,39 +1326,28 @@ impl PageIndex {
     /// archives), `offsetBytes = 5` is the patch group (u8, up to 255 — its
     /// measured geometry, not a reference constant).
     fn group_lookup(&mut self, key: &[u8; 16]) -> Result<Option<(u16, u64, u32)>> {
-        if self.offset_bytes != 6 && self.offset_bytes != 5 {
+        if self.footer.offset_bytes != 6 && self.footer.offset_bytes != 5 {
             return Err(Error::Parse(format!(
                 "not a group index (offsetBytes {})",
-                self.offset_bytes
+                self.footer.offset_bytes
             )));
         }
-        let ordinal_width = self.offset_bytes - 4;
         let Some(page) = self.find_page(key) else {
             return Ok(None);
         };
         let data = self.read_page(page)?;
-        for i in 0..self.page_entry_count(page) {
-            let at = (i * self.per_entry) as usize;
-            let entry = &data[at..at + self.per_entry as usize];
-            if &entry[..16] != key {
+        for entry in self.footer.entries_in_page(page, &data)? {
+            if &entry.key != key {
                 continue;
             }
-            let size = u32::from_be_bytes([entry[16], entry[17], entry[18], entry[19]]);
-            let archive = if ordinal_width == 2 {
-                u16::from_be_bytes([entry[20], entry[21]])
-            } else {
-                u16::from(entry[20])
-            };
-            let o = 20 + ordinal_width;
-            let offset = u32::from_be_bytes([entry[o], entry[o + 1], entry[o + 2], entry[o + 3]]);
-            return Ok(Some((archive, u64::from(offset), size)));
+            return Ok(Some((entry.archive, u64::from(entry.offset), entry.size)));
         }
         Ok(None)
     }
 
     /// Find a key in the loose-file index: its size.
     fn loose_lookup(&mut self, key: &[u8; 16]) -> Result<Option<u32>> {
-        if self.offset_bytes != 0 {
+        if self.footer.offset_bytes != 0 {
             return Err(Error::Parse(
                 "not a loose-file index (offsetBytes != 0)".into(),
             ));
@@ -980,18 +1356,82 @@ impl PageIndex {
             return Ok(None);
         };
         let data = self.read_page(page)?;
-        for i in 0..self.page_entry_count(page) {
-            let at = (i * self.per_entry) as usize;
-            let entry = &data[at..at + self.per_entry as usize];
-            if &entry[..16] != key {
+        for entry in self.footer.entries_in_page(page, &data)? {
+            if &entry.key != key {
                 continue;
             }
-            return Ok(Some(u32::from_be_bytes([
-                entry[16], entry[17], entry[18], entry[19],
-            ])));
+            return Ok(Some(entry.size));
         }
         Ok(None)
     }
+}
+
+/// What one `indices/<hash>.index` holds, for the install test. Counts and
+/// geometry only, never content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexStats {
+    pub file_len: u64,
+    pub offset_bytes: u8,
+    pub size_bytes: u8,
+    pub key_bytes: u8,
+    pub checksum_size: u8,
+    pub element_count: u32,
+    pub page_size: u32,
+    pub entry_size: u32,
+    pub entries_per_page: u32,
+    pub page_count: u32,
+    /// Entries on page 0 and on the last page.
+    pub first_page_entries: u32,
+    pub last_page_entries: u32,
+    /// First and last 16-byte last-key records.
+    pub first_last_key: [u8; 16],
+    pub final_last_key: [u8; 16],
+    /// Every page body's MD5 matched its stored checksum.
+    pub page_checksums_ok: bool,
+}
+
+/// Open one index with the client's footer and tail checks, read every page,
+/// and report its geometry. `expected` is the index's 16-byte key, the value
+/// the client compares against MD5(terminal + footer); pass `None` for a
+/// synthetic file.
+pub fn inspect_index(path: &Path, expected: Option<&[u8; 16]>) -> Result<IndexStats> {
+    let mut index = PageIndex::open_with_key(path, expected)?;
+    let footer = index.footer;
+    let mut checksums_ok = true;
+    for page in 0..footer.page_count {
+        let body = index.read_page(page)?;
+        if !index.page_checksum_matches(page, &body) {
+            checksums_ok = false;
+        }
+    }
+    let first_last_key = if index.last_keys.len() >= 16 {
+        index.last_keys[..16].try_into().unwrap()
+    } else {
+        [0u8; 16]
+    };
+    let final_last_key = if index.last_keys.len() >= 16 {
+        let at = index.last_keys.len() - 16;
+        index.last_keys[at..].try_into().unwrap()
+    } else {
+        [0u8; 16]
+    };
+    Ok(IndexStats {
+        file_len: index.file.metadata()?.len(),
+        offset_bytes: footer.offset_bytes,
+        size_bytes: footer.size_bytes,
+        key_bytes: footer.key_bytes,
+        checksum_size: footer.checksum_size,
+        element_count: footer.element_count,
+        page_size: footer.page_size,
+        entry_size: footer.entry_size(),
+        entries_per_page: footer.entries_per_page,
+        page_count: footer.page_count,
+        first_page_entries: footer.page_entries(0),
+        last_page_entries: footer.page_entries(footer.page_count - 1),
+        first_last_key,
+        final_last_key,
+        page_checksums_ok: checksums_ok,
+    })
 }
 
 /// What the local store holds, for the `--index-stats` diagnostic. Counts,
@@ -1007,6 +1447,23 @@ pub struct StoreStats {
     /// `indices/*.index` files on disk. These are **CDN routes**, not local
     /// locations: their archive ordinals and offsets do not name a local pack.
     pub cdn_indexes: usize,
+}
+
+/// Open (or keep open) one `data.NNN` pack.
+///
+/// The client's `DynamicContainerOpenArchive` (`0x14250c8f0`) keys its handle
+/// cache by the archive number and never opens the same pack twice. `len` and
+/// `offset` are archive-local.
+fn open_archive<'a>(
+    archives: &'a mut HashMap<u32, fs::File>,
+    install: &Install,
+    archive: u32,
+) -> Result<&'a mut fs::File> {
+    if let std::collections::hash_map::Entry::Vacant(entry) = archives.entry(archive) {
+        let path = install.data_dir().join(index::archive_name(archive));
+        entry.insert(fs::File::open(path)?);
+    }
+    Ok(archives.get_mut(&archive).expect("just inserted"))
 }
 
 /// `data.NNN` files in the store.
@@ -1062,14 +1519,24 @@ mod tests {
 
     const TEST_PAGE: usize = 1024;
 
-    /// A synthetic index with the reference's layout: page bodies, the
-    /// per-page last-key array, per-page checksums, 8 pad bytes, the 12-byte
-    /// footer, 8 trailing bytes. Entries are `[key 16][size u32 BE]`, plus the
-    /// ordinal and offset when `offset_bytes` is 5 or 6.
+    /// A synthetic index with the client's layout, built by the same formula:
+    /// page bodies, the per-page last-key array, the per-page checksums, the
+    /// terminal checksum, then the 20-byte footer. Entries are `[key 16]
+    /// [size u32 BE]`, plus the ordinal and offset when `offset_bytes` is 5 or
+    /// 6.
     fn build(entries: &[([u8; 16], u32, u16, u32)], offset_bytes: usize) -> Vec<u8> {
+        build_with(entries, offset_bytes, 1)
+    }
+
+    fn build_with(
+        entries: &[([u8; 16], u32, u16, u32)],
+        offset_bytes: usize,
+        version: u8,
+    ) -> Vec<u8> {
+        const CHECKSUM: usize = 8;
         let per_entry = 16 + 4 + offset_bytes;
         let epp = TEST_PAGE / per_entry;
-        let pages = (entries.len() + epp - 1).max(1) / epp;
+        let pages = ((entries.len() + epp - 1).max(1) / epp).max(1);
         let mut out = Vec::new();
         for p in 0..pages {
             let mut page = vec![0u8; TEST_PAGE];
@@ -1091,6 +1558,7 @@ mod tests {
             }
             out.extend_from_slice(&page);
         }
+        let page_end = out.len();
         for p in 0..pages {
             let last = entries
                 .iter()
@@ -1101,18 +1569,28 @@ mod tests {
                 .unwrap_or([0u8; 16]);
             out.extend_from_slice(&last);
         }
-        out.extend(std::iter::repeat_n(0u8, pages * 8));
-        out.extend([0u8; 8]);
-        let mut footer = [0u8; 12];
-        footer[0] = 1;
+        let key_array = out[page_end..].to_vec();
+        let mut checksums = Vec::with_capacity(pages * CHECKSUM);
+        for page in out[..page_end].chunks_exact(TEST_PAGE) {
+            checksums.extend_from_slice(&blte::md5_digest(page)[..CHECKSUM]);
+        }
+        out.extend_from_slice(&checksums);
+        let mut tail = key_array;
+        tail.extend_from_slice(&checksums);
+        out.extend_from_slice(&blte::md5_digest(&tail)[..CHECKSUM]);
+        let mut footer = [0u8; INDEX_FOOTER_SIZE];
+        footer[0] = version;
         footer[3] = (TEST_PAGE / 1024) as u8;
         footer[4] = offset_bytes as u8;
         footer[5] = 4;
         footer[6] = 16;
-        footer[7] = 8;
+        footer[7] = CHECKSUM as u8;
         footer[8..12].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        let mut header = footer;
+        header[12..20].fill(0);
+        let hash = blte::md5_digest(&header);
+        footer[12..20].copy_from_slice(&hash[..8]);
         out.extend_from_slice(&footer);
-        out.extend([0u8; 8]);
         out
     }
 
@@ -1127,6 +1605,14 @@ mod tests {
             std::env::temp_dir().join(format!("ow-casc-{}-{name}.index", std::process::id()));
         fs::write(&path, bytes).expect("write synthetic index");
         path
+    }
+
+    /// Recompute the footer's header MD5 after a test edits its header.
+    fn resign(footer: &mut [u8; 20]) {
+        let mut header = *footer;
+        header[12..20].fill(0);
+        let hash = blte::md5_digest(&header);
+        footer[12..20].copy_from_slice(&hash[..8]);
     }
 
     /// More entries than fit one page: the binary search over the last-key
@@ -1145,7 +1631,10 @@ mod tests {
         }
         let path = write_temp("group", &build(&entries, 6));
         let mut index = PageIndex::open(&path).expect("opens");
-        assert!(index.page_count >= 2, "synthetic file should span pages");
+        assert!(
+            index.footer.page_count >= 2,
+            "synthetic file should span pages"
+        );
 
         for i in [0u8, 1, 40, 78, 79] {
             let found = index.group_lookup(&key(i)).expect("lookup");
@@ -1177,15 +1666,15 @@ mod tests {
     }
 
     /// A loose index (`offsetBytes = 0`) reports sizes, and the one-page
-    /// count is the case the full-file parser gets wrong: with the corrected
-    /// formula a single-page file has `page_count == 1`, not 0.
+    /// count is the case the reference formula gets wrong: with the client's
+    /// element-count formula a single-page file has `page_count == 1`, not 0.
     #[test]
     fn loose_lookup_and_single_page_count() {
         let entries = vec![(key(9), 109_878_111, 0u16, 0u32)];
         let path = write_temp("loose", &build(&entries, 0));
         let mut index = PageIndex::open(&path).expect("opens");
-        assert_eq!(index.page_count, 1);
-        assert_eq!(index.entry_count, 1);
+        assert_eq!(index.footer.page_count, 1);
+        assert_eq!(index.footer.element_count, 1);
         assert_eq!(
             index.loose_lookup(&key(9)).expect("lookup"),
             Some(109_878_111)
@@ -1201,6 +1690,183 @@ mod tests {
         let mut index = PageIndex::open(&path).expect("opens");
         let e = index.loose_lookup(&key(1)).expect_err("must refuse");
         assert!(e.to_string().contains("not a loose-file index"), "{e}");
+        fs::remove_file(&path).ok();
+    }
+
+    /// The pure footer leaf on a well-formed synthetic file: the exact
+    /// geometry, page count and output-byte layout of `0x1424d9af0`.
+    #[test]
+    fn footer_parse_matches_the_client_geometry() {
+        let entries: Vec<_> = (0u8..80)
+            .map(|i| (key(i), 100 + u32::from(i), 0, 0))
+            .collect();
+        let bytes = build(&entries, 0);
+        let footer_bytes: [u8; 20] = bytes[bytes.len() - 20..].try_into().unwrap();
+        let footer = IndexFooter::parse(&footer_bytes, bytes.len() as u32).expect("footer");
+        assert_eq!(footer.version, 1);
+        assert_eq!(footer.page_size, 1024);
+        assert_eq!(footer.offset_bytes, 0);
+        assert_eq!(footer.size_bytes, 4);
+        assert_eq!(footer.key_bytes, 16);
+        assert_eq!(footer.checksum_size, 8);
+        assert_eq!(footer.element_count, 80);
+        assert_eq!(footer.entry_size(), 20);
+        assert_eq!(footer.entries_per_page, 51);
+        assert_eq!(footer.page_count, 2);
+        assert_eq!(footer.last_key_bytes, 32);
+        assert_eq!(footer.checksum_bytes, 16);
+        assert_eq!(footer.expected_len(), bytes.len() as u32);
+        assert_eq!(footer.tail_len(), 32 + 16 + 8);
+        assert_eq!(footer.page_entries(0), 51);
+        assert_eq!(footer.page_entries(1), 29);
+        assert_eq!(footer.page_entries(2), 0);
+        assert_eq!(footer.page_offset(1), 1024);
+    }
+
+    /// Every footer rejection the client's leaf has, plus the two safety
+    /// branches (short buffer, page smaller than an entry) the client would
+    /// fault on.
+    #[test]
+    fn footer_rejections_follow_the_client_branches() {
+        let entries = vec![(key(1), 5, 0u16, 0u32)];
+        let bytes = build(&entries, 0);
+        let len = bytes.len() as u32;
+        let good: [u8; 20] = bytes[bytes.len() - 20..].try_into().unwrap();
+
+        // Version 2 is the first rejected version; version 1 is the last
+        // accepted one.
+        let mut footer = good;
+        footer[0] = 2;
+        resign(&mut footer);
+        assert!(IndexFooter::parse(&footer, len).is_err());
+
+        // Checksum size 17 is the first rejected width; 16 is accepted.
+        let mut footer = good;
+        footer[7] = 17;
+        resign(&mut footer);
+        assert!(IndexFooter::parse(&footer, len).is_err());
+
+        // Zero page size and zero entry size.
+        let mut footer = good;
+        footer[3] = 0;
+        resign(&mut footer);
+        assert!(IndexFooter::parse(&footer, len).is_err());
+
+        let mut footer = good;
+        footer[4] = 0;
+        footer[5] = 0;
+        footer[6] = 0;
+        resign(&mut footer);
+        assert!(IndexFooter::parse(&footer, len).is_err());
+
+        // A bad header MD5 is the first branch; it leaves the hash zeroed in
+        // the output buffer, as the client does.
+        let mut footer = good;
+        footer[12] ^= 1;
+        let mut out = [0xA5u8; 0x30];
+        assert_eq!(parse_index_footer(&footer, 20, len, &mut out), 8);
+        assert_eq!(&out[12..20], &[0u8; 8]);
+
+        // A file length one byte off fails the client's total-length gate.
+        assert!(IndexFooter::parse(&good, len + 1).is_err());
+        assert!(IndexFooter::parse(&good, len - 1).is_err());
+
+        // A page size whose KiB byte is 0xff is legal upstream but this
+        // file's stored page count then no longer matches the length.
+        let mut footer = good;
+        footer[3] = 0xff;
+        resign(&mut footer);
+        assert!(IndexFooter::parse(&footer, len).is_err());
+
+        // Short input is a reject in this port (the client would read before
+        // the buffer).
+        let mut out = [0u8; 0x30];
+        assert_eq!(parse_index_footer(&good, 19, len, &mut out), 8);
+        assert_eq!(parse_index_footer(&[], 0, 0, &mut [0u8; 0x30]), 8);
+    }
+
+    /// A short file, a bad terminal checksum and a wrong index key are the
+    /// three whole-file rejects not covered by the footer leaf alone.
+    #[test]
+    fn whole_file_rejects_short_terminal_and_wrong_key() {
+        let entries = vec![(key(1), 5, 0u16, 0u32), (key(2), 6, 0, 0)];
+        let good = build(&entries, 0);
+
+        let short = write_temp("short", &good[..12]);
+        let e = PageIndex::open(&short).expect_err("short file must reject");
+        assert!(e.to_string().contains("too small"), "{e}");
+        fs::remove_file(&short).ok();
+
+        let mut bad_terminal = good.clone();
+        let at = bad_terminal.len() - 20 - 8 - 1;
+        bad_terminal[at] ^= 0x80;
+        let path = write_temp("terminal", &bad_terminal);
+        let e = PageIndex::open(&path).expect_err("terminal checksum must reject");
+        assert!(e.to_string().contains("terminal checksum"), "{e}");
+        fs::remove_file(&path).ok();
+
+        // The real key relation: MD5(terminal + footer) is the file's key.
+        let footer_bytes: [u8; 20] = good[good.len() - 20..].try_into().unwrap();
+        let terminal = &good[good.len() - 28..good.len() - 20];
+        let mut hashed = terminal.to_vec();
+        hashed.extend_from_slice(&footer_bytes);
+        let expected: [u8; 16] = blte::md5_digest(&hashed);
+        let path = write_temp("key", &good);
+        assert!(PageIndex::open_with_key(&path, Some(&expected)).is_ok());
+        let wrong = [0u8; 16];
+        let e = PageIndex::open_with_key(&path, Some(&wrong)).expect_err("wrong key must reject");
+        assert!(e.to_string().contains("index key"), "{e}");
+        fs::remove_file(&path).ok();
+    }
+
+    /// The page reader uses the client's `page * pageSize` and rejects an
+    /// out-of-range page; a short body is an I/O short read, not zeros.
+    #[test]
+    fn page_reader_range_and_short_body() {
+        let entries: Vec<_> = (0u8..80)
+            .map(|i| (key(i), 100 + u32::from(i), 800 + u16::from(i), 7))
+            .collect();
+        let bytes = build(&entries, 6);
+        let path = write_temp("page-range", &bytes);
+        let mut index = PageIndex::open(&path).expect("opens");
+        assert_eq!(index.footer.page_count, 3);
+        let page1 = index.read_page(1).expect("page 1");
+        assert_eq!(page1.len(), 1024);
+        let decoded = index.footer.entries_in_page(1, &page1).expect("entries");
+        assert_eq!(decoded.len(), 39);
+        assert_eq!(decoded[0].key, key(39));
+        assert_eq!(decoded[38].key, key(77));
+        let e = index.read_page(3).expect_err("out of range");
+        assert!(e.to_string().contains("out of range"), "{e}");
+
+        // Truncate after opening: page 1's read is short.
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open");
+        file.set_len(1024 + 8).expect("truncate");
+        drop(file);
+        let e = index.read_page(1).expect_err("short page");
+        assert!(matches!(e, Error::Io(_)), "{e:?}");
+        fs::remove_file(&path).ok();
+    }
+
+    /// The client's per-page MD5 check and the element-count cap.
+    #[test]
+    fn page_checksums_and_element_cap_match_the_client() {
+        let entries: Vec<_> = (0u8..80).map(|i| (key(i), 1, 0, 0)).collect();
+        let bytes = build(&entries, 0);
+        let path = write_temp("checksums", &bytes);
+        let mut index = PageIndex::open(&path).expect("opens");
+        for page in 0..index.footer.page_count {
+            let body = index.read_page(page).expect("page");
+            assert!(index.page_checksum_matches(page, &body), "page {page}");
+        }
+        let mut body = index.read_page(0).expect("page");
+        body[0] ^= 1;
+        assert!(!index.page_checksum_matches(0, &body));
+        assert_eq!(index.page_entry_count(1), 29);
+        assert_eq!(index.page_entry_count(2), 0);
         fs::remove_file(&path).ok();
     }
 

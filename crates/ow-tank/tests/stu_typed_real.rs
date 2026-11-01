@@ -523,7 +523,7 @@ fn real_stu_typed_layer() {
             continue;
         };
         read += 1;
-        let has_magic = bytes.starts_with(b"STUD");
+        let has_magic = bytes.starts_with(&ow_stu::MAGIC_V1);
         if has_magic {
             stud_headers += 1;
         }

@@ -13,8 +13,10 @@ operator's install; behaviour comes from the complete current-build
 | **know the rebuild order** | **[`rebuild-plan.md`](rebuild-plan.md)** |
 | see every system and its state | [`systems-coverage.md`](systems-coverage.md) |
 | **pick the next thing to work on** | **[`open-questions.md`](open-questions.md)** |
+| **implement movement** | **[`movement-plan.md`](movement-plan.md)** |
 | know how evidence is classified | [`provenance.md`](provenance.md) |
 | work in the decompiler | [`ghidra-project.md`](ghidra-project.md) |
+| rebuild the clean Ghidra image | [`ghidra-migration.md`](ghidra-migration.md) |
 | find a function's current address | [`function-names.csv`](function-names.csv) |
 | know what is not 1 to 1 yet | [`deviations.md`](deviations.md), [`ow-tank-1to1.md`](ow-tank-1to1.md), [`casc-1to1.md`](casc-1to1.md) |
 | know the crates and data flow | [`architecture.md`](architecture.md) |
@@ -27,7 +29,7 @@ operator's install; behaviour comes from the complete current-build
 ## Reading orders
 
 - **Movement:** `formats/character-controller.md` → `formats/domino.md` →
-  `docs/open-questions.md` (the ramp is open).
+  `movement-plan.md` → `docs/open-questions.md`.
 - **Combat:** `formats/weapons.md` → `docs/open-questions.md` (fire/damage is
   open).
 - **Camera:** `formats/camera.md` → `formats/animation.md` (first-person) →

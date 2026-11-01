@@ -1,0 +1,91 @@
+{
+  "id": "fn/ApplyStateModifiers",
+  "title": "tier-2 shipped code: the 37-kind state-modifier evaluator against FUN_140cbcbe0",
+  "address": {
+    "v2b": "0x7ff7c59dcbe0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_apply_modifiers",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "body",
+      "kind": "ptr",
+      "ptr_len": 7168
+    },
+    {
+      "name": "base",
+      "kind": "u64"
+    },
+    {
+      "name": "records",
+      "kind": "ptr",
+      "ptr_len": 56
+    },
+    {
+      "name": "gate",
+      "kind": "u64"
+    },
+    {
+      "name": "feature_bit",
+      "kind": "u64"
+    },
+    {
+      "name": "g1",
+      "kind": "f64"
+    },
+    {
+      "name": "g2",
+      "kind": "f64"
+    },
+    {
+      "name": "vtable",
+      "kind": "ptr",
+      "ptr_len": 128
+    }
+  ],
+  "returns": "void",
+  "state": {
+    "base": "0x00007ff7c86d1210",
+    "hex": "000000000000000000000000000000000000000000000000000000000000000000000000000004400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f8bf0000000000000000"
+  },
+  "argFactory": "mover_apply_modifiers_fixture",
+  "options": {
+    "iterations": 420,
+    "coverageThreshold": 70,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4848,
+    "coverageWindow": 6445,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4",
+      "0x7ff7c7c9aad4",
+      "0x7ff7c7ca0ff8",
+      "0x7ff7c7ca0ffc",
+      "0x7ff7c7ca100c",
+      "0x7ff7c7ca41e8",
+      "0x7ff7c7ca44b8",
+      "0x7ff7c7ca5114",
+      "0x7ff7c7e30830",
+      "0x7ff7c7e30838",
+      "0x7ff7c7d8468c",
+      "0x7ff7c8591e08",
+      "0x7ff7c7dc2418",
+      "0x7ff7c86d1230",
+      "0x7ff7c86d1270",
+      "0x7ff7c59df510-0x7ff7c59df950"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/modifiers.rs (apply_state_modifiers), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_apply_modifiers entry.",
+    "The oracle runs FUN_140cbcbe0 (0x140cbcbe0) with the body pinned in the arena and a fake vtable at arena +0x6000; its +0x68/+0x70 slots hold the base-table stubs at their v2b addresses because the oracle maps the raw image without relocations.",
+    "body+8 encodes a service block at body+0x1800 whose +0x28 descriptor decodes to null (the end-of-function events then return without a call) and whose +0x118 bit 29 is the guarded-crouch feature bit; the probe receives that bit directly.",
+    "Cases: the default path; one set-record per live kind 0x00..0x2e; holes 0x11/0x22 and kinds 0x2f/-1; ops 6/-1; window edges; ops 0..5 on several kinds; NaN bounds; dash windows at id 100..200 with and without the flags; the guarded crouch block on/off; a four-record stack in ascending order.",
+    "The two +0x65c bounds are preloaded through the state block from the mutable doubles at 0x1439b1230/0x1439b1270 (2.5 and -1.5)."
+  ],
+  "acknowledgedGaps": [
+    "The obfuscated service pointer chain from body+8 is not followed by the candidate; the guarded block's feature bit is supplied as an argument, and the state block's +0x118 value in the fixture is the source. The end-of-function events 0x11/0x12 and the 0x142cbd190 notify are external side effects and are not modelled; they do not write the body. The 0xa70 state-array scan and the +0x268 restore are implemented but the fixture seeds count 0, so the copied-entry path is not exercised. Every record's +0x34 is read only by op 5."
+  ]
+}

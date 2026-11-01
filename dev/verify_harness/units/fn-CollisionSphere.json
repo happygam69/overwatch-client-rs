@@ -1,0 +1,70 @@
+{
+  "id": "fn/CollisionSphere",
+  "title": "tier-2 shipped code: the type-0 sphere narrowphase against 0x142ccdf40",
+  "address": {
+    "v2b": "0x7ff7c79edf40"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_sphere",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "record",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 72
+    },
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 120
+    },
+    {
+      "name": "xform",
+      "kind": "ptr",
+      "ptr_len": 32
+    }
+  ],
+  "returns": "void",
+  "argFactory": "collision_sphere_fixture",
+  "options": {
+    "iterations": 264,
+    "coverageThreshold": 85,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 5541,
+    "coverageWindow": 1260,
+    "allowedImageReads": [
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f",
+      "0x7ff7c87e5f40-0x7ff7c87e5f4f",
+      "0x7ff7c7e30818-0x7ff7c7e30827",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7c9aae4-0x7ff7c7c9aaf3",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff",
+      "0x7ff7c7cc62f0-0x7ff7c7cc62ff",
+      "0x7ff7c80b1030-0x7ff7c80b103f"
+    ],
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c79edf97",
+        "edge": "0x7ff7c79edf9d",
+        "why": "The support-point path (count > 0) hands the block to 0x142cc9460, which is unread. Every fixture case passes count = 0, so the fall-through edge is never taken."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (sphere_sweep), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_sphere entry.",
+    "The oracle runs the real 0x142ccdf40 and the harness compares the whole 0x44-byte output pointee (three quads plus the trailing ids) byte for byte. A miss leaves the output untouched on both sides, so the hit/miss branch is part of the compared channel.",
+    "The unit declares the function's exact extent (0x4ec) because the image's .pdata entry stops at 0x42 bytes.",
+    "The record is {centre, radius}, the transform {position, world->local quaternion}, and the block start/end/motion/expansion with the +0x72 flag; the quaternion edge pool includes a zero, a non-unit and the IEEE specials."
+  ],
+  "acknowledgedGaps": [
+    "Only the count <= 0 path is verified. The count > 0 path (the shared support-point routine 0x142cc9460) is open, and so are the other four shape types, the hit policy and the geometry ingest."
+  ]
+}

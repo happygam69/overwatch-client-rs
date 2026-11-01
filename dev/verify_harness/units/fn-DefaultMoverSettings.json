@@ -1,0 +1,49 @@
+{
+  "id": "fn/DefaultMoverSettings",
+  "title": "tier-2 shipped code: the movement-settings default constructor against FUN_1405a87d0",
+  "address": {
+    "v2b": "0x7ff7c52c87d0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_default_settings",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 1792
+    },
+    {
+      "name": "base",
+      "kind": "u64"
+    },
+    {
+      "name": "global",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "mover_default_settings_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 100,
+    "mutationCount": 4,
+    "mutationKillRate": 1.0,
+    "seed": 4646,
+    "coverageWindow": 450,
+    "allowedImageReads": [
+      "0x7ff7c8ea80e8"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/settings.rs (default_settings), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_default_settings entry.",
+    "The oracle runs FUN_1405a87d0 (0x1405a87d0) with the object pinned at a known arena address; the probe receives the same address as `base` because four fields (+0x10, +0x70, +0x280, +0x558) are pointers into the object itself.",
+    "The case fills cover 0x00, 0xff, 0xaa, 0x55 and random bytes, so untouched bytes must survive. The written span is 0x0..0x5e7; the object's remaining bytes are not part of the unit.",
+    "This pins the defaults the verified ramp and spring read: +0x5a8/+0x5ac = 1.0, +0x5b4 = 1.0, +0x5c0 = 0.0 (via the qword at +0x5bc) and +0x5c4/+0x5c5/+0x5c6 = 1. It also pins the parameter-block seeds +0x5d0 = -2, +0x5d4 = 1.0 and +0x5dc = 0x10000."
+  ],
+  "acknowledgedGaps": [
+    "The constructor reads the sentinel global at 0x1441880e8, which is zero in the image; the fixture passes that value. The later settings apply (0x140c862e0) and the asset that overwrites the scale pair are not part of this unit."
+  ]
+}

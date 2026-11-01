@@ -33,9 +33,12 @@ install files (CASC)                     Overwatch.exe (Ghidra)
 | `ow-tank` | asset semantics: GUIDs, STU classes, models, skeletons, clips, blend trees, entities, weapons, settings, maps | asset bytes | `guid`, `classreg`, `classes`, `entity`, `blendtree`, `clip`, `skin`, `skeleton`, `model`, `hardpoint`, `fieldnames`, `keytable`, `mapresolve`, `mapchunk` |
 | `ow-scene` | map geometry: the resolver's chunk set, model placeables, materials/textures, renderer-neutral vertex/index/instance buffers | `ow-tank` | `lib` |
 | `ow-client` | the one launchable client: practice-range launch, `wgpu` renderer, HUD, free camera | `ow-scene`, `ow-tank` | `main`, `surface`, `hud` |
+| `ow-render` | native D3D11 backend: device/swap chain, replay dispatch, state caches, engine batch records | `windows` | `device`, `frame`, `replay`, `state`, `batch` |
+| `ow-sim` | differential-verified client arithmetic: mover ramp/command, Domino body, camera basis | none | `movement`, `body`, `camera` |
 
-`ow-sim` stays **parked reference code** and is not a workspace member; it is
-not trusted for map selection or gameplay until its layers pass the oracle
+`ow-sim` is a workspace member now. It holds only the differential-verified
+arithmetic; it is not trusted for map selection or a per-frame gameplay claim
+until the control law and Domino dispatch pass the oracle
 ([`rebuild-plan.md`](rebuild-plan.md)).
 
 Binary/example entry points live in `crates/ow-tank/src/bin` (`hero`,
@@ -59,9 +62,10 @@ readable header and its variation modes.
 
 ## Behaviour pipeline
 
-1. **Open `Overwatch.exe`** in the project (`dev/ghidra_run/owmod`). It is the
-   complete current-build image: every `.text` page, the install's plaintext
-   `.pdata`, 151,260 functions.
+1. **Open `Overwatch.exe`** in the project (`dev/ghidra_run/owmod_clean`). It is the
+   complete current-build image: every `.text` page and the install's
+   plaintext `.pdata`; the function census is in
+   [`ghidra-project.md`](ghidra-project.md).
 2. **Read the function.** Use the MCP bridge or the headless scripts in
    `docs/ghidra/`. Record the address and the conclusion in
    `docs/formats/<system>.md`; never paste disassembly.
@@ -86,8 +90,8 @@ readable header and its variation modes.
 ## Tests and verification
 
 `cargo xtask verify` is the gate: fmt, clippy (warnings are errors), the
-tests, the tool index and the deviation check. `--fast` leaves out the tests
-that read the install. Behind it:
+tests, the tool index, the deviation check and the address/function-entry
+check. `--fast` leaves out the tests that read the install. Behind it:
 
 - `cargo test --release -p ow-casc -p ow-stu -p ow-tank -p ow-scene` - data
   layer and map/client scene tests (the `*_real` tests read the install and

@@ -1,0 +1,37 @@
+{
+  "id": "fn/MoverRampScalarOffset",
+  "title": "tier-2 shipped code: the scalar ramp plus +0x10fc against MoverRampScalarOffset (0x140ca7570)",
+  "address": {
+    "v2b": "0x7ff7c59c7570"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_ramp_scalar_offset",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "body", "kind": "ptr", "ptr_len": 4464 }
+  ],
+  "returns": "f32",
+  "argFactory": "mover_ramp_scalar_offset_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "coverageWindow": 56,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/movement.rs (ramp_offset), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_ramp_scalar_offset entry.",
+    "Oracle is MoverRampScalarOffset at exe 0x140ca7570 (v2b 0x7ff7c59c7570), a leaf with no .pdata extent; coverageWindow 0x38 stops at the RET at 0x140ca75a4.",
+    "Read expression: minss(body+0x10ec, 1.0) * scale + body[0x10fc], with the same CMOVZ scale slot at body+0x5b4/0x5a8 selected by body[0x10d0] bit 1.",
+    "Call site: the tail of MoverAdvance (0x140ca7f30) uses this same expression to subtract the ramp from the swept position; the unit pins the scalar leaf the expression matches."
+  ],
+  "acknowledgedGaps": [
+    "The unit proves the leaf's scalar arithmetic. MoverAdvance's sweep and the caller's use of the result remain open. NaN payload propagation is outside the unit, as in fn/MoverRampVector."
+  ]
+}

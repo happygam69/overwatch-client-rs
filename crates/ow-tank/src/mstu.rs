@@ -128,7 +128,7 @@ mod tests {
     /// The smallest STU blob `ow-stu` accepts: a version-1 header with no
     /// instances.
     fn minimal_stu() -> Vec<u8> {
-        let mut out = Vec::from(*b"STUD");
+        let mut out = Vec::from(ow_stu::MAGIC_V1);
         out.extend_from_slice(&0u32.to_le_bytes());
         out
     }

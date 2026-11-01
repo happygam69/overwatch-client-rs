@@ -903,33 +903,26 @@ fn hex_nibble(byte: u8) -> Option<u8> {
 /// Parse one bucket file. `expect_bucket` is verified against the header.
 pub fn parse_bucket_file(path: &Path, expect_bucket: Option<u8>) -> Result<BucketFile> {
     let data = fs::read(path)?;
-    if data.len() < SECTION_HEADER + FILE_HEADER_SIZE {
-        return Err(Error::Malformed(
-            path.to_path_buf(),
-            "file shorter than its header",
-        ));
-    }
 
-    // The section header's byte count positions the entry block. The client
-    // (`0x14250fcf0`) requires it to be at least 0x10 and rounds
-    // `sectionSize + 0x17` down to a 16-byte boundary; the entry block's own
-    // 8-byte BlockSizeAndHash follows, then the entries. The usual file has
-    // sectionSize 16 -> entry header at 32 -> entries at 40.
+    // `DynamicIndexSegmentParse` (`0x14250fcf0`) checks in this order: the
+    // 8-byte section header fits; the section body fits; the section hash
+    // matches; the section is at least 0x10 bytes; the bucket matches; then
+    // the version and widths. The section size is read as a u32 and every
+    // offset is formed in 64 bits, so a huge declared size cannot wrap.
+    if data.len() < SECTION_HEADER {
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "file shorter than its section header",
+        ));
+    }
     let section_size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-    if section_size < 0x10 {
+    let header_end = SECTION_HEADER + section_size as usize;
+    if data.len() < header_end {
         return Err(Error::Malformed(
             path.to_path_buf(),
-            "section header is smaller than 16 bytes",
+            "section body runs past the end of the file",
         ));
     }
-    let entry_header = (section_size as usize + 0x17) & !0xf;
-    if data.len() < entry_header + SECTION_HEADER {
-        return Err(Error::Malformed(
-            path.to_path_buf(),
-            "entry block header runs past the end of the file",
-        ));
-    }
-    let entries_offset = entry_header + SECTION_HEADER;
 
     // The section's second word is a 32-bit hash of the section body, and the
     // entry block's second word is a rolling hash over the 18-byte entries.
@@ -937,13 +930,6 @@ pub fn parse_bucket_file(path: &Path, expect_bucket: Option<u8>) -> Result<Bucke
     // the same hash, verified against all sixteen files of the reference
     // install. Rejecting a mismatch is what keeps a corrupt index from
     // resolving to arbitrary bytes.
-    let header_end = 8 + section_size as usize;
-    if data.len() < header_end {
-        return Err(Error::Malformed(
-            path.to_path_buf(),
-            "section body runs past the end of the file",
-        ));
-    }
     let mut state = [0u32; 2];
     hash_index(&data[8..header_end], &mut state);
     let stored = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
@@ -954,22 +940,18 @@ pub fn parse_bucket_file(path: &Path, expect_bucket: Option<u8>) -> Result<Bucke
         ));
     }
 
-    let version = u16::from_le_bytes([data[8], data[9]]);
-    let bucket = data[10];
-    let span_size = data[12];
-    let span_offs = data[13];
-    let ekey_bytes = data[14];
-
-    // The client's parser (`FUN_14250fcf0`) accepts any version >= 7 and
-    // checks only the three field widths it hardcodes: 4-byte size, 5-byte
-    // location, 9-byte key. It never looks at the extra-bytes or offset-bits
-    // bytes, so neither do we; a v8 file with the same widths reads the same.
-    if version < 7 || span_size != 4 || span_offs != 5 || ekey_bytes != 9 {
+    // The client returns status 5 for a short section or a bad version/widths
+    // and status 9 for the structural and hash failures. `ow-casc` keeps one
+    // `Malformed` error because callers branch only on success; the mapping
+    // is recorded in `docs/formats/casc.md`.
+    if section_size < 0x10 {
         return Err(Error::Malformed(
             path.to_path_buf(),
-            "unsupported index header",
+            "section header is smaller than 16 bytes",
         ));
     }
+
+    let bucket = data[10];
     if let Some(expected) = expect_bucket {
         if bucket != expected {
             return Err(Error::Malformed(
@@ -979,20 +961,61 @@ pub fn parse_bucket_file(path: &Path, expect_bucket: Option<u8>) -> Result<Bucke
         }
     }
 
-    let block_size = i32::from_le_bytes([
+    let version = u16::from_le_bytes([data[8], data[9]]);
+    let span_size = data[12];
+    let span_offs = data[13];
+    let ekey_bytes = data[14];
+
+    // The client's parser (`0x14250fcf0`) accepts any version >= 7 and
+    // checks only the three field widths it hardcodes: 4-byte size, 5-byte
+    // location, 9-byte key. It never looks at the extra-bytes or offset-bits
+    // bytes, so neither do we; a v8 file with the same widths reads the same.
+    if version < 7 || span_size != 4 || span_offs != 5 || ekey_bytes != 9 {
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "unsupported index header",
+        ));
+    }
+
+    // The section header's byte count positions the entry block. The client
+    // rounds `section_size + 0x17` down to a 16-byte boundary; the entry
+    // block's own 8-byte BlockSizeAndHash follows, then the entries. The usual
+    // file has section_size 16 -> entry header at 32 -> entries at 40. The
+    // client also stores the u64 at header + 0x10 as the maximum addressable
+    // size; the parse never checks it, and the index lookup/resolve paths do
+    // not read it.
+    let entry_header = (section_size as usize + 0x17) & !0xf;
+    if entry_header >= data.len() {
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "entry block header starts past the end of the file",
+        ));
+    }
+    let remaining = data.len() - entry_header;
+    if remaining < SECTION_HEADER {
+        return Err(Error::Malformed(
+            path.to_path_buf(),
+            "entry block header runs past the end of the file",
+        ));
+    }
+    let block_size = u32::from_le_bytes([
         data[entry_header],
         data[entry_header + 1],
         data[entry_header + 2],
         data[entry_header + 3],
     ]);
-    if block_size < 0 || block_size as usize % ENTRY_SIZE != 0 {
+    if u64::from(block_size) + SECTION_HEADER as u64 > remaining as u64 {
         return Err(Error::Malformed(
             path.to_path_buf(),
-            "entry block size is not a multiple of 18",
+            "entry block runs past the end of the file",
         ));
     }
-    let count = block_size as usize / ENTRY_SIZE;
 
+    // The client divides the declared block size by 18 and ignores any
+    // remainder: `count = block_size / 0x12`, with no divisibility check. A
+    // trailing partial entry is never hashed and never decoded.
+    let count = block_size as usize / ENTRY_SIZE;
+    let entries_offset = entry_header + SECTION_HEADER;
     let end = entries_offset + count * ENTRY_SIZE;
     if data.len() < end {
         return Err(Error::Malformed(
@@ -1565,6 +1588,84 @@ mod tests {
         assert_eq!(file.entries[0].0, key);
         assert_eq!(file.entries[0].1.archive, 1);
         assert_eq!(file.entries[0].1.size, 99);
+        fs::remove_file(&path).ok();
+    }
+
+    /// The client floors `block_size / 0x12`; it does not require the declared
+    /// entry block to be a multiple of 18. The five trailing bytes here are
+    /// part of the block but are neither hashed nor decoded.
+    #[test]
+    fn accepts_an_entry_block_with_a_partial_trailing_entry() {
+        let key = [0x2au8; 9];
+        let mut file = bucket_file(7, 3, &[(key, 1 << 30, 41)]);
+        file[32..36].copy_from_slice(&23u32.to_le_bytes());
+        file[ENTRIES_OFFSET + ENTRY_SIZE..ENTRIES_OFFSET + 23].fill(0xa5);
+        // `(23 + 32 + 0x1007) & ~0xfff` is still 0x1000, so the fixture's page
+        // table stays at the offset the parser computes.
+        let path = write_temp("block-tail", &file);
+        let parsed = parse_bucket_file(&path, Some(3)).expect("floored entry count");
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].0, key);
+        assert_eq!(parsed.entries[0].1.size, 41);
+        fs::remove_file(&path).ok();
+    }
+
+    /// The first structural check is the 8-byte section header; a shorter
+    /// file is malformed before any field is read.
+    #[test]
+    fn rejects_a_file_shorter_than_the_section_header() {
+        let path = write_temp("short", &[0u8; 4]);
+        assert!(parse_bucket_file(&path, None).is_err());
+        fs::remove_file(&path).ok();
+    }
+
+    /// The section hash covers the declared section body and is checked before
+    /// the version and widths, so a changed version byte is a hash failure.
+    #[test]
+    fn rejects_a_section_hash_mismatch() {
+        let key = [0x2bu8; 9];
+        let mut file = bucket_file(7, 3, &[(key, 1 << 30, 41)]);
+        file[8] ^= 0xff;
+        let path = write_temp("section-hash", &file);
+        assert!(parse_bucket_file(&path, Some(3)).is_err());
+        fs::remove_file(&path).ok();
+    }
+
+    /// The entry block's rolling hash covers exactly the floored entry count;
+    /// a changed entry byte is rejected before any entry is decoded.
+    #[test]
+    fn rejects_an_entry_block_hash_mismatch() {
+        let key = [0x2cu8; 9];
+        let mut file = bucket_file(7, 3, &[(key, 1 << 30, 41)]);
+        file[ENTRIES_OFFSET] ^= 0xff;
+        let path = write_temp("entry-hash", &file);
+        assert!(parse_bucket_file(&path, Some(3)).is_err());
+        fs::remove_file(&path).ok();
+    }
+
+    /// The client requires `block_size + 8 <= remaining`; one byte more is
+    /// rejected even though the section and entry hashes are still valid.
+    #[test]
+    fn rejects_an_entry_block_that_runs_past_the_file() {
+        let key = [0x2du8; 9];
+        let mut file = bucket_file(7, 3, &[(key, 1 << 30, 41)]);
+        let block_size = (file.len() - ENTRIES_OFFSET + 1) as u32;
+        file[32..36].copy_from_slice(&block_size.to_le_bytes());
+        let path = write_temp("block-bound", &file);
+        assert!(parse_bucket_file(&path, Some(3)).is_err());
+        fs::remove_file(&path).ok();
+    }
+
+    /// `page_count = remaining >> 9` floors; a partial trailing page is
+    /// ignored and does not add a page to the table.
+    #[test]
+    fn page_count_floors_a_partial_trailing_page() {
+        let key = [0x2eu8; 9];
+        let mut file = bucket_file(7, 3, &[(key, 1 << 30, 41)]);
+        file.extend_from_slice(&[0u8; 0x123]);
+        let path = write_temp("partial-page", &file);
+        let parsed = parse_bucket_file(&path, Some(3)).expect("partial page is ignored");
+        assert_eq!(parsed.pages.page_count(), 60);
         fs::remove_file(&path).ok();
     }
 

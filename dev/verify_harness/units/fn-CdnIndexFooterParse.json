@@ -1,0 +1,61 @@
+{
+  "id": "fn/CdnIndexFooterParse",
+  "title": "tier-2 shipped code: CDN index footer parse against the client's FUN_1424d9af0",
+  "address": {
+    "v2b": "0x7ff7c71f9af0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "cdn_index_footer_parse",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    { "name": "data", "kind": "ptr", "ptr_len": 64 },
+    { "name": "len", "kind": "u64" },
+    { "name": "total_len", "kind": "u64" },
+    { "name": "out", "kind": "ptr", "ptr_len": 48 }
+  ],
+  "returns": "void",
+  "argFactory": "cdn_index_footer_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 40,
+    "mutationKillRate": 1.0,
+    "seed": 4591,
+    "allowedImageReads": [
+      "0x7ff7c87e5f40-0x7ff7c87e5f47",
+      "0x7ff7c87e5f98-0x7ff7c87e5faf",
+      "0x7ff7c83395c0-0x7ff7c83395df",
+      "0x7ff7c818b2b0-0x7ff7c818b2ff"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/container.rs, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the cdn_index_footer_parse entry. The ledger binds the verdict to container.rs + the probe source + the git revision.",
+    "Oracle is FUN_1424d9af0 at exe 0x1424d9af0. Signature: (void *buffer, uint32 buffer_len, uint32 file_len, uint8 out[0x30]). The client reads the footer at buffer + buffer_len - 20; the probe passes the footer at the end of a 64-byte arena buffer and the same len field, so the address is the same. The function writes only AL: on success it does `XOR AL,AL` after leaving the total length in EAX, so RAX is `file_len & ~0xff`, not 0; on a reject AL=8 and RAX's upper bits hold whatever the last compare left. Callers test AL only, so the unit declares `void` and compares the memory channel.",
+    "Output layout, verified against the function bytes: out[0..0x14] is the footer copy; out[0x14]=pageSize=footer[3]<<10; out[0x18]=entrySize=footer[4]+footer[5]+footer[6]; out[0x1c]=pageSize/entrySize; out[0x20]=(elementCount-1+entriesPerPage)/entriesPerPage; out[0x24]=pageCount*keyBytes; out[0x28]=pageCount*checksumSize. All derived fields are host-order dwords and all arithmetic is 32-bit wrapping.",
+    "The memory channel carries every accept/reject that is caller-visible: a bad footer hash leaves out[0xc..0x14] zeroed; a version, checksum-size, zero-page, zero-entry or zero-entries-per-page reject leaves all derived fields untouched at the fixture's 0xA5 fill; an accepted geometry writes the six dwords. Both buffers are compared, so an unintended input write is caught too.",
+    "The one status the memory channel cannot see is the final length gate: the client writes the same six dwords and then returns 8 when file_len is one byte off. The unit pins both edges so coverage reaches the branch, and container.rs's own tests plus the four real files prove the length formula; the status itself is the declared gap.",
+    "Real cases: the four install footers (archive-group 0100000406041008d847970055a616cfef3af752 at 260,173,908 B; patch group 01000004050410081e591d00e8d1710213451589 at 48,616,028 B; file-index 0100000400041008d66e0000f82dc775fc579b5b at 576,828 B; patch file index 01000004000410084a110000909b13e32eae4b30 at 90,668 B). The fixture pins them at prefix 0 and 44, so the footer-at-the-end read is exercised at two addresses.",
+    "The sweep also pins version 0/1/2/3/0xff, checksum 0/1/16/17/0xff, page sizes 0/1/2/255 KiB, zero entry components and every key/size/offset zero combination, and element counts 0/1/156/157/158/314/315/0xffffffff (the 157-entry boundary of the real archive group). A wrong header hash is pinned with an otherwise valid length so the hash branch is reached first.",
+    "Not tested: a buffer_len below 20. The client computes buffer + len - 20 and would read before the buffer, so no representable arena input can make that a defined call; the probe rejects it before calling the port. The divide-by-zero edge (page size smaller than the entry size) is likewise unreachable through the footer bytes: the largest entry sum is 765 and the smallest nonzero page is 1024, so entriesPerPage is never zero. The port keeps a guard for it, but the unit cannot produce the input.",
+    "allowedImageReads: 0x7ff7c87e5f40-0x7ff7c87e5f47 is the /GS security cookie at exe 0x143ac5f40; 0x7ff7c87e5f98-0x7ff7c87e5faf is the CRT memcpy feature-flag block at exe 0x143ac5f98; 0x7ff7c83395c0-0x7ff7c83395df is a compiler dispatch table at exe 0x1436195c0; 0x7ff7c818b2b0-0x7ff7c818b2ff is the error-format string block (`\\x%02x`, `%03o`, hex digits, `%.*g`) at exe 0x14346b2b0. They are fixed image data read by the MD5 helper, the stack check and the reject logger, not game state."
+  ],
+  "knownEquivalentMutants": [
+    {
+      "kind": "cmp-flip !=to==",
+      "line": 1162,
+      "rationale": "Line 1162 is the final `if expected != total_len` gate. Flipping it to `==` changes only the value the client leaves in AL; both branches write the same six geometry dwords before the compare, and the unit's void/memory channel cannot see AL. The mutant is therefore observationally equivalent in every channel this unit compares, not in the client's caller-visible status. What would kill it: a return-mask channel for AL, which the runner does not have. container.rs's own tests assert the length reject directly."
+    }
+  ],
+  "acknowledgedGaps": [    {
+      "what": "The final file-length status",
+      "why": "On a length mismatch the client writes the same six geometry dwords as an accept and only AL differs (8 vs 0), so the void/memory channel cannot distinguish the two. The length formula itself is proven by the four real index files and by container.rs's synthetic tests; the harness would need a return-mask channel that the runner does not have. RAX cannot substitute: on success the client leaves `file_len & ~0xff` in EAX, and on a reject its upper bits are whatever the last compare left, neither of which a caller uses."
+    },
+    {
+      "what": "A buffer shorter than the 20-byte footer",
+      "why": "The client subtracts 20 from the length without a guard and reads before the buffer; the oracle cannot represent the resulting wild read, and a fault is not a behaviour. Every defined call has buffer_len >= 20, which the fixture covers."
+    }
+  ]
+}

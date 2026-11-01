@@ -4,6 +4,8 @@ members = [
     "crates/ow-casc",
     "crates/ow-scene",
     "crates/ow-client",
+    "crates/ow-render",
+    "crates/ow-sim",
     "crates/ow-stu",
     "crates/ow-tank",
     "crates/xtask",
@@ -30,6 +32,8 @@ needless_range_loop = "allow"
 ow-casc = { path = "crates/ow-casc" }
 ow-scene = { path = "crates/ow-scene" }
 ow-client = { path = "crates/ow-client" }
+ow-render = { path = "crates/ow-render" }
+ow-sim = { path = "crates/ow-sim" }
 ow-stu = { path = "crates/ow-stu" }
 ow-tank = { path = "crates/ow-tank" }
 

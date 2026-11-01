@@ -1,0 +1,54 @@
+{
+  "id": "fn/MoverGate",
+  "title": "tier-2 shipped code: the movement gate against FUN_140ca7d80",
+  "address": {
+    "v2b": "0x7ff7c59c7d80"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_gate",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "body",
+      "kind": "ptr",
+      "ptr_len": 7168
+    },
+    {
+      "name": "base",
+      "kind": "u64"
+    },
+    {
+      "name": "results",
+      "kind": "ptr",
+      "ptr_len": 8
+    }
+  ],
+  "returns": "u64",
+  "argFactory": "mover_gate_fixture",
+  "options": {
+    "iterations": 120,
+    "coverageThreshold": 80,
+    "mutationCount": 8,
+    "mutationKillRate": 0.75,
+    "seed": 4949,
+    "coverageWindow": 230,
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c59c7df5",
+        "edge": "0x7ff7c59c7e45",
+        "why": "the record address is base + i*0x30; a null base faults at the preceding window read, so the null-record edge cannot execute"
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/gate.rs (movement_gate), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_gate entry.",
+    "The oracle runs FUN_140ca7d80 (0x140ca7d80) with a body whose +0x690 array points at synthetic 0x30-byte records; each record's +0x28 object holds a fake vtable whose +0x78 slot is one of two image stubs (return 1 or return 0).",
+    "Cases: both early exits, an empty array, matching and non-matching window edges, multiple records with mixed results, and arrays where no record matches.",
+    "The candidate receives the per-record virtual results as a byte slice, in array order; the oracle gets them from the two stubs."
+  ],
+  "acknowledgedGaps": [
+    "The record object's vtable+0x78 predicate is a gameplay-state function outside this unit; the fixture substitutes two constant stubs and the candidate takes their results as an input. The record pointer at +0x28 is not dereferenced by the candidate."
+  ]
+}

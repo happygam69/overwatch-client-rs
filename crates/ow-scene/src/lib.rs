@@ -112,8 +112,13 @@ pub struct SceneTextureLevel {
     /// The exact half-float decode, four per pixel (`r, g, b, a`), for the
     /// formats with a half-float form: BC6H, R16G16B16A16_FLOAT and R16_FLOAT.
     /// R16_FLOAT is padded with `(0, 0, 1.0)`. `None` for every 8-bit format
-    /// and for R16_UNORM, whose exact 16-bit value is not preserved yet (open).
+    /// and for R16_UNORM, whose exact value is a unorm word, not a half float.
     pub rgba16: Option<Vec<u16>>,
+    /// The exact R16_UNORM words (DXGI 56), one per pixel. `Some` only when the
+    /// asset's stored format is R16_UNORM and every word was decoded; `None`
+    /// for every other format. These are not half floats and are never put in
+    /// [`Self::rgba16`]; an `R16Unorm` upload stages them bit for bit.
+    pub r16_unorm: Option<Vec<u16>>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +178,7 @@ impl SceneTexture {
                 height: N as u16,
                 rgba,
                 rgba16: None,
+                r16_unorm: None,
             }],
             mip_count: 1,
             surfaces: 1,
@@ -198,6 +204,7 @@ impl SceneTexture {
                 height: 1,
                 rgba: vec![255, 255, 255, 255],
                 rgba16: None,
+                r16_unorm: None,
             }],
             mip_count: 1,
             surfaces: 1,
@@ -220,6 +227,7 @@ impl SceneTexture {
                 height: level.height,
                 rgba: level.rgba.clone(),
                 rgba16: (!level.rgba16.is_empty()).then(|| level.rgba16.clone()),
+                r16_unorm: (!level.r16_unorm.is_empty()).then(|| level.r16_unorm.clone()),
             })
             .collect();
         // A hand-built `Texture` (the colour tests) has no level list; keep the
@@ -232,6 +240,7 @@ impl SceneTexture {
                 height: t.height,
                 rgba: t.rgba.clone(),
                 rgba16: (!t.rgba16.is_empty()).then(|| t.rgba16.clone()),
+                r16_unorm: (!t.r16_unorm.is_empty()).then(|| t.r16_unorm.clone()),
             }]
         } else {
             levels
@@ -258,6 +267,16 @@ impl SceneTexture {
     /// Viewer-generated textures have no levels-with-halves and answer false.
     pub fn has_exact_half(&self) -> bool {
         !self.levels.is_empty() && self.levels.iter().all(|level| level.rgba16.is_some())
+    }
+
+    /// Whether every decoded level carries exact R16_UNORM words, so an upload
+    /// can use `R16Unorm` instead of the clamped RGBA8 view.
+    ///
+    /// This is a separate predicate from [`Self::has_exact_half`] on purpose:
+    /// an R16_UNORM word is a 16-bit unorm integer, not a half float, so it is
+    /// never placed in `rgba16` and `has_exact_half` stays false for it.
+    pub fn has_exact_r16_unorm(&self) -> bool {
+        !self.levels.is_empty() && self.levels.iter().all(|level| level.r16_unorm.is_some())
     }
 }
 
@@ -3031,6 +3050,40 @@ mod tests {
         assert_eq!(plain.format_byte, 0x64);
         assert_eq!(plain.levels[0].rgba16, None);
         assert!(!plain.has_exact_half());
+        assert!(!plain.has_exact_r16_unorm());
+    }
+
+    #[test]
+    fn decoded_carries_exact_r16_unorm_words_apart_from_halves() {
+        // stored 0x39 is R16_UNORM (DXGI 56): a unorm integer, not a half.
+        let words = vec![0x0001u16, 0x8000, 0xFFFE, 0xFFFF];
+        let texture = ow_tank::texture::Texture {
+            width: 2,
+            height: 2,
+            mip_count: 1,
+            surfaces: 1,
+            format_byte: 0x39,
+            format: ow_tank::texture::Format::R16Unorm,
+            rgba: [0u8, 128, 255, 255].repeat(4),
+            r16_unorm: words.clone(),
+            levels: vec![ow_tank::texture::TextureLevel {
+                mip: 0,
+                surface: 0,
+                width: 2,
+                height: 2,
+                rgba: [0u8, 128, 255, 255].repeat(4),
+                r16_unorm: words.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let scene = SceneTexture::decoded(0x0c0000000000e349, &texture);
+        assert_eq!(scene.format_byte, 0x39);
+        assert_eq!(scene.levels[0].r16_unorm.as_deref(), Some(words.as_slice()));
+        assert!(scene.has_exact_r16_unorm());
+        assert_eq!(scene.levels[0].rgba16, None, "a unorm is not a half");
+        assert!(!scene.has_exact_half());
+        assert!(!scene.srgb);
     }
 
     /// A hand-built one-level `Texture` for the carrier tests.

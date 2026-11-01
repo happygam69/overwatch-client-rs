@@ -12,10 +12,11 @@ different run; it is not evidence. Code whose only citation is a capture is
 **open**, not read. See `provenance.md`.
 
 **"Verified" has one meaning here:** a differential-harness unit passes all
-five stages against the client's bytes. As of this commit the harness ledger
-has 25 units and **twelve target `ow-tank`**, including `fn/ChunkGuid` and
-`fn/BundleLookup` (section D), `fn/BundleDirectoryLookup` (section E, a
-verified consumer) and `fn/CmfKey154504` / `fn/CmfIv154504` (section B;
+five stages against the client's bytes. As of 2026-11-02 the harness ledger
+has 64 units and **thirteen target `ow-tank`**, including `fn/ChunkGuid`,
+`fn/MapChunkCellBytesFixup` and `fn/BundleLookup` (section D),
+`fn/BundleDirectoryLookup` (section E, a verified consumer) and
+`fn/CmfKey154504` / `fn/CmfIv154504` (section B;
 differential and mutation pass, but the coverage stage cannot measure the
 body). `casc` targets
 `ow-casc`; the legacy probe and `ow-sim` targets are not shipped `ow-tank`
@@ -58,7 +59,7 @@ measure the body.
 | area | state | next anchor |
 |---|---|---|
 | Streaming policy | which chunks load when is unread | `formats/maps.md` |
-| Map chunk kind `0x12` body | not tested | `formats/maps.md` |
+| Map chunk kind `0x12` cell-to-shape decoder | the container and the 17-pointer fixup are implemented/verified (section D); the 17 arrays are not yet turned into shapes | `formats/maps.md`, `formats/domino.md` |
 | Replay frame payload | container prefix only | `formats/replay.md` |
 | Audio decode | Wwise metadata and WEM headers only | `formats/sound.md` |
 | Shader instance data | containers parse; real instance layout unvalidated | `formats/shaders.md` |
@@ -69,6 +70,7 @@ measure the body.
 |---|---|---|---|
 | Chunk-GUID formula | `dev/verify_harness/units/fn-ChunkGuid.json` (`fn/ChunkGuid`) | `MapChunkGuid` at `0x141b32e20`, kind table `0x1439aa320` | verified: 364 differential cases, every channel; 100% coverage (0/0 branches); 3/3 viable mutants killed |
 | Bundle entry lookup | `dev/verify_harness/units/fn-BundleLookup.json` (`fn/BundleLookup`) | `BundleEntryLookup` at `0x141fd5820` (`0x141fd4a50` is the caller) | verified: 364 differential cases, every channel; 100% coverage (29/29 reachable branches of 35 sites, six structurally dead edges declared); 12/12 mutants killed |
+| Collision cell-array fixup | `dev/verify_harness/units/fn-MapChunkCellBytesFixup.json` (`fn/MapChunkCellBytesFixup`) | `MapChunkCellBytesFixup` at `0x141ff51a0` | verified: 264 differential cases plus the edge pool, the whole 0xC00-byte block compared, the four relative-pointer slots masked; 33.3% branch coverage (1/3 reachable sites; the two skipped sites are the `JZ` inside the allocate-then-deref-null mode-0 blocks) with two declared dead edges; 12/12 mutants killed. It proves the runtime 17-pointer conversion, not the cell-to-shape decoder. The container itself is the install test `crates/ow-tank/tests/collision_cells_real.rs` (220 cells, 17 arrays, tiling and boundaries pinned). |
 
 The unit's probe reads the kind from the same table slot the client indexes
 and calls the shipped `ow_tank::mapguid::chunk_guid(map, kind)`. The oracle

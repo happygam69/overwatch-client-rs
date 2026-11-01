@@ -1,0 +1,58 @@
+{
+  "id": "fn/ShapePoints",
+  "title": "tier-2 shipped code: the type-2 point-cloud bounds against 0x142cd3720",
+  "address": {
+    "v2b": "0x7ff7c79f3720"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "shape_points",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "record",
+      "kind": "ptr",
+      "ptr_len": 52
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "matrix",
+      "kind": "ptr",
+      "ptr_len": 64
+    },
+    {
+      "name": "points",
+      "kind": "ptr",
+      "ptr_len": 128
+    }
+  ],
+  "returns": "void",
+  "argFactory": "shape_points_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 90,
+    "mutationCount": 10,
+    "mutationKillRate": 0.75,
+    "seed": 5757,
+    "coverageWindow": 166,
+    "allowedImageReads": [
+      "0x7ff7c830cf10-0x7ff7c830cf1f",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7e3e0c0-0x7ff7c7e3e0cf",
+      "0x7ff7c87e5f40-0x7ff7c87e5f4f"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/shapes.rs (points_bounds), called by crates/ow-sim/src/bin/verify_probe.rs through the shape_points entry.",
+    "The oracle runs the real shape-bounds leaf and the harness compares the 0x20-byte output pointee byte for byte.",
+    "The matrix is a random 4x4 column-major transform; the record and output are per-case pointees."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies one shape type's bounds leaf, not the 0x142cb9030 dispatcher or the type-3 path. The dispatcher and type 3 remain open."
+  ]
+}

@@ -1295,12 +1295,21 @@ dependencies = [
  "flate2",
  "glam",
  "ow-casc",
+ "ow-render",
  "ow-scene",
  "ow-stu",
  "ow-tank",
  "pollster",
+ "raw-window-handle",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "ow-render"
+version = "0.1.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]
@@ -1312,6 +1321,10 @@ dependencies = [
  "ow-casc",
  "ow-tank",
 ]
+
+[[package]]
+name = "ow-sim"
+version = "0.1.0"
 
 [[package]]
 name = "ow-stu"

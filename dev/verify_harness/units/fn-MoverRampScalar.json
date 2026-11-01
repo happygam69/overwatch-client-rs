@@ -1,0 +1,38 @@
+{
+  "id": "fn/MoverRampScalar",
+  "title": "tier-2 shipped code: the scalar mover ramp against MoverRampScalar (0x140ca75f0)",
+  "address": {
+    "v2b": "0x7ff7c59c75f0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "mover_ramp_scalar",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "body", "kind": "ptr", "ptr_len": 4464 }
+  ],
+  "returns": "f32",
+  "argFactory": "mover_ramp_scalar_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "coverageWindow": 48,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/movement.rs (ramp_scale), called by crates/ow-sim/src/bin/verify_probe.rs through the mover_ramp_scalar entry.",
+    "Oracle is MoverRampScalar at exe 0x140ca75f0 (v2b 0x7ff7c59c75f0), a leaf with no .pdata extent; coverageWindow 0x30 stops at the RET at 0x140ca761c.",
+    "Read expression: minss(body+0x10ec, 1.0) * scale, where scale is body+0x5b4 when (body[0x10d0] & 2) != 0 and body+0x5a8 otherwise. The scale selection is TEST/CMOVZ, not a branch.",
+    "The base ramp fixture keeps the flag byte in a third pointee for the vector unit; this unit's fixture copies it into the body at +0x10d0, which is what the scalar leaf reads.",
+    "Call site: FUN_140cc0dc0 reads the scalar as the ramp part of the per-frame input/wish spring."
+  ],
+  "acknowledgedGaps": [
+    "The unit proves the leaf's scalar arithmetic and CMOVZ slot. The caller FUN_140cc0dc0 and the wish spring remain open. NaN payload propagation is outside the unit, as in fn/MoverRampVector."
+  ]
+}

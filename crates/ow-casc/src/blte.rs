@@ -234,7 +234,9 @@ pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>>
     // `DynamicContainerRead` the header is skipped (`+ 0x1e`) and a
     // zero-length request succeeds without ever opening a BLTE container.
     // Measured: 20 such records in a 20,000-entry sample of this install.
-    if data.len() == DATA_HEADER_SIZE && !data.starts_with(&BLTE_MAGIC) {
+    // `Store::read_payload` already skips the header, so an empty payload is
+    // the same record seen through the client's own range.
+    if data.is_empty() || (data.len() == DATA_HEADER_SIZE && !data.starts_with(&BLTE_MAGIC)) {
         return Ok(Vec::new());
     }
     let blte = strip_data_header(data)?;
@@ -719,6 +721,18 @@ fn quarter(x: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) {
     x[c] ^= x[b].wrapping_add(x[a]).rotate_left(9);
     x[d] ^= x[c].wrapping_add(x[b]).rotate_left(13);
     x[a] ^= x[d].wrapping_add(x[c]).rotate_left(18);
+}
+
+/// Standard MD5 over an arbitrary byte slice.
+///
+/// The client's frame-header hash (`Md5Init` `0x1426a5100`, `Md5Update`
+/// `0x1426a4f40`, `Md5Final` `0x1426a5010`, `Md5Transform` `0x1426ab530`) is
+/// the same digest as the 16-byte page hash stored after each first key in an
+/// encoding page index: measured on all 26,544 pages of the installed file.
+/// The client function that checks an encoding page's hash has not been read,
+/// so `EncodingFile` does not reject a mismatched page.
+pub fn md5_digest(data: &[u8]) -> [u8; 16] {
+    md5(data)
 }
 
 #[cfg(test)]

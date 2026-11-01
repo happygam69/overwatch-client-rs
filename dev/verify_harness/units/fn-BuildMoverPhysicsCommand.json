@@ -1,0 +1,54 @@
+{
+  "id": "fn/BuildMoverPhysicsCommand",
+  "title": "tier-2 shipped code: the mover command words against BuildMoverPhysicsCommand (0x140cb74a0)",
+  "address": {
+    "v2b": "0x7ff7c59d74a0"
+  },
+  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "entry": "build_mover_command",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    { "name": "body", "kind": "ptr", "ptr_len": 6784 },
+    { "name": "out", "kind": "ptr", "ptr_len": 8 }
+  ],
+  "returns": "void",
+  "argFactory": "mover_command_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4241,
+    "coverageWindow": 365
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/movement.rs, called by crates/ow-sim/src/bin/verify_probe.rs through the build_mover_command entry.",
+    "Oracle is BuildMoverPhysicsCommand at exe 0x140cb74a0 (v2b 0x7ff7c59d74a0), extent 0x140cb74a0..0x140cb760d (365 bytes); the unit declares coverageWindow 365.",
+    "The builder calls the movement gate FUN_140ca7d80 (0x140ca7d80) first. The fixture pins body+0x698 (the gate's record count) to zero, so the gate returns body[0x1a78] != 0 && body[0x658] != 0 and never enters its indirect record loop; the probe refuses a positive count instead of guessing it.",
+    "The first word is selected by +0x1a7b, +0x1a75 and +0x1a60. The action word starts at 0x10a1 when the obfuscated state test passes or +0x652 is zero; otherwise it is 0x14a1 or 0x14b9, then the 0xfff7/0xffef masks and the 0x1a7f clear. The tail word is +0x23c. The function writes six bytes; the unit's out is eight bytes and the last two stay at the fixture's 0xCC.",
+    "The two obfuscated byte tests are pinned at their exact boundaries: (state_1a79 + 0x59) ^ 0x71 == 0xEC is state_1a79 0x44, and rotr(byte_1a7a,1)+0x4d rotated left == 0xC5 is byte_1a7a 0x2B. Neighbours are in the first cases so the mutation stage can see them.",
+    "Call site: MoverStateMachine (0x140cbacc0) calls ApplyStateModifiers then SubmitMoverPhysicsCommand (0x140cc03d0), which calls this builder before SetCharacterControllerVelocity."
+  ],
+  "knownEquivalentMutants": [
+    {
+      "kind": "boundary -1",
+      "line": 179,
+      "rationale": "`(b.wrapping_add(0x14) >> 1) == 0` already forces b + 0x14 to be 0 or 1; when it is 1, b is odd and `(b & 1) == 0` is false. The `& 1` term cannot change the branch result, so a boundary shift on it is observationally equivalent for every u8 b."
+    },
+    {
+      "kind": "boundary +1",
+      "line": 179,
+      "rationale": "Same redundant `& 1` term: the high-shift test subsumes it for all 256 state-byte values. No input can observe the boundary change."
+    },
+    {
+      "kind": "mask widen",
+      "line": 179,
+      "rationale": "A widened mask on the redundant low-bit test still yields the same boolean because the test is only reached when b + 0x14 == 0 (b even)."
+    }
+  ],
+  "acknowledgedGaps": [
+    "The unit proves the command words given the gate result. The gate itself (FUN_140ca7d80), its record loop and its indirect [record+0x28]->[vtable+0x78] call are not modelled; the fixture keeps the record count at zero. The callers and the Domino dispatch remain open."
+  ]
+}

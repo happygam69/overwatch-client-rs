@@ -6,7 +6,9 @@ format the combat and entity work depends on.
 
 ## Versions
 
-Version 1 begins with the ASCII `STUD`. Version 2 has no magic — the absence of
+Version 1 begins with the u32 `0x53545544` (on disk the bytes `44 55 54 53`,
+`DUTS`; the client's `StuLoadSubAssets` compares the integer). Version 2 has
+no magic — the absence of
 that marker selects it — and starts with a CRC64 checksum over its first 36
 bytes. Retail Overwatch 2 assets are version 2. **No version 1 asset ships in
 this install**, so the v1 reader is exercised by synthetic tests only.
@@ -99,10 +101,17 @@ or swap order produces values that resolve to nothing.
 ## Version 1 layout
 
 ```text
-u32 magic "STUD"
+u32 magic 0x53545544
 u32 record count
 record[count]              { i32 offset; u32 flags }
 ```
+
+**The magic is the integer, not the four ASCII bytes (2026-11-02).**
+`StuLoadSubAssets` (`0x1421d26d0`) compares the first dword of the blob with
+`0x53545544`. On disk that is `44 55 54 53` (`DUTS`); the ASCII spelling
+`STUD` read little-endian would be `0x44455453` and is rejected. `ow-stu`'s
+`MAGIC_V1` is the four bytes `[0x44, 0x55, 0x54, 0x53]`, and the collision
+chunk's two blobs carry exactly them.
 
 An instance lives at its record's `offset`; its index is its position in the
 record table. References resolve by **record offset**, not index, so a later
@@ -115,6 +124,41 @@ V1 differences: strings are a 16-byte `i64 info_offset; i64 pad` pointing at
 the same triple, with file-absolute `text_offset`; asset refs are raw;
 embedded refs are record offsets; arrays are `{i64 count; i64 data_offset}`
 with file-absolute offsets; hash-map offsets are file-absolute.
+
+## The load path: offsets to pointers (2026-11-01)
+
+The client turns the file's self-relative offsets into pointers in two passes,
+both now read:
+
+- `FUN_1421d26d0` (the STUD loader) walks a STUD container's record table, reads
+  each record's 32-bit class hash at its offset, looks the class up with
+  `FUN_1421c14f0` (the hash map anchored at `0x143aa6be0`, filled at runtime),
+  calls the class's hook at `descriptor+0x60` on the payload bytes to
+  construct the instance **in place**, writes the resolved type id back at
+  `record+0xc`, and then calls `FUN_1421d3c10` for the field pass.
+- `FUN_1421d3c10` iterates the class and its bases (`0x1421cd340` starts the
+  iterator, `0x1421cdbb0` advances) and calls `FUN_1421d3710` per field.
+  `FUN_1421d3710` switches on the field type's `vtable[0x38]` and converts the
+  instance's offsets using `base = ctx+0x18` (the payload base):
+
+  | case | field kind | conversion |
+  |---|---|---|
+  | 0 | pointer + link | `*p = p ? base + *p : 0`, then the `+8` link |
+  | 1 | array of pointers | header, then each 16-byte entry's pointer and `+8` |
+  | 2 | plain offset | `*p = *p != 0xffffffff ? base + *p : 0` |
+  | 3 | array of offsets | header `{count, data off}`, then each element |
+  | 4 | inline instance | recurse into `FUN_1421d3c10` |
+  | 5 | nested instances | recurse per element |
+  | 7 | hash map | converts the bucket arrays and keys |
+  | 9 | string | `base + info_offset` |
+  | 11/13 | special | `0x1421d36b0` |
+  | 8/10/12 | skip | — |
+
+  So a v1 instance is loadable **only** through its class's field table: with
+  no fields, nothing is converted and every offset stays a number. That is why
+  the collision chunk's completion does its own fixup (`FUN_141ff51a0`, 17
+  self-relative qwords per `m_cellBytes` record) instead of relying on the
+  reflection pass.
 
 ## The typed layer
 
