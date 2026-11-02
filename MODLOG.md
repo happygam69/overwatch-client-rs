@@ -18,6 +18,17 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
   `MoverWishQueryCached`, `FUN_140c9f110`, the shape basis pair, `0x140cc2290`)
   and each is named with its call site in the doc.
 
+## 2026-11-02 - FinishMapChunkAsset repaired; two consumer hypotheses ruled out
+
+- `FinishMapChunkAsset` (`0x141ff54e0`) was stored as 12 bytes; after the
+  false-`noreturn` repair it is 964 bytes and decompiles end to end, confirming
+  the slot `0x1e`/`0x22` cell dispatch and adding its tail (upload accounting
+  `FUN_141fe37a0`, return `0x11`) and the full case list.
+- Ruled out as the cell consumer: the geometry object (brush-only, proven by the
+  writer and caller counts) and `FUN_1420c63b0` (10 500 bytes, four
+  `ShapeAddToBody` sites, but no code caller and no plain pointer — its three
+  data xrefs are internal switch tables whose neighbours point inside itself).
+
 ## 2026-11-02 - the brush ingest, read end to end; Ghidra's false noreturns
 
 - `AppendCollisionEntryFromBrushSource` (`0x14213a510`, 2011 bytes) read fully:

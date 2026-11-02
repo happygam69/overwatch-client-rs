@@ -1115,10 +1115,15 @@ parse its payload:
   per-type geometry pools are `+0x2d0..+0x330`.
 
 **The two collision chunks are identified by slot (2026-11-02).**
-`FinishMapChunkAsset` (`0x141ff54e0`, 12 bytes — the project shows a truncated
-body, read it from the image) dispatches on `ChunkSlotForGuid(work+0x70)` and
-has a case for slot **`0x1e`** and one for slot **`0x22`**. Both run the same
-three steps and differ only in the sub-asset offset:
+`FinishMapChunkAsset` (`0x141ff54e0`) dispatches on
+`ChunkSlotForGuid(work+0x70)` and has a case for slot **`0x1e`** and one for
+slot **`0x22`**. It was stored as a 12-byte function until the false-`noreturn`
+repair (see `ghidra-project.md`); it is now **964 bytes and decompiles end to
+end**, which confirms the hand-read dispatch below and adds its two ends: every
+case falls through to the upload accounting `FUN_141fe37a0(work, data, work+0x1c,
+1)` and the function returns `0x11`, and the full case list is `7`, `8`, `0xf`,
+`0x1d`, `0x1e`, `0x1f`, `0x21`, `0x22`, `0x23`. Both collision slots run the
+same three steps and differ only in the sub-asset offset:
 
 ```text
 slot 0x1e:  MapChunkHeaderFixup(payload); sub = StuLoadSubAssets(cache, *payload, 0)
@@ -1146,6 +1151,30 @@ cleanly in two, and only the second half is open:
 |---|---|
 | chunk → STU sub-asset → cell container (slot `0x1e`/`0x22`, header, 17 arrays, pointer fixup) | **read, `fn/MapChunkCellBytesFixup` verified** |
 | cell container → shape records in the query world | **open** |
+
+**Ruled out on the consumer side (2026-11-02).** Two hypotheses were tested and
+both fail, so neither is worth re-trying:
+
+- *the geometry object's vectors*: the `0x60` entry count (`+0x114`) has only
+  three writers image-wide and the `0x100`-element vector's append helper
+  (`0x1421360a0`) has exactly one caller, the brush ingest — that class is
+  brush-only;
+- *`FUN_1420c63b0`* (10 500 bytes, four `ShapeAddToBody` sites, the obvious
+  "world ingest"): it has **no code caller** and no plain pointer to it
+  anywhere. Its three data references (`0x14378243c`, `0x1437824dc`,
+  `0x14469c0c4`) sit in tables whose neighbouring words are RVAs pointing
+  **inside the same function**, i.e. internal switch tables, not vtable slots.
+  Its only call xref is a self-recursion at `0x1420c8db5`. So it is not the
+  scene's ingest entry point.
+
+What is known about the consumer's target, for whoever picks this up: the fixup
+rewrites the cell records **in place**, so the arrays become `{pointer, count}`
+pairs at the same offsets, and the cell block is reached as
+`StuLoadSubAssets(cache, chunk->payload[0], 0) + 0x68` (slot `0x1e`) or `+ 0x08`
+(slot `0x22`). A consumer therefore needs the collision sub-asset base and a
+17-array walk; `ow_tank::collision` already produces exactly that shape from the
+practice range's chunk, so a consumer found in code can be checked against real
+data immediately.
 
 **The handle table's single writer is the registry install, not a per-record
 call.** The whole image has exactly one store to `0x1442a0bc0`:

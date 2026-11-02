@@ -672,7 +672,16 @@ an argument.
    bytes-fixup writes (`sub+0x68` slot `0x1e`, `sub+0x08` slot `0x22`).
    Three false `noreturn`s (`0x141bb00e0`, `0x142ced8f0`, `0x142efe2b0`) were
    truncating every allocating function in the geometry module; the mechanical
-   audit recipe is in `docs/ghidra-project.md`.
+   audit recipe is in `docs/ghidra-project.md`. `FinishMapChunkAsset`
+   (`0x141ff54e0`) was truncated the same way and is now 964 bytes that
+   decompile end to end, confirming the slot `0x1e`/`0x22` cell dispatch.
+   Two consumer hypotheses are ruled out: the geometry object (brush-only) and
+   `FUN_1420c63b0` (no code caller, no plain pointer — its data xrefs are
+   internal switch tables). **Handoff for this thread:** the fixup rewrites the
+   cells in place, the cell block is `StuLoadSubAssets(cache, chunk->payload[0],
+   0) + 0x68` (slot `0x1e`) or `+ 0x08` (`0x22`), so the consumer is whatever
+   reads that sub-asset and walks 17 arrays — and `ow_tank::collision` already
+   has that shape from real data to check it against.
 
 1. Read the producer of the level-load GUID lists (`docs/open-questions.md`
    item 11.1): who resolves a map request to Jam `0x501B`'s four vectors, and
