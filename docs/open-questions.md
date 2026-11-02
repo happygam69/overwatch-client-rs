@@ -583,6 +583,15 @@ brush-only, and **the chunk's cells belong to a different node class**. Next
 anchor: the class that owns the chunk component the bytes-fixup writes
 (`sub+0x68` for slot `0x1e`, `sub+0x08` for slot `0x22`).
 
+Two candidates are now excluded rather than pending. `FUN_1420c63b0` (10 500
+bytes, four `ShapeAddToBody` sites) has **no code caller** and no plain pointer;
+its three data xrefs are internal switch tables whose neighbouring words point
+inside the same function, and its only call xref is a self-recursion. And the
+sub-asset resolver `0x1421d26d0` has just **14 call sites** image-wide, only one
+of which adds `0x68` (the chunk completion itself), so the consumer does not
+re-resolve the collision sub-asset that way — it must be handed the cells from
+the chunk work record (`work+0x60`, the payload the completion stores).
+
 Note for the next reader: three callees were falsely marked `noreturn`
 (`0x141bb00e0`, `0x142ced8f0`, `0x142efe2b0`), which stored this function as 167
 bytes instead of 2011 and made several live addresses read as "no function".
