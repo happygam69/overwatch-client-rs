@@ -665,9 +665,11 @@ an argument.
    `+0x108`, `+0x118`, `+0x128`, `+0x138`). The cheap reading of the 17 cell
    arrays is excluded by measurement, and a whole-image scan shows the entry
    count `+0x114` is written in only three places, none of them on the cell
-   path — so **the chunk does not feed the `0x60` entries**. Next anchor: who
-   writes `+0x118`/`+0x124` (the `0x50`-byte candidate vector), or, if nobody on
-   the chunk path does, the cells belong to a different node class.
+   path — so **the chunk does not feed the `0x60` entries**. The `+0x118` vector
+   is no alternative: its append helper `FUN_1421360a0` builds `0x100`-byte
+   elements and has exactly one caller, the brush ingest. This node class is
+   brush-only; next anchor is the class that owns the chunk component the
+   bytes-fixup writes (`sub+0x68` slot `0x1e`, `sub+0x08` slot `0x22`).
    Three false `noreturn`s (`0x141bb00e0`, `0x142ced8f0`, `0x142efe2b0`) were
    truncating every allocating function in the geometry module; the mechanical
    audit recipe is in `docs/ghidra-project.md`.

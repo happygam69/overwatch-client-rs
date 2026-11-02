@@ -29,9 +29,10 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
   `{data, u32 capacity, u32 count}` vector headers at `+0xf8`, `+0x108`,
   `+0x118`, `+0x128`, `+0x138`.
 - Negative result: the entry count `+0x114` is written in exactly three places
-  image-wide (the brush ingest, a clear, the build's reset), so **no cell code
-  appends `0x60` entries**. The chunk path must feed `+0x118` instead, or belong
-  to another node class.
+  image-wide (the brush ingest, a clear, the build's reset), and the `+0x118`
+  vector's append helper (`0x1421360a0`) builds `0x100`-byte elements with the
+  brush ingest as its only caller. **This node class is brush-only**; the chunk's
+  cells must be built by a different class.
 - Ghidra defect fixed the mechanical way: three callees were falsely `noreturn`
   (`0x141bb00e0` allocator, `0x142ced8f0` throw, `0x142efe2b0` memcpy), which had
   truncated every allocating function; a dry-run `clear_flow_and_repair` lists

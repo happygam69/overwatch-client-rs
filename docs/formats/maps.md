@@ -1003,20 +1003,30 @@ calls the ingest. So `+0xb0` holds brush assets, not cells.
 
 The build pass then turns the entries into world shapes: per entry it calls
 `ShapeAddToBody` and stores the handle at `entry+0x50`, then walks the
-`+0x118` candidates (`0x50` bytes each, count `+0x124`), calling `FUN_142cd7b20`
-on each face of each candidate (`face array @ +0x30`, count `@ +0x38`, stride
-`0x40`).
+`+0x118` records, calling `FUN_142cd7b20` on each face of each record (`face
+array @ +0x30`, count `@ +0x38`, stride `0x40`).
 
-**Negative result: the `0x60` entries are brush-only (2026-11-02).** A whole-
-image scan for stores to the entry count `+0x114` finds exactly **three** sites,
-all in the geometry module: `0x14213a965` (the brush ingest above), `0x1421388dd`
-(a clear) and `0x14213d559` (the build's reset to zero). **Nothing on the cell
-path appends a `0x60` entry.** Combined with the earlier measurement (no cell
-array is a `0x60`-stride view), the chunk path cannot be feeding `+0x108` at
-all; within this object the only remaining target is the `+0x118` candidate
-vector, so the cell ingest must write there (or the cells belong to a
-different node class entirely). That is the next anchor, and it is now a
-specific question rather than a search: **who writes `+0x118`/`+0x124`?**
+**Negative result: this whole object is brush-only, so the cells are elsewhere
+(2026-11-02).** Three scans settle it, and together they close this line of
+attack:
+
+1. stores to the `0x60` entry count `+0x114` across the whole image are exactly
+   **three** sites, all in the geometry module: `0x14213a965` (the brush ingest
+   above), `0x1421388dd` (a clear) and `0x14213d559` (the build's reset);
+2. the `+0x118` header's element size is **`0x100`**, not `0x50`: its append
+   helper `FUN_1421360a0` (19 bytes) grows `capacity += capacity>>1` (minimum 2)
+   with a `capacity << 8` allocation, copies `count << 8` bytes, and returns
+   `count * 0x100 + base`;
+3. that helper has **exactly one caller**, `AppendCollisionEntryFromBrushSource`.
+
+So the geometry object only ever receives brush material: nothing on the cell
+path appends either vector, and the `0x100`-byte record the brush ingest fills
+(`{vertices, tree nodes, two more pointers, two floats, the scaled quad, the two
+stamp ids, a handle}`) is a brush collider source, not a cell. Combined with the
+measurement that no cell array is a `0x60`-stride view, **the chunk's cells do
+not feed this node class at all** — they must be built by a different one. That
+is the next anchor: the node class that owns the chunk component the fixup
+writes (`sub+0x68` for slot `0x1e`, `sub+0x08` for slot `0x22`).
 
 **Ghidra was hiding this function behind false `noreturn`s (2026-11-02).**
 `0x14213a510` was stored as a 167-byte function; its real body is 2011 bytes.

@@ -576,11 +576,12 @@ entry (`MeshToColliderFaces` into `entry+0x20`, per-face stamp writes, handle to
 count}` headers at `+0xf8`, `+0x108`, `+0x118`, `+0x128`, `+0x138`. A whole-image
 scan of stores to the entry count `+0x114` finds **three** sites: the brush
 ingest, a clear, and the build's reset. **No cell code appends a `0x60` entry.**
-So the chunk path is not `geometry+0x108`; inside this object the only remaining
-target is the `+0x118` candidate vector (`0x50`-byte records, count `+0x124`,
-consumed by `FUN_142cd7b20` per face). Next anchor: **who writes
-`+0x118`/`+0x124`** — and, if nobody on the chunk path does, the cells belong to
-a different node class than the geometry object read here.
+The `+0x118` vector is not an alternative either: its append helper
+`FUN_1421360a0` builds **`0x100`-byte** elements (`capacity << 8`), and that
+helper has exactly **one caller** — the brush ingest. So this whole node class is
+brush-only, and **the chunk's cells belong to a different node class**. Next
+anchor: the class that owns the chunk component the bytes-fixup writes
+(`sub+0x68` for slot `0x1e`, `sub+0x08` for slot `0x22`).
 
 Note for the next reader: three callees were falsely marked `noreturn`
 (`0x141bb00e0`, `0x142ced8f0`, `0x142efe2b0`), which stored this function as 167
