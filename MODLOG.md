@@ -18,6 +18,17 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
   `MoverWishQueryCached`, `FUN_140c9f110`, the shape basis pair, `0x140cc2290`)
   and each is named with its call site in the doc.
 
+## 2026-11-02 - cells to shapes: the consumer's contract, and one hypothesis killed
+
+- Read `GeometryIngestCandidateB` (`0x14213528a`): the decoder's output form is a
+  `0x30`-byte mesh source of **three `{pointer,count}` pairs** over arrays of
+  **`0x60`-byte records**, one body per entry, one type-3 shape per record, the
+  nearest connect point picked by `FUN_142cb9a50`, then `FUN_142cb34f0`.
+- Measured all 17 arrays over the 220 practice-range cells: none is a fixed
+  0x60/0x30/0x20-stride view; all are 4-byte granular. The records are built,
+  not reinterpreted. Numbers recorded in `formats/maps.md`; the next anchor is
+  the builder.
+
 ## 2026-11-02 - `fan::solve`, the writer's decision in code
 
 - `ow-sim::fan::solve(body, ctx, solver)` now runs the composition that was

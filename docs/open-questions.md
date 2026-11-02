@@ -557,6 +557,18 @@ dead. The **cell decoder** — who turns the 17 arrays into the `0x60` cell
 entries (or the `0x100` sector entries) — is still the open link, so the
 container is not yet a collider.
 
+**The consumer's contract is read; the array overlay is excluded (2026-11-02).**
+`GeometryIngestCandidateB` (`0x14213528a`) shows the decoder's output form: a
+`0x30`-byte mesh source holding **three `{pointer, count}` pairs** whose arrays
+hold **`0x60`-byte records** (copied by `func_141b53b70` at a `0x60` stride), one
+body per entry and one type-3 shape per record. Measuring the practice range's
+220 cells excludes the cheap reading: no array is a fixed-stride view (`arr7`
+divides by `0x60` in 44/220 cells, `arr12` in 14, `arr14` in 22), and every
+array is 4-byte granular. So the records are **built**, as on the brush path,
+and the next anchor is the builder: whoever turns `arr13`/`arr14` plus the
+`arr3`/`arr11`/`arr12` runs into those three arrays. Full measurement in
+`formats/maps.md`.
+
 **The collider build chain is verified except its two ends (2026-11-02).**
 Read and proven this session: `MeshToColliderFaces` (`0x142cf2010`, the
 double-sided shell), `ColliderFaceAppend` (`0x142cca460`, the `0x60`-byte face

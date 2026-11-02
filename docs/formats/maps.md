@@ -905,6 +905,50 @@ builder** that fills the node block the narrowphase walks. Direct-caller maps
 `MeshToColliderFaces` at two (`0x14213a995`, `0x14213c9d7`), all brush paths,
 so the chunk path does not go through a brush tree.
 
+**The consumer wants three arrays of 0x60-byte records (2026-11-02).**
+`GeometryIngestCandidateB` (`0x14213528a`, 3097 bytes) is the per-entry shape
+builder, and it fixes the decoder's output form exactly. Per iteration:
+
+- the outer loop runs while a counter is below `[node+0xd8]` and walks two
+  cursors: `0x30` per step through the **mesh-source array**
+  (`[node+0xf8]` = pointer, `[node+0x100]` = count) and `0x14` per step through
+  the **entry array** it fills;
+- the `0x30`-byte source is **three `{pointer, count}` pairs** at `+8`/`+0x10`,
+  `+0x38`/`+0x40` and `+0x68`/`+0x70` — not three `vec4`s. `func_141b53b70`
+  copies `record[i]` at a **`0x60` stride** from each pair's array, so each of
+  the three arrays holds `0x60`-byte records and the pair's second word is
+  the record count;
+- per entry it creates one body (`OwnerCreateBody` with the node's `+0x9c`
+  shape id and the node's float settings) and one shape per source record
+  (`ShapeAddToBody` with a stack descriptor whose type word at `+0x1e` is
+  `0x100`, id at `+0x7a`, the two stamp ids at `+0x7e`/`+0x20`, and
+  `0x100ffff`/`0x200` at `+0x82`/`+0x86`), then connects them with
+  `FUN_142cb34f0(body, quad, point, 1)`;
+- the connect point is the **nearest** one found by `FUN_142cb9a50(shape,
+  quad)`: the loop keeps the shape whose returned point is closest to the
+  node's `+0xb0` triple, squared-distance compared;
+- afterwards the node's `+0xb0..+0xcc` accumulator is zeroed and `+0xe4`/`+0xe6`
+  are set.
+
+So the decoder's contract is now concrete: **three arrays of `0x60`-byte
+records plus their counts**, per entry, in a `0x30`-byte source. What fills
+them from the 17 cell arrays is still open.
+
+**Negative result: the 17 arrays are not record views (2026-11-02).** Measured
+over the practice range's 220 cells, no array is a `0x60`- (or `0x30`-, or
+`0x20`-) stride view: `arr7` divides by `0x60` in 44/220 cells, `arr12` in
+14/220, `arr14` in 22/220 — the rest divide in fewer, so a straight per-cell
+overlay of a fixed record size is excluded. Every array **is** 4-byte
+granular in every cell measured, and 26 cells have an empty first eight arrays.
+Totals: `arr0` 11 984, `arr1` 56 488, `arr2` 62 800, `arr3` 43 336, `arr4`
+54 160, `arr5` 168 472, `arr6` 400 184, `arr7` 148 928, `arr8` 19 352, `arr9`
+23 368, `arr10` 250 720, `arr11` 277 496, `arr12` 319 360, `arr13` 1 781 600,
+`arr14` 4 338 448, `arr15` 695 816, `arr16` 87 784. Cell 0's lengths: 40, 104,
+176, 72, 88, 264, 704, 576, 72, 200, 992, 1040, 960, 5392, 11200, 4064, 512.
+The data must therefore be **built** into the `0x60` records, not reinterpreted
+from an array — which is consistent with the brush path, where
+`MeshToColliderFaces` writes the source rather than pointing at it.
+
 **What that leaves.** The chunk-side navigation is exact, the payload's cell
 layout is decoded, and the consumer chain is read up to the geometry finaliser
 (`0x14213d0b0`) and `OwnerCreateBody` (`0x142cc3d90`). The one open link is the
