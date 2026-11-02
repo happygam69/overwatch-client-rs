@@ -640,22 +640,21 @@ an argument.
 
 ## Next
 
-0. **Movement, the wish producer's composition — blocked, read this first.**
+0. **Movement, the last five helpers before `fan::solve`.**
    The fan's arithmetic, all four acceptance rules, the back-transform and the
-   refinement are read and implemented (`ow-sim::fan`, 25 units), and the
-   policy plus its seam are in (`ow-sim::policy`, 14 units). What is **not**
-   read is how the writer `0x140cb86c0` composes them: it calls the evaluator
-   at four sites (`0x140cb9086`, `0x140cb949b`, `0x140cb9770`, `0x140cb9b6e`)
-   inside three enclosing loops, and still unknown are (a) which site runs
-   under which input (`uVar21` / `cVar6` preconditions differ per site),
-   (b) the ring pass's carried-forward first endpoint and its `B`/`C` scale
-   quad, (c) where the ring pass's `dl` goes, and (d) the `+0x1140` write.
-   Two attempts at it (decompile read, then the site-4 disassembly) did not
-   settle it, so per the project rule it is written up rather than guessed:
-   `fan::solve` does not exist and nothing downstream pretends it does.
-   **Next anchors:** `0x140cb9000..0x140cb9350` (sites 1 and 2 and the loop
-   headers under them), then the `+0x1140` store, then the `0x140cc2290`
-   special branch.
+   refinement are read and implemented (`ow-sim::fan`, 28 units), the policy
+   plus its seam are in (`ow-sim::policy`, 14 units), and the writer's
+   **composition is read** and tabulated in
+   `docs/formats/character-controller.md`: scales and endpoints, the seed
+   floor, pass 0's cached query, both ring branches, the pentagon refine, the
+   back-transform pass and the output contract. What `solve` still needs is
+   five small helpers, each named with its call site: `FUN_1426cd3d0` (the
+   facing threshold), `MoverWishQueryCached` (pass 0), `FUN_140c9f110` (the
+   extrapolation vector), `func_141af0070` + `FUN_141ae3eb0` (the shape
+   basis), and `0x140cc2290` (the `kind == 3` refine). `fan::solve` does not
+   exist and nothing downstream pretends it does.
+   **After the five:** cells → shapes (item 2), then the `ow-client` wiring.
+   Committed as `def2c9a`.
 
 1. Read the producer of the level-load GUID lists (`docs/open-questions.md`
    item 11.1): who resolves a map request to Jam `0x501B`'s four vectors, and
