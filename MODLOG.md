@@ -3,6 +3,213 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the writer's composition, read
+
+- `0x140cb86c0` read end to end: the seed/speed endpoint pair (`A = point +
+  seed*dir`, `B = point - speed*dir`, two different scalars), the `2 *
+  [shape+0x2d2c]` seed floor, pass 0's cached query and its shape-set pair,
+  both ring branches (direction fan and shape fan), the pentagon refine, the
+  back-transform pass and the output write, all tabulated in
+  `docs/formats/character-controller.md`.
+- New read units: `fan::ring_sweep` (count and the `0.35` radius floor),
+  `fan::ring_offset` (`(sin*R, 0, cos*R, 0)`) and `fan::shape_ring_offset`
+  (`(sin*(seed-0.015), 0.015, cos*(seed-0.015), 0)`). 114 `ow-sim` units green.
+- `fan::solve` still unwritten: five helpers remain (`FUN_1426cd3d0`,
+  `MoverWishQueryCached`, `FUN_140c9f110`, the shape basis pair, `0x140cc2290`)
+  and each is named with its call site in the doc.
+
+## 2026-11-02 - the ring pass's rule, and where the fan read stops
+
+- `ow-sim::fan::accepts_ring(alignment, threshold, gate)`: site `0x140cb9b6e`'s
+  acceptance is `gate && alignment > threshold`, strict, with the gate fed
+  from the hit record's flags byte. All four of the writer's call sites now
+  have their acceptance rule read and unit-tested (25 fan units).
+- The fan read stops here deliberately: the **composition** — which site runs
+  under which input, the ring pass's carried-forward endpoint, and the
+  `+0x1140` write — is not read, so `fan::solve` stays unwritten and
+  `CandidateSolver` stays a seam. `STATUS-handoff.md` carries the blocker with
+  its next anchors.
+
+## 2026-11-02 - a wrong citation found and fixed
+
+- `facing`'s address was recorded as `0x140cb92a0`; disassembling that range
+  shows the radius-scale and the direction splats (`MULSS [rdi+0x5b8]`,
+  `MOVUPS [rdi+0xc0]`), not the dot. The arithmetic is from the refinement's
+  comparison at **site `0x140cb9770`**; the address attribution in `fan.rs`,
+  the plan and this log is corrected. The code was never wrong, the citation
+  was.
+
+## 2026-11-02 - the fan's refinement is read and implemented
+
+- `ow-sim::fan` gains the refinement: `horizontal_unit`, `back_direction`,
+  `refine_direction` (the `-normal` sibling with its fallback),
+  `refined_offset` (`pentagon*0.02 + refined*0.005`), `refined_sweep` (the
+  `0.04` ground probe), `accepts_refine` (`flag_bit_0x10000 || facing >
+  best_y`, strict, `best_y` captured before the loop) and `refine_pentagon`
+  (keep-first, replace-on-facing, break-on-facing, five candidates).
+- The back-transform is no longer "not read": the direction is `-xyz`
+  normalized in the horizontal plane with `y` kept as `n*0.5*0.0`, and the
+  degeneracy guard is `1.17549435e-36`.
+- Six new units; the fan now has 24. `fan::solve` stays unwritten: the outer
+  walk over the writer's four evaluator call sites is the remaining read.
+
+## 2026-11-02 - the producer seam lands, the loop does not
+
+- `ow-sim::fan` gains `CandidateSolver` (`evaluate(a, b) -> Option<SweepHit>`),
+  `SweepHit { score, normal }`, and `facing(dir, normal)` — the refinement's
+  second acceptance term (site `0x140cb9770`), `y`, `x`, `z` summed left to
+  right.
+- `policy::PolicySolver` implements the trait over `candidate_hit_policy`, so
+  the whole chain runs end to end against a synthetic world. Three new tests.
+- The producer's loop is **not** written: each candidate is wrapped in a
+  per-candidate refinement block that is only partly read. It is queued as
+  `docs/open-questions.md` 1a, with `fan::solve` blocked behind it.
+
+## 2026-11-02 - the hit policy is implemented and tested
+
+- `crates/ow-sim/src/policy.rs` lands: the callback `0x14202bc90` as
+  `candidate_hit_policy(hit, packed, ctx, world)`, with `PackedShape`,
+  `HitRecord`, `HitFilter`, `Hit`, `World` and the `Geometry`/`VariantLookup`
+  traits that supply the map data the policy reads. Twelve unit tests, gate
+  green; the harness unit waits on a seeded geometry object.
+- The key chain is reproduced, not simplified: `decode_geometry_pointer`
+  (`0x14202beba`, constants pinned by a round-trip test) and the entry decode
+  in `geometry_key`, including the anti-tamper globals as `key_mix`/`key_salt`.
+- The **first** call site's presence binding is `(word & 0x0f) >> 4`, always
+  zero, so the dedupe scan over `[world+0x240]` is unreachable in this build.
+  `dead_presence_term` keeps the formula and a test asserts it over all 65536
+  slot words; the live binding takes the presence bit from `0x10`.
+- One documented non-identical value: with no world the client leaves a stale
+  register in `rec+0x20`; the Rust record writes `0` there.
+
+## 2026-11-02 - the collision answer is read end to end, the hit policy stays open
+
+- `CollisionHandleDispatch` (`0x142cc45a0`) re-read at the instruction level: it
+  bounds the handle at `0x3fff`, decodes the record with the same
+  `(raw + 0xb3269b88d44d5fb2) ^ 0x77600ba5adcc265c` as the evaluator wrapper,
+  builds a five-field driver context (world, `request+0x58`, the callback,
+  `request+0x60`'s answer record, the observation slice) and calls
+  `CollisionQueryDriver`. The branch on `request+0x71` appends to a
+  **0xaa0-byte observation ring** at `record+0x4a0`; `0x142cadf00` is that
+  slice's inline-vector release, not a query helper (two earlier notes
+  corrected).
+- `CollisionQueryDriver` (`0x142cbd510`) read: four passes on `request+0x5e`'s
+  bits, the sweep AABB and its per-lane expansion, the three per-entry masks
+  (swept AABB, slab test with `0.005` slack, `+0x2c == -1` leaf test), the
+  `0x100`-entry worklist (`CollisionWorklistPush`), and the leaf call into
+  `ShapeNarrowphase`.
+- `ShapeNarrowphase` (`0x142cc1610`) read: it is the only caller of the policy
+  and therefore fixes the contract — `callback(&hit, packedShapeDescriptor,
+  answerRecord)`. The thunk `0x14202c580` is byte-exact
+  (`MOV RAX,R8 / MOV R8,RDX / MOV RDX,RCX / MOV RCX,RAX / JMP`), so the policy
+  body receives `(hit, packed, record)`. The earlier "first parameter is the
+  descriptor the dispatcher passed third" note is superseded.
+- The policy body `0x14202bc90` (1797 bytes) is **read**. The earlier
+  "computed-jump dispatcher" reading was wrong: `0x14202bd06`'s `ADD`/`ROR`
+  chain is a **pointer decode**, and the far branch targets
+  (`0x142049e89`, `0x14202df4a`, `0x14202e840`, `0x142030dc2`) are junk-filler
+  obfuscation between blocks. A linear sweep decodes the body to exactly its
+  end (427 instructions, no data islands, no indirect jumps), so the live path
+  is plain code. Three obfuscation idioms resolved: junk-between-blocks, a
+  constant-injection stub (`0x142018990` stores `0x10`/`0xf`/`4`/`0` through
+  its four pointer arguments), and pointer/value decode chains.
+- Contract: `(hit, packed, ctx)` -> 1 no hit / 2 accepted / 3 rejected. Gates:
+  `world = 0x1420c2360(ctx)`; `0x1420af950` (62 B) rejects unless the hit's
+  required mask meets `world[0x280]`, its forbidden mask does not, and the
+  world is absent from its exclusion list; a decoded geometry key dedupes
+  against `[world+0x240]` x `[world+0x248]` 0x10-byte entries. Mode switch on
+  `hit+0x34`: 0 = presence (`hit+0x39 = 1`, return 1); 1 = fill the 0x50-byte
+  record at `[hit+0x10]` and return 2; >= 2 = build a local record and
+  classify through `hit[0](&record, [hit+0x08]+0x470)`. Outputs: `hit+0x30`
+  (the score the fan compares), `hit+0x38`, `hit+0x39`.
+- `dev/probe_policy_blocks.py` (new) decodes a function from the recovered
+  image, distinguishes a computed jump from junk filler, and reports
+  unresolved/outside targets. Note for anyone re-reading this area: code bytes
+  come from `dev/data/offline_recover/module_offline.bin` (flat, offset ==
+  VA - base); the install's `.text` is encrypted.
+- Stage is **read**; what remains for it is the map-data geometry, not code.
+  No gameplay code was written for it yet.
+- Docs: `formats/character-controller.md` gains "The collision query driver
+  and the hit contract"; `movement-plan.md` stage rows updated;
+  `open-questions.md` item 1 narrowed to the policy body.
+
+## 2026-11-02 - collider shell corrected: the live path is the brush tree
+
+- `MeshToColliderFaces` (`0x142cf2010`) re-read with the decompiler: the
+  thickening is **z only** (x/y/w pass through `+-0.0`) and the index array is
+  ordered outward-block, inward-block, then the stitching pairs. Two real
+  divergences in `crates/ow-sim/src/collider.rs::shell` fixed, plus the surface
+  id word it was not writing; its tests now assert the read behaviour.
+  Differential unit still pending (**not tested**).
+- `GeometryBuild` (`0x14213c440`), `ColliderFaceAppend` (`0x142cca460`) and
+  `ColliderMeshEmit` (`0x142ccc120`) read. `GeometryBuild` is the only cell
+  producer and it builds from the model's brush tree, so the map collider comes
+  from brush trees, not from the 17-array chunk (see
+  `docs/open-questions.md` item 6).
+- Ghidra bridge endpoints confirmed reachable (`/get_xrefs_to`,
+  `/force_decompile`, `/disassemble_bytes`) with program name `Overwatch.exe`.
+- Gate: `cargo xtask verify --fast` green (`cargo test -p ow-sim --lib`: 90
+  passed).
+
+## 2026-11-02 - collider triangle skip test verified, shell builder read
+
+- `fn/TriangleDegenerate` (`0x142cd56e0`) implemented in
+  `crates/ow-sim/src/collide.rs` and verified: differential over 30 declared
+  cases (bit-exact), 100% branch coverage, mutation kill rate 100% (9/9
+  probed of 12 generated). Its boundary
+  cases sit exactly on `1e6`, `6.24999984e-06` and `2.49999994e-05`.
+- `MeshToColliderFaces` (`0x142cf2010`) read in full and recorded in
+  `dev/data/read/decoder-notes.md`: it builds a double-sided shell (vertices
+  offset by +-epsilon, per face two triangles with opposite winding, plus side
+  walls in the flag mode). Not implemented.
+- Gate: `cargo xtask verify --fast` green.
+
+## 2026-11-02 - Collision: the degenerate-triangle skip, verified
+
+- `crates/ow-sim/src/collide.rs` gains `triangle_degenerate`: the read
+  expression of the client's per-triangle skip test (`0x142cd56e0`) — the
+  non-finite corner test on the low three lanes, the three scalar box-extent
+  compares against `1e6`, the three squared-edge compares against
+  `6.24999984e-06`, and the cross-length compare against `2.49999994e-05`, in
+  that order, with `AL` 0 or 1 as the only output.
+- `fn/TriangleDegenerate` verifies it differentially through
+  `crates/ow-sim/src/bin/verify_probe.rs` and
+  `dev/verify_harness/triangle_fixture.py`: 96 random cases plus a declared
+  pool that sits on both sides of every threshold and on each threshold
+  exactly, coverage 100% of its 6 branch sites, 12/12 mutants killed.
+- The collider-mesh chain upstream of the query is now read end to end and
+  named in `docs/function-names.csv`: `MeshToColliderFaces` (`0x142cf2010`),
+  `ColliderMeshEmit` (`0x142ccc120`), `ColliderFaceAppend` (`0x142cca460`),
+  `BrushTreeToMesh` (`0x142cf23c0`). None of those four is implemented yet.
+- The pool records that feed the cell/sector builders come from brush/model
+  primitives via the creator at `0x1421363d1`, not from the 17-array chunk
+  container; that reframing is recorded in `docs/open-questions.md` item 6,
+  "Round 2".
+
+## 2026-11-02 - Collision: the type-3 mesh narrowphase, verified
+
+- `crates/ow-sim/src/collide.rs` gains `mesh_sweep` + `mesh_triangle`: the read
+  expression of the type-3 BVH walk (`0x142caed30`) and the per-triangle test
+  (`0x142cce430`'s fast path), including the `0xFF` index-run grouping with its
+  single-corner carry, the last-accepted-triangle rule and the published
+  0x44-byte hit. The walk's counters (`internals`/`leaves` at `+0x3c`/`+0x40`)
+  are kept because they are part of the output the query returns.
+- `fn/MeshSweep` verifies it differentially at `0x142caed30` through
+  `crates/ow-sim/src/bin/verify_probe.rs` and
+  `dev/verify_harness/mesh_fixture.py`: 328 cases over 16 fixture shapes and
+  the edge pool, byte-for-byte on the whole 0x44-byte output, coverage 61.1%
+  with the unread support-point path declared dead, 10/12 mutants.
+- The walk's input is pinned. A 0x60 cell entry holds a **0x30-byte mesh
+  source** at `+0x20` (`{u64 nodes; u64 second; u64 third; u32 count; 5
+  floats}`); the brush path fills it with `MeshToColliderFaces`
+  (`0x142cf2010`), which has only two callers, both geometry builds. The
+  chunk decoder must fill the same struct from the cell arrays.
+- New read tools (git-ignored, `dev/data/read/`): `d.py` (disassemble an image
+  range), `callers.py` (scan `E8 rel32` for direct callers), `covhunt.py`
+  (list a unit's uncovered branch sites).
+- Open: the support-point path (`0x142cc9460`), the BVH builder, and the cell
+  decoder itself.
+
 ## 2026-11-02 - Collision: the cell container and the runtime fixup
 
 - `ow_tank::collision::parse` reads the collision chunk's STUD blob, the
@@ -117,3 +324,9 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 - The runtime crates were parked and the workspace reduced to the data layer.
   The practice-range chunk seed and the synthetic map claim were removed;
   `cargo xtask verify` became the one gate.
+- `fn/BuildBvh`: the collider BVH builder (`0x142ccb1b0`) is read and
+  verified. The split rule turned out to be a 64-bin surface-area heuristic on
+  the centroid spread, not the array-half split the earlier note recorded, and
+  the partition is a swap pass rather than a stable one. Differential, 100%
+  branch coverage, mutation 10/11. `crates/ow-sim/src/collider.rs` now holds
+  the shell, the face records, the builder and the flattening in one chain.

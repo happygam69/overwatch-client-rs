@@ -69,7 +69,8 @@ client-side mode→variation selector.
   stage (`fn/CollisionSweepBounds`, `0x142cd5540`), the type-0 narrowphase's
   analytic path (`fn/CollisionSphere`, `0x142ccdf40`) and the query's layer
   filter (`fn/CollisionShapeFilter`, `0x142cbb350`) and the type-1 capsule
-  (`fn/CollisionCapsule`, `0x142ccd7b0`) and the collision chunk's runtime
+  (`fn/CollisionCapsule`, `0x142ccd7b0`), the type-3 mesh narrowphase
+  (`fn/MeshSweep`, `0x142caed30`) and the collision chunk's runtime
   17-pointer cell fixup (`fn/MapChunkCellBytesFixup`, `0x141ff51a0`) are
   differential units against the client's bytes, and the chunk's container
   (220 cells, 17 arrays each) is parsed and pinned on the install

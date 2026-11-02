@@ -123,17 +123,17 @@ and "velocity publish" (the function's name).
 | state-record pass (`0x140cb63c0`) | read | state id from `[state_object+0xbc]` (default 1), the `0x800000` skip, the fan call with `dt=0`, the service `+0x58/+0x60/+0x68` hooks |
 | fan seed, speed, radius, rotations, acceptance | read + implemented | `ow-sim::fan`, 17 tests |
 | fan evaluator body (`0x14203dae0`) | read | result record + query struct layouts |
-| handle dispatcher (`0x142cc45a0`) | read | decode, descriptor + block layout, island branch dead on this caller |
-| collision query driver (`0x142cbd510`) | read | four passes, AABB + moving-box tests, worklist |
+| handle dispatcher (`0x142cc45a0`) | read | handle decode, the driver context, the 0xaa0-byte observation ring; the ring is gated on `request+0x71`, whose writer is not read |
+| collision query driver (`0x142cbd510`) | read | four passes, sweep AABB, the three per-entry masks, the worklist, the leaf call |
 | sweep bounds (`0x142cd5540`) | verified | `fn/CollisionSweepBounds` |
-| narrowphase wrapper (`0x142cc1610`) | read | transform, layer filter, type dispatch |
+| narrowphase wrapper (`0x142cc1610`) | read | transform, layer filter, type dispatch, and the `callback(&hit, packed, record)` contract |
 | layer filter (`0x142cbb350`) | verified | `fn/CollisionShapeFilter` |
 | shape world transform (`0x142cb8b80`) | read | static pool copy and the normalised pose quaternion; not implemented |
 | type-0 narrowphase (`0x142ccdf40`, 0x4ec) | analytic path verified | `fn/CollisionSphere`; the support-point path (`0x142cc9460`) is open |
 | type-1 capsule (`0x142ccd7b0`, 0x78a) | verified | `fn/CollisionCapsule`; the support-point path (`0x142cc9460`) is open |
 | narrowphases `0x142cd3c80` (0x3f0), `0x142caed10` (0x1a thunk), `0x142cd0ae0` (0xc00) | **open** | inventoried, two-path shape known |
-| hit policy (`0x14202c580` -> `0x14202bc90`) | **open** | thunk and argument order read; needs a live collision world |
-| geometry ingest (map chunks → descriptors) | **open** | payload format read; the converter is the next anchor (`formats/maps.md`) |
+| hit policy (`0x14202c580` -> `0x14202bc90`) | **read** | contract `(hit, packed, ctx)` -> 1/2/3; world gate, `0x1420af950` layer/exclusion filter, decoded geometry-key dedupe, 0x50-byte record fill for mode 1, classifier `hit[0]` for mode >= 2; only the map-data tables it reads are missing (item 6 ingest) |
+| geometry ingest (map chunks → descriptors) | **half read** | chunk → cells is read and verified (slots `0x1e`/`0x22`, `fn/MapChunkCellBytesFixup`, 220 cells); **cells → shape records is open** (`formats/maps.md`) |
 | shape pools: alloc / entry build / add | read | `DmWorldConstruct` (`0x142cbeb70`), `ShapePoolAlloc` (`0x142cb00c0`), `ShapeEntryFromDescriptor` (`0x142cb7f10`), `ShapeAddToBody` (`0x142cb3940`), `ShapeAddToOwner` (`0x142cd4ef0`) |
 | wish spring (`0x140cc0dc0`) | verified | `fn/MoverWishSpring` |
 | state transform (`0x140ca5c50`) | verified | `fn/MoverStateVector` (leaf path) |
@@ -144,6 +144,107 @@ and "velocity publish" (the function's name).
 | publish chain (`0x142cbd1b0` -> `0x142cd4bc0`) | verified | `fn/SetCharacterControllerVelocity`, `fn/MoveCharacterController` |
 | published value's meaning | read, not proven | see above; the new `0x140cbf950` evidence shows the value is re-imported as a world vector and converted back into the wish space |
 | Domino step / broadphase refit | read | `formats/domino.md` |
+
+## Implementation checklist
+
+Ordered by dependency. Each line names the file to write, what proves it, and
+what data it still needs. The rule is unchanged: an item is done when its unit
+is green, not when the code compiles.
+
+**1. `crates/ow-sim/src/policy.rs` — the hit policy. DONE (12 units green).**
+
+Landed as written below; `cargo test -p ow-sim policy` runs 12 tests and the
+gate is green. The harness unit `fn/CandidateHitPolicy` is still pending — it
+needs a seeded geometry object, so it comes after item 5.
+
+```rust
+pub const NO_HIT: u8 = 1;
+pub const ACCEPTED: u8 = 2;
+pub const REJECTED: u8 = 3;
+pub struct PackedShape { point: [f32;4], normal: [f32;4], fraction: f32,
+                         word30: u32, id: i16, sub: u16, key: u16 }
+pub struct HitRecord { /* 0x50 bytes, field offsets as read */ }
+pub struct HitFilter  { required: u32 /*+0x08*/, forbidden: u32 /*+0x10*/,
+                        excluded: &[u64] /*+0x20/+0x28*/, arg470: u64 }
+pub struct Hit { classifier, filter, record, optional, mode, score, flag, flag2 }
+pub struct World { layer_mask /*+0x280*/, identity, geometry: Option<&dyn Geometry> }
+pub trait Geometry { slot_word, base_index, table_entry, variant_table,
+                     key_mix, key_salt }
+pub trait VariantLookup { fn resolve(&self, index: u16) -> Option<(u16,u16)> }
+pub fn candidate_hit_policy(hit: &mut Hit, packed: &PackedShape,
+                            ctx: u64, world: Option<&World>) -> u8
+```
+
+The world is `Option` because the client's null-world `je` skips both the
+geometry decode and the optional filter and runs the mode switch directly;
+the geometry object is supplied as a trait so the policy runs without a map.
+The three gates, the mode switch and the record fill are in the client's
+order. Two obfuscation details are reproduced, not simplified away:
+`decode_geometry_pointer` (`0x14202beba`) with its constants pinned by a
+round-trip test against the documented inverse, and the entry/key chain in
+`geometry_key` including the two anti-tamper globals (`[0x143b79598+0x198]`,
+`byte[0x1438480f3]`) taken from the geometry as `key_mix`/`key_salt`.
+
+`dead_presence_term` / `dead_key` keep the **first** call site's binding, whose
+presence mask is `(word & 0x0f) >> 4` — always zero. That is why the dedupe
+scan over `[world+0x240]` is unreachable in this build, and
+`the_first_sites_presence_term_is_always_zero` asserts it over all 65536 slot
+words. The live binding (mode `1`) takes the presence bit from `0x10`.
+
+**One value is not bit-identical by construction:** with no world the client
+never executes the decode's load, so `rec+0x20` receives a stale register. A
+Rust caller has no stale register and writes `0`. It is documented on
+`HitRecord::geometry`; the real evaluator always has a world, so the path is
+unreachable from `0x1420328c0`.
+
+**2. `crates/ow-sim/src/fan.rs` — the seam and the refinement. DONE, minus the
+outer walk.**
+
+Landed: `CandidateSolver` (`evaluate(a, b) -> Option<SweepHit>`), `SweepHit
+{ score, normal }`, `facing(dir, normal)` (from the refinement's
+comparison at site `0x140cb9770`: `y`, `x`,
+`z`, summed left to right), and the refinement pass —
+`horizontal_unit`, `back_direction`, `refine_direction`, `refined_offset`,
+`refined_sweep`, `accepts_refine`, `refine_pentagon`. `policy::PolicySolver`
+implements the trait, so the chain runs end to end against a synthetic world.
+
+What is still unwritten is `fan::solve` itself — the **outer** walk over the
+writer's four evaluator call sites. The pieces it needs are all read and
+tested; the composition (which site runs, what the query carries, what the
+`+0x1140` write takes from the record) is not. `open-questions.md` 1a carries
+it with its anchors.
+
+**3. `crates/ow-sim/src/frame.rs` — compose.** Already implemented
+(`state_vector`, `ramp_from_body`, `frame_velocity`, `update_frame`); no change.
+End-to-end test: a synthetic body plus a synthetic world must produce the same
+velocity the two client call sites compute, bit-for-bit.
+
+**4. `crates/ow-client/` — live wiring.** Order from `MoverUpdateFrame`:
+`ApplyStateModifiers` -> `SubmitMoverPhysicsCommand` -> input-source pass ->
+`FUN_140cc0dc0` (spring) -> state vector -> ramp -> `SetCharacterControllerVelocity`.
+Needs a body record (`ow-sim::body`) and a world (item 5). Nothing here is a
+read; it is assembly, so it lands last.
+
+**5. Cells → shapes (the open read).** Two halves, and the first is done:
+`ow-tank::collision` parses the 220 cells and `fn/MapChunkCellBytesFixup`
+proves the pointer fixup. What is missing is the converter that turns a cell
+into the `0x60`-byte face records the narrowphases consume: quantized vertices
+from `arr13`/`arr14`, index runs from `arr3`/`arr11`/`arr12`, face stride
+`0x60`, normal `+0xc0`, count `+0xf6`, `0x30`-byte vertices from `+0x18`. Its
+unit will be `fn/MapChunkToShapes`; until it exists, `WorldView` is synthetic.
+
+**6. Verify.** `cargo xtask verify --fast` gates everything above except the
+install reads; the full `cargo xtask verify` runs `collision_cells_real`. The
+movement units that must stay green while this lands: `fn/MoverWishForward`,
+`fn/MoverWishInverse`, `fn/MoverWishCopy`, `fn/MoverWishSpring`,
+`fn/MoverStateVector`, `fn/MoverRampVector`, `fn/MoverRampScalar`,
+`fn/MoverAdvance`, `fn/MoveCharacterController`, `fn/CollisionShapeFilter`,
+`fn/CollisionSphere`, `fn/CollisionCapsule`, `fn/CollisionSweepBounds`,
+`fn/MapChunkCellBytesFixup`.
+
+**What is implementable now:** items 1–3 against a synthetic world — the whole
+producer loop runs, deterministically, with no map. **What is not:** any
+scored candidate on a real map, which is item 5 alone.
 
 ## What goes into `ow-client` when the reads land
 

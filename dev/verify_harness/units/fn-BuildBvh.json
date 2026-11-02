@@ -1,0 +1,88 @@
+{
+  "id": "fn/BuildBvh",
+  "title": "tier-2 shipped code: the collider BVH builder at 0x142ccb1b0",
+  "address": {
+    "v2b": "0x7ff7c79eb1b0"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "build_bvh",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "state",
+      "kind": "ptr",
+      "ptr_len": 64
+    },
+    {
+      "name": "faces",
+      "kind": "ptr",
+      "ptr_len": 1536
+    },
+    {
+      "name": "count",
+      "kind": "u64"
+    },
+    {
+      "name": "bins",
+      "kind": "u64"
+    },
+    {
+      "name": "prefix",
+      "kind": "u64"
+    },
+    {
+      "name": "nodes",
+      "kind": "ptr",
+      "ptr_len": 2640
+    }
+  ],
+  "returns": "u64",
+  "argFactory": "bvh_fixture",
+  "options": {
+    "iterations": 96,
+    "coverageThreshold": 90,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 9031,
+    "coverageWindow": 400,
+    "allowedImageReads": [
+      "0x7ff7c7c9aa00-0x7ff7c7c9abff",
+      "0x7ff7c7ca1780-0x7ff7c7ca17bf",
+      "0x7ff7c7ca41c0-0x7ff7c7ca41ff",
+      "0x7ff7c7ca44c0-0x7ff7c7ca450f",
+      "0x7ff7c7ca97a0-0x7ff7c7ca97ff",
+      "0x7ff7c7d7aee0-0x7ff7c7d7af2f",
+      "0x7ff7c830cce0-0x7ff7c830cd3f"
+    ],
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c79eb2b1",
+        "edge": "0x7ff7c79eb2d0",
+        "why": "CMP R11,1 guards the centroid-union loop; R11 is the face count and the leaf path at 0x142ccb216-0x142ccb2a2 returns for every count <= 4, so the loop-skipping edge needs count <= 1, which can never reach here."
+      },
+      {
+        "site": "0x7ff7c79eb322",
+        "edge": "0x7ff7c79eb341",
+        "why": "The same CMP R11,1 guard on the flat path's face-box union, reached only after the <= 4 leaf test has already returned."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit for the collider BVH builder: the candidate is ow_sim::collider::build, called through the build_bvh probe entry.",
+    "Signature from the prologue: rcx = state (node array at +0x30, used count +0x38), rdx = the 0x60-stride face array, r8d = count, r9 = the 64-bin scratch, the fifth argument on the stack = the prefix scratch.",
+    "The compared channels are the state (used-node count) and the node array (2*count-1 slots, sentinel-filled by the fixture so an unwritten tail cannot pass). Each node is compared field for field: min/max vec4, the face pointer at +0x28, axis +0x30, the two child indices, face count, height and the +0x44 id word.",
+    "The declared cases cover the clustered path (all centroid extents under 0.005, split at the array half), a spread on each axis, a single-bin SAH input, two competing clusters, and a dominant box area."
+  ],
+  "acknowledgedGaps": [
+    "The harness compares the node array only; the per-node neighbour links the appender writes and the finalizer's flattening order are exercised by fn/ColliderFaceAppend, not here."
+  ],
+  "knownEquivalentMutants": [
+    {
+      "kind": "op-swap -->+",
+      "line": 427,
+      "rationale": "`(faces.len() / 2).clamp(1, faces.len() - 1)`: the mutation widens the upper clamp bound from len-1 to len+1, which can only bind when the split count exceeds len-1. The cluster path's count is len/2 (always <= len-1 for len >= 2) and the split path's left count comes from bin_split, which never returns len (it needs a non-empty right side). So the clamp's upper bound is unreachable in both branches and the mutant cannot change any output byte."
+    }
+  ]
+}

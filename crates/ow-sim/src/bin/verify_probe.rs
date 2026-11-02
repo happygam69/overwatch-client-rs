@@ -968,6 +968,35 @@ fn collision_filter_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), Stri
     Ok((format!("{:x}", ret), vec![a, b]))
 }
 
+/// `0x142cd56e0`: the collider's "is this triangle unusable" test. Three vec4
+/// corners, no pointee written; the compared channel is the whole return
+/// register (a `MOVMSKPS` mask on the non-finite exit, else 1 or 0).
+fn triangle_degenerate_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut quads = [[0.0f32; 4]; 3];
+    let mut pointees = Vec::new();
+    for (index, arg) in args.into_iter().enumerate() {
+        let bytes = match arg {
+            Arg::Ptr(b, r, g) if r.is_empty() && g.is_none() && b.len() == 16 => b,
+            _ => return Err(format!("arg{index} must be a 16-byte vec4")),
+        };
+        for lane in 0..4 {
+            let raw = u32::from_le_bytes([
+                bytes[lane * 4],
+                bytes[lane * 4 + 1],
+                bytes[lane * 4 + 2],
+                bytes[lane * 4 + 3],
+            ]);
+            quads[index][lane] = f32::from_bits(raw);
+        }
+        pointees.push(bytes);
+    }
+    let ret = ow_sim::collide::triangle_degenerate(quads[0], quads[1], quads[2]);
+    Ok((format!("{:x}", ret), pointees))
+}
+
 /// `0x142ccd7b0` type 1 (capsule), the analytic path plus its two sphere-leaf
 /// recursions. Same record/output shape as the sphere, with a 0x30-byte record.
 fn collision_capsule_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
@@ -1002,6 +1031,51 @@ fn collision_capsule_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), Str
         out_after[0x3c..0x44].copy_from_slice(&0u64.to_le_bytes());
     }
     Ok(("-".to_string(), vec![record, out_after, block, xform]))
+}
+
+/// `0x142caed30` type 3 (mesh), the no-support-point walk. The element
+/// pointee carries the 0x50-byte pool element followed by its whole world;
+/// the element's three pointers are relative to that base, so the mesh the
+/// walk reads starts right after the element.
+fn mesh_sweep_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let element = match it.next() {
+        Some(Arg::Ptr(b, _, g)) if g.is_none() && b.len() > 0x50 => b,
+        _ => return Err("arg0 must be the type-3 element plus its world".into()),
+    };
+    let out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x44 => b,
+        _ => return Err("arg1 must be the 0x44-byte output".into()),
+    };
+    let block = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x78 => b,
+        _ => return Err("arg2 must be the query block".into()),
+    };
+    let xform = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x20 => b,
+        _ => return Err("arg3 must be the shape transform".into()),
+    };
+    let world = ow_sim::collide::MeshWorld {
+        base: 0x50,
+        bytes: &element[0x50..],
+    };
+    let sweep = ow_sim::collide::mesh_sweep(&element[..0x50], &world, &block, &xform);
+    let mut out_after = out;
+    if let Some(hit) = sweep.hit {
+        out_after[0x00..0x10].copy_from_slice(&quad_bytes(hit.point));
+        out_after[0x10..0x20].copy_from_slice(&quad_bytes(hit.normal));
+        out_after[0x20..0x30].copy_from_slice(&quad_bytes(hit.fraction));
+        out_after[0x30..0x34].copy_from_slice(&hit.triangle.to_le_bytes());
+        out_after[0x34..0x36].copy_from_slice(&hit.ids[0].to_le_bytes());
+        out_after[0x36..0x38].copy_from_slice(&hit.ids[1].to_le_bytes());
+        out_after[0x38..0x3a].copy_from_slice(&0xffffu16.to_le_bytes());
+    }
+    out_after[0x3c..0x40].copy_from_slice(&sweep.internals.to_le_bytes());
+    out_after[0x40..0x44].copy_from_slice(&sweep.leaves.to_le_bytes());
+    Ok(("-".to_string(), vec![element, out_after, block, xform]))
 }
 
 fn vec4_at(bytes: &[u8], offset: usize) -> [f32; 4] {
@@ -1271,7 +1345,11 @@ fn handle_call(
         "collision_sweep_bounds" => collision_sweep_bounds_entry(args),
         "collision_sphere" => collision_sphere_entry(args),
         "collision_filter" => collision_filter_entry(args),
+        "triangle_degenerate" => triangle_degenerate_entry(args),
         "collision_capsule" => collision_capsule_entry(args),
+
+        "build_bvh" => build_bvh_entry(args),
+        "mesh_sweep" => mesh_sweep_entry(args),
         "mover_variant_position" => mover_variant_position_entry(args),
         "mover_state_transform" => mover_state_entry(args),
         "mover_state_vector" => mover_state_vector_entry(args),
@@ -1457,4 +1535,101 @@ fn main() {
         }
         let _ = out.flush();
     }
+}
+
+/// `0x142ccb1b0` the BVH builder: `(state, faces, count, bins, prefix)`.
+///
+/// The candidate only needs the face array and the count; the two scratch
+/// addresses and the state's node pointer are the caller's business. The
+/// compared channels are the state (whose `+0x38` used count the builder
+/// bumps) and the node array the state points at.
+fn build_bvh_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 6 {
+        return Err(format!("expected 6 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut state = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 0x40 => b,
+        _ => return Err("arg0 must be the 0x40-byte state".into()),
+    };
+    let faces_blob = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg1 must be the face array".into()),
+    };
+    let count = match it.next() {
+        Some(Arg::U64(value)) => value as usize,
+        _ => return Err("arg2 must be the face count".into()),
+    };
+    if faces_blob.len() < count * 0x60 {
+        return Err("the face array is shorter than count".into());
+    }
+    // arg3/arg4 are the caller's bin and prefix scratch (raw addresses); arg5
+    // is the node array the builder fills.
+    match it.nth(2) {
+        Some(Arg::Ptr(_, r, g)) if r.is_empty() && g.is_none() => {}
+        _ => return Err("arg5 must be the node array".into()),
+    }
+    let mut faces = Vec::with_capacity(count);
+    for slot in 0..count {
+        let at = slot * 0x60;
+        let face = &faces_blob[at..at + 0x60];
+        let quad = |offset: usize| -> [f32; 4] {
+            let mut out = [0.0f32; 4];
+            for lane in 0..4 {
+                out[lane] = f32::from_bits(u32::from_le_bytes([
+                    face[offset + lane * 4],
+                    face[offset + lane * 4 + 1],
+                    face[offset + lane * 4 + 2],
+                    face[offset + lane * 4 + 3],
+                ]));
+            }
+            out
+        };
+        let index = |offset: usize| -> i32 {
+            i32::from_le_bytes([
+                face[offset],
+                face[offset + 1],
+                face[offset + 2],
+                face[offset + 3],
+            ])
+        };
+        faces.push(ow_sim::collider::Face {
+            min: quad(0x00),
+            max: quad(0x10),
+            centroid: quad(0x20),
+            marker: index(0x30),
+            area: f32::from_bits(index(0x34) as u32),
+            index: [index(0x40), index(0x44), index(0x48)],
+            mode: u16::from_le_bytes([face[0x50], face[0x51]]),
+            a: u16::from_le_bytes([face[0x52], face[0x53]]),
+            b: u16::from_le_bytes([face[0x54], face[0x55]]),
+            source: slot,
+            bucket: index(0x30),
+            id_bits: u16::from_le_bytes([face[0x54], face[0x55]]),
+        });
+    }
+    let (built, ordering) = ow_sim::collider::build(&faces).map_err(|err| format!("{err:?}"))?;
+    if built.len() > 2 * count - 1 {
+        return Err("the builder emitted more nodes than a binary tree allows".into());
+    }
+    state[0x38..0x3c].copy_from_slice(&(built.len() as i32).to_le_bytes());
+    // The builder writes each face's bin into the record at `+0x30`, and the
+    // splits permute the array, so the returned face blob is the final one.
+    let mut faces_blob = faces_blob;
+    if ordering.len() == count {
+        let original = faces_blob.clone();
+        for (slot, face) in ordering.iter().enumerate() {
+            let from = face.source * 0x60;
+            faces_blob[slot * 0x60..slot * 0x60 + 0x60]
+                .copy_from_slice(&original[from..from + 0x60]);
+            let at = slot * 0x60 + 0x30;
+            faces_blob[at..at + 4].copy_from_slice(&face.bucket.to_le_bytes());
+        }
+    }
+    let mut out = vec![0xCDu8; (2 * count - 1) * 0x50];
+    // The fixture pins the face array at `ARENA_BASE + 0x200`; the client keeps
+    // an absolute pointer at each leaf node's `+0x28`.
+    const FACE_ARENA_ADDRESS: u64 = 0x2_0000_0200;
+    ow_sim::collider::write_build_nodes(&built, FACE_ARENA_ADDRESS, &mut out);
+    Ok(("0".to_string(), vec![state, faces_blob, out]))
 }

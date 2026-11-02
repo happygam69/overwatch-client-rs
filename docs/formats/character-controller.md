@@ -18,6 +18,45 @@ integrates the per-frame step.
   `SubmitMoverPhysicsCommand` velocity assembly, the Domino character
   controller and collision. The invoker's caller is still not located and may
   be a dead path.
+- **Collision, 2026-11-02:** the collider query leaves are proven — the type-3
+  mesh sweep (`fn/MeshSweep`: the BVH walk plus the triangle test) and
+  `ColliderTriangleDegenerate` (`0x142cd56e0`, the skip test
+  `MeshToColliderFaces` applies per triangle) are differential-verified. The
+  rest of the collider-mesh chain is read but not implemented:
+  `MeshToColliderFaces` (`0x142cf2010`), `ColliderMeshEmit` (`0x142ccc120`),
+  `ColliderFaceAppend` (`0x142cca460`), `BrushTreeToMesh` (`0x142cf23c0`), the
+  pool record creator (`0x1421363d1`) and the driver `0x14213bbc0` that turns
+  pool records into the `0x60` cell and `0x100` sector entries and hands them
+  to `ShapeAddToBody` -> `GeometryFinalize`. Geometry data reaches those pools
+  from **brush/model primitives**, not from the 17-array chunk container.
+- **The collider mesh pipeline is read end to end (2026-11-02).** brush tree ->
+  `BrushTreeToMesh` (`0x142cf23c0`) -> `MeshToColliderFaces` (`0x142cf2010`,
+  which duplicates every vertex as `v + eps` and `v - eps` and emits two
+  oppositely wound triangles per face, i.e. a closed double-sided **shell**,
+  adding side walls when `eps >= 0.005` (`0x142f897c4`)) -> `ColliderMeshEmit`
+  (`0x142ccc120`) -> `ColliderFaceAppend` (`0x142cca460`), which writes
+  `0x60`-byte face records (`min`, `max`, `(min+max)/2`, `{-1, area, i0, i1}`,
+  `{i2, -1, -1, -1}`, `{mode, a, b, 0}`), welds the shell's two surfaces through
+  a hash of undirected vertex-pair keys (bucket count
+  `round_up_pow2(3 * faces)`), and builds a BVH (`0x142ccb1b0`, leaf at `<= 4`
+  faces, `0x50`-byte build nodes: `min` `+0x00`, `max` `+0x10`, `+0x20`/`+0x28`
+  zero, `first_face` `+0x28`, `+0x30` axis, `+0x34`/`+0x38` children, `+0x3c`
+  face count of a leaf, `+0x40` height, `+0x44` the id word). The split rule is
+  decided by the **centroid** spread (`0x142ccb2a2`): when all three centroid
+  extents are below `0.005` the faces are clustered and the node splits at the
+  array half (`count >> 1`, `0x142ccb314`) with its axis named by the largest
+  face-box extent; otherwise a 64-bin surface-area heuristic runs along the
+  largest centroid extent — bin = `clamp(trunc((c - low) * 64 / extent), 0, 63)`
+  (`0x142ccb680`), prefix and suffix boxes give
+  `cost(i) = area(prefix_i) * count(prefix_i) + area(suffix_i+1) *
+  count(suffix_i+1)` with `area = 2 * (x*(z+y) + z*y)`, the earliest cheapest
+  boundary wins, and the array is then partitioned **in place by swapping** each
+  qualifying face into the next free slot (`0x142ccbc17`) — so the taken faces
+  keep their order and the displaced face moves to the source's old slot, which
+  is what the client's own output shows. `fn/BuildBvh` proves all of it.
+  The conversion to the `0x20`-byte runtime nodes (`0x142ccad80`) and the
+  appender `0x142cca460` are still unread, as is the pool importer
+  `0x1421363d1`; the weld's neighbour links have no known reader.
 - **Implementation status:** no playable movement is implemented. The old
   trace-measured approximation was deleted with `ow-sim/movement.rs`; the
   client's own control law is the only acceptable source. The verified leaves
@@ -220,7 +259,12 @@ differential units now pin the read arithmetic against the client's bytes:
   array from `world+0x2d0/0x2e8/0x300/0x330`, runs the type-0/1/2/4 leaf and
   copies the 0x20-byte bounds back into the record. Types above 4 follow the
   client's final box path.
-  The type-3 mesh path (`0x142cae5a0`) is still open.
+  The type-3 mesh path (`0x142cae5a0`) was open here; it is now read and
+  verified separately as `fn/MeshSweep` against the walk its dispatcher calls
+  (`0x142caed30`, `crates/ow-sim/src/collide.rs::mesh_sweep`), so this unit's
+  remaining open edge is only the dispatcher's own type-3 branch, which
+  `fn/ShapeDispatch` elects not to cover (the 0x2f0 pool record path is not
+  fixture-reachable without the allocator vtable).
 - `fn/MoveCharacterControllerShape` (`0x142cd4bc0`, shape path): 9 cases,
   83.3% branch coverage (5/6; the contact-event edge is open), 8/10 mutants.
   It builds the quaternion matrix
@@ -1108,13 +1152,424 @@ gate and `+0x70` secondary; the slot's producer is not read.
 **What is implemented.** `ow-sim::fan` implements the read arithmetic: the
 turn limit, the max3 cap, the frame time, the speed, the radius, the seed
 (both terms and the `+0.1` bias), the rotation, the two fan generators and
-both acceptance rules, with unit tests. The evaluator `0x1420328c0` (a
-wrapper over the obfuscated collision query `0x14203dae0`), the two
-generic helpers `0x1426cd3d0`/`0x1426de990`, the per-pass record layouts and
-the `0x141c5d780` query chain are **open**, and the module takes their
-outputs as arguments rather than inventing them. So the wish producer is
-read in shape but not finished: no wish can be produced until
-`0x14203dae0` is read.
+both acceptance rules, with unit tests. The evaluator wrapper `0x1420328c0`,
+the handle dispatcher `0x142cc45a0`, the query driver `0x142cbd510` and the
+narrowphase `0x142cc1610` are read (below). Still **open**: the policy body
+`0x14202bc90` (obfuscated, see its subsection), the two generic helpers
+`0x1426cd3d0`/`0x1426de990`, the per-pass record layouts and the
+`0x141c5d780` query chain, and the geometry ingest that fills the world
+record. The module takes their outputs as arguments rather than inventing
+them, so no wish can be produced yet.
+
+**The query object's layout, its producer and the record (2026-11-02).**
+Three reads close the descriptor half of the contract above.
+
+*Clone.* `0x140a01560 (crow, copy)` is the query clone: it enumerates every
+live field, so its last written field is the object's last field. The query is
+**0x4a5 bytes** (0x4a8 stride):
+
+| offset | field |
+|---|---|
+| `+0x00`, `+0x08`, `+0x10` | three qwords, copied verbatim |
+| `+0x04` | u16, the fan writes `body[0x23c]` |
+| `+0x06` | u16 mode: `0xf` from the fan, `0xe` from the nested cached query, `1` from its outer call |
+| `+0x08` | u64, the fan writes `0x0003000000000000` |
+| `+0x18`, `+0x1a`, `+0x1c` | u32 / u16 / byte; the fan writes `0`, `0x30e0`, `0` |
+| `+0x20` | inline vector 1: `{ptr = +0x30, count +0x28, cap +0x2c = 0x80000020}` |
+| `+0x130` | inline vector 2: `{ptr = +0x140, count +0x138, cap +0x13c}`, same cap |
+| `+0x240` | inline vector 3: `{ptr = +0x250, count +0x248, cap +0x24c}`, copied by `0x1407e1710` |
+| `+0x450` | float4 — segment point A |
+| `+0x460` | float4 — segment point B |
+| `+0x470`, `+0x480`, `+0x488`, `+0x490`, `+0x498` | qwords copied verbatim |
+| `+0x49c` | u32, copied verbatim |
+| `+0x4a4` | byte, copied verbatim |
+
+The two inline-vector caps carry bit 31 (`0x80000020`), so bit 31 is the
+"storage is inline" marker of this container type and 0x20 is the capacity.
+The clone is shallow for the header and deep for the three vectors only.
+
+*What the fan puts in the segment.* `MoverWishWriter` builds
+`P = M * wish` (`0x140c9e670`, below), then writes
+`A = P + S + (seed + 0.1) * basis` into `+0x450` and
+`B = P + S - speed * basis` into `+0x460`, where `S = body[0xe8] * 1e-6 *
+helper0(block) * 0x143872ce8` is the per-frame scale along the same four-lane
+`basis` (`body+0xc0/+0xc4/+0xc8/+0xcc`). So the query is a **sweep segment
+from behind the mover to `seed + 0.1` ahead of it**, both endpoints in world
+space, and the w lane rides the basis w. The `+0.1` is the same bias the seed
+takes.
+
+*The record the query answers with.* The fan's per-candidate record and the
+memo wrapper's copy agree on one 0x50-byte layout: `+0x00` float4 position,
+`+0x10` float4 direction (the fan dots it with the basis and takes `|.|` —
+this is the fan's score), `+0x20` qword hit block (`0` = no hit), `+0x28`
+qword initialised to `0xffff0000ffffffff`, `+0x30` f32 initialised to `1.0`,
+`+0x34` qword initialised to `-1`, `+0x3c` u32 initialised to `1` (bit 16 is
+tested by the fan), `+0x40` qword, `+0x48` byte.
+
+*The memo front-end.* `0x140cc1870 (body, &record, &query)` is the second
+caller of the evaluator and is reached from the fan when `body[0x659] != 0`.
+It caches one record at `body+0x1b08` for the state id `body+0x1a60` copied to
+`body+0x1b00`, and reuses it when the query's `+0x450` and `+0x460` xyz lanes
+are each within **0.004** of the cached `body+0x1ae0..0x1aec` and
+`body+0x1af0..0x1af8`. On reuse it prefers the cached record when its `+0x30`
+is `>=` the fresh one. It reaches the evaluator through a clone whose mode
+byte `+0x06` is `0xe` (outer) and `1` (inner), and stores the evaluator's
+return byte at `body+0x1b13` / `+0x1b12`.
+
+*The hit-policy thunk, corrected.* `0x14202c580` is not three instructions
+but four moves and a tail jump: it rotates `(ctx, a, b)` into `(b, ctx, a)`
+before `0x14202bc90`. So the policy body's first parameter is the descriptor
+pointer the dispatcher passed third, not the context. `0x14202c580` has no
+function in the image (the bytes after it are `int3` padding), which is why
+the address looked like code without a body.
+
+**The wish-to-world transform (2026-11-02).** `0x140c9e670 (block, out4)` is
+the fan's `M = M * wish` step and the reason the fan's seed is a world-space
+projection. It copies `block+0x70..0x7f` to `out4`, then calls
+`0x140c9e740 (block, &m)`; when that returns 1 it overwrites `out4` with
+`v.x*m[+0x00] + v.y*m[+0x10] + v.z*m[+0x20] + m[+0x30]` (a row-vector affine
+with w ignored — the same convention as `MoverWishForward`). When it returns 0
+the copy stands, so the identity case costs nothing.
+`0x140c9e740` resolves the matrix: the id at `block+0x450` must not be the
+sentinel `0x1441880e8` and must not have `0x1fffffff` set; the parent chain
+comes from `0x140c9f000 (block)`; with no parent, `block+0x40 == 0` means "no
+matrix" and it writes a default and returns 0, otherwise it copies the 4x4 at
+`block+0x3f0..0x42f` and returns 1. For the fan the block is `body+0x10d0`, so
+those are `body+0x1110` (flag), `body+0x14c0..0x14ff` (matrix), `body+0x1520`
+(id) and `body+0x1528` (state object) — the id is the same one the ramp term
+tests.
+
+### The writer's candidate loops (2026-11-02; the outer walk is still open)
+
+The wish writer calls the evaluator at **four** points, inside three enclosing
+loops. Two of them are now read at the arithmetic level:
+
+**The ring pass.** Site `0x140cb9b6e`. Gated by `body+0x659` and by the memo
+`0x140cc1870(body, &center, &query)` returning non-zero, and additionally
+entered only when `uVar21 == 0 || evaluator != 0`. Its bindings:
+
+- radius `fVar35 = max(body+0x65c, 0.35) * body+0x5b8` — the same value
+  `ow-sim::fan::fan_radius` computes;
+- count `n = body+0x5bc`, and the step from `0x1426c40f0(0xffff0000ffffffff,
+  6.2831855/n)`: `sin` in the low half, `cos` in the high half, matching
+  `ring_step`;
+- the offset is **one scalar**, `offset = pair_component * radius`, splatted to
+  all four lanes (`movss` + `shufps 0xc9`) and stored at `[rbp-0x20]`; the pair
+  itself starts at `(1, 0)` and is rotated by the step after every candidate;
+- two endpoints, written to `[rbp+0x550]` and `[rbp+0x560]` before the call:
+  `A = (A + B) + splat(offset)` and `B = (B - C) + splat(offset)`, where `B` and
+  `C` are built from the query's two points and `A` from the previous
+  iteration's result — so the loop **carries the first endpoint forward**;
+- after a non-zero return, the alignment test is
+  `dl = (byte[rbp-0x52] & 1) != 0 && sum4(candidate_dir * body[0xc0..0xcc]) >
+  [rbp-0x40]` — a **four-lane** sum of the products against a threshold, and
+  the `(b & 1)` term is a gate from the hit record's flags byte, not part of
+  the arithmetic;
+- the output flags are **OR**s, not assignments:
+  `out+0x41 |= (b & 1)` and `out+0x42 |= ((b >> 2) & 1)`.
+
+That alignment dot is **not** the refinement's `facing`: it multiplies the
+candidate direction by the mover's direction quad and sums all four lanes,
+where `facing` multiplies the direction by the hit **normal** in the y, x, z
+order. Two different tests, two different call sites; do not conflate them.
+
+**The refinement pass** (`0x140cb9842..0x140cb9a20`) is read in full and
+implemented (`ow-sim::fan::refine_pentagon`): five pentagon candidates at
+`offset*0.02 + refined*0.005`, the ground probe `0.04` lower, and the keep-first
+/ replace-on-facing / break-on-facing rule.
+
+**Still open:** which of the four call sites runs under which input (the
+`uVar21` / `cVar6` preconditions differ per site, and sites two and four are
+unread), the `B` endpoint's scale quad, and the `+0x1140` write (the block is
+only ever *read* at `0x140cb86c0`'s head in the decompiled body, so the write
+lives in a callee or the caller). None of that is guessed in `ow-sim`:
+`fan::solve` does not exist, and `CandidateSolver` is documented as the seam
+rather than the loop.
+
+### The writer's composition, read (2026-11-02)
+
+The writer `0x140cb86c0` is no longer a black box: its prologue, its four
+candidate loops and its output write have all been read. Read as one list, the
+composer runs these stages over a single `CandidateQuery`:
+
+1. **Scales.** `point = MoverWishWorldPoint(body+0x10d0)` advanced by
+   `frame_frac * shape_dir * _DAT_143872ce8` from `FUN_140c9f110`; the seed
+   scalar `A` is the biased seed, the speed scalar `B` is
+   `fan_speed + frame_dt`. Both are splatted across x/y/z plus the `w` lane
+   with `body+0xcc`. So `A = point + seed*dir` and `B = point - speed*dir` —
+   the two endpoint quads are built from **two different scalars**, seed and
+   speed, which is why they are not symmetric.
+2. **Seed floor.** When the geometry pointer resolves and `body+0x655` is
+   clear, the seed is raised to twice the hit shape's radius:
+   `seed = max(seed, 2 * [shape+0x2d2c])`. The shape comes from the world
+   handle with `FUN_140d4c510` + the seam `0x142030030`.
+3. **Pass 0, the cached query.** When `byte[body+0x659]` is set,
+   `MoverWishQueryCached(body, &out_dir, &query)` runs one query with
+   `query.mask = word[body+0x23c]` and a shape-set pair chosen by
+   `body+0x1a60` (`0x10a1` + `8`/`0x10`/`0x18`, permuted by
+   `(byte[body+0x1a79]+0x59)^0x71`; the no-settings case is `0x10a10002`).
+4. **Pass 1, the ring.** When `byte[body+0x659]` is set and
+   `n = [body+0x5bc] > 0` and `_DAT_1439b07b8` is clear: `n` quads, each the
+   previous direction plus an offset `(pair.x*r, 0, pair.y*r, 0)` with
+   `r = max([body+0x65c], 0.35) * [body+0x5b8]`, the pair rotated by
+   `(cos, sin) = 0x1426c40f0(6.2831855/n)`. Acceptance is `accepts_ring`:
+   facing, then a strictly smaller `|projection|` than the best so far.
+   The alternative branch (`_DAT_1439b07b8` set) builds **five** quads from
+   the shape's own basis instead: `(cos*(seed-0.015), 0.015,
+   sin*(seed-0.015), 0)` rotated by the same trick; `0x3c75c28f` is `0.015`.
+5. **Pass 2, the pentagon refine.** Five steps around the accepted direction:
+   `dir*0.02 + normal*0.005` with the y lane shifted by `-0.04`, the pair
+   rotated by `(0.95105654, 0.30901697)`; the first hit is taken, a facing
+   pass replaces it, and a facing pass breaks. A `kind == 3` hit with
+   `_DAT_1439b08d0` set hands the whole refine to the obfuscated indirect
+   `0x140cc2290` instead.
+6. **Pass 3, the back-transform.** Five candidate quads are re-evaluated:
+   `s = -dot(cand, dir)`, `A = s*dir + cand + seed*dir`, `B = s*dir + cand -
+   speed*dir`; on a facing pass with `|proj| < best` **and** `last_dot < 0`
+   the output direction becomes `s*dir + cand` (that is `back_direction`),
+   the normal becomes the record's quad, and `out+0x41 |= (key>>8)&1` while
+   `out+0x42 = (key>>10)&1` (OR for the first, assignment for the second).
+7. **The write.** `out+0x00..0x1f` = direction then normal quads;
+   `out+0x30` = the record's tag word; `out+0x34` = the resolved id;
+   `out+0x38` = the record's `local_c40`; `out+0x40` = 1. The no-hit path
+   zeroes `0..0x1f`, sets `out+0x30 = _DAT_1441880e8`, `out+0x34 = 0`,
+   `out+0x40 = 0`, `out+0x38 = 0xffff0000ffffffff`, and the word output to 0.
+   A tagged hit (`0x141c5d780(obj, 0x55 / 0x23 / 0x2e / 0x22 / 0x68)`) takes
+   the variant path and, when it resolves, runs `MoverWishTransform`
+   `0x140c9e740` on the direction before writing it.
+
+**What is still unread, and it is exactly five helpers.** `solve` needs
+`FUN_1426cd3d0` (the facing threshold `local_c18`), `MoverWishQueryCached`
+(pass 0), `FUN_140c9f110` (the extrapolation vector), `func_141af0070` +
+`FUN_141ae3eb0` (the shape basis for pass 1'), and `0x140cc2290` (the `kind ==
+3` refine). None is large, all five are named here with their call sites, and
+until they are read `fan::solve` stays unwritten — the stages above are the
+table it will be written from.
+
+### The collision query driver and the hit contract (2026-11-02)
+
+Reading the wrapper's tail to its driver closes the shape of the whole
+collision answer. The wrapper `0x1420328c0` hands the query to the handle
+dispatcher `0x142cc45a0`, which builds a **driver context** and calls
+`CollisionQueryDriver 0x142cbd510`; the driver runs the broadphase itself and
+reaches the narrowphase `0x142cc1610`, which is what finally calls the policy
+through the thunk.
+
+**The dispatcher `0x142cc45a0..0x142cc47ce`** (0x22d bytes, leaf, no calls):
+
+1. `if (handle >= 0x3fff) return;` — an unsigned tail-loop bound test.
+2. `raw = table[handle]` from `_DAT_1442a0bc0`; if `raw` is the sentinel
+   `0xc439709cd97ec6aa` it returns.
+3. `record = (raw + 0xb3269b88d44d5fb2) ^ 0x77600ba5adcc265c` — the same
+   obfuscated pointer decode the evaluator wrapper uses, so a handle resolves
+   to the same world record on both paths.
+4. If `request[0x71] != 0` and `record[0x4a8] > 0`, it appends the request to
+   a ring of **0xaa0-byte slices** at `record[0x4a0]`: the index comes from
+   `record[0x4ac]` while it is below `record[0x4a8]`, otherwise it wraps with
+   `record[0x4b0] = (i+1) % n`. The slice's `+0x80` is an inline vector whose
+   pointer is compared against `slice+0x80`, reset by `0x142cadf00` when it
+   has moved to the heap, its capacity is `0x20` and `+0xa90` takes
+   `record[0x4b4]++`. The 0x80-byte request is then copied to `slice+0x00`.
+   So `0x142cadf00` is the **inline-vector release/reset of that slice**, not
+   a query helper (correcting the earlier note that listed it as one of two
+   dispatcher targets).
+
+**The driver context** is built on the dispatcher's stack and is exactly five
+fields:
+
+| offset | field |
+|---|---|
+| `+0x00` | the world record from the handle |
+| `+0x08` | `request+0x58` (u16 promoted) |
+| `+0x10` | the callback — the thunk `0x14202c580` |
+| `+0x18` | `request+0x60` — the answer record the fan reads back |
+| `+0x20` | the observation slice, or `0` |
+| `+0x28` | `0` |
+
+The query handed to the driver is the request itself, all `0x73` bytes, and
+`request+0x5e` becomes its `param_4`: a **pass mask**. The driver is one
+`do { ... } while (true)` over four passes, `param_4 >>= 1` at the bottom, and
+`piVar17` walking `record+0x44 + 0x28*i`.
+
+**One pass** (`0x142cbdf10..`, the body of the `if (param_4 & 1)` block):
+`CollisionSweepBounds(segment, &plane, &t0, &t1)` splits the request's two
+float4 endpoints into `local_5f8..fStack_5ec` (A) and `local_5e8..uStack_5e0`
+(B), gives `plane = ±request[0x40..0x4f]` and the clip parameter triple in
+`local_558`, and yields a sweep AABB. The AABB is then expanded per lane:
+`min(A + clip*t0 - B, B + clip*t0 - A)` kept as `auVar56`, its max as
+`auVar57`, and `fVar58..fVar61 = B - A` (`BF`).
+
+Of the four field langs, **only family 1 is implemented in the image**:
+
+- `record[0x44 + 0x28*i]` — `int*`, the island's shape-list count, `-1` means
+  the island is empty and the whole pass is skipped;
+- `piVar17[-5]` — the island's shape array;
+- the worklist is the container at `record+0x44+0x28*i+0x3c` = `record+0x80+0x40*i`,
+  seeded with one entry and cap `0x100` on the driver's own stack frame and
+  grown by `CollisionWorklistPush 0x140d24b60` — called once with the index
+  alone (a branch child) and once with `base+0x30+offset` (a sibling entry).
+  The driver releases it with `0x142cadf00` only when the data left its inline
+  buffer.
+
+Per entry (stride `0x40`): the local AABB is `[base+0x00..0x0f] - lane` and
+`[base+0x10..0x1f] + lane`. Three saturating masks decide it: (1) the box
+against the sweep AABB on xyz; (2) a slab test with a **0.005** slack,
+`abs(BF x (P - A)) > abs(BF)*halfExtent` per axis; (3) `*(i32*)(base+0x2c)`
+`== -1` selects a leaf, anything else a branch. A leaf runs
+`ShapeNarrowphase(ctx, &hitPoint, &query, *(u32*)(base+0x20))`; a return of
+`2` is a hit, `1` aborts the island. On a hit the point is tested against the
+clip plane (`movmskps` of `hitPoint < clip`); full containment re-aims the
+sweep's plane and AABB from that point — a data-dependent branch whose two
+outcomes are documented above but not yet read as one expression.
+
+**`ShapeNarrowphase 0x142cc1610..0x142cc1813`** (516 bytes) is the only caller
+of the policy, and therefore the definition of its arguments:
+
+- `lVar4 = *(u64*)(world + 0x2b8) + id*0xc0`; `ShapeWorldTransform(shape,
+  &basis)`; `ShapeQueryFilter(ctx+0x08, shape+0x98)` gates it.
+- `func_0x142cb8d60(shape, world, &basis, &hit)` fills the hit struct.
+- then, with `p = ctx`:
+  `uVar2 = (*(code *)p[2])(&hit, CONCAT26(u16 world[0x194], CONCAT24(u16
+  shape[0xa8], u32 shape[0xa0])), p[3])` — i.e.
+  **`callback(&hit, packedShapeDescriptor, answerRecord)`**.
+- when `p[4] != 0`, the contact point is appended to `p[4]+0x80` by
+  `0x142cc1450`, tagged `1` on a hit or `2` on a reject.
+
+The hit struct is: `+0x00` and `+0x10` the two float4 the narrowphase writes,
+`+0x20` the contact point, `+0x30` u32 preset to `0xffffffff` (then
+`shape+0xaa` unless the shape type is 3 or 4), `+0x38` u16 `shape+0xae`.
+
+**The thunk, byte-exact** (`0x14202c580`, five instructions, then `int3`):
+`MOV RAX,R8 / MOV R8,RDX / MOV RDX,RCX / MOV RCX,RAX / JMP 0x14202bc90`. It
+permutes `(RCX,RDX,R8)` into `(R8,RCX,RDX)`, so the policy body
+`0x14202bc90` receives **`(hit, packed, record)`**: parameter 1 is the hit
+struct, parameter 2 the packed shape descriptor, parameter 3 the answer
+record. The earlier note that its first parameter was "the descriptor the
+dispatcher passed third" is superseded — the dispatcher never calls the
+thunk, the narrowphase does.
+
+**The policy body `0x14202bc90..0x14202c394` (1797 bytes) is read (2026-11-02),
+and it is not a computed-jump dispatcher.** That earlier reading is superseded
+— and so is its stated body end `0x14203d94`, which was a transcription error
+(Ghidra's `body_end` is `0x14202c394`). A linear sweep of the recovered image
+decodes the whole body to exactly `0x14202c395` — 427 instructions, no data
+islands, no indirect jumps (`dev/probe_policy_blocks.py`) — so the live path
+is contiguous plain code.
+
+Why the decompiler failed anyway: the body is **junk-filler obfuscated**. Six
+dead regions sit between basic blocks, each a run of nonsense instructions
+ending in an opaque-predicate branch to an address in another function
+(`0x14202be2c`/`0x14202be36`/`0x14202be41` → `0x14203c7ff`, `0x14202dfaf`,
+`0x142030dc2`; `0x14202c2c2`/`0x14202c2cb`/`0x14202c2de` → `0x14202e840`,
+`0x14202df4a`, `0x142049e89`). Ghidra follows those branches into the junk and
+then into other functions, which is where `in_stack_00000039`, `unaff_R12D`
+and the blocks at `0x142049f49`/`0x14207a112` came from. The targets are dead:
+the flags are set by junk instructions the live path never reaches.
+
+Three obfuscation idioms are used, all now resolved:
+
+1. **Junk between blocks** — skip the dead run, continue at the next real
+   address (`0x14202be5b`, `0x14202c0db`, `0x14202c2ec`, `0x14202c33d`).
+2. **Constant-injection stub** — `0x142018990` is not a real callee: it stores
+   `0x10`/`0xf`/`4`/`0` through its four pointer arguments and returns. The
+   caller permutes the four slots differently on each call, so the "four
+   out-params" are the constants `index = 0`, `shift = 4`, `mask = 0x10`,
+   `mask = 0x0f`.
+3. **Pointer and value decode chains** — pure arithmetic, recorded below.
+
+**The contract.** `policy(hit, packed, ctx)` (the narrowphase orders the
+arguments `(hit, packed, ctx)`; the thunk `0x14202c580` rotates them into
+`(hit, packed, record)`). Returns **1 = no hit**, **2 = hit accepted**,
+**3 = rejected**.
+
+**The gates, in order.**
+
+```text
+world = 0x1420c2360(ctx)                    -- kind dispatch; 0 -> straight to classify
+0x1420af950(hit+0x08, world) == 0           -> return 3
+packed+0x38 == 0xffff                       -> skip the dedupe scan
+```
+
+`0x1420af950` (62 bytes) is the relevance filter: `mask = world[0x280]`; the
+hit is rejected when `(x[8] & mask) == 0`, rejected again when
+`(x[0x10] & mask) != 0`, and rejected when `world` appears in the
+`x[0x20]` array of `x[0x28]` qwords. So `hit+0x08` points at a filter object
+with a required mask, a forbidden mask and a world-exclusion list.
+
+**The key.** `rdi = decode([world+8])` with
+`decode(x) = ror64(ror64(x + 0x1e2421a4798a328, 0x22) ^ 0xe1379e3cb308170d, 0x2b)`.
+The table walk is
+`t = [rdi + 0x110]`, `idx = popcount(t & m) + byte[rdi+0x130]`,
+`v = [[[rdi+0x80] + idx*8]]`, then
+`v = ror(v,0x38) + 0x4d79452d486f9431; v ^= [0x143b79598 + 0x198];
+v ^= 0xec99e783d64e4c83; v -= 0x327aecc3f519246f; v ^= byte[0x1438480f3]`,
+and `0x140543440(&v)` decodes in place:
+`v = ror64((ror64(zero32(v),0x14) ^ 0x8b084bd971b946cc) - 0x32c1c6a5a278ca6f, 0x26)`
+(its entry `0x142543440..0x142543480` is junk; live code starts at
+`0x140543481`). The presence bit is `(t & 0x10) >> 4`, and the key is
+`h = ror64(v, 0x15) & -(int)presence`, a `neg`/`movsxd` mask that yields 0
+when the bit is clear.
+
+**The two call sites bind the stub's constants differently, and that has a
+consequence.** The stub stores `0x10`/`0x0f`/`4`/`0` into the four slots; the
+first site (`0x14202bd39`) reads the popcount mask from `0x10` and the
+presence mask from `0x0f`, so its presence term is `(t & 0x0f) >> 4`, which is
+**always zero** — the dedupe scan over `[world+0x240]`/`[world+0x248]` at
+`0x14202be78..0x14202beae` is therefore **unreachable in this build**, and so
+is the `[h+0x250]` variant lookup that hangs off it. The second site
+(`0x14202bfc7`, mode 1 only) swaps them: popcount from `0x0f`, presence from
+`0x10`, so **bit 4 of `[rdi+0x110]` is exactly the "shape id is an index"
+bit** — set, the low 15 bits of `packed+0x34` are resolved through
+`[[h+0x250]]` with `0x141b3c890(obj, &out, packed[0x34] & 0x7fff)` into
+`out.id & 0x7fff` / `out.kind`. Record both facts as the shipped behaviour:
+the dedupe is dead code, the variant resolution is live.
+
+**The optional filter.** If `hit+0x18` is non-null it is called as
+`hit+0x18(rdi, hit+0x20, hit+0x28)`; a false return is **3**.
+**The mode switch** on `hit+0x34`:
+
+- **0** — `hit+0x39 = 1`, return **1** (presence test, no record).
+- **1** — fill the caller's record `rec = [hit+0x10]`:
+  `rec+0x00`/`rec+0x10` = 16 bytes each from `packed+0x00`/`packed+0x10`
+  (point and normal), `rec+0x20 = rdi`, `rec+0x28 = ctx`, `rec+0x30` = the f32
+  at `packed+0x20` (the hit fraction the fan scores), `rec+0x34 = packed+0x30`,
+  `rec+0x38 = word packed+0x38`, `rec+0x3c = word packed+0x34`,
+  `rec+0x3e = word packed+0x36`, `rec+0x40 = 0`. When `word packed+0x34` is
+  **negative** it is an index: `rec+0x3c = 1` first, then, only when `rdi` is
+  non-null and bit 4 of `[rdi+0x110]` is set, the id is resolved through
+  `[[h+0x250]]` with `0x141b3c890(obj, &out, packed[0x34] & 0x7fff)`
+  and written back as `rec+0x3c = out.id & 0x7fff`, `rec+0x3e = out.kind`.
+  Returns **2**.
+- **≥2** — build a local record on the stack (same fields, plus `+0x3a` =
+  `0xffff` and a zero byte at `+0x48`), resolve a negative shape id the same
+  way, then classify:
+  `class = hit+0x00(&record, [hit+0x08] + 0x470)`. If `class == 1`, the score
+  `packed+0x20` is written to `hit+0x30` and the return is **2**; if
+  `class == 2` the return is **3**; otherwise `hit+0x38 = 1` and the return is
+  **1**.
+
+So the policy writes exactly three outputs on the hit object — `hit+0x30` (the
+score the fan's acceptance rules compare), `hit+0x38` (a one-byte flag) and
+`hit+0x39` — plus the caller's 0x50-byte record. Everything it reads that is
+not a field of `hit`/`packed` comes from the decoded geometry object `rdi`
+(`[rdi+0x80]` a table, `[rdi+0x110]`/`byte[rdi+0x130]` its index inputs,
+`[rdi+0x250]` a variant table), which is **map data**: the ingest is item 6.
+
+**What is left of this stage.** No code. The remaining gap is data: the
+contents of `[rdi+0x80]`/`[rdi+0x110]`/`[rdi+0x250]`, i.e. the geometry the
+map supplies, so the policy can be implemented and unit-tested against
+synthetic worlds, but a candidate still cannot be scored for real until the
+collision ingest exists. `dev/probe_policy_blocks.py` reproduces the sweep.
+
+The earlier "emulate the decode" anchor is **withdrawn**: there is no
+decode to emulate.
+
+**Tooling note (2026-11-02).** `0x140c9e670` carried a wrong `noreturn` mark in
+project, which truncated `MoverWishWriter`'s decompilation at the transform
+call and hid the whole fan body from the decompiler (the earlier readings of
+this function came from the listing). The mark is cleared in the project
+image; the fan now decompiles end to end, and the body matches the
+instruction addresses already recorded above.
 
 ## What the current image shows (2026-10-25)
 
@@ -1341,6 +1796,85 @@ structure the command triple maintains, never map-chunk bytes. The
 map-chunk-to-shape ingest is **not read**; that is the gap between
 `formats/maps.md` and the query. The client has no gameplay collision
 implementation yet; the map mesh is visual only.
+
+## The collider build (2026-11-02)
+
+The shape the sweep walks is a 0x60-byte record built by
+`ColliderFaceAppend` (`0x142cca460`) and then flattened into the two-level
+runtime arrays. Read end to end, with constants resolved against
+`dev/data/offline_recover/module_offline.bin`.
+
+**Inputs.** `A` (rcx) is the build object: `+0x20` face array, `+0x28` face
+capacity, `+0x2c` face count, `+0x30` build nodes (0x50 stride), `+0x38` nodes
+used, `+0x3c` node capacity. `B` (rdx) is zeroed and written as the 0x30-byte
+result. `C` (r8) is the source: `+0x00` vertex array (0x10-byte `vec4`),
+`+0x08` face array (**0x14-byte** records), `+0x10` face count.
+
+**The face record.** The face count is clamped to `0x4000000`. Each source
+face gives the three `i32` vertex indices at `+0x00/+0x04/+0x08` and three
+`u16` ids at `+0x0c/+0x0e/+0x10`; a face `ColliderTriangleDegenerate` rejects
+produces no record and no area. The record written at `A[0x20] + count*0x60`:
+
+| offset | content |
+|---|---|
+| `+0x00`, `+0x10` | `vec4` box min, max (lane-wise `minps`/`maxps` of the three vertices) |
+| `+0x20` | `vec4` centre `(min + max) * 0.5` |
+| `+0x30` | `-1`, then `+0x34` = f32 area `0.5*|cross(v1-v0, v2-v0)|` |
+| `+0x38`, `+0x3c`, `+0x40` | the three vertex indices `v0`, `v1`, `v2` |
+| `+0x44`, `+0x48`, `+0x4c` | per-edge adjacency, seeded `0`, `0`, `-1` |
+| `+0x50`, `+0x52`, `+0x54` | the three `u16` ids |
+
+`B+0x28` accumulates the areas. Then a half-edge pass builds one bucket per
+directed edge (`(v[i], v[(i+1)%3])`, `(i+1)%3` by the `0x55555556` magic
+divide) keyed by `start | end<<32` and hashed
+`t = (k<<0x12) + ~k; t ^= t>>0x1f; t *= 0x15; t ^= t>>0xb; t *= 0x41;
+t ^= t>>0x16`, buckets 0x20 bytes chained through dword `+0x10` with the key at
+`+0x08` and a paired latch at `+0x18`. A hit writes the **vertex opposite the
+shared edge** into each face's `+0x44/+0x48/+0x4c`; the edge without a twin
+keeps its seed.
+
+**The result.** `B+0x08` is the vertex array, `count = maxIndex + 1` elements
+of `(x, y, z, 0.0)` (lane 3 forced to zero); `B+0x1c` is that count. The build
+node array is `2*faceCount - 1` entries of 0x50 bytes; `0x142ccb1b0` builds the
+tree and `0x142ccad80` flattens it into `B+0x00` (runtime nodes, 0x20 bytes,
+count `B+0x18`) and `B+0x10` (runtime faces, 0x20 bytes, count `B+0x20`),
+writing `B+0x24` = tree height and padding each runtime box by `max(0.01,
+0.005)` = `0.01` per lane. The runtime face carries `{v0, v1, v2, 0, 0, -1}` at
+`+0x00..+0x14` and the three `u16` ids at `+0x18/+0x1a/+0x1c`; the adjacency
+words are **not** copied into it.
+
+`crates/ow-sim/src/collider.rs::faces` matches this except for the half-edge
+adjacency (it leaves the seeds) — that pass is **not implemented and not
+tested**, and it matters only if the response reads `+0x44/+0x48/+0x4c`.
+
+## Where a map's cells come from (2026-11-02)
+
+`GeometryBuild` (`0x14213c440`) is the only writer of a cell
+(`0x142136010`, one call site) and `GeometryFinalize` (`0x14213d0b0`) is the
+only writer of a pool-A record (`0x142136130`, one call site). Both build from
+the geometry node's **brush tree**:
+`BrushTreeToMesh` (`0x142cf23c0`) -> `MeshToColliderFaces` (`0x142cf2010`) ->
+face records -> BVH. Nothing materialises a cell from the chunk's 17 arrays:
+`MapChunkCellBytesFixup` (`0x141ff51a0`, one caller `0x141ff57f7`) only rebases
+the 17 qwords at `+0x00..+0x80` from relative to absolute, the collision-chunk
+component (`0x140f8e000`..`0x140f94000`, class hash `0x9199bf6b`) never touches
+`+0x68`, and no cell/sector producer reads the container. The sweep's triangle
+records therefore come from brush trees carried by models; the chunk decoder is
+**open** and unlocated (see `docs/open-questions.md` item 6).
+
+**The cell** (`GEO+0x108`, stride 0x60): `+0x00/+0x10` two `vec4` copied from
+the mesh record, `+0x20` the 0x30-byte type-3 mesh source (vertex base at
+`+0x10`, triangle base at `+0x20`), `+0x30 + k*0x20 + 0x18/+0x1a` a `u16` pair
+per triangle, `+0x50/+0x58/+0x5c` the face-list pointer, count and flag.
+`GeometryFinalize` remaps every `u16` through `0x142cee0e0` and calls
+`ShapeAddToBody` (`0x142cb3940`) with constants `100.0`, `1.0`, `0.1`,
+`FLT_MAX`, `0xffff0000`, `0x3000100`.
+
+**The sector** (`GEO+0x118`, stride 0x100): `+0x00..0x1f` transform, `+0x20`
+distance, `+0x24` the "distance exactly zero" byte, `+0x28` limit,
+`+0x30`/`+0x38` two words from the accept test `0x14213c240`, `+0x40`/`+0x50`
+two `vec4`, `+0x60` byte, `+0xa0` 16 bytes, `+0xe0/+0xe8/+0xec` three words.
+
 
 ### The advance's contact pass (2026-11-01)
 

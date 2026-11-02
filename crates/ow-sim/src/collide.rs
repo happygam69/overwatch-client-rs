@@ -339,6 +339,7 @@ pub fn sphere_sweep(record: &[u8], block: &[u8], xform: &[u8]) -> Option<[Quad; 
     let q = quad_at(xform, 0x10);
     let start = quad_at(block, 0x00);
     let end = quad_at(block, 0x10);
+    // The whole budget: one sphere narrowphase per candidate, no triangle loop.
     let motion = quad_at(block, 0x20);
     let expansion = quad_at(block, 0x50);
     let hit_inside = block[0x72] != 0;
@@ -417,6 +418,363 @@ pub fn sphere_sweep(record: &[u8], block: &[u8], xform: &[u8]) -> Option<[Quad; 
         out_fraction[lane] = crate::movement::minss(scaled[lane], motion[lane]);
     }
     Some([world_point, world_normal, out_fraction])
+}
+
+// ---------------------------------------------------------------------------
+// The type-3 mesh primitive (`0x142caed10` wrapper, `0x142caed30` body).
+// ---------------------------------------------------------------------------
+
+/// A type-3 shape element: `{scale at +0x00, 1/scale at +0x10, BVH root at
+/// +0x20, vertices at +0x28, triangles at +0x30}`.
+pub const MESH_RECORD_LEN: usize = 0x50;
+/// A BVH node: `{min xyz at +0x00, max xyz at +0x0c, i32 second-child or
+/// triangle base at +0x18, u16 layer mask at +0x1c, u8 axis at +0x1e, u8 leaf
+/// triangle count at +0x1f}`.
+pub const MESH_NODE_LEN: usize = 0x20;
+/// A mesh triangle record: three vertex indices at `+0x00`, two u16 ids at
+/// `+0x18`, the layer mask at `+0x1c`.
+pub const MESH_TRIANGLE_LEN: usize = 0x20;
+/// A mesh vertex: one `vec4` (stride `0x10`).
+pub const MESH_VERTEX_LEN: usize = 0x10;
+
+/// The bytes the element's three pointers address, plus the address of the
+/// first byte.
+///
+/// The client reads the pool element's `+0x20`, `+0x28` and `+0x30` slots as
+/// raw pointers into the level's mesh block. The fixture and the harness hand
+/// the same numbers over, so `base` is the guest address the blob starts at
+/// and every read goes through `address - base`.
+pub struct MeshWorld<'a> {
+    pub base: u64,
+    pub bytes: &'a [u8],
+}
+
+impl MeshWorld<'_> {
+    fn slice(&self, address: u64, len: usize) -> &[u8] {
+        let offset = address.wrapping_sub(self.base) as usize;
+        assert!(
+            offset
+                .checked_add(len)
+                .is_some_and(|end| end <= self.bytes.len()),
+            "mesh world does not cover {len:#x} bytes at {address:#x}"
+        );
+        &self.bytes[offset..offset + len]
+    }
+
+    fn quad(&self, address: u64) -> Quad {
+        quad_at(self.slice(address, 16), 0)
+    }
+
+    fn u16(&self, address: u64, offset: usize) -> u16 {
+        u16_at(self.slice(address + offset as u64, 2), 0)
+    }
+
+    fn u8(&self, address: u64, offset: usize) -> u8 {
+        self.slice(address + offset as u64, 1)[0]
+    }
+
+    fn i32(&self, address: u64, offset: usize) -> i32 {
+        i32::from_le_bytes(
+            self.slice(address + offset as u64, 4)
+                .try_into()
+                .expect("four bytes"),
+        )
+    }
+}
+
+/// The output a mesh hit leaves in the query buffer.
+pub struct MeshHit {
+    /// The world contact point (`out+0x00`).
+    pub point: Quad,
+    /// The world unit normal (`out+0x10`).
+    pub normal: Quad,
+    /// The hit fraction along the sweep (`out+0x20`).
+    pub fraction: Quad,
+    /// The triangle index that produced the hit (`out+0x30`, raw bits).
+    pub triangle: i32,
+    /// The triangle record's two `u16` ids (`out+0x34`, `out+0x36`).
+    pub ids: [u16; 2],
+}
+
+/// One `mesh_sweep` call.
+pub struct MeshSweep {
+    /// The last accepted triangle, in world space. `None` leaves the client's
+    /// output buffer untouched.
+    pub hit: Option<MeshHit>,
+    /// `out+0x3c`: every internal node the walk visited.
+    pub internals: i32,
+    /// `out+0x40`: every leaf the walk expanded.
+    pub leaves: i32,
+}
+
+#[inline]
+fn quad_min(a: Quad, b: Quad) -> Quad {
+    [
+        minss(a[0], b[0]),
+        minss(a[1], b[1]),
+        minss(a[2], b[2]),
+        minss(a[3], b[3]),
+    ]
+}
+
+#[inline]
+fn quad_max(a: Quad, b: Quad) -> Quad {
+    [
+        maxss(a[0], b[0]),
+        maxss(a[1], b[1]),
+        maxss(a[2], b[2]),
+        maxss(a[3], b[3]),
+    ]
+}
+
+/// `ANDPS` with the `0x7fffffff` splat.
+#[inline]
+fn quad_abs(v: Quad) -> Quad {
+    [
+        f32::from_bits(v[0].to_bits() & 0x7fff_ffff),
+        f32::from_bits(v[1].to_bits() & 0x7fff_ffff),
+        f32::from_bits(v[2].to_bits() & 0x7fff_ffff),
+        f32::from_bits(v[3].to_bits() & 0x7fff_ffff),
+    ]
+}
+
+/// One lane's sign bit, as `MOVMSKPS` sees it (`-0.0` counts).
+#[inline]
+fn sign_bit(v: f32) -> bool {
+    v.to_bits() & 0x8000_0000 != 0
+}
+
+/// `0x142cce430`'s accepted branch: one triangle against the query segment.
+///
+/// `count` is the query block's support-point count, which the mesh walk
+/// forwards untouched; a non-zero count or an expansion that is `<= 0.005` on
+/// every lane hands the triangle to `0x142cc9460`, which is unread.
+fn mesh_triangle(
+    vertices: [Quad; 3],
+    start: Quad,
+    end: Quad,
+    motion: Quad,
+    expansion: Quad,
+    count: i32,
+) -> Option<(Quad, Quad, Quad)> {
+    // The client's fast path runs when every lane of the scaled expansion is
+    // at most 0.005; anything else is the support-point (slow) path.
+    if count != 0 || !all_lanes(|lane| expansion[lane] <= 0.005) {
+        return None;
+    }
+
+    let [v0, v1, v2] = vertices;
+    let p = sub_lane(v0, start);
+    let q = sub_lane(v1, start);
+    let r = sub_lane(v2, start);
+    let d = sub_lane(end, start);
+
+    // The client's vectorised cross products: `rot3(a) * rot3_inv(b) -
+    // rot3_inv(a) * rot3(b)`, multiplied by `d` lane-wise before the fold.
+    let a = dot3(cross(r, q), d);
+    let b = dot3(cross(p, r), d);
+    let c = dot3(cross(q, p), d);
+    let plane = quad_min(quad_min(a, b), c);
+    if all_lanes(|lane| plane[lane] < 0.0) {
+        return None;
+    }
+
+    let e0 = sub_lane(v1, v0);
+    let e1 = sub_lane(v2, v0);
+    let normal = rot3(sub_lane(mul_lane(rot3(e1), e0), mul_lane(rot3(e0), e1)));
+
+    // `det = -(normal . d)`; only a strictly smaller value misses.
+    let det = negate(dot3(normal, d));
+    if all_lanes(|lane| det[lane] < f32::from_bits(0x3400_0000)) {
+        return None;
+    }
+
+    let numerator = negate(dot3(normal, p));
+    let t = [
+        numerator[0] / det[0],
+        numerator[1] / det[1],
+        numerator[2] / det[2],
+        numerator[3] / det[3],
+    ];
+    if !all_lanes(|lane| 0.0 <= t[lane]) || !all_lanes(|lane| t[lane] <= motion[lane]) {
+        return None;
+    }
+
+    let point = add_lane(mul_lane(t, d), start);
+    let length = dot3(normal, normal)[0].sqrt();
+    let unit = mul_lane(splat(1.0f32 / length), normal);
+    Some((point, unit, t))
+}
+
+/// `cross(a, b)` in the client's operand order.
+#[inline]
+fn cross(a: Quad, b: Quad) -> Quad {
+    let forward = mul_lane(rot3(a), rot3_inverted(b));
+    let backward = mul_lane(rot3_inverted(a), rot3(b));
+    sub_lane(forward, backward)
+}
+
+/// `SHUFPS v, v, 0xd2`: `(z, x, y, w)`.
+#[inline]
+fn rot3_inverted(v: Quad) -> Quad {
+    [v[2], v[0], v[1], v[3]]
+}
+
+/// `0x142caed30` type 3 (mesh): a swept query against a triangle BVH.
+///
+/// Only the count `<= 0` path is implemented. The triangle callback argument
+/// is null on this path (the wrapper `0x142caed10` zeroes it), so the walk
+/// never stops early.
+pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) -> MeshSweep {
+    let missed = MeshSweep {
+        hit: None,
+        internals: 0,
+        leaves: 0,
+    };
+    let scale = quad_at(record, 0x00);
+    let inverse = quad_at(record, 0x10);
+    let root = read_pointer(record, 0x20);
+    if root == 0 {
+        return missed;
+    }
+    let vertices = read_pointer(record, 0x28);
+    let triangles = read_pointer(record, 0x30);
+
+    let position = quad_at(xform, 0x00);
+    let q = quad_at(xform, 0x10);
+    let start = quad_at(block, 0x00);
+    let end = quad_at(block, 0x10);
+    // The motion budget shrinks to the last accepted fraction (0x142caf5c1).
+    let mut motion = quad_at(block, 0x20);
+    let count = i32_at(block, 0x38);
+    let mask = u16_at(block, 0x70);
+    let expansion = mul_lane(quad_at(block, 0x50), inverse);
+    if count > 0 {
+        return missed;
+    }
+
+    let start = mul_lane(rotate_to_local(q, sub_lane(start, position)), inverse);
+    let end = mul_lane(rotate_to_local(q, sub_lane(end, position)), inverse);
+    let step = if all_lanes(|lane| 0.0 < expansion[lane]) {
+        add_lane(splat(0.02), expansion)
+    } else {
+        expansion
+    };
+
+    let direction = sub_lane(end, start);
+    let far = add_lane(mul_lane(motion, direction), start);
+    // `lo`/`hi` are re-derived from the hit point after every acceptance
+    // (0x142caf5d7), which tightens the node tests for the rest of the walk.
+    let mut low = quad_min(start, far);
+    let mut high = quad_max(start, far);
+    let absolute = quad_abs(direction);
+
+    let mut stack = vec![root];
+    let mut sweep = missed;
+    let mut hit: Option<MeshHit> = None;
+    while let Some(node) = stack.pop() {
+        if world.u16(node, 0x1c) & mask == 0 {
+            continue;
+        }
+        let node_min = world.quad(node);
+        let node_max = world.quad(node + 0x0c);
+        let high_corner = add_lane(node_max, step);
+        let low_corner = sub_lane(node_min, step);
+        if (0..3).any(|lane| {
+            sign_bit(high_corner[lane] - low[lane]) || sign_bit(high[lane] - low_corner[lane])
+        }) {
+            continue;
+        }
+        let sum = add_lane(high_corner, low_corner);
+        let difference = sub_lane(high_corner, low_corner);
+        let centre = sub_lane(start, mul_lane(sum, splat(0.5)));
+        let half = mul_lane(difference, splat(0.5));
+        let first = sub_lane(
+            mul_lane(rot3(direction), centre),
+            mul_lane(rot3(centre), direction),
+        );
+        let second = add_lane(
+            mul_lane(rot3(absolute), half),
+            mul_lane(rot3(half), absolute),
+        );
+        // `|rot3(t1)| - rot3(t2)`: the rotation is applied before the abs.
+        let predicate = sub_lane(quad_abs(rot3(first)), rot3(second));
+        if (0..3).any(|lane| 0.0 < predicate[lane]) {
+            continue;
+        }
+
+        let children = world.i32(node, 0x18);
+        let leaf = world.u8(node, 0x1f);
+        if leaf != 0 {
+            sweep.leaves += 1;
+            let mut triangle = offset(triangles, i64::from(children) * 0x20);
+            for index in 0..leaf {
+                if world.u16(triangle, 0x1c) & mask != 0 {
+                    let corner = |slot: usize| {
+                        let vertex = world.i32(triangle, slot * 4);
+                        world.quad(offset(vertices, i64::from(vertex) * 0x10))
+                    };
+                    if let Some((point, normal, fraction)) = mesh_triangle(
+                        [corner(0), corner(1), corner(2)],
+                        start,
+                        end,
+                        motion,
+                        expansion,
+                        count,
+                    ) {
+                        motion = fraction;
+                        low = quad_min(start, point);
+                        high = quad_max(start, point);
+                        let local = mul_lane(point, scale);
+                        hit = Some(MeshHit {
+                            point: add_lane(rotate_to_world_point(q, local), position),
+                            normal: rotate_to_world_normal(q, normal),
+                            fraction,
+                            triangle: children + i32::from(index),
+                            ids: [world.u16(triangle, 0x18), world.u16(triangle, 0x1a)],
+                        });
+                    }
+                }
+                triangle = offset(triangle, MESH_TRIANGLE_LEN as i64);
+            }
+        } else {
+            sweep.internals += 1;
+            let second = offset(node, i64::from(children) * 0x20);
+            let first = offset(node, MESH_NODE_LEN as i64);
+            // `0 < d[axis]` on all four lanes picks the near child; the body
+            // splats the axis lane and tests every lane, and every other axis
+            // value reads a stack slot the body never writes.
+            let visible = match world.u8(node, 0x1e) {
+                0 => direction[0],
+                1 => direction[1],
+                _ => f32::NAN,
+            };
+            // The pair is pushed so that the pop order is: the child-field
+            // node when `0 < d[axis]` is false, the adjacent one when true.
+            let near_is_second = all_lanes(|_lane| 0.0 < visible);
+            if near_is_second {
+                stack.push(second);
+                stack.push(first);
+            } else {
+                stack.push(first);
+                stack.push(second);
+            }
+        }
+    }
+    sweep.hit = hit;
+    sweep
+}
+
+fn read_pointer(record: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(record[offset..offset + 8].try_into().expect("eight bytes"))
+}
+
+fn i32_at(bytes: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("four bytes"))
+}
+
+fn offset(address: u64, delta: i64) -> u64 {
+    address.wrapping_add(delta as u64)
 }
 
 // ---------------------------------------------------------------------------
@@ -646,6 +1004,49 @@ pub fn capsule_sweep(record: &[u8], block: &[u8], xform: &[u8]) -> Option<[Quad;
         out_fraction[lane] = crate::movement::minss(fraction[lane], motion[lane]);
     }
     Some([world_contact, world_normal, out_fraction])
+}
+
+/// `0x142cd56e0`: whether a collider triangle is unusable (`AL` set), in the
+/// client's own return form.
+///
+/// The client returns `AL`: 1 when the triangle must be skipped, 0 when it is
+/// usable. The `MOVMSKPS` result never reaches the caller - every rejecting
+/// exit runs `mov al, 1` afterwards - so the compared channel is one bit.
+///
+/// The four tests run in this order: a corner coordinate that is `inf` or `NaN`
+/// (`ANDPS` with `+inf`, `CMPEQPS` against `+inf`, low three lanes), a bounding
+/// box wider than `1e6` on any axis, an edge shorter than `0.0025` (squared
+/// length below `6.25e-6`), and twice the area below `2.5e-5`.
+pub fn triangle_degenerate(a: Quad, b: Quad, c: Quad) -> u32 {
+    for corner in [a, b, c] {
+        for value in corner.iter().take(3) {
+            if value.to_bits() & 0x7f80_0000 == 0x7f80_0000 {
+                return 1;
+            }
+        }
+    }
+
+    let extent = sub_lane(quad_max(quad_max(a, b), c), quad_min(quad_min(a, b), c));
+    for value in extent.iter().take(3) {
+        if *value > 1_000_000.0 {
+            return 1;
+        }
+    }
+
+    for edge in [sub_lane(b, a), sub_lane(c, b), sub_lane(a, c)] {
+        if length_sq(edge)[0] < 6.25e-6 {
+            return 1;
+        }
+    }
+
+    // `rot3(rot3(e1)*e2 - rot3(e2)*e1)` is `-cross(e1, e2)` for `e1 = c - a`
+    // and `e2 = b - a`, so the normal below is the client's vector with the
+    // opposite sign; only its length is tested, so the sign is unobservable.
+    let normal = cross(sub_lane(b, a), sub_lane(c, a));
+    if length_sq(normal)[0].sqrt() < 2.5e-5 {
+        return 1;
+    }
+    0
 }
 
 #[cfg(test)]
@@ -905,5 +1306,426 @@ mod tests {
         assert_eq!(fraction, [0.0; 4]);
         let flagged = sphere_block([0.2, 0.0, 2.0], [2.0, 0.0, 2.0], 1.0, 0);
         assert!(capsule_sweep(&capsule, &flagged, &xform).is_none());
+    }
+
+    /*
+     * The type-3 mesh primitive.
+     *
+     * The fixture is a two-quad, three-node mesh: an internal root whose two
+     * children are leaves, the first holding a quad at the origin (triangles
+     * 0 and 1) and the second a quad at x = 5 (triangles 2 and 3). Both quads
+     * wind counter-clockwise in the xy plane, so their normals point up.
+     */
+
+    const MESH_BASE: u64 = 0x0000_0001_0000_0000;
+    const NODES_AT: usize = 0x100;
+    const VERTICES_AT: usize = 0x200;
+    const TRIANGLES_AT: usize = 0x300;
+
+    struct MeshFixture {
+        record: Vec<u8>,
+        world: Vec<u8>,
+    }
+
+    impl MeshFixture {
+        fn sweep(&self, block: &[u8], xform: &[u8]) -> MeshSweep {
+            let world = MeshWorld {
+                base: MESH_BASE,
+                bytes: &self.world,
+            };
+            mesh_sweep(&self.record, &world, block, xform)
+        }
+    }
+
+    fn put_quad(bytes: &mut [u8], offset: usize, quad: Quad) {
+        for (lane, value) in quad.iter().enumerate() {
+            bytes[offset + lane * 4..offset + lane * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+    }
+
+    fn put_node(
+        bytes: &mut [u8],
+        at: usize,
+        low: [f32; 3],
+        high: [f32; 3],
+        child: i32,
+        mask: u16,
+        axis: u8,
+        count: u8,
+    ) {
+        for (lane, value) in low.iter().enumerate() {
+            bytes[at + lane * 4..at + lane * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for (lane, value) in high.iter().enumerate() {
+            let offset = at + 0x0c + lane * 4;
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes[at + 0x18..at + 0x1c].copy_from_slice(&child.to_le_bytes());
+        bytes[at + 0x1c..at + 0x1e].copy_from_slice(&mask.to_le_bytes());
+        bytes[at + 0x1e] = axis;
+        bytes[at + 0x1f] = count;
+    }
+
+    fn put_triangle(bytes: &mut [u8], at: usize, corners: [i32; 3], ids: [u16; 2], mask: u16) {
+        for (slot, corner) in corners.iter().enumerate() {
+            bytes[at + slot * 4..at + slot * 4 + 4].copy_from_slice(&corner.to_le_bytes());
+        }
+        bytes[at + 0x18..at + 0x1a].copy_from_slice(&ids[0].to_le_bytes());
+        bytes[at + 0x1a..at + 0x1c].copy_from_slice(&ids[1].to_le_bytes());
+        bytes[at + 0x1c..at + 0x1e].copy_from_slice(&mask.to_le_bytes());
+    }
+
+    fn fixture(scale: f32, inverse: f32) -> MeshFixture {
+        let mut world = vec![0u8; 0x400];
+        let mut record = vec![0u8; MESH_RECORD_LEN];
+        put_quad(&mut record, 0x00, [scale; 4]);
+        put_quad(&mut record, 0x10, [inverse; 4]);
+        record[0x20..0x28].copy_from_slice(&(MESH_BASE + NODES_AT as u64).to_le_bytes());
+        record[0x28..0x30].copy_from_slice(&(MESH_BASE + VERTICES_AT as u64).to_le_bytes());
+        record[0x30..0x38].copy_from_slice(&(MESH_BASE + TRIANGLES_AT as u64).to_le_bytes());
+
+        let corners = [
+            [0.0f32, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [6.0, 0.0, 0.0],
+            [6.0, 1.0, 0.0],
+            [5.0, 1.0, 0.0],
+        ];
+        for (slot, corner) in corners.iter().enumerate() {
+            put_quad(
+                &mut world,
+                VERTICES_AT + slot * MESH_VERTEX_LEN,
+                [corner[0], corner[1], corner[2], 0.0],
+            );
+        }
+
+        // The root straddles both quads; its second child sits two nodes on.
+        put_node(
+            &mut world,
+            NODES_AT,
+            [-1.0, -1.0, -1.0],
+            [7.0, 2.0, 1.0],
+            2,
+            0x0001,
+            0,
+            0,
+        );
+        put_node(
+            &mut world,
+            NODES_AT + MESH_NODE_LEN,
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            0,
+            0x0001,
+            0,
+            2,
+        );
+        put_node(
+            &mut world,
+            NODES_AT + 2 * MESH_NODE_LEN,
+            [5.0, 0.0, 0.0],
+            [6.0, 1.0, 0.0],
+            2,
+            0x0001,
+            0,
+            2,
+        );
+
+        put_triangle(&mut world, TRIANGLES_AT, [0, 1, 2], [0x11, 0x21], 0x0001);
+        put_triangle(
+            &mut world,
+            TRIANGLES_AT + MESH_TRIANGLE_LEN,
+            [0, 2, 3],
+            [0x12, 0x22],
+            0x0001,
+        );
+        put_triangle(
+            &mut world,
+            TRIANGLES_AT + 2 * MESH_TRIANGLE_LEN,
+            [4, 5, 6],
+            [0x13, 0x23],
+            0x0001,
+        );
+        put_triangle(
+            &mut world,
+            TRIANGLES_AT + 3 * MESH_TRIANGLE_LEN,
+            [4, 6, 7],
+            [0x14, 0x24],
+            0x0001,
+        );
+        MeshFixture { record, world }
+    }
+
+    fn mesh_block(
+        start: Quad,
+        end: Quad,
+        motion: f32,
+        expansion: f32,
+        count: i32,
+        mask: u16,
+    ) -> Vec<u8> {
+        let mut bytes = vec![0u8; 0x78];
+        put_quad(&mut bytes, 0x00, start);
+        put_quad(&mut bytes, 0x10, end);
+        put_quad(&mut bytes, 0x20, [motion; 4]);
+        bytes[0x38..0x3c].copy_from_slice(&count.to_le_bytes());
+        put_quad(&mut bytes, 0x50, [expansion; 4]);
+        bytes[0x70..0x72].copy_from_slice(&mask.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_mesh_sweep_down_onto_a_quad_reports_the_triangle_that_contains_it() {
+        let mesh = fixture(1.0, 1.0);
+        let block = mesh_block(
+            [0.75, 0.9, 5.0, 0.0],
+            [0.75, 0.9, -5.0, 0.0],
+            1.0,
+            0.004,
+            0,
+            0x0001,
+        );
+        let hit = mesh
+            .sweep(&block, &identity_xform([0.0, 0.0, 0.0]))
+            .hit
+            .expect("the sweep crosses the quad");
+        // `(0.75, 0.9)` lies above the quad's diagonal, so only triangle 1
+        // covers it and triangle 0 is the miss that precedes the hit.
+        assert_eq!(hit.triangle, 1);
+        assert_eq!(hit.ids, [0x12, 0x22]);
+        assert_eq!(hit.fraction, [0.5; 4]);
+        assert_eq!(hit.point, [0.75, 0.9, 0.0, 0.0]);
+        assert_eq!(hit.normal, [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn a_mesh_walk_reports_the_nodes_it_expanded() {
+        let mesh = fixture(1.0, 1.0);
+        let block = mesh_block(
+            [0.75, 0.9, 5.0, 0.0],
+            [0.75, 0.9, -5.0, 0.0],
+            1.0,
+            0.004,
+            0,
+            0x0001,
+        );
+        let sweep = mesh.sweep(&block, &identity_xform([0.0, 0.0, 0.0]));
+        // The root is internal; the second quad's box is outside the query's
+        // reach, so only the first leaf is expanded.
+        assert_eq!(sweep.internals, 1);
+        assert_eq!(sweep.leaves, 1);
+    }
+
+    #[test]
+    fn a_mesh_walk_skips_a_node_whose_layer_mask_is_clear() {
+        let mesh = fixture(1.0, 1.0);
+        let block = mesh_block(
+            [0.75, 0.9, 5.0, 0.0],
+            [0.75, 0.9, -5.0, 0.0],
+            1.0,
+            0.004,
+            0,
+            0x0002,
+        );
+        let sweep = mesh.sweep(&block, &identity_xform([0.0, 0.0, 0.0]));
+        assert!(sweep.hit.is_none());
+        assert_eq!(sweep.internals, 0);
+        assert_eq!(sweep.leaves, 0);
+    }
+
+    #[test]
+    fn a_mesh_walk_skips_a_triangle_whose_layer_mask_is_clear() {
+        let mut mesh = fixture(1.0, 1.0);
+        mesh.world
+            [TRIANGLES_AT + MESH_TRIANGLE_LEN + 0x1c..TRIANGLES_AT + MESH_TRIANGLE_LEN + 0x1e]
+            .copy_from_slice(&0x0002u16.to_le_bytes());
+        let block = mesh_block(
+            [0.75, 0.9, 5.0, 0.0],
+            [0.75, 0.9, -5.0, 0.0],
+            1.0,
+            0.004,
+            0,
+            0x0001,
+        );
+        let sweep = mesh.sweep(&block, &identity_xform([0.0, 0.0, 0.0]));
+        assert!(sweep.hit.is_none());
+        assert_eq!(sweep.leaves, 1);
+    }
+
+    #[test]
+    fn a_mesh_sweep_beside_the_quad_misses() {
+        let mesh = fixture(1.0, 1.0);
+        // The sweep falls between the two quads: inside the root's box, so the
+        // root is expanded, but outside both leaves.
+        let block = mesh_block(
+            [3.0, 0.5, 5.0, 0.0],
+            [3.0, 0.5, -5.0, 0.0],
+            1.0,
+            0.004,
+            0,
+            0x0001,
+        );
+        let sweep = mesh.sweep(&block, &identity_xform([0.0, 0.0, 0.0]));
+        assert!(sweep.hit.is_none());
+        assert_eq!(sweep.internals, 1);
+        assert_eq!(sweep.leaves, 0);
+    }
+
+    #[test]
+    fn a_mesh_shape_without_a_root_leaves_the_output_untouched() {
+        let mut mesh = fixture(1.0, 1.0);
+        mesh.record[0x20..0x28].copy_from_slice(&0u64.to_le_bytes());
+        let block = mesh_block(
+            [0.75, 0.9, 5.0, 0.0],
+            [0.75, 0.9, -5.0, 0.0],
+            1.0,
+            0.004,
+            0,
+            0x0001,
+        );
+        let sweep = mesh.sweep(&block, &identity_xform([0.0, 0.0, 0.0]));
+        assert!(sweep.hit.is_none());
+        assert_eq!(sweep.internals, 0);
+        assert_eq!(sweep.leaves, 0);
+    }
+
+    #[test]
+    fn a_mesh_block_with_support_points_is_not_implemented() {
+        // The count > 0 path hands every triangle to `0x142cc9460`.
+        let mesh = fixture(1.0, 1.0);
+        let block = mesh_block(
+            [0.75, 0.9, 5.0, 0.0],
+            [0.75, 0.9, -5.0, 0.0],
+            1.0,
+            0.0,
+            1,
+            0x0001,
+        );
+        let sweep = mesh.sweep(&block, &identity_xform([0.0, 0.0, 0.0]));
+        assert!(sweep.hit.is_none());
+        assert_eq!(sweep.internals, 0);
+    }
+
+    #[test]
+    fn the_mesh_scale_multiplies_the_local_hit() {
+        // A shape scaled by two halves the query on the way in, so the world
+        // hit of a sweep at x = 1.5 lands on the mesh's x = 0.75.
+        let mesh = fixture(2.0, 0.5);
+        let block = mesh_block(
+            [1.5, 0.5, 5.0, 0.0],
+            [1.5, 0.5, -5.0, 0.0],
+            1.0,
+            0.004,
+            0,
+            0x0001,
+        );
+        let hit = mesh
+            .sweep(&block, &identity_xform([0.0, 0.0, 0.0]))
+            .hit
+            .expect("the enlarged quad covers (1.5, 0.5)");
+        assert_eq!(hit.point, [1.5, 0.5, 0.0, 0.0]);
+        // The local point is (0.75, 0.25), below the quad's diagonal.
+        assert_eq!(hit.triangle, 0);
+    }
+
+    #[test]
+    fn the_mesh_transform_moves_the_contact_into_world_space() {
+        let mesh = fixture(1.0, 1.0);
+        let block = mesh_block(
+            [0.75, 0.9, 5.0, 0.0],
+            [0.75, 0.9, -5.0, 0.0],
+            1.0,
+            0.004,
+            0,
+            0x0001,
+        );
+        let hit = mesh
+            .sweep(&block, &identity_xform([0.0, 0.0, 3.0]))
+            .hit
+            .expect("the local quad still lies under the sweep");
+        assert_eq!(hit.point, [0.75, 0.9, 3.0, 0.0]);
+    }
+
+    #[test]
+    fn the_last_hit_triangle_wins() {
+        // Two stacked, upward-facing quads both accept the same sweep; the walk
+        // keeps the last triangle it tests, which is also the farther one.
+        let mut mesh = fixture(1.0, 1.0);
+        for slot in 4..8 {
+            let corner = [
+                [0.0f32, 0.0, -1.0],
+                [1.0, 0.0, -1.0],
+                [1.0, 1.0, -1.0],
+                [0.0, 1.0, -1.0],
+            ][slot - 4];
+            put_quad(
+                &mut mesh.world,
+                VERTICES_AT + slot * MESH_VERTEX_LEN,
+                [corner[0], corner[1], corner[2], 0.0],
+            );
+        }
+        put_node(
+            &mut mesh.world,
+            NODES_AT + 2 * MESH_NODE_LEN,
+            [0.0, 0.0, -1.0],
+            [1.0, 1.0, 0.0],
+            2,
+            0x0003,
+            0,
+            2,
+        );
+        for (index, mask) in [0x0001u16, 0x0001, 0x0002, 0x0002].iter().enumerate() {
+            let at = TRIANGLES_AT + index * MESH_TRIANGLE_LEN + 0x1c;
+            mesh.world[at..at + 2].copy_from_slice(&mask.to_le_bytes());
+        }
+        for index in 0..3 {
+            let at = NODES_AT + index * MESH_NODE_LEN + 0x1c;
+            mesh.world[at..at + 2].copy_from_slice(&0x0003u16.to_le_bytes());
+        }
+        let block = mesh_block(
+            [0.75, 0.9, 5.0, 0.0],
+            [0.75, 0.9, -5.0, 0.0],
+            1.0,
+            0.004,
+            0,
+            0x0002,
+        );
+        let hit = mesh
+            .sweep(&block, &identity_xform([0.0, 0.0, 0.0]))
+            .hit
+            .expect("both quads accept the sweep");
+        assert_eq!(hit.triangle, 3);
+        assert_eq!(hit.point[2], -1.0);
+        assert!(hit.fraction[0] > 0.5);
+    }
+}
+
+#[cfg(test)]
+mod mesh_case0 {
+    use super::*;
+
+    #[test]
+    fn the_python_fixture_case_hits() {
+        let element = std::fs::read("../../dev/data/read/case0_element.bin").unwrap();
+        let block = std::fs::read("../../dev/data/read/case0_block.bin").unwrap();
+        let xform = std::fs::read("../../dev/data/read/case0_xform.bin").unwrap();
+        let world = MeshWorld {
+            base: 0x50,
+            bytes: &element[0x50..],
+        };
+        let sweep = mesh_sweep(&element[..0x50], &world, &block, &xform);
+        println!(
+            "hit={:?} internals={} leaves={}",
+            sweep
+                .hit
+                .as_ref()
+                .map(|h| (h.triangle, h.point, h.normal, h.fraction)),
+            sweep.internals,
+            sweep.leaves
+        );
+        assert!(sweep.hit.is_some(), "expected a hit");
     }
 }

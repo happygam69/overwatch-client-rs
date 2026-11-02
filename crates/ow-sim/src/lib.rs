@@ -6,19 +6,22 @@
 //! holds the read mover ramp, command, wish-spring and transform leaves;
 //! `state` is the state-record transform lookup; `frame` is the per-frame
 //! velocity law those leaves compose into; `collide` is the first stage of the
-//! swept collision query. The arithmetic is checked by the
-//! differential harness. The rest of the mover's input→velocity path (the
-//! wish source and Domino dispatch) is still open (`docs/open-questions.md`),
-//! so it is not implemented in this crate.
+//! swept collision query, and `policy` is the hit callback that query calls
+//! back into. The arithmetic is checked by the differential harness. The rest
+//! of the mover's input→velocity path (Domino dispatch) and the map ingest the
+//! policy reads are still open (`docs/open-questions.md`), so they are not
+//! implemented in this crate.
 
 pub mod body;
 pub mod camera;
 pub mod collide;
+pub mod collider;
 pub mod fan;
 pub mod frame;
 pub mod gate;
 pub mod modifiers;
 pub mod movement;
+pub mod policy;
 pub mod settings;
 pub mod shapes;
 pub mod state;

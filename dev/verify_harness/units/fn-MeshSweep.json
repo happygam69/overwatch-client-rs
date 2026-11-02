@@ -1,0 +1,93 @@
+{
+  "id": "fn/MeshSweep",
+  "title": "tier-2 shipped code: the type-3 mesh narrowphase against 0x142caed30",
+  "address": {
+    "v2b": "0x7ff7c79ced30"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "mesh_sweep",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "element",
+      "kind": "ptr",
+      "ptr_len": 592
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 68
+    },
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 120
+    },
+    {
+      "name": "xform",
+      "kind": "ptr",
+      "ptr_len": 32
+    }
+  ],
+  "returns": "void",
+  "argFactory": "mesh_fixture",
+  "options": {
+    "iterations": 264,
+    "coverageThreshold": 55,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 5544,
+    "coverageWindow": 2423,
+    "allowedImageReads": [
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f",
+      "0x7ff7c7ca44e0-0x7ff7c7ca44ef",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff",
+      "0x7ff7c7c9aae4-0x7ff7c7c9aaf3",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7cacd50-0x7ff7c7cacd5f",
+      "0x7ff7c87e5f40-0x7ff7c87e5f4f",
+      "0x7ff7c830c2c0-0x7ff7c830c2cf",
+      "0x7ff7c830cd70-0x7ff7c830cd7f",
+      "0x7ff7c830cd80-0x7ff7c830cd8f",
+      "0x7ff7c830cda0-0x7ff7c830cdaf"
+    ],
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c79cef0f",
+        "edge": "0x7ff7c79cef15",
+        "why": "The support-point path (count > 0) builds the rotation and folds the block against the centre and half extent, then hands every triangle to 0x142cc9460, which is unread. Every fixture case passes count = 0."
+      },
+      {
+        "site": "0x7ff7c79cf44a",
+        "edge": "0x7ff7c79cf606",
+        "why": "The leaf dispatch reaches the leaf block only when the node's triangle count is non-zero (0x142caf3b8), and r12d is loaded from that same byte at 0x142caf425, so the repeated zero test always falls through."
+      },
+      {
+        "site": "0x7ff7c79cf5aa",
+        "edge": "0x7ff7c79cf5ac",
+        "why": "The callback register r13 is always null: the wrapper 0x142caed10 passes cb = 0, and the probe has no callback argument. The null test always jumps to 0x142caf5c5."
+      },
+      {
+        "site": "0x7ff7c79cf698",
+        "edge": "0x7ff7c79cf69a",
+        "why": "The stack buffer is only never handed back by free when the walk exceeds its 64-node inline stack and reallocates (0x142cadee0). No fixture walks deeper than three nodes, so the free path is dead."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (mesh_sweep), called by crates/ow-sim/src/bin/verify_probe.rs through the mesh_sweep entry.",
+    "The oracle runs the real 0x142caed30 and the harness compares the whole 0x44-byte output pointee byte for byte: the three quads, the triangle index at +0x30, the two record ids at +0x34/+0x36, the 0xffff mark at +0x38 and both walk counters at +0x3c/+0x40.",
+    "The registered entry is the wrapper at 0x142caed10 (shape entry -> pool element at +0x48); this unit verifies the body it forwards to, so the wrapper's rewrite is not covered.",
+    "The unit declares the body's extent (0x977) because the image's .pdata entry describes the wrapper.",
+    "The declared specials pin the diagonal split of the quad (which triangle index wins), the miss beside the mesh, the back face, a sweep that starts past the plane, a zero-length query, the block layer mask, the triangle layer mask, a degenerate triangle, two stacked faces (last accepted wins over nearest) and a rotated transform."
+  ],
+  "acknowledgedGaps": [
+    "Only the count <= 0, fast-path mesh is verified. The support-point path (0x142cc9460), the triangle test's slow-enter path (expansion > 0.005), a BVH axis >= 2 (whose direction slot is never written), the depth-64 stack realloc at 0x142cadee0, the BVH builder and the geometry ingest remain open.",
+    {
+      "what": "Branch coverage of 0x142caed30",
+      "why": "The body's declared extent spans two regions this unit cannot run. The count > 0 support-point path (0x142caef15-0x142caf1a5) holds five branch sites and is unread, so it never executes; the callback block after the null test at 0x142caf5ac holds two more and needs a non-null cb, which the type-3 wrapper never supplies. Seven of the 22 discovered sites are therefore permanently uncovered, and the tracker rejects declaring a site that never ran. The reachable ceiling for a fast-path-only unit is 11 of the 18 countable sites (61%). The measured value is recorded and the gate is 55; the 328-case differential and the mutation stage carry this unit."
+    }
+  ]
+}

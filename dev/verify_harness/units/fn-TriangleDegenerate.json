@@ -1,0 +1,53 @@
+{
+  "id": "fn/TriangleDegenerate",
+  "title": "tier-2 shipped code: the collider's unusable-triangle test at 0x142cd56e0",
+  "address": {
+    "v2b": "0x7ff7c79f56e0"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "triangle_degenerate",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "corner_a",
+      "kind": "ptr",
+      "ptr_len": 16
+    },
+    {
+      "name": "corner_b",
+      "kind": "ptr",
+      "ptr_len": 16
+    },
+    {
+      "name": "corner_c",
+      "kind": "ptr",
+      "ptr_len": 16
+    }
+  ],
+  "returns": "u64",
+  "argFactory": "triangle_fixture",
+  "options": {
+    "iterations": 96,
+    "coverageThreshold": 95,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 7081,
+    "coverageWindow": 200,
+    "allowedImageReads": [
+      "0x7ff7c830cfe0-0x7ff7c830cfff",
+      "0x7ff7c7ca41e8-0x7ff7c7ca41f7",
+      "0x7ff7c7da3290-0x7ff7c7da329f"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (triangle_degenerate), called by crates/ow-sim/src/bin/verify_probe.rs through the triangle_degenerate entry.",
+    "The leaf writes only AL, so the compared channel is one bit: 1 when the triangle must be skipped, 0 when it is usable. The MOVMSKPS result on the non-finite exit is overwritten by `mov al, 1` before the return, so no mask reaches the caller (the first differential iteration proved that: the candidate's mask 4 against the oracle's 1).",
+    "The four tests are ordered: a corner lane whose exponent is all ones (inf or NaN, low three lanes only), a bounding-box extent above 1e6 on any axis, an edge whose squared length is below 6.25e-6, and twice the area below 2.5e-5. The fixture's declared cases sit on both sides of every threshold.",
+    "The leaf reads three constant pools and nothing else, so allowedImageReads covers 0x1435ecfe0 (6.25e-6 and 2.5e-5), 0x142f841e8 (1e6) and 0x143083290 (the inf splat, read as two quads)."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the degenerate-triangle predicate only. Its two callers - the sector build inside 0x142cca460 and the brush path - are unread, so the predicate's role in the collider pipeline is not exercised here."
+  ]
+}

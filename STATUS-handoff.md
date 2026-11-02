@@ -31,9 +31,20 @@ client-side mode→variation selector (see "Open").
 
 The client is a **viewer**. It makes no movement, combat or camera-behaviour
 claim. `ow-sim` holds the verified movement, Domino body and camera-basis
-arithmetic and, since 2026-11-01, the read per-frame velocity law
-(`ow-sim::frame`); the wish producer, the velocity→position stage and
-collision are still open, so no frame can be stepped yet.
+arithmetic, the read per-frame velocity law (`ow-sim::frame`) and, since
+2026-11-02, the type-3 mesh narrowphase the collision query needs; the wish
+producer, the velocity→position stage and the collision cell decoder are still
+open, so no frame can be stepped yet.
+
+The **collision answer** is now read end to end apart from one stage: the fan's
+candidate evaluator, the handle dispatcher `0x142cc45a0`, the query driver
+`0x142cbd510` and the narrowphase `0x142cc1610` are read, and the last one
+fixes the contract the policy sees — `callback(&hit, packedShapeDescriptor,
+answerRecord)`, rotated by the thunk `0x14202c580` into `(hit, packed,
+record)`. The remaining stage is the policy body `0x14202bc90`, whose prologue
+is obfuscated; without it the answer to "is this wish blocked" is unknown, so
+the wish producer stays open and `ow-sim::fan` keeps taking its evaluation as
+an argument.
 
 ## Exact today
 
@@ -137,7 +148,15 @@ collision are still open, so no frame can be stepped yet.
   reachable branch sites with the support-point path declared, 12/12
   mutants) proves the type-1 capsule: the line-against-segment closest
   approach, both endpoint clamps, the inside report and the three sphere-leaf
-  recursions.
+  recursions. `fn/MeshSweep` (`0x142caed30`, 328 cases, 61.1% of the reachable
+  branch sites with the support-point path declared, 12/12 mutants) proves the
+  **type-3 mesh** narrowphase: the BVH walk, both child pushes, the
+  AABB/swept-hull tests, the triangle mask, the per-triangle test
+  (`0x142cce430`'s fast path), the `0xFF` index-run grouping with its
+  single-corner carry, the last-accepted-triangle rule, the published
+  0x44-byte hit and both walk counters (`collide::mesh_sweep`). The chunk
+  cells become type-3 meshes, so this was the last unread query primitive the
+  practice range needs (`crates/ow-sim/src/collide.rs`).
   The wish spring proves the
   input copy, the `+0x10fc`/`+0x1100`
   spring, both state-id branches and the 1/1024 quantiser; the forward and
@@ -332,7 +351,65 @@ collision are still open, so no frame can be stepped yet.
   `geometry+0x108`/`+0x114` from the 17 arrays, or fills the 0x100 sector
   entries), so the container is not yet a collider. The candidates and the
   dead ends tried on 2026-11-02 are listed in `docs/open-questions.md` item 6,
-  "Search map for the decoder".
+  "Search map for the decoder" — narrowed further on 2026-11-02: every
+  `MeshShapeFill` caller but the generic `ShapeEntryFromDescriptor` route lives
+  in code Ghidra never defined, and `GeometryFinalize`/`OwnerCreateBody` have no
+  code references at all, so the decoder has to be read as raw disassembly from
+  those three call sites rather than reached by walking callers.
+- **The geometry object side is now read end to end (2026-11-02).** The writer
+  of the 0x60 cell entries and the 0x100 sector entries is the driver
+  `0x14213bbc0` (vtable slot `+0x78`), which walks pool A (`GEO+0xb0`, stride
+  `0xb0`, count `+0xc0`) and pool B (`GEO+0xc8`, count `+0xd8`), calling builder
+  #1 `0x14213a510(GEO, index, desc, force, out)` at `0x14213bd61` and builder #2
+  `0x14213acf0` at `0x14213beaf`. Pool records already hold decoded geometry:
+  `+0x00` vertex array (0x20-byte elements), `+0x08` triangle array (0x28-byte
+  elements), counts `+0x10/+0x14/+0x18`, a 0x30-byte mesh source at `+0x20`,
+  position/extent at `+0x78/+0x84`, a u16 face list at `+0x90/+0x98`, and the
+  record's own slot index at `+0xa0`. Builder #1 copies the arrays into a mesh
+  record, converts with `BrushTreeToMesh` (`0x142cf23c0`), pushes a cell
+  (header `vec4`s, mesh source via `MeshToColliderFaces` `0x142cf2010`, the
+  `(GEO+0xa8, GEO+0xaa)` index pair at `[cell+0x30] + k*0x20 + 0x18`, face list
+  via `0x142139080`) and then a sector (transform, distance, limit, accept-test
+  outputs). The brush path (`0x14213c440`) reuses the same cell fill and calls
+  `OwnerCreateBody` + `GeometryFinalize` itself. **Still open:** who fills the
+  pools from the 17 fixed-up arrays — no code in the geometry class reads
+  `chunk+0x2428`. Full detail in `dev/data/read/decoder-notes.md`.
+- **Collider query leaves verified (2026-11-02).** `fn/MeshSweep` (the type-3
+  BVH walk plus triangle test) and `fn/TriangleDegenerate` (the per-triangle
+  skip test `0x142cd56e0` that `MeshToColliderFaces` applies) both pass the
+  differential, coverage and mutation stages. Read but **not implemented**:
+  `MeshToColliderFaces` (`0x142cf2010`), `ColliderMeshEmit` (`0x142ccc120`),
+  `ColliderFaceAppend` (`0x142cca460`), `BrushTreeToMesh` (`0x142cf23c0`), the
+  pool record creator (`0x1421363d1`). `MeshToColliderFaces` and
+  `ColliderFaceAppend` are read in full except the weld's neighbour links (no
+  reader found): the collider is a **double-sided shell** (`v +- eps`, two
+  oppositely wound triangles per face, walls when `eps >= 0.005`) whose faces
+  are welded across the two surfaces by a vertex-pair hash and packed into a
+  BVH. The BVH builder `0x142ccb1b0` is now **read and verified**
+  (`fn/BuildBvh`): leaf at `<= 4` faces; otherwise the split follows the
+  centroid spread — array half when every centroid extent is below `0.005`,
+  else a 64-bin `area*count` sweep along the widest axis with the earliest
+  cheapest boundary, then an in-place **swap** partition (not a stable shift).
+  Implemented in `crates/ow-sim/src/collider.rs` together with the shell, the
+  face records and the flattening. Next: the flattening `0x142ccad80`,
+  `ColliderMeshEmit` (`0x142ccc120`), then the cell decoder.
+- **The collider build is read end to end (2026-11-02):** `GeometryBuild`
+  (`0x14213c440`) is the **only** cell writer (`0x142136010`, one call site)
+  and `GeometryFinalize` (`0x14213d0b0`) the only pool-A writer
+  (`0x142136130`, one call site); both build from the node's brush tree, so a
+  map's collider comes from **brush trees carried by models**, not from the
+  collision chunk's 17 arrays (no reader found; the fixup only rebases them).
+  `ColliderFaceAppend` (`0x142cca460`) is read including the half-edge
+  twin pass: face records 0x60 hold box min/max/centre, `+0x30 = -1`, area at
+  `+0x34`, `{v0, v1, v2, 0, 0, -1}` at `+0x38..+0x4c` (the last three are
+  per-edge adjacency, filled by the twin pass), and three `u16` ids at
+  `+0x50..+0x56`; the vertex array is `(x, y, z, 0)` with count `maxIndex+1`.
+  `MeshToColliderFaces` was re-read with the decompiler: the thickening is
+  **z only** (x/y/w pass `+-0.0`) and the index array is outward block, inward
+  block, then the stitching pairs. `crates/ow-sim/src/collider.rs::shell` was
+  corrected to that read and the half-edge adjacency is still **not
+  implemented** (matters only if the response reads it). Next: the brush
+  tree -> mesh data (`BrushTreeToMesh` input) and the ingest.
 - **Geometry layout read (2026-11-01):** `GeometryClear` (`0x1421384e0`) fixes
   the arrays: `+0xf8`/`+0x104` 0x50-stride transforms, `+0x108`/`+0x114`
   **0x60-stride cell entries**, `+0x118`/`+0x124` 0x100-stride entries,
@@ -350,6 +427,16 @@ collision are still open, so no frame can be stepped yet.
   (`0x142cf2010`), then `OwnerCreateBody` + `GeometryFinalize`. The 220-cell
   STU chunk therefore feeds a **different** node type; the node registry
   `0x141c5ff40` has 100 registration thunks to enumerate.
+- **Where the brush build writes (2026-11-02):** `MeshToColliderFaces`
+  (`0x142cf2010`) is called with `entry+0x20` and fills the 0x60 entry's
+  **0x30-byte type-3 mesh source** (`{u64, u64, u64, u32 count, 5 floats}`,
+  the same layout `ShapeEntryFromDescriptor` copies); a loop then stamps the
+  brush's two u16 ids (`node+0xa8`/`+0xaa`) into every 0x20-byte face at
+  `+0x18`/`+0x1a`, `0x142139080` appends the entry's u16 array, and
+  `GeometryFinalize` (`0x14213cb52` is its only call site) turns the entry into
+  one body plus one mesh shape. So the brush path and the chunk path must build
+  the **same** 0x30-byte source: the chunk decoder's job is to turn the
+  quantized vertex arrays and the `0xFF`-separated index runs into it.
 - **D3D11 renderer (D1-D5):** the production-path device and swap chain (D1),
   the back-buffer texture with its explicit RTV/SRV/UAV and the resize order
   (D2), the per-frame step order (D3), the 64-opcode replay dispatch (D4) and
@@ -553,6 +640,23 @@ collision are still open, so no frame can be stepped yet.
 
 ## Next
 
+0. **Movement, the wish producer's composition — blocked, read this first.**
+   The fan's arithmetic, all four acceptance rules, the back-transform and the
+   refinement are read and implemented (`ow-sim::fan`, 25 units), and the
+   policy plus its seam are in (`ow-sim::policy`, 14 units). What is **not**
+   read is how the writer `0x140cb86c0` composes them: it calls the evaluator
+   at four sites (`0x140cb9086`, `0x140cb949b`, `0x140cb9770`, `0x140cb9b6e`)
+   inside three enclosing loops, and still unknown are (a) which site runs
+   under which input (`uVar21` / `cVar6` preconditions differ per site),
+   (b) the ring pass's carried-forward first endpoint and its `B`/`C` scale
+   quad, (c) where the ring pass's `dl` goes, and (d) the `+0x1140` write.
+   Two attempts at it (decompile read, then the site-4 disassembly) did not
+   settle it, so per the project rule it is written up rather than guessed:
+   `fan::solve` does not exist and nothing downstream pretends it does.
+   **Next anchors:** `0x140cb9000..0x140cb9350` (sites 1 and 2 and the loop
+   headers under them), then the `+0x1140` store, then the `0x140cc2290`
+   special branch.
+
 1. Read the producer of the level-load GUID lists (`docs/open-questions.md`
    item 11.1): who resolves a map request to Jam `0x501B`'s four vectors, and
    whether the local practice-range session builds it in-process.
@@ -603,13 +707,25 @@ collision are still open, so no frame can be stepped yet.
       `0x142cd0ae0`). The five primitives are inventoried (0x4ec, 0x78a, 0x3f0,
       a 0x1a thunk to `0x142caed30`, 0xc00) and `0x142cb8b80` is read (a
       static pool copy, or a normalised pose quaternion). The evaluator's hit
-      policy is the constant `0x14202c580` -> `0x14202bc90`, and it needs a
-      live collision world, so **a candidate cannot yet be scored**: both the
-      hit policy and the geometry the query walks come from the map's
-      collision chunks, which are unread (`formats/maps.md`). So the wish producer
-      and character collision are the same read. Also open: the generic
-      helpers `0x1426cd3d0`/`0x1426de990`, the per-pass record layouts and
-      the `0x141c5d780(object, byte)` query chain.
+      policy is the constant `0x14202c580` -> `0x14202bc90`. The thunk is
+      byte-exact and the narrowphase fixes the contract (`callback(&hit,
+      packedShapeDescriptor, answerRecord)`, permuted into `(hit, packed,
+      record)`), so the policy's **arguments are read**; its body is **read
+too** (2026-11-02): the `ADD`/`ROR 0x22` chain is a **pointer decode**, the far
+      branch targets are junk-filler obfuscation, and a linear sweep decodes
+      the 1797 bytes to exactly their end (427 instructions, no data islands).
+      The contract is `(hit, packed, ctx)` -> 1 no hit / 2 accepted / 3
+      rejected, with three gates (`world = 0x1420c2360(ctx)`, the
+      `0x1420af950` layer+exclusion filter, the decoded-key dedupe against
+      `[world+0x240]`), a mode switch on `hit+0x34` (0 = presence, 1 = fill the
+      0x50-byte record at `[hit+0x10]`, >= 2 = classify through `hit[0]`), and
+      three outputs (`hit+0x30` score, `hit+0x38` flag, `hit+0x39`). What is
+      left is **data, not code**: the geometry tables the policy queries come
+      from the map's collision chunks, which are unread (`formats/maps.md`), so
+      **a candidate cannot yet be scored** for real and the wish producer and
+      character collision are the same read. Also open: the generic helpers
+      `0x1426cd3d0`/`0x1426de990`, the per-pass record layouts and the
+      `0x141c5d780(object, byte)` query chain.
    2. *The velocity→position stage* — who turns the controller velocity into
       a sweep: the Domino tick's kinematic branch or a per-frame
       `0x142cbcee0` call. The character body's Domino parameters (mass,

@@ -19,6 +19,25 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `corpus.py` | Build and query a standing corpus for the current image. | 675 |
 | `data/bc7oracle/texture2ddecoder/__init__.py` | A python wrapper for [Perfare](https://github.com/Perfare)'s [Texture2DDecoder](https://github.com/Perfare/AssetStudio/tree/master/Texture2DDecoder). | 31 |
 | `data/gen_body.py` | (no header) | 25 |
+| `data/read/bvhprobe.py` | Dump the client's BVH builder output for one fixture case. | 59 |
+| `data/read/callers.py` | Find direct callers of an image address by scanning for `E8 rel32` bytes. | 68 |
+| `data/read/covhunt.py` | Report the mesh sweep's uncovered conditional branches for the fixture cases. | 42 |
+| `data/read/d.py` | Disassemble an exe-address range from the offline image. | 66 |
+| `data/read/g.py` | Bridge query via curl: g.py <path> <json-body> [out-file] [field] | 53 |
+| `data/read/geodis.py` | (no header) | 15 |
+| `data/read/meshdebug.py` | Compare the mesh walk case by case: the oracle at 0x142caed30 against the | 104 |
+| `data/read/meshprobe.py` | Trace the oracle's per-triangle calls for one mesh fixture case. | 69 |
+| `data/read/r2.py` | Scratch helpers (gitignored): pdata function map + byte scans over the offline image. | 44 |
+| `data/read/scan_disp.py` | (no header) | 30 |
+| `data/read/scan_geom.py` | (no header) | 20 |
+| `data/read/scan_imm.py` | (no header) | 29 |
+| `data/read/scan_imm2.py` | (no header) | 30 |
+| `data/read/scanb0.py` | (no header) | 20 |
+| `data/read/scanreg.py` | (no header) | 15 |
+| `data/read/scansep.py` | Byte-scan for `cmp r16, 0xff` forms, the 0xFF separator test in an index run. | 40 |
+| `data/read/tritrace.py` | Dump the oracle's executed instruction addresses for a triangle case. | 36 |
+| `data/read/xref.py` | (no header) | 35 |
+| `data/read/xrefs.py` | (no header) | 22 |
 | `data/refs.py` | (no header) | 13 |
 | `data/tmp/analyze.py` | (no header) | 16 |
 | `data/tmp/classify.py` | (no header) | 12 |
@@ -49,14 +68,19 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `pe_layout.py` | Classify an address in the install's PE: raw-backed, zero-fill (BSS), or unmapped. | 125 |
 | `probe_cellbytes.py` | Diagnostic: settle MapChunkCellBytesFixup's array/record indirection. | 137 |
 | `probe_evaluator.py` | Trace one call of an obfuscated function, to map its executed blocks. | 171 |
+| `probe_node_types.py` | Recover the node-type registry table from the image. | 170 |
+| `probe_policy_blocks.py` | Recover a function's block graph from the image bytes, and tell a computed | 363 |
+| `rd.py` | Disassemble or hex-dump a virtual-address range of the local image. | 55 |
+| `rdc.py` | Disassemble a VA range, resolving RIP-relative operands to their float quads. | 36 |
 | `remove_fns.py` | Remove a named set of functions from Rust files. | 68 |
 | `tex_oracle.py` | Cross-check our texture decoders against an independent implementation. | 300 |
 | `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 81 |
 | `verify_harness/apply_character_move_fixture.py` | Inputs for the `fn/ApplyCharacterControllerMove` unit (no-shape path). | 43 |
 | `verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` | 575 |
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
+| `verify_harness/bvh_fixture.py` | Inputs for the BVH builder unit (`0x142ccb1b0`). | 144 |
 | `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 249 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 821 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 827 |
 | `verify_harness/cdn_index_footer_fixture.py` | Deterministic inputs for the `fn/CdnIndexFooterParse` unit. | 178 |
 | `verify_harness/cell_bytes_fixture.py` | Inputs for the `cell_bytes_fixup` unit (`0x141ff51a0`). | 115 |
 | `verify_harness/character_position_fixture.py` | Inputs for the `fn/CharacterPosition` unit. | 36 |
@@ -79,6 +103,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/encoding_header_parse_fixture.py` | Deterministic inputs for the `fn/EncodingHeaderParse` unit. | 207 |
 | `verify_harness/gen.py` | Deterministic input generation for one unit. | 258 |
 | `verify_harness/ledger.py` | Digest-bound verification records. | 155 |
+| `verify_harness/mesh_fixture.py` | Inputs for the `mesh_sweep` unit (`0x142caed30`, type 3). | 294 |
 | `verify_harness/move_character_fixture.py` | Inputs for the `fn/MoveCharacterController` unit (no-shape path). | 60 |
 | `verify_harness/move_character_shape_fixture.py` | Inputs for the `fn/MoveCharacterControllerShape` unit. | 50 |
 | `verify_harness/mover_apply_modifiers_fixture.py` | Inputs for the `fn/ApplyStateModifiers` unit. | 449 |
@@ -119,6 +144,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/texture_format_fixture.py` | Structured inputs for fn/TextureFormatFamilyBpp. | 40 |
 | `verify_harness/texture_payload_fixture.py` | Structured inputs for fn/TexturePayloadGuid. | 59 |
 | `verify_harness/texture_request_fixture.py` | Structured inputs for fn/TextureRequestCount. | 63 |
+| `verify_harness/triangle_fixture.py` | Inputs for the `triangle_degenerate` unit (`0x142cd56e0`). | 133 |
 | `verify_harness/variant_position_fixture.py` | Inputs for the `fn/VariantPosition` unit. | 25 |
 | `verify_harness/world_position_fixture.py` | Inputs for the `fn/WorldPosition` unit. | 28 |
 | `xref_rva.py` | Scan a session image for code references to given rvas. | 81 |

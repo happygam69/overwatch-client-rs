@@ -879,8 +879,31 @@ triangle mesh (`0x142cf23c0`), thickens and closes it (`0x142cf2010`), appends
 the entry's u16 array to `geometry+0xf8` (`0x142139080`), creates the owner's
 body (`OwnerCreateBody`) and finalises. So the 220-cell STU chunk feeds a
 **different node type**, not this one. The node-type registry add
-(`0x141c5ff40`) has 100 caller thunks, one per node type; walking that table
-is how the chunk's consumer is found.
+(`0x141c5ff40`, now created in the project as `RegisterNodeType`) has **144**
+call sites, one per node type (measured 2026-11-02, not the 100 estimated
+here); the type table is static data 0x28 apart from `0x143b8e5c8`, and
+`dev/probe_node_types.py` dumps it — see "The node-type table is recovered"
+below.
+
+**What the brush build writes, and what that means for the decoder
+(2026-11-02).** The 0x60 cell entry's `+0x20` is a **0x30-byte type-3 mesh
+source** (`{u64 nodes; u64 second; u64 third; u32 count; 5 floats}`), the same
+struct `ShapeEntryFromDescriptor` (`0x142cb7f10`) copies into the type-3 pool
+record and `MeshShapeFill` (`0x142cae540`) builds the walkable mesh from. The
+brush path fills it here: `MeshToColliderFaces` (`0x142cf2010`) is called with
+`entry+0x20` (its fill), a loop then stamps the brush's two u16 ids
+(`+0xa8`/`+0xaa`) into each 0x20-byte face's `+0x18`/`+0x1a`, `0x142139080`
+appends the entry's u16 array, and `GeometryFinalize`'s only call site
+(`0x14213cb52`) turns the entry into one body and one type-3 shape. Because the
+brush path and the chunk path must reach the *same* walkable mesh, the chunk
+decoder's output form is fixed: the three pointers of that source, built from
+the cell's quantized vertices (`arr13`/`arr14`) and its `0xFF`-separated index
+runs (`arr3`/`arr11`/`arr12`). The one unread piece on that path is the **BVH
+builder** that fills the node block the narrowphase walks. Direct-caller maps
+(`dev/data/read/callers.py`) put `BrushTreeToMesh` at exactly four sites
+(`0x14213a7ab`, `0x14213af82`, `0x14213c2c8`, `0x14213c9c0`) and
+`MeshToColliderFaces` at two (`0x14213a995`, `0x14213c9d7`), all brush paths,
+so the chunk path does not go through a brush tree.
 
 **What that leaves.** The chunk-side navigation is exact, the payload's cell
 layout is decoded, and the consumer chain is read up to the geometry finaliser
@@ -956,6 +979,39 @@ parse its payload:
   table at `0x1442a0bc0` to a record whose fixture pool is `+0x2b8` and whose
   per-type geometry pools are `+0x2d0..+0x330`.
 
+**The two collision chunks are identified by slot (2026-11-02).**
+`FinishMapChunkAsset` (`0x141ff54e0`, 12 bytes — the project shows a truncated
+body, read it from the image) dispatches on `ChunkSlotForGuid(work+0x70)` and
+has a case for slot **`0x1e`** and one for slot **`0x22`**. Both run the same
+three steps and differ only in the sub-asset offset:
+
+```text
+slot 0x1e:  MapChunkHeaderFixup(payload); sub = StuLoadSubAssets(cache, *payload, 0)
+            MapChunkCellBytesFixup(sub + 0x68)
+slot 0x22:  MapChunkHeaderFixup(payload); sub = StuLoadSubAssets(cache, *payload, 0)
+            MapChunkCellBytesFixup(sub + 0x08)
+both:       if (payload[1] != 0) StuLoadSubAssets(cache, payload[1], 0)
+```
+
+So the cell container the verified fixup rewrites is **the chunk's STU
+sub-asset plus a per-slot header** — `0x68` bytes for slot `0x1e`, `0x08` for
+slot `0x22`. Which of the two is `MAP_CHUNK_COLLISION` and which is
+`teMAP_CHUNK_ADDITIVE_COLLISION` needs the kind table; they are otherwise
+identical. The neighbouring slots are other systems and are not collision:
+`0x1f`/`0x1d` → `FUN_142e492a0`/`FUN_142e493e0`, `0x21`/`0x23` →
+`FUN_142e49270`, `0x1e`-style header fixup also appears for `0x1e` only; slots
+`7`/`0xf` do their own inline relinking (0x40-stride records with a 0x10
+array, 0x58-stride with 0x20), and slot `8` is the GUID-keyed STU container.
+
+**The consumer of those cells is still unwritten.** The fixup only rewrites
+pointers; nothing in this dispatch builds shapes. The ingest therefore splits
+cleanly in two, and only the second half is open:
+
+| half | state |
+|---|---|
+| chunk → STU sub-asset → cell container (slot `0x1e`/`0x22`, header, 17 arrays, pointer fixup) | **read, `fn/MapChunkCellBytesFixup` verified** |
+| cell container → shape records in the query world | **open** |
+
 **The handle table's single writer is the registry install, not a per-record
 call.** The whole image has exactly one store to `0x1442a0bc0`:
 `0x142cc3bb0`, which stores the registry object's array pointer and, at
@@ -995,6 +1051,57 @@ open question stays exactly one level down — **who fills
 function-offset table, but it is `.pdata` in an RVA+checksum encoding (its
 extents match `.pdata` exactly, including the truncated ones), so it adds no
 precision to the coverage windows the units declare.
+
+**The node-type table is recovered (2026-11-02).** The registry add had no
+function in the project image, so every one of its callers was invisible
+("0 callers" on all of them) and the documented plan "walk the 100 thunks"
+could not run. It is `RegisterNodeType`, `0x141c5ff40` (52 bytes), now created
+in the project image; it has **144 call sites**, not 100:
+
+```text
+RegisterNodeType(slot, descriptor)
+  slot[1] = descriptor[0]      ; u16 type id
+  slot[2] = descriptor[1]      ; the class registrar
+  slot[3] = descriptor[2]      ; context
+  slot[0] = head; head = slot  ; a singly-linked list, head 0x144188170
+```
+
+The slots are **static per-type data**, 0x28 bytes apart from `0x143b8e5c8`,
+so the type table can be read straight out of the image without disassembly.
+Each type's registrar is a small `SUB RSP,0x48` stub that reads
+`MOV ECX,<type>`, `LEA RCX,[<class registrar>]`, `LEA RCX,[<slot>]` and calls
+`RegisterNodeType`; `dev/probe_node_types.py` scans for the call and reads
+both constants out of the site.
+
+**The class registrars obfuscate their own names, and the names are useless as
+an anchor.** A class registrar (e.g. type `0x13` = `0x142191d00`, 44 bytes)
+allocates a `0x30`-byte descriptor, stores the type id at `byte[+8]`, decodes
+a name in place — `name[i] ^= key[i & 7]`, length `[len] & 0xffffff`, key at
+`len-8`, name at `len+4` — and calls `RegisterTypeWithSize`. The mechanism is
+recovered, but the strings are generic: type `0x13`'s two triples decode to
+`"Unknown"` and `"Unknown"`, so the obfuscation protects the string, it does
+not identify the node. Whatever identifies the collision node, it is not a
+name.
+
+**Project defect to know about.** `GeometryBuild` (`0x14213c440`) is stored as
+an **84-byte** function with no callers and no callees, while its real body is
+`0x14213c440..~0x14213d0b0` (3,184 bytes; the probe reaches 430 instructions
+before the sweep stops at conditional edges). Anything that asks the project
+for this function's callers or callees gets nothing, which is why the
+"node-type-2 build's callers" question kept coming back empty. Read it from
+the recovered image, not from the project.
+
+**Where that leaves the ingest.** The type table is enumerable (144 types,
+each with a class registrar), the brush path is fully read, the chunk
+container is parsed and byte-fixed, and the cell layout is decoded. What is
+still unwritten is the **chunk node type's build**: which of the 144 types
+takes the collision chunk and turns its cells into the `0x30`-byte type-3 mesh
+source. The discriminator for the next pass is the class size handed to
+`RegisterTypeWithSize` plus the class vtable's build slot — a chunk build must
+fill that mesh source from the cell's quantized vertices (`arr13`/`arr14`) and
+its `0xFF`-separated index runs (`arr3`/`arr11`/`arr12`) **without** calling
+`BrushTreeToMesh`. `dev/probe_node_types.py --ingest` lists types whose build
+touches a collider producer as a starting filter.
 
 ## Verification
 

@@ -810,3 +810,26 @@ Overwatch.exe,0x142132cf0,0x142132cf0,GeometryCopyParams,Copies and scales the c
 Overwatch.exe,0x142cf2010,0x142cf2010,MeshToColliderFaces,Thickens a triangle mesh into a closed double-sided collider (2x vertices 2x 0x14-byte faces open edges closed),map,
 
 Overwatch.exe,0x142cf23c0,0x142cf23c0,BrushTreeToMesh,Walks a brush CSG tree (ops 0..5 over 0x60-byte hulls) and emits a triangle mesh,map,
+Overwatch.exe,0x142caed10,0x142caed10,MeshSweepEntry,Forwards a shape sweep to the type-3 BVH walk (shape entry then pool element at +0x48),domino,
+
+Overwatch.exe,0x142caed30,0x142caed30,MeshSweep,Walks the type-3 BVH (0x20-byte nodes AABB then swept hull) and tests each leaf triangle publishing the 0x44-byte hit,domino,
+
+Overwatch.exe,0x142cce430,0x142cce430,MeshTriangleTest,Plane and barycentric test of one quad against a swept point with 0xFF-separated index runs (fast path when the expansion is small),domino,
+
+
+Overwatch.exe,0x142cd56e0,0x142cd56e0,ColliderTriangleDegenerate,Says whether one collider mesh triangle must be skipped: a non-finite corner, a box extent over 1e6, an edge shorter than 0.0025, or a cross length under 2.5e-5,domino,
+
+Overwatch.exe,0x142cf2010,0x142cf2010,MeshToColliderFaces,Converts one source mesh (0x20 vertices, 0x18+8*idx triangles) into collider faces (0x80 corners, 0x30 indices), skipping degenerate triangles and flattening a repeated last vertex,domino,
+
+Overwatch.exe,0x142cca460,0x142cca460,ColliderFaceAppend,Appends one collider face from up to four indexed vertices, de-duplicating by the last corner and taking corners from the output face array,domino,
+
+Overwatch.exe,0x142ccc120,0x142ccc120,ColliderMeshEmit,Walks one mesh source's faces and vertices, runs MeshToColliderFaces, skips degenerate output triangles and appends the faces into the pool record,domino,
+
+Overwatch.exe,0x140c9e670,0x140c9e670,MoverWishWorldPoint,"Transforms the block +0x70 wish through the state matrix at +0x3f0; the copy stands when the id or the +0x40 flag says no",mover,
+Overwatch.exe,0x140c9e740,0x140c9e740,MoverStateBlockMatrix,"Resolves the 4x4 at the block +0x3f0 gated by the id at +0x450 and the byte at +0x40",mover,
+Overwatch.exe,0x140a01560,0x140a01560,CandidateQueryClone,"Clones the 0x4a5-byte collision query object: header and three inline vectors and the two segment points and the tail flags",mover,
+Overwatch.exe,0x140cc1870,0x140cc1870,MoverWishQueryCached,"Memoised candidate query keyed by the state id and the two segment points within 0.004",mover,
+Overwatch.exe,0x14202bc90,0x14202bc90,CandidateHitPolicy,"The hit policy behind the argument-rotating thunk at 0x14202c580: gates on the record world and a layer/exclusion filter, dedupes by a decoded geometry key, then fills the 0x50-byte answer record (mode 1) or classifies through hit[0] (mode >= 2); returns 1 no hit, 2 accepted, 3 rejected",mover,
+Overwatch.exe,0x1420af950,0x1420af950,FilterHitLayers,"Accepts a hit when its required mask meets the world mask, its forbidden mask does not, and the world is absent from its exclusion list",mover,
+Overwatch.exe,0x142018990,0x142018990,WriteIndexConstants,"Constant-injection stub: stores 0x10, 0xf, 4 and 0 through four pointer arguments so the caller appears to receive computed out-params",obfuscation,
+Overwatch.exe,0x140543440,0x140543440,DecodeKeyInPlace,"Junk-prefixed leaf (live code at 0x140543481) that decodes the qword at its argument in place with a rotate/xor/subtract constant chain",obfuscation,

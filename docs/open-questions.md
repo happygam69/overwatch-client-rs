@@ -9,6 +9,33 @@ read, it stays here and the gameplay feature stays unimplemented.
 
 ---
 
+## 1a. The fan's per-candidate refinement block
+
+**Status: the block is read and implemented; the outer walk is open.**
+
+Read and shipped (`ow-sim::fan`, six new units):
+
+- the back-transform direction (`0x140cb9580`) is `-descriptor.xyz` normalized
+  **in the horizontal plane** (`len2 = z*z + x*x`, one `rsqrtps` plus one Newton
+  step, the `y` lane kept as `n*0.5*0.0`), `w` from `-descriptor.w`, and
+  `(0,0,1,0)` when `len2 < 1.17549435e-36` or the approximation's sign test
+  fails;
+- its `-normal` sibling does the same to the accepted hit's normal and falls
+  back to the first direction when it is degenerate;
+- the offset is `pentagon*0.02 + refined*0.005` per lane, and two endpoints are
+  built from the centre: the raised one and the ground probe `0.04` below;
+- the acceptance is `flag_bit_0x10000 || facing > best_y`, with `best_y` = the
+  earlier pass's `local_c18` captured before the loop and never updated, and the
+  **first** hit kept even when it fails the facing test.
+
+**Still open: the outer walk.** The writer calls the evaluator at four sites
+inside three enclosing loops, and which one runs — what the query carries and
+what the final `+0x1140` write takes from the record — is not read. `fan::solve`
+stays unwritten until it is; writing it now would invent the composition.
+
+**Next anchors.** The first two evaluator call sites and their loop headers in
+`0x140cb86c0`, then the `+0x1140` write.
+
 ## 1. The mover's input→velocity control law
 
 **Question.** `MoverInvoker` (`0x1407ffc50`, interface vtable `0x142fdbf40`
@@ -70,6 +97,19 @@ operands are the verified units `fn/MoverStateVector` and
 So the open part of item 1 is narrowed to the **wish producer** and the
 **velocity→position stage**, not the velocity expression.
 
+**The wish producer is read to its last stage (2026-11-02).** The fan's
+candidate evaluator `0x1420328c0`, the handle dispatcher `0x142cc45a0`, the
+query driver `0x142cbd510` and the narrowphase `0x142cc1610` are read, and the
+narrowphase pins the policy's arguments exactly
+(`callback(&hit, packedShapeDescriptor, answerRecord)`, permuted by the thunk
+`0x14202c580` into `(hit, packed, record)`). The policy body
+`0x14202bc90` is **read** (2026-11-02): the `ADD`/`ROR 0x22` chain is a
+**pointer decode**, not a jump, and the far branch targets are junk-filler
+obfuscation. What is left of the producer is data, not code: the map's
+geometry tables, so **no wish is produced** and the client stays a viewer.
+Details: `formats/character-controller.md`, "The collision query driver and
+the hit contract".
+
 The source is partially read (2026-11-01): the first-person view object
 (vtable `0x142f87810`, slot `+0x250` = `0x140654530`) writes the actor command
 at `+0x1210` — yaw `+0x04`, pitch `+0x06` (s16 fixed-point, clamped to
@@ -112,10 +152,11 @@ floored by `body[0x5cc]`, the radius
 `72°` and `2π/N` rotations, the `+0.1` seed bias, the second seed term
 `dot(query - (pos - ramp), dir)`, and both acceptance rules
 (`|score| < best && y > best_y`, then `|score| < best`). `ow-sim::fan`
-implements exactly that with unit tests. Still open: the evaluator
-`0x1420328c0`, the generic helpers `0x1426cd3d0`/`0x1426de990`, the per-pass
-record layouts, the `0x141c5d780(object, byte)` query chain and the
-`+0x41`/`+0x42` flag slot's producer.
+implements exactly that with unit tests. Still open: the generic helpers
+`0x1426cd3d0`/`0x1426de990`, the per-pass record layouts, the
+`0x141c5d780(object, byte)` query chain and the `+0x41`/`+0x42` flag slot's
+producer. (The evaluator `0x1420328c0` named here on 2026-11-01 is read as of
+2026-11-02.)
 
 **What would settle it.** The spring itself is now verified
 (`fn/MoverWishSpring`, 264 cases, 90% branch coverage, 12/12 mutants) with a
@@ -144,13 +185,45 @@ just the prologue `0x14203dae0..0x14203dbd9` plus the body
 read: it resolves the world's geometry object (`world+0x620`), fills the
 result record the fan reads back, builds a 0x71-byte query struct from the
 descriptor object (`[param_2+8]`) and calls `0x142cc45a0` (62-byte handle
-dispatcher) or `0x14212db80` (78 bytes). Its opaque guard is
-**pointer-keyed** (the world pointer's low byte, decoded through the nibble
-table `0x1433d158`), so a straight decompile is unusable but the two variants
-can be compared under the emulator. Remaining: the descriptor object's layout
-and producer, the two dispatchers' targets and the query itself.
+dispatcher, 557 bytes) or `0x14212db80` (78 bytes, not on this path). The
+static flow at `0x14202bc90` is **junk-filler obfuscation**, not a computed
+jump: dead runs of instructions end in opaque-predicate branches to other
+functions (`0x142049e89`, `0x14202df4a`, `0x14202e840`, `0x142030dc2`), which
+is what pulled Ghidra's decompile out of the function. A linear sweep decodes
+the body to exactly its end (427 instructions, no data islands), so the live
+path is plain code and the body is read (see below).
 **This couples the input side to collision** — the same query is item 6 — so
 the wish producer cannot be finished before it.
+
+**The descriptor and the record are read (2026-11-02).**
+`formats/character-controller.md` now has the query object's field table
+(0x4a5 bytes, three inline vectors at `+0x20/+0x130/+0x240`, the sweep
+segment at `+0x450/+0x460`, mode word at `+0x06`), its producer (the fan
+writes `A = P + S + (seed + 0.1) * basis`, `B = P + S - speed * basis` with
+`P = M * wish`), the 0x50-byte answer record and the memo front-end
+`0x140cc1870` (state id `body+0x1a60`, endpoints within 0.004 of
+`body+0x1ae0`/`body+0x1af0`). `0x14202c580` is a four-move thunk rotating
+`(ctx, a, b)` into `(b, ctx, a)` before `0x14202bc90`, so the policy body's
+first parameter is the **hit** object (`0x14202c580` receives the narrowphase's
+`&hit` in RCX). The wish-to-world step is `0x140c9e670`
+with `0x140c9e740` (matrix at `body+0x14c0`, flag `body+0x1110`, id
+`body+0x1520`). The wrong `noreturn` mark on `0x140c9e670` is cleared in the
+project image, so `MoverWishWriter` now decompiles end to end.
+
+Remaining for this item: the geometry ingest that gives the policy a world to
+read. The body of `0x14202bc90` is **read** (2026-11-02): contract
+`(hit, packed, ctx)` -> 1/2/3, the world gate, the `0x1420af950`
+layer/exclusion filter, the decoded geometry-key dedupe, the 0x50-byte record
+fill for mode 1 and the `hit[0]` classification for mode >= 2. Its apparent
+"computed jumps" were junk-filler obfuscation, not a dispatch table, and its
+two "unread callees" were a constant-injection stub (`0x142018990`) and a
+junk-prefixed in-place decode (`0x140543440`). So the fan is fully read and
+**no code is left unread in it**; what remains is the map data the policy
+queries (`[rdi+0x80]`/`[rdi+0x110]`/`[rdi+0x250]`), which is item 6.
+
+**Next anchor:** implement `ow-sim`'s version of the policy against synthetic
+hits and worlds and add a `fn/CandidateHitPolicy` differential unit; the
+collision ingest (item 6) is what a live candidate needs.
 
 **Next anchor.** `fn/MoverWishForward`, `fn/MoverWishInverse`,
 `fn/MoverWishCopy`, `fn/StateTransform` and `fn/MoverStateVector` are
@@ -190,9 +263,12 @@ no-shape path (`fn/WorldPosition`, `fn/VariantPosition`,
 four shape-bound leaves (`fn/ShapeSphere`, `fn/ShapeCapsule`, `fn/ShapeBox`,
 `fn/ShapePoints`), the shape dispatcher (`fn/ShapeDispatch`) and the shape
 list walk (`fn/MoveCharacterControllerShape`, contact id `-1`) are verified
-too, and the harness now has a `vec4` return channel (XMM0, 128 bits). The
-next reads are the contact event (`0x142cf32d0`), the type-3 mesh path
-(`0x142cae5a0`), the rigid velocity path
+too, and the harness now has a `vec4` return channel (XMM0, 128 bits)
+plus the whole-output differential, and the type-3 mesh path is now read and
+verified too (`fn/MeshSweep` on `0x142caed30`, the no-support-point walk and
+its triangle test; `crates/ow-sim/src/collide.rs::mesh_sweep`). The
+next reads are the contact event (`0x142cf32d0`), the mesh support-point path
+(`0x142cc9460`), the rigid velocity path
 (`0x142cb5310`), the `MoverAdvance` integration and liveness, and the fan
 writer. The harness supports `startRegs`, MS x64 stack
 arguments, range-form `allowedImageReads`, `vec4` returns and state-snapshot
@@ -320,6 +396,44 @@ The gap is the map-chunk-to-shape ingest: the client's spatial structure is
 built by the command triple, and the producer of the triangle records from
 chunk bytes is not read.
 
+**The live collider is the model's brush tree, not the 17-array chunk
+(2026-11-02).** `GeometryBuild` (`0x14213c440`) is read end to end and is the
+only producer of a `0x60` cell: it takes the node's model
+(`node+0x88` -> `+0x38` -> `+0x40` -> `+0x48`), copies the collision parameters
+(`0x142132cf0`), pushes one cell from `geometry+0x108` (`0x142136010`, which has
+this single call site), builds the mesh from the object's `+0x98` instance array
+(`0x142cec9e0` / `0x142ced620` / `0x142ced990`), runs `BrushTreeToMesh`
+(`0x142cf23c0`) and then `MeshToColliderFaces` (`0x142cf2010`) with the
+collision radius and the object's `+0x0a` id, stamps the brush's two `u16` ids
+into each `0x20`-byte face at `+0x18`/`+0x1a`, appends the cell's `u16` array
+(`0x142139080`), normalises `geometry+0x42` by `sqrt(a*a + b*b)`, creates the
+body (`OwnerCreateBody`) and finalises (`0x14213d0b0`, whose pool-A push
+`0x142136130` also has one call site). Nothing else in the image pushes a cell
+or a pool-A record, so the shape records the sweep walks are built from
+**brush trees carried by models**, and the chunk's 17 arrays are pointer-fixed
+at load with no reader found (round 2 reached the same place from the component
+side). The decoder question therefore becomes two data questions: which model
+the map's collision comes from, and how its brush tree is encoded. The
+`0x142cca460` appender (`ColliderFaceAppend`) and the `0x142ccc120` wrapper
+(`ColliderMeshEmit`) are read: the appender walks the `0x14`-byte index
+records, reads the three vertices, skips a record `ColliderTriangleDegenerate`
+rejects, and fills one `0x60` face record plus the running area; the wrapper
+calls it and frees its three arrays.
+
+**`MeshToColliderFaces` detail corrected (2026-11-02).** The thickening is
+**z only**: the first vertex block is `(x + 0.0, y + 0.0, z + radius, w + 0.0)`
+and the second `(x - 0.0, y - 0.0, z - radius, w - 0.0)` — `x`, `y` and `w` pass
+through the signed zero add, which only turns `-0.0` into `+0.0` in the first
+block. The index array is three blocks: every source face outward (as written),
+every source face inward (`i2 + n, i1 + n, i0 + n`), then — only when
+`radius >= 0.005` — one stitching pair per marked edge in face order, entry 0
+pairing `i0`/`i1`, entry 1 `i1`/`i2`, entry 2 `i2`/`i0`, each pair being
+`(a, a + n, b + n)` and `(b + n, b, a)`. Every `0x14` record carries `+0x0c = 0`
+and the caller's surface id at `+0x10`. `crates/ow-sim/src/collider.rs::shell`
+now matches this and its tests are updated; a differential unit for it is not
+built yet (**not tested**), because the function allocates its two arrays
+internally and the harness needs a pinned allocator region to compare them.
+
 **The wish producer's evaluator is this query, and the chain is now read to
 its narrowphase.** `0x1420328c0` (a wrapper) takes `[body+0x240]` — the
 spatial world — and calls `0x14203dae0`, whose reachable body is read; it
@@ -350,6 +464,22 @@ policy's live collision world (`0x14202c580` -> `0x14202bc90`). Without those,
 a candidate cannot be scored: the fan reads a record only the live hit policy
 fills. So the next anchor is the chunk ingest in `formats/maps.md`, coupled
 with the primitive bodies.
+
+**The node-type table is enumerated (2026-11-02).** The "walk the 100 thunks"
+plan was blocked by a project defect: the registry add `0x141c5ff40` had no
+function, so all of its callers read as "0 callers". It is
+`RegisterNodeType` (52 bytes) and has **144** call sites; creating it in the
+project image made all 144 visible at once. The type table is **static data**
+0x28 bytes apart from `0x143b8e5c8` (`{next, u16 type, class_registrar,
+context}`, linked through head `0x144188170`), so it can be read from the
+image without disassembly; `dev/probe_node_types.py` does exactly that. Each
+class registrar obfuscates its own name (`name[i] ^= key[i & 7]`, key at
+`len-8`), but the strings are generic — type `0x13` decodes to `"Unknown"` —
+so **no name identifies the collision node**. The remaining discriminator is
+the class size handed to `RegisterTypeWithSize` and the class vtable's build
+slot: the chunk build must fill the `0x30`-byte type-3 mesh source from the
+cell's quantized vertices (`arr13`/`arr14`) and its `0xFF`-separated index
+runs (`arr3`/`arr11`/`arr12`) without calling `BrushTreeToMesh`.
 
 **The pool side is read (2026-11-01).** The fixture/pool write path is now
 whole: `DmWorldConstruct` sizes every pool from the world config
@@ -427,6 +557,20 @@ dead. The **cell decoder** — who turns the 17 arrays into the `0x60` cell
 entries (or the `0x100` sector entries) — is still the open link, so the
 container is not yet a collider.
 
+**The collider build chain is verified except its two ends (2026-11-02).**
+Read and proven this session: `MeshToColliderFaces` (`0x142cf2010`, the
+double-sided shell), `ColliderFaceAppend` (`0x142cca460`, the `0x60`-byte face
+records), the triangle skip test (`0x142cd56e0`, `fn/TriangleDegenerate`), the
+BVH builder (`0x142ccb1b0`, `fn/BuildBvh`) and the type-3 narrowphase (earlier,
+`fn/MeshSweep`). The builder's split rule had been mis-recorded: it bins the
+**centroid** spread over 64 buckets on the widest axis and picks the cheapest
+`area(left)*count(left) + area(right)*count(right)` boundary, taking the array
+half only when every centroid extent is below `0.005`; the partition is the
+swap pass at `0x142ccbc17`, not a stable shift. Still open on this chain: the
+appender's weld bookkeeping (its neighbour links have no reader), the
+flattening `0x142ccad80` (the node order and padding the implementation still
+mirrors rather than reads) and `ColliderMeshEmit` (`0x142ccc120`).
+
 **The cell entry is 0x60 bytes and the consumer is exact (2026-11-01).**
 `GeometryClear` (`0x1421384e0`) fixes the geometry object's arrays: `+0xf8`/
 `+0x104` 0x50-stride transforms, `+0x108`/`+0x114` **0x60-stride cell
@@ -451,6 +595,59 @@ record. The types run `1..=0xb4` with holes; the factories are the
 `0x5c0`). No factory has yet been matched to the collision chunk; the next
 attempt can start from that full (type, factory) table instead of the size
 guess.
+
+**The 0x30-byte mesh source is the decoder's output form (2026-11-02).**
+`MeshShapeFill` (`0x142cae540`) copies it; a 0x60 cell entry holds it at
+`+0x20` (`GeometryFinalize` passes `record+0x20`); and the brush path fills it
+with `MeshToColliderFaces` (`0x142cf2010`), whose only two callers are
+`GeometryBuild` (`0x14213c440`, at `0x14213c9d7`) and the builder that runs
+from `0x14213a995`. So whatever the chunk decoder is, its output is
+`{u64 nodes; u64 second; u64 third; u32 count; 5 floats}` handed to
+`ShapeAddToBody`'s type-3 branch. The remaining unknown is the **BVH builder**
+for mesh nodes (the narrowphase walks 0x20-byte nodes with the layout in
+`crates/ow-sim/src/collide.rs`); find its caller and the decoder is one stack
+up. `BrushTreeToMesh` (`0x142cf23c0`) has exactly four callers
+(`0x14213a7ab`, `0x14213af82`, `0x14213c2c8`, `0x14213c9c0`), all brush paths,
+so the chunk path does not go through the brush tree.
+
+**The type-3 shape's producers are mapped (2026-11-02).** `MeshShapeFill`
+(`0x142cae540`) has exactly five call sites: `ShapeEntryFromDescriptor`
+(`0x142cb7f10`, from `0x142cb80d4`) — the generic descriptor-to-shape route,
+itself reached only through two data tables (`0x14473d368`, `0x143829a20`) and
+two calls, so nothing in that chain names the decoder; `FUN_14210bac0` (from
+`0x14210bc96`), which divides the filled vertices by a scale; and **three sites
+in code Ghidra never defined** (`0x140c28288`, `0x14207879f`, `0x1420a06eb`).
+`GeometryFinalize` and `OwnerCreateBody` likewise have no code references: they
+are reached indirectly. The chunk decoder therefore cannot be found by walking
+callers from the finalize side; it sits in an undefined region and the next
+attempt has to read it as raw disassembly (`dev/data/read/d.py`). Two of the
+three sites are already informative: `0x140c28288` stores the new shape record
+at `owner+0x50` and increments the counter at `owner+0xcd0`; `0x14207879f`
+fills a **0x58-stride** record array — `record+0x50..+0x5c` from
+`[src+8/+0xc/+0x10/+0x14]`, mesh source passed as `base + 0x20 + i*0x58` — so a
+second, 0x58-byte mesh-bearing record shape exists beside the 0x60 cell entry,
+with its vertices at `+0x20` just like the cell entry.
+
+**Chunk kind dispatch is not the collision chunk (2026-11-02).** `0x140c66540`
+switches on a chunk kind byte at `[chunk+0x13]`: kind `8` calls `[vtable+0x78]`
+then `0x142076ab0`; kind `0x1a` calls `[vtable+0x88]`, copies a quad returned by
+`0x141c5b950` to `payload+0x2040`, then `0x142075d00`, which stages three
+records (kinds `1`, `0x15`, `0x40`) into the object at `+0x88`/`+0x2a8`/`+0x808`
+under a hashed key (`func_0x141b32e50`). Those are placeable/spawn records, so
+kind `0x1a` is a content chunk, not the 220-cell collision chunk.
+
+**The collider surface is a shell, and the emitter is the last unread link
+(2026-11-02).** `MeshToColliderFaces` (`0x142cf2010`) is read in full (detail in
+`dev/data/read/decoder-notes.md`): it allocates an index array and a vertex
+array, writes the vertices twice (`v + epsilon`, then `v - epsilon`), emits two
+index records per face with the index order reversed in the second half, and in
+its flag mode adds side-wall record pairs along boundary edges; then it calls
+`ColliderMeshEmit` (`0x142ccc120`), which applies `ColliderTriangleDegenerate`
+(`0x142cd56e0`, verified) before appending each triangle, and frees both
+arrays. So a brush collider is a closed double-sided shell around the brush
+plane, not the plane itself. `0x142ccc120` is now the next unit to read: it
+holds the face append (`ColliderFaceAppend`, `0x142cca460`) and the pool A
+cell writes.
 
 **Search map for the decoder (2026-11-02), so the dead ends are not repeated.**
 The chunk asset's completion path only uses `ChunkSlotForGuid` to pick the
@@ -506,6 +703,60 @@ free-list link. Release and update/insert are read
 displacement scans: no `inc`/`add` of `record+0x2c0` exists in the image even
 though release decrements it. Next: `0x141d71200`'s head and the caller of its
 vtable slot `+0x40` (`0x142f744a0`).
+
+**The geometry side is read; the chunk side is not (2026-11-02).** The `0x60`
+cell entries and the `0x100` sector entries are written by one driver at
+`0x14213bbc0` (vtable slot `+0x78`), which walks pool A (container at `GEO+0xb0`,
+stride `0xb0`, count `+0xc0`) and pool B (`GEO+0xc8`, count `+0xd8`) and calls
+builder #1 `0x14213a510(GEO, index, desc, force, out)` at `0x14213bd61` and
+builder #2 `0x14213acf0` at `0x14213beaf`. A pool A record already holds
+decoded geometry — vertex array at `+0x00` (`0x20`-byte elements), triangle
+array at `+0x08` (`0x28`-byte elements), counts at `+0x10/+0x14/+0x18` — which
+builder #1 copies into a mesh record (allocations `count*0x20` and
+`count*0x28`), converts with `BrushTreeToMesh` (`0x142cf23c0`), then pushes a
+cell: `+0x00..0x1f` two `vec4` from the mesh record, `+0x20` the `0x30`-byte
+mesh source via `MeshToColliderFaces` (`0x142cf2010`), the `(GEO+0xa8, GEO+0xaa)`
+index pair into every triangle at `[cell+0x30] + k*0x20 + 0x18/+0x1a`, and
+`+0x50/+0x58/+0x5c` the `{u16* list, count, flag}` face list from
+`0x142139080`. Sectors are filled the same way with a transform, a distance and
+a limit. `GeometryFinalize` (`0x14213d0b0`) then walks `GEO+0x108`
+(stride `0x60`, count `+0x114`), skips the first entry, copies five `vec4` into
+a fresh `0xb0` record, takes over the face list and creates one body plus one
+type-3 mesh shape. The brush path (`0x14213c440`) shares those cell-fill steps
+and then calls `OwnerCreateBody` and `GeometryFinalize` itself. What is still
+open is the **input**: no code in the geometry class reads `chunk+0x2428`, so
+the function that fills the two record pools from the 17 fixed-up arrays
+remains unidentified; the record layout it must produce is now known exactly
+(section 4.1 of `dev/data/read/decoder-notes.md`, which also holds the search
+map and every dead end).
+
+**Round 2: the chunk container is not the collision source for movement
+(2026-11-02).** Two facts changed the picture. (a) The pool A records — the
+only input of the cell/sector builders — are created by a **primitive
+importer** at `0x1421363d1` (pool `push_back` `0x142136130`, grow path
+`0x142136160`), which fills a record's `+0x00/+0x08/+0x10/+0x14` through
+`0x14213a6aa` (reached only from `0x14213ad6b`, inside builder #2). Its inputs
+are a local `0x30`-byte mesh descriptor at `+0x20` (via `0x14212c210` ->
+`0x141bce330`, element stride `0x2c`, counts `+0x14`/`+0x18`, physics index
+`+0x28`), a rig node chosen from `[GEO+0x88]` by the record's `+0x70` slot
+index, and two rb-trees (`0x142cbb020`/`0x142cba920` for triangles, stride
+`0x4c`, first dword = count; `0x142cbb300`/`0x142cbacc0` for vertices, stride
+`0x34`). Its output form: vertices `0x20` stride = 3 f32 position + 2 f32
+(halved) + 4 f32 at `+0x18`; triangles `0x28` stride = 3x u16 at `+0x00` plus
+3x u16 physics indices at `+0x06`. The source object is class type **9**, not
+the type 10 the driver validates. (b) The 17-array container's only in-image
+contact is its fixup (`0x141ff51a0`, single caller `0x141ff57f7`) plus a
+type registration at `0x1400fdcb0` (class hash `0x9199bf6b`, record size
+`0x78`, alignment `8`, **array element `0x50`**, eight stub vtable slots and
+empty name strings, registered through `0x1421cd360`). No geometry-class code
+reads `chunk+0x2428`. So the runtime colliders that `fn/MeshSweep` queries are
+built from **brush/model primitives**, and the 220-cell container is not on
+that path. **Consequence for movement:** the read chain that matters is the
+primitive side — `0x142cec9e0` / `0x142ced620` / `0x142ced990` / `0x142ceca00`
+(brush tree build), `BrushTreeToMesh` (`0x142cf23c0`), `MeshToColliderFaces`
+(`0x142cf2010`), the pool A importer `0x1421363d1`, then `GeometryFinalize`.
+None of those four is read yet, and the 17-array container's consumer stays an
+open stage per the hard rule.
 
 **Next anchor.** `formats/character-controller.md` ("Collision"),
 `formats/maps.md`.

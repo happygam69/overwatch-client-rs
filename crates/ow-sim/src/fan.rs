@@ -13,15 +13,26 @@
 //!   (frame_time * helper)`, floored by `body+0x5cc`);
 //! * the fan's radius (`max(body+0x65c, 0.35) * body+0x5b8 - 0.015`);
 //! * the candidate rotation (the pentagon's 72° step and the `2π/N` step);
-//! * the acceptance rules of both search passes.
+//! * the acceptance rules of all four call sites — the first pass's score
+//!   **and** height ([`accepts_pass1`]), the fine pass's score
+//!   ([`accepts_pass2`]), the ring pass's gated alignment ([`accepts_ring`]) and
+//!   the refinement's facing test ([`accepts_refine`]);
+//! * the back-transform's direction (`0x140cb9580`): the descriptor's `-xyz`
+//!   normalized in the horizontal plane with `y` zeroed, falling back to
+//!   `(0,0,1,0)`, and its `-normal` sibling that falls back to it;
+//! * the refinement (`0x140cb9842..0x140cb9a20`): the `0.02` pentagon step plus
+//!   the `0.005` refined-direction step, the `0.04` ground probe, and the
+//!   keep-first / replace-on-facing / break-on-facing rule.
 //!
-//! What is **not** here, because it is not read: the evaluation
-//! `0x1420328c0` that scores a candidate (77 call sites, a general
-//! candidate test), the two generic helpers `0x1426cd3d0` and `0x1426de990`
-//! that feed the speed and the score threshold, the back-transform's role,
-//! and the three per-pass record layouts. Those are inputs to this module,
-//! not outputs: [`accepts_pass1`] and [`accepts_pass2`] take the evaluator's
-//! score and height as arguments rather than inventing them.
+//! What is **not** here, because it is not read: the evaluator `0x1420328c0`
+//! that scores a candidate (77 call sites, a general candidate test), the two
+//! generic helpers `0x1426cd3d0` and `0x1426de990` that feed the speed and the
+//! score threshold, the **outer** walk that decides which of the four call
+//! sites runs and what the query carries, and the three per-pass record
+//! layouts. Those are inputs to this module, not outputs: [`accepts_pass1`],
+//! [`accepts_pass2`] and [`accepts_refine`] take the evaluator's answers as
+//! arguments rather than inventing them, and [`refine_pentagon`] takes the
+//! solver through [`CandidateSolver`].
 //!
 //! Every constant below is read from the current image. The addresses in the
 //! comments are the instruction that loads it.
@@ -291,6 +302,295 @@ pub fn accepts_pass2(score: f32, best_score: f32) -> bool {
     score.abs() < best_score
 }
 
+/// The ring pass's acceptance, at site `0x140cb9b6e`: the record's flags byte
+/// gates the test (`byte[rbp-0x52] & 1`), and the direction alignment must be
+/// **strictly greater** than the threshold the pass carries.
+///
+/// ```text
+/// gate && alignment > threshold
+/// ```
+///
+/// The `gate` is fed from the hit record, not computed here; the alignment and
+/// the threshold arrive already formed, because the alignment is a four-lane
+/// product sum whose lane-add order is only partly read. This is the fan's
+/// third acceptance rule and the last of them to be read.
+pub fn accepts_ring(alignment: f32, threshold: f32, gate: bool) -> bool {
+    gate && alignment > threshold
+}
+
+/// The refinement pass's acceptance, exactly as the client branches it.
+///
+/// ```text
+/// hit && ( flag_bit_0x10000 || facing > best_y )
+/// ```
+///
+/// The second term is the earlier pass's best `y` (`local_c18`), captured
+/// before the loop and never updated inside it, and the comparison is strict:
+/// the client's `<=` falls through to "not accepted".
+pub fn accepts_refine(facing: f32, best_y: f32, flag_bit_0x10000: bool) -> bool {
+    flag_bit_0x10000 || facing > best_y
+}
+
+/// `0x140cb9842..0x140cb9a20`: the refinement pass over the five pentagon
+/// directions.
+///
+/// For each of the five rotated offsets it builds the pair [`refined_sweep`]
+/// returns, asks the solver, and keeps the answer under the client's rule: the
+/// **first** hit is always kept (the `!bVar25` arm), later ones replace it only
+/// when they pass [`accepts_refine`], and a passing hit breaks the loop. The
+/// offset pair is rotated by the pentagon step after every candidate, including
+/// the last.
+///
+/// `dir` is the mover's direction quad (`body+0xc0..0xcc`) and `best_y` is the
+/// earlier pass's `local_c18`; both are read-only here, which is why the pass
+/// can be unit-tested against any solver.
+pub fn refine_pentagon(
+    center: [f32; 4],
+    start: [f32; 2],
+    refined: [f32; 4],
+    dir: [f32; 4],
+    best_y: f32,
+    flag_bit_0x10000: bool,
+    solver: &mut dyn CandidateSolver,
+) -> Option<SweepHit> {
+    let mut best: Option<SweepHit> = None;
+    let mut pair = start;
+    for _ in 0..5 {
+        let (a, b) = refined_sweep(center, pair, refined);
+        if let Some(hit) = solver.evaluate(a, b) {
+            let passes = accepts_refine(facing(dir, hit.normal), best_y, flag_bit_0x10000);
+            if best.is_none() || passes {
+                best = Some(hit);
+                if passes {
+                    break;
+                }
+            }
+        }
+        pair = rotate_pair(pair, PENTAGON_COS, PENTAGON_SIN);
+    }
+    best
+}
+
+/// `1.17549435e-36` at `0x140cb953a` and `0x140cb95b6`.
+pub const REFINE_EPSILON: f32 = 1.175_494_4e-36;
+/// `0x140cb9844`: the pentagon step's scale on the rotated pair.
+pub const REFINE_STEP: f32 = 0.02;
+/// `0x140cb9850`: the refined direction's scale.
+pub const REFINE_DIR: f32 = 0.005;
+/// `0x140cb98a8`: the ground probe's drop below the sweep start.
+pub const REFINE_GROUND_DROP: f32 = 0.04;
+
+/// `0x140cb9580`: the horizontal unit direction of `-v`, with `y` forced to
+/// zero and the `w` lane scaled from `-w`.
+///
+/// ```text
+/// len2 = z*z + x*x
+/// if len2 < 1.17549435e-36        -> (0, 0, 1, 0)
+/// r    = rsqrtps(len2);  n = (3 - r*r*len2) * r * 0.5
+/// out  = (x*n, n*0.5*0.0, z*n, -w*n)
+/// if n*len2 < 0                   -> (0, 0, 1, 0)
+/// ```
+///
+/// The `y` lane keeps the client's `* 0.5 * 0.0`, not a bare `0.0`, so an
+/// infinite or NaN `len2` propagates the same way it does in the image. The
+/// `w` lane's input is the descriptor's fourth component (`descriptor+0x460`),
+/// which is what `descriptor+0x450/+0x458/+0x460` name in the caller.
+///
+/// Returns `None` for the degenerate and sign-failed cases, which the client
+/// expresses by branching to the `(0, 0, 1, 0)` assignment.
+pub fn horizontal_unit(v: [f32; 4], w: f32) -> Option<[f32; 4]> {
+    let x = -v[0];
+    let z = -v[2];
+    let len2 = sse_add(sse_mul(z, z), sse_mul(x, x));
+    if len2 < REFINE_EPSILON {
+        return None;
+    }
+    let r = 1.0f32 / len2.sqrt();
+    let n = sse_mul(sse_add(3.0, -sse_mul(sse_mul(r, r), len2)), sse_mul(r, 0.5));
+    if sse_mul(n, len2) < 0.0 {
+        return None;
+    }
+    Some([
+        sse_mul(x, n),
+        sse_mul(sse_mul(n, 0.5), 0.0),
+        sse_mul(z, n),
+        sse_mul(-w, n),
+    ])
+}
+
+/// `0x140cb9580`: the back-transform's direction — `-descriptor.xyz`
+/// horizontally normalized, `y` zeroed, `w` from `-descriptor.w`, with
+/// `(0, 0, 1, 0)` when it is degenerate.
+/// The ring pass's sweep configuration, from the writer's ring branch.
+///
+/// ```text
+/// count  = u32 at [body+0x5bc]
+/// radius = max(f32 at [body+0x65c], 0.35) * f32 at [body+0x5b8]
+/// ```
+///
+/// A count of zero skips the whole pass, which is why this returns `None`
+/// rather than an empty sweep. The per-step rotation is
+/// `0x1426c40f0(6.2831855 / count)` whose **low** half is the sine and high
+/// half the cosine.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RingSweep {
+    pub count: u32,
+    pub radius: f32,
+}
+
+/// Builds the ring sweep from the writer's three raw values.
+pub fn ring_sweep(count: u32, configured_radius: f32, radius_scale: f32) -> Option<RingSweep> {
+    if count == 0 {
+        return None;
+    }
+    Some(RingSweep {
+        count,
+        radius: configured_radius.max(0.35) * radius_scale,
+    })
+}
+
+/// The ring pass's per-step offset quad: `(sin*R, 0, cos*R, 0)`.
+///
+/// `pair` is the rotating `(cos, sin)` unit pair that starts at `(1, 0)` and is
+/// rotated by the sweep angle each step. Only x and z carry the offset; y and
+/// w are zero, which is why the sweep is a flat circle in the ground plane.
+pub fn ring_offset(pair: [f32; 2], radius: f32) -> [f32; 4] {
+    [pair[1] * radius, 0.0, pair[0] * radius, 0.0]
+}
+
+/// The alternative ring branch's candidate quad: `(sin*(seed-0.015), 0.015,
+/// cos*(seed-0.015), 0)`.
+///
+/// The same five-way fan, but built from the **shape's own basis** instead of
+/// the movement direction, with a constant `0.015` height on y and the seed
+/// shortened by `0.015` (`0x3c75c28f`). `pair` is the same rotating
+/// `(cos, sin)` pair; the first candidate (`pair = (0, 1)`) points along +x.
+pub fn shape_ring_offset(pair: [f32; 2], seed: f32) -> [f32; 4] {
+    [
+        pair[1] * (seed - 0.015),
+        0.015,
+        pair[0] * (seed - 0.015),
+        0.0,
+    ]
+}
+
+pub fn back_direction(descriptor: [f32; 4]) -> [f32; 4] {
+    horizontal_unit(descriptor, descriptor[3]).unwrap_or([0.0, 0.0, 1.0, 0.0])
+}
+
+/// `0x140cb95a8`: the refinement direction — `-normal.xyz` horizontally
+/// normalized, `w` from `-descriptor.w`, **falling back to `fallback`** when
+/// the normal is degenerate or its sign test fails.
+///
+/// ```text
+/// d = horizontal_unit(-normal, descriptor.w)
+/// refine_direction = d.is_some() ? d : fallback
+/// ```
+pub fn refine_direction(normal: [f32; 4], descriptor_w: f32, fallback: [f32; 4]) -> [f32; 4] {
+    horizontal_unit(normal, descriptor_w).unwrap_or(fallback)
+}
+
+/// `0x140cb9850`: the refinement's offset from a candidate direction.
+///
+/// ```text
+/// off.x = pentagon.x * 0.02 + refined.x * 0.005
+/// off.y = 0.0       * 0.02 + refined.y * 0.005
+/// off.z = pentagon.z * 0.02 + refined.z * 0.005
+/// off.w = 0.0       * 0.02 + refined.w * 0.005
+/// ```
+///
+/// The scale is applied to the rotated pentagon pair first and the refined
+/// direction is added second, in that order, because the client multiplies
+/// `fVar45`/`fVar34` by `0.02` into two temporaries and then adds the
+/// `0.005` products to them.
+pub fn refined_offset(pentagon: [f32; 2], refined: [f32; 4]) -> [f32; 4] {
+    let sx = sse_mul(pentagon[0], REFINE_STEP);
+    let sz = sse_mul(pentagon[1], REFINE_STEP);
+    [
+        sse_add(sx, sse_mul(refined[0], REFINE_DIR)),
+        sse_add(sse_mul(0.0, REFINE_STEP), sse_mul(refined[1], REFINE_DIR)),
+        sse_add(sz, sse_mul(refined[2], REFINE_DIR)),
+        sse_add(sse_mul(0.0, REFINE_STEP), sse_mul(refined[3], REFINE_DIR)),
+    ]
+}
+
+/// `0x140cb98a0..0x140cb98bc`: the two sweep endpoints the refinement builds
+/// from `center` — the raised one and the ground probe `0.04` below it.
+///
+/// ```text
+/// offset = refined_offset(pentagon, refined)
+/// a = (center.x + off.x,  center.y + off.y,  center.z + off.z)
+/// b = (center.x + off.x, (center.y - 0.04) + off.y, center.z + off.z)
+/// ```
+///
+/// The `w` lanes are accumulators the client carries through both records
+/// (`fStack_13c`, `fStack_12c`), so they are returned unchanged from `center`.
+///
+pub fn refined_sweep(
+    center: [f32; 4],
+    pentagon: [f32; 2],
+    refined: [f32; 4],
+) -> ([f32; 4], [f32; 4]) {
+    let off = refined_offset(pentagon, refined);
+    let x = sse_add(center[0], off[0]);
+    let y = sse_add(center[1], off[1]);
+    let z = sse_add(center[2], off[2]);
+    let a = [x, y, z, center[3]];
+    let b = [
+        x,
+        sse_add(sse_add(center[1], -REFINE_GROUND_DROP), off[1]),
+        z,
+        center[3],
+    ];
+    (a, b)
+}
+
+/// One candidate's evaluation, as the evaluator `0x1420328c0` hands it back.
+///
+/// The two fields are the ones the fan's acceptance reads: the hit fraction
+/// (`record+0x20`, which the evaluator copies from the descriptor) and the
+/// surface normal (`record+0x10`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SweepHit {
+    /// The hit fraction.
+    pub score: f32,
+    /// The surface normal, four lanes.
+    pub normal: [f32; 4],
+}
+
+/// The seam between the producer and whatever answers "is this direction
+/// reachable": one candidate in, one hit or nothing out.
+///
+/// In the client this is the evaluator `0x1420328c0`, which builds a sweep
+/// and asks the collision query; the query's narrowphase answers through the
+/// hit policy. [`crate::policy::PolicySolver`] is that chain with a synthetic
+/// world behind it. The producer's own loop over the offsets, the two
+/// acceptance rules and the per-candidate refinement are **not** here yet —
+/// the refinement block is the fan's remaining open read (see
+/// `docs/open-questions.md`), so this trait is the whole of what item 2 landed.
+pub trait CandidateSolver {
+    /// `a` = sweep start, `b` = sweep end.
+    fn evaluate(&mut self, a: [f32; 4], b: [f32; 4]) -> Option<SweepHit>;
+}
+
+/// The acceptance's second term: the mover direction against the hit normal,
+/// from the refinement pass's comparison at site `0x140cb9770` (the decompile's
+/// `dir.y*n.y + dir.x*n.x + dir.z*n.z`, `body+0xc4`, `body+0xc0`, `body+0xc8`
+/// against the record's `+0x10` lanes):
+///
+/// ```text
+/// dir.y * normal.y + dir.x * normal.x + dir.z * normal.z
+/// ```
+///
+/// The client's operand order is y, x, z (`body+0xc4`, `body+0xc0`,
+/// `body+0xc8`), and the sum is accumulated left to right, so the two
+/// multiplication pairs and the two additions are reproduced in that order.
+pub fn facing(dir: [f32; 4], normal: [f32; 4]) -> f32 {
+    let y = sse_mul(dir[1], normal[1]);
+    let x = sse_add(y, sse_mul(dir[0], normal[0]));
+    sse_add(x, sse_mul(dir[2], normal[2]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,5 +770,148 @@ mod tests {
     fn the_fine_pass_only_needs_a_better_score() {
         assert!(accepts_pass2(-0.5, 1.0));
         assert!(!accepts_pass2(1.0, 1.0));
+    }
+
+    #[test]
+    fn the_back_direction_normalizes_horizontally_and_drops_y() {
+        // (-3, ., -4) has horizontal length 5, so each lane is scaled by 0.2
+        // and the y lane is `n * 0.5 * 0.0`, which is zero.
+        let d = back_direction([3.0, 5.0, 4.0, 2.0]);
+        assert!((d[0] - -0.6).abs() < 1e-6, "x {}", d[0]);
+        assert_eq!(d[1], 0.0);
+        assert!((d[2] - -0.8).abs() < 1e-6, "z {}", d[2]);
+        assert!((d[3] - -0.4).abs() < 1e-6, "w {}", d[3]);
+    }
+
+    #[test]
+    fn a_flat_descriptor_falls_back_to_positive_z() {
+        assert_eq!(back_direction([0.0, 1.0, 0.0, 0.0]), [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn the_refinement_direction_falls_back_when_the_normal_is_degenerate() {
+        let fallback = [0.0, 0.0, 1.0, 0.0];
+        assert_eq!(
+            refine_direction([0.0, 0.0, 0.0, 0.0], 0.0, fallback),
+            fallback
+        );
+        // A real normal wins over the fallback and is normalized the same way.
+        let d = refine_direction([0.0, 1.0, -2.0, 0.0], 0.0, fallback);
+        assert!((d[2] - 1.0).abs() < 1e-6, "z {}", d[2]);
+        assert_eq!(d[1], 0.0);
+    }
+
+    #[test]
+    fn the_refined_offset_scales_both_terms() {
+        let off = refined_offset([1.0, 0.0], [0.0; 4]);
+        assert_eq!(off, [0.02, 0.0, 0.0, 0.0]);
+        let off = refined_offset([0.0, 0.0], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(off[0], 0.005);
+        let off = refined_offset([1.0, 2.0], [3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(off[0], 0.02f32 + 0.015);
+        assert_eq!(off[1], 0.02);
+        assert_eq!(off[2], 0.04f32 + 0.025);
+        assert_eq!(off[3], 0.03);
+    }
+
+    #[test]
+    fn the_refinement_breaks_on_the_first_facing_hit() {
+        struct Counting {
+            calls: usize,
+            hit: Option<SweepHit>,
+        }
+        impl CandidateSolver for Counting {
+            fn evaluate(&mut self, _a: [f32; 4], _b: [f32; 4]) -> Option<SweepHit> {
+                self.calls += 1;
+                self.hit.map(|mut h| {
+                    h.score = self.calls as f32;
+                    h
+                })
+            }
+        }
+        let normal = [0.0, 0.0, 1.0, 0.0];
+        let dir = [0.0, 0.0, 1.0, 0.0];
+
+        // facing is 1.0 > 0.0, so the first candidate is kept and breaks.
+        let mut solver = Counting {
+            calls: 0,
+            hit: Some(SweepHit { score: 0.0, normal }),
+        };
+        let best = refine_pentagon([0.0; 4], [1.0, 0.0], [0.0; 4], dir, 0.0, false, &mut solver)
+            .expect("a hit");
+        assert_eq!(solver.calls, 1);
+        assert_eq!(best.score, 1.0);
+
+        // best_y above the facing keeps the first hit but walks all five.
+        let mut solver = Counting {
+            calls: 0,
+            hit: Some(SweepHit { score: 0.0, normal }),
+        };
+        let best = refine_pentagon([0.0; 4], [1.0, 0.0], [0.0; 4], dir, 2.0, false, &mut solver)
+            .expect("a hit");
+        assert_eq!(solver.calls, 5);
+        assert_eq!(best.score, 1.0);
+
+        // The flag bit bypasses the facing test entirely.
+        let mut solver = Counting {
+            calls: 0,
+            hit: Some(SweepHit { score: 0.0, normal }),
+        };
+        refine_pentagon([0.0; 4], [1.0, 0.0], [0.0; 4], dir, 2.0, true, &mut solver);
+        assert_eq!(solver.calls, 1);
+
+        // No hit at all walks all five and returns nothing.
+        let mut solver = Counting {
+            calls: 0,
+            hit: None,
+        };
+        assert!(
+            refine_pentagon([0.0; 4], [1.0, 0.0], [0.0; 4], dir, 0.0, false, &mut solver,)
+                .is_none()
+        );
+        assert_eq!(solver.calls, 5);
+    }
+
+    #[test]
+    fn the_ring_acceptance_is_gated_and_strict() {
+        assert!(accepts_ring(1.0, 0.5, true));
+        assert!(!accepts_ring(0.5, 0.5, true)); // equal does not pass
+        assert!(!accepts_ring(1.0, 0.5, false)); // the record's flag gates it
+    }
+
+    #[test]
+    fn the_ring_sweep_radius_is_floored_at_0_35() {
+        let sweep = ring_sweep(8, 0.1, 2.0).expect("a non-zero count sweeps");
+        assert_eq!(sweep.count, 8);
+        assert_eq!(sweep.radius, 0.35 * 2.0); // the 0.35 floor is applied first
+        assert!(ring_sweep(0, 1.0, 1.0).is_none());
+        // and the offset quad puts sine on x and cosine on z
+        assert_eq!(ring_offset([0.0, 1.0], 2.0), [2.0, 0.0, 0.0, 0.0]);
+        assert_eq!(ring_offset([1.0, 0.0], 2.0), [0.0, 0.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn the_shape_ring_shortens_the_seed_and_floats_at_0_015() {
+        // pair = (0, 1) is the first candidate and points along +x
+        assert_eq!(shape_ring_offset([0.0, 1.0], 1.0), [0.985, 0.015, 0.0, 0.0]);
+        assert_eq!(shape_ring_offset([1.0, 0.0], 1.0), [0.0, 0.015, 0.985, 0.0]);
+    }
+
+    #[test]
+    fn the_refinement_acceptance_is_strict_and_flag_bypassable() {
+        assert!(accepts_refine(1.0, 0.0, false));
+        assert!(!accepts_refine(0.0, 0.0, false)); // equal is not "higher"
+        assert!(!accepts_refine(-1.0, 0.0, false));
+        assert!(accepts_refine(-1.0, 0.0, true));
+    }
+
+    #[test]
+    fn the_refined_sweep_drops_the_ground_probe_by_four_centimetres() {
+        let center = [10.0, 20.0, 30.0, 7.0];
+        let (a, b) = refined_sweep(center, [1.0, 0.0], [0.0; 4]);
+        assert_eq!(a, [sse_add(10.0, 0.02), 20.0, 30.0, 7.0]);
+        assert_eq!(b[1], sse_add(sse_add(20.0, -0.04), 0.0));
+        assert_eq!(a[0], b[0]);
+        assert_eq!(a[2], b[2]);
     }
 }
