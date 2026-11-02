@@ -656,6 +656,22 @@ an argument.
    mesh-face pass. 123 `ow-sim` units.
    **Next:** cells → shapes (item 2), then the `ow-client` wiring.
 
+0a. **Cells → shapes: the brush path is closed, the cell path is a specific
+   question now.** `AppendCollisionEntryFromBrushSource` (`0x14213a510`) is read
+   end to end — brush snapshot, `BrushTreeToMesh`, the leaf/chord-scale area
+   test, then one `0x60` entry per mesh piece with `MeshToColliderFaces` filling
+   `entry+0x20` and the handle going to `geometry+0xf8`. The geometry object's
+   layout is recovered (`+0xb0` sources, five vector headers at `+0xf8`,
+   `+0x108`, `+0x118`, `+0x128`, `+0x138`). The cheap reading of the 17 cell
+   arrays is excluded by measurement, and a whole-image scan shows the entry
+   count `+0x114` is written in only three places, none of them on the cell
+   path — so **the chunk does not feed the `0x60` entries**. Next anchor: who
+   writes `+0x118`/`+0x124` (the `0x50`-byte candidate vector), or, if nobody on
+   the chunk path does, the cells belong to a different node class.
+   Three false `noreturn`s (`0x141bb00e0`, `0x142ced8f0`, `0x142efe2b0`) were
+   truncating every allocating function in the geometry module; the mechanical
+   audit recipe is in `docs/ghidra-project.md`.
+
 1. Read the producer of the level-load GUID lists (`docs/open-questions.md`
    item 11.1): who resolves a map request to Jam `0x501B`'s four vectors, and
    whether the local practice-range session builds it in-process.

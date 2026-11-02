@@ -18,6 +18,27 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
   `MoverWishQueryCached`, `FUN_140c9f110`, the shape basis pair, `0x140cc2290`)
   and each is named with its call site in the doc.
 
+## 2026-11-02 - the brush ingest, read end to end; Ghidra's false noreturns
+
+- `AppendCollisionEntryFromBrushSource` (`0x14213a510`, 2011 bytes) read fully:
+  brush snapshot -> `BrushTreeToMesh` -> leaf/chord-scale area test -> one `0x60`
+  entry (`MeshToColliderFaces` into `entry+0x20`, per-face stamp writes, handle
+  to `geometry+0xf8`).
+- Geometry object layout recovered from the constructor and two destructors:
+  source array at `+0xb0` (stride `0xb0`, count `+0xc0`), five
+  `{data, u32 capacity, u32 count}` vector headers at `+0xf8`, `+0x108`,
+  `+0x118`, `+0x128`, `+0x138`.
+- Negative result: the entry count `+0x114` is written in exactly three places
+  image-wide (the brush ingest, a clear, the build's reset), so **no cell code
+  appends `0x60` entries**. The chunk path must feed `+0x118` instead, or belong
+  to another node class.
+- Ghidra defect fixed the mechanical way: three callees were falsely `noreturn`
+  (`0x141bb00e0` allocator, `0x142ced8f0` throw, `0x142efe2b0` memcpy), which had
+  truncated every allocating function; a dry-run `clear_flow_and_repair` lists
+  them. Recipe in `docs/ghidra-project.md`.
+- New tool `dev/find_field_writes.py`: whole-image load/store scan by struct
+  displacement (what the field-writer question actually needs).
+
 ## 2026-11-02 - cells to shapes: the consumer's contract, and one hypothesis killed
 
 - Read `GeometryIngestCandidateB` (`0x14213528a`): the decoder's output form is a

@@ -564,10 +564,28 @@ hold **`0x60`-byte records** (copied by `func_141b53b70` at a `0x60` stride), on
 body per entry and one type-3 shape per record. Measuring the practice range's
 220 cells excludes the cheap reading: no array is a fixed-stride view (`arr7`
 divides by `0x60` in 44/220 cells, `arr12` in 14, `arr14` in 22), and every
-array is 4-byte granular. So the records are **built**, as on the brush path,
-and the next anchor is the builder: whoever turns `arr13`/`arr14` plus the
-`arr3`/`arr11`/`arr12` runs into those three arrays. Full measurement in
-`formats/maps.md`.
+array is 4-byte granular. So the records are **built**, as on the brush path.
+Full measurement in `formats/maps.md`.
+
+**The brush ingest is read; the cell path is not that array (2026-11-02).**
+`AppendCollisionEntryFromBrushSource` (`0x14213a510`) is read end to end: it
+snapshots a brush source (`geometry+0xb0`, stride `0xb0`), meshes it with
+`BrushTreeToMesh`, applies a leaf-or-chord-scale area test, and appends a `0x60`
+entry (`MeshToColliderFaces` into `entry+0x20`, per-face stamp writes, handle to
+`geometry+0xf8`). The geometry object's vectors are `{data, u32 capacity, u32
+count}` headers at `+0xf8`, `+0x108`, `+0x118`, `+0x128`, `+0x138`. A whole-image
+scan of stores to the entry count `+0x114` finds **three** sites: the brush
+ingest, a clear, and the build's reset. **No cell code appends a `0x60` entry.**
+So the chunk path is not `geometry+0x108`; inside this object the only remaining
+target is the `+0x118` candidate vector (`0x50`-byte records, count `+0x124`,
+consumed by `FUN_142cd7b20` per face). Next anchor: **who writes
+`+0x118`/`+0x124`** — and, if nobody on the chunk path does, the cells belong to
+a different node class than the geometry object read here.
+
+Note for the next reader: three callees were falsely marked `noreturn`
+(`0x141bb00e0`, `0x142ced8f0`, `0x142efe2b0`), which stored this function as 167
+bytes instead of 2011 and made several live addresses read as "no function".
+The mechanical audit recipe is in `ghidra-project.md`.
 
 **The collider build chain is verified except its two ends (2026-11-02).**
 Read and proven this session: `MeshToColliderFaces` (`0x142cf2010`, the

@@ -124,6 +124,38 @@ The fix is three steps, and it is worth repeating before trusting any
 The allocator's own body is `93` bytes and its aligned path tail-jumps to
 `0x141bb0120`; the unaligned path uses the heap at `0x144188200`.
 
+## Finding false `noreturn`s mechanically (2026-11-02)
+
+It happened again, three times, and each occurrence silently truncated every
+function that continues after the call. The culprits this time:
+
+| callee | real role |
+|---|---|
+| `0x141bb00e0` | `Alloc(size, alignment)` — the second allocator, used as `Alloc(0x28, 0x10)` |
+| `0x142ced8f0` | a throw helper, called on an invalid state |
+| `0x142efe2b0` | the vector-grow memcpy (`dst, src, bytes`) |
+
+`AppendCollisionEntryFromBrushSource` (`0x14213a510`) was stored as 167 bytes;
+with the three flags cleared and the body repaired it is 2011 bytes and
+decompiles end to end, which is what finally exposed how a brush becomes a
+collision entry.
+
+Do not hunt these by eye. `clear_flow_and_repair` in **dry-run** mode refuses a
+seed whose repair would delete a defined continuation after a call, and its
+error lists each offending pair — call site, callee, and the continuation
+address. That list *is* the false-`noreturn` report for that region:
+
+```text
+clear_flow_and_repair(start=<function entry>, end=<end of its code>, dry_run=true)
+  -> error: Repair would delete defined continuation after no-return call(s):
+       [{call_address=..., callee_address=..., next_address=...}, ...]
+set_function_no_return(<callee_address>, false)   # repeat for each row
+clear_flow_and_repair(start=..., end=..., dry_run=false)
+```
+
+A genuinely non-returning helper (the stack-cookie check `0x1426c3d40`, a
+fail-fast) never appears in that list, because nothing continues after it.
+
 ## Zeros: the `.data` zero-fill tail (BSS)
 
 `.data` has a **zero-filled tail**: its virtual size (`0xcc43bc`) is larger

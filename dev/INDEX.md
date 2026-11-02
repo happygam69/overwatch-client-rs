@@ -51,6 +51,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `deviation_check.py` | Check that the legacy deviations and the code agree. | 92 |
 | `field_index.py` | Field-access index over the complete client image. | 417 |
 | `find_anim_decoder.py` | Find code that reads the animation clip header, by the loads it must make. | 107 |
+| `find_field_writes.py` | Find the code that reads or writes one struct-field offset. | 112 |
 | `find_tables.py` | Find large arrays of code pointers (jump/dispatch tables) in the module image. | 79 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
 | `frame_check.py` | Check cited addresses and function-name entries against the one address frame. | 317 |

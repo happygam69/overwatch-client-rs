@@ -949,6 +949,87 @@ The data must therefore be **built** into the `0x60` records, not reinterpreted
 from an array — which is consistent with the brush path, where
 `MeshToColliderFaces` writes the source rather than pointing at it.
 
+**The geometry object, and the brush ingest end to end (2026-11-02).**
+The object every ingest path writes is now read from its constructor
+(`0x142135c10`, vtable `0x143394ed0` then `0x1433950b8`), its two destructors
+(`0x142135e30`, `0x14213a310`) and the ingest itself:
+
+| field | meaning |
+|---|---|
+| `+0xb0` | source array base, count at `+0xc0`, last-id (u32, init `-1`) at `+0xc4`, **stride `0xb0`** |
+| `+0xd0..+0xf4` | three `{base, base2, u32 count, u32 last-id = -1}` groups, `0x18` bytes each, ending exactly at `+0xf8` |
+| `+0xf8`, `+0x108`, `+0x118`, `+0x128`, `+0x138` | five vector headers, `0x10` bytes each: `{void *data; u32 capacity; u32 count}` |
+
+So `+0x108` is `{data, cap @ +0x110, count @ +0x114}` and `+0x118` is
+`{data, cap @ +0x120, count @ +0x124}` — the counts sit **inside** the header,
+not at `+0x100`/`+0x110` as the earlier note guessed.
+
+`AppendCollisionEntryFromBrushSource` (`0x14213a510`, 2011 bytes) is the brush
+ingest, read end to end. Given a source index it:
+
+1. snapshots the source's brush (`this+0xb0 + index*0xb0`) into a `0x28`-byte
+   heap record — `{vertices, nodes, u32 vertexCount @ +0x10, u32 nodeCount @
+   +0x14, u32 @ +0x18, u32 index @ +0x20 = -1}` — copying `count<<5` bytes of
+   0x20-byte vertices and `count*0x28` bytes of tree nodes, then marks
+   `source+0x58 = 1`;
+2. runs `BrushTreeToMesh` and measures the mesh (`0x142cf10e0`);
+3. applies the area test. There are two branches, chosen by `this+0x34`:
+   - `this+0x34 != 0`: the entry is appended as soon as **any** tree node is a
+     leaf (`node+0x24 != 0`);
+   - otherwise the scale `this+0x38` must be positive, and for every leaf node
+     it sums the chord length between the node's vertex (`+0x8`, index `*0x20`
+     into the vertex array) and its child's vertex (`node[+0x4].+0x8`), scales
+     the sum by `this+0x38`, and **skips** the mesh when that value squared is
+     `<=` the measure returned by `0x142cf10e0`;
+4. appends one `0x60` entry per `0x28`-byte snapshot record (the loop steps
+   `0x28` over the snapshot array); each record gives exactly one entry:
+   - grow when `count == capacity`: `capacity += capacity>>1`, minimum 2, and
+     the allocation is `capacity * 0x60` — the entry stride, confirmed by the
+     `LEA reg,[reg+reg*2]; SHL 5` pair;
+   - `entry[0x00..0x20]` = a raw copy of the record's first `0x20` bytes
+     (`entry+0x20` is the `0x30`-byte mesh source);
+   - `MeshToColliderFaces(entry+0x20, mesh, this+0x20, word[this+0x0a])`;
+   - per generated face (`source.count @ entry+0x40`, array @ `entry+0x30`,
+     stride `0x20`): `face+0x18 = this[0xa8]`, `face+0x1a = this[0xaa]`;
+     `FUN_142139080(this+0xf8, entry+0x50)` appends the handle.
+
+The driver (the function that calls the ingest at `0x14213bd61`) walks the
+source array by index, requires `source+0xa0 == 0`, `source+0x58 == 1`
+avoided, `source+0x59 != 0`; resolves the source's asset through
+`0x141fd3a90` and requires **kind `0xa`** (from `0x141fd3b20`), checks its
+class with `0x1421ce150` against the rdata at `0x143f505c0`, builds the
+descriptor from the source's floats `+0x78/+0x7c/+0x80/+0x84/+0x88/+0x8c`, and
+calls the ingest. So `+0xb0` holds brush assets, not cells.
+
+The build pass then turns the entries into world shapes: per entry it calls
+`ShapeAddToBody` and stores the handle at `entry+0x50`, then walks the
+`+0x118` candidates (`0x50` bytes each, count `+0x124`), calling `FUN_142cd7b20`
+on each face of each candidate (`face array @ +0x30`, count `@ +0x38`, stride
+`0x40`).
+
+**Negative result: the `0x60` entries are brush-only (2026-11-02).** A whole-
+image scan for stores to the entry count `+0x114` finds exactly **three** sites,
+all in the geometry module: `0x14213a965` (the brush ingest above), `0x1421388dd`
+(a clear) and `0x14213d559` (the build's reset to zero). **Nothing on the cell
+path appends a `0x60` entry.** Combined with the earlier measurement (no cell
+array is a `0x60`-stride view), the chunk path cannot be feeding `+0x108` at
+all; within this object the only remaining target is the `+0x118` candidate
+vector, so the cell ingest must write there (or the cells belong to a
+different node class entirely). That is the next anchor, and it is now a
+specific question rather than a search: **who writes `+0x118`/`+0x124`?**
+
+**Ghidra was hiding this function behind false `noreturn`s (2026-11-02).**
+`0x14213a510` was stored as a 167-byte function; its real body is 2011 bytes.
+Three callees were marked non-returning although every call site continues:
+`0x141bb00e0` (the size/alignment allocator used as `Alloc(size, align)`),
+`0x142ced8f0` (a throw helper) and `0x142efe2b0` (the vector-grow memcpy). Any
+function that allocates or grows a vector after calling one of them was
+truncated, which is why "no function at this address" kept coming back for
+addresses that clearly hold code. The audit recipe is in
+`ghidra-project.md` and it is mechanical: `clear_flow_and_repair` in dry-run
+mode **reports** the offending callees, and `set_function_no_return` clears
+them.
+
 **What that leaves.** The chunk-side navigation is exact, the payload's cell
 layout is decoded, and the consumer chain is read up to the geometry finaliser
 (`0x14213d0b0`) and `OwnerCreateBody` (`0x142cc3d90`). The one open link is the
