@@ -640,21 +640,21 @@ an argument.
 
 ## Next
 
-0. **Movement, the last five helpers before `fan::solve`.**
-   The fan's arithmetic, all four acceptance rules, the back-transform and the
-   refinement are read and implemented (`ow-sim::fan`, 28 units), the policy
-   plus its seam are in (`ow-sim::policy`, 14 units), and the writer's
-   **composition is read** and tabulated in
-   `docs/formats/character-controller.md`: scales and endpoints, the seed
-   floor, pass 0's cached query, both ring branches, the pentagon refine, the
-   back-transform pass and the output contract. What `solve` still needs is
-   five small helpers, each named with its call site: `FUN_1426cd3d0` (the
-   facing threshold), `MoverWishQueryCached` (pass 0), `FUN_140c9f110` (the
-   extrapolation vector), `func_141af0070` + `FUN_141ae3eb0` (the shape
-   basis), and `0x140cc2290` (the `kind == 3` refine). `fan::solve` does not
-   exist and nothing downstream pretends it does.
-   **After the five:** cells → shapes (item 2), then the `ow-client` wiring.
-   Committed as `def2c9a`.
+0. **Movement, the wish producer — `solve` exists; four stages still open.**
+   `ow-sim::fan::solve` runs the read composition: the `body+0x659` gate, both
+   endpoints (`point + seed*dir`, `point - speed*dir`, `body+0xcc` scaling the
+   `w` lane), `cos(turn_limit)` as the facing threshold, the ring → refine →
+   back-transform order, and both reflection bytes (`|=` then assignment).
+   The five helpers are read: `0x1426cd3d0` is `cosf`, `0x140ca7400` is the
+   cone angle in degrees clamped to `[0, 1.5707844]`, `0x140c9f110` returns a
+   zero quad (the extrapolation is zero), `0x141ae3eb0` is the shape's box
+   corner + extent, `0x140cc2290` is the mesh-face refinement.
+   Still **not** implemented, and each is behind the seam rather than faked:
+   (a) the evaluator `0x1420328c0`; (b) pass 0's `MoverWishQueryCached` cache
+   (`0.004` per lane — the test is `fan::memo_matches`, the cache is not);
+   (c) the shape-ring branch behind the global `_DAT_1439b07b8`; (d) the
+   mesh-face pass. 123 `ow-sim` units.
+   **Next:** cells → shapes (item 2), then the `ow-client` wiring.
 
 1. Read the producer of the level-load GUID lists (`docs/open-questions.md`
    item 11.1): who resolves a map request to Jam `0x501B`'s four vectors, and

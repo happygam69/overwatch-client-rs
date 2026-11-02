@@ -508,6 +508,9 @@ impl CandidateSolver for PolicySolver<'_> {
         (out == ACCEPTED).then_some(SweepHit {
             score: record.fraction,
             normal: record.normal,
+            // The writer keeps `record+0x38` and `record+0x3a` in one 32-bit
+            // value and reads its third byte as the acceptance gate.
+            word: u32::from(record.key) | (u32::from(record.slot3a) << 16),
         })
     }
 }

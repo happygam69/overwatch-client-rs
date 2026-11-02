@@ -22,16 +22,22 @@
 //!   `(0,0,1,0)`, and its `-normal` sibling that falls back to it;
 //! * the refinement (`0x140cb9842..0x140cb9a20`): the `0.02` pentagon step plus
 //!   the `0.005` refined-direction step, the `0.04` ground probe, and the
-//!   keep-first / replace-on-facing / break-on-facing rule.
+//!   keep-first / replace-on-facing / break-on-facing rule;
+//! * the composition ([`solve`]): the `body+0x659` enable gate, the two
+//!   endpoints `point + seed*dir` and `point - speed*dir` (different scalars on
+//!   the two ends, `body+0xcc` scaling the `w` lane), the facing threshold
+//!   `cos(turn_limit)`, the memo's `0.004` re-use test, the ring → refine →
+//!   back-transform order, and the two reflection bytes (`|=` for one,
+//!   assignment for the other).
 //!
 //! What is **not** here, because it is not read: the evaluator `0x1420328c0`
-//! that scores a candidate (77 call sites, a general candidate test), the two
-//! generic helpers `0x1426cd3d0` and `0x1426de990` that feed the speed and the
-//! score threshold, the **outer** walk that decides which of the four call
-//! sites runs and what the query carries, and the three per-pass record
-//! layouts. Those are inputs to this module, not outputs: [`accepts_pass1`],
+//! that scores a candidate (77 call sites, a general candidate test), the
+//! **outer** walk that decides which of the four call sites runs and what the
+//! query carries, pass 0's `MoverWishQueryCached` memory, the shape-ring branch
+//! behind the global toggle, and `0x140cc2290`'s mesh-face refinement. Those are
+//! inputs to this module, not outputs: [`accepts_pass1`],
 //! [`accepts_pass2`] and [`accepts_refine`] take the evaluator's answers as
-//! arguments rather than inventing them, and [`refine_pentagon`] takes the
+//! arguments rather than inventing them, [`refine_pentagon`] and [`solve`] take
 //! solver through [`CandidateSolver`].
 //!
 //! Every constant below is read from the current image. The addresses in the
@@ -48,6 +54,9 @@ pub const WISH: usize = 0x1140;
 pub const VELOCITY: usize = 0x1150;
 /// `body + 0x5c8`: the turn limit in degrees (`0x140ca7400`).
 pub const TURN_LIMIT: usize = 0x5c8;
+/// `body + 0x659`: the producer's own enable gate. Zero means the client
+/// writes the zero record and never probes at all.
+pub const PASS_ENABLED: usize = 0x659;
 /// `body + 0x5d0..0x5d8`: the speed cap triple used when flags bit 1 is clear.
 pub const SPEED_CAP_CLEAR: [usize; 3] = [0x5d0, 0x5d4, 0x5d8];
 /// `body + 0x5dc..0x5e4`: the speed cap triple used when flags bit 1 is set.
@@ -547,15 +556,249 @@ pub fn refined_sweep(
 
 /// One candidate's evaluation, as the evaluator `0x1420328c0` hands it back.
 ///
-/// The two fields are the ones the fan's acceptance reads: the hit fraction
-/// (`record+0x20`, which the evaluator copies from the descriptor) and the
-/// surface normal (`record+0x10`).
+/// The fields are the ones the fan's acceptance reads: the hit fraction
+/// (`record+0x30`, which the evaluator copies from the descriptor), the
+/// surface normal (`record+0x10`), and the two key words stacked the way the
+/// writer keeps them in one register.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SweepHit {
     /// The hit fraction.
     pub score: f32,
     /// The surface normal, four lanes.
     pub normal: [f32; 4],
+    /// `record+0x38` in the low half and `record+0x3a` in the high half.
+    ///
+    /// The writer keeps these two as one 32-bit value and reads its **third
+    /// byte**: bit 0 of that byte (`word & 0x10000`) is the acceptance's gate,
+    /// and bit 2 (`word >> 18 & 1`) is written to `out+0x42`.
+    pub word: u32,
+}
+
+/// The memo's per-lane tolerance: `|cached - candidate| <= 0.004`.
+pub const MEMO_TOLERANCE: f32 = 0.004;
+
+/// Whether the cached query may be reused for these endpoints.
+///
+/// `MoverWishQueryCached 0x140cc1870` compares the two stored points against
+/// the query's two endpoints lane by lane, **twelve** comparisons in all: the
+/// x, y and z of each endpoint, never `w`. The comparison is `<=`, so an
+/// exactly `0.004` move still reuses the cache.
+pub fn memo_matches(cached: [[f32; 3]; 2], candidate: [[f32; 3]; 2]) -> bool {
+    cached
+        .iter()
+        .zip(candidate.iter())
+        .all(|(a, b)| (0..3).all(|i| sse_add(a[i], -b[i]).abs() <= MEMO_TOLERANCE))
+}
+
+/// `cos(turn_limit(body))`: the facing cone's cosine, `0x1426cd3d0` called
+/// from the writer's prologue.
+///
+/// `0x140ca7400` gives the cone half-angle in degrees clamped to `[0, π/2]`,
+/// and the writer takes its cosine. The client's `cosf` reduces in double
+/// precision and rounds once, so the port does the same rather than calling
+/// `f32::cos`.
+pub fn facing_threshold(body: &[u8]) -> f32 {
+    (turn_limit(body) as f64).cos() as f32
+}
+
+/// The sweep's two endpoints, in the writer's own arithmetic.
+///
+/// ```text
+/// seed_end  = point + seed  * (dir.x, dir.y, dir.z, dir_w)
+/// speed_end = point - speed * (dir.x, dir.y, dir.z, dir_w)
+/// ```
+///
+/// The two ends carry **different** scalars, which is why they are not
+/// symmetric, and the `w` lane is scaled by `body+0xcc` rather than by the
+/// direction's own fourth lane.
+pub fn endpoints(
+    point: [f32; 4],
+    dir: [f32; 4],
+    dir_w: f32,
+    seed: f32,
+    speed: f32,
+) -> ([f32; 4], [f32; 4]) {
+    let lanes = [dir[0], dir[1], dir[2], dir_w];
+    let mut a = [0.0f32; 4];
+    let mut b = [0.0f32; 4];
+    for i in 0..4 {
+        a[i] = sse_add(sse_mul(seed, lanes[i]), point[i]);
+        b[i] = sse_add(point[i], -sse_mul(speed, lanes[i]));
+    }
+    (a, b)
+}
+
+/// `|point · dir|`, accumulated in the client's y, x, z order.
+///
+/// This is the ring pass's distance comparison: a candidate only replaces the
+/// current best when it is **strictly** closer, and the two zero terms in the
+/// client's sum are the world origin, not a subtraction that can change a
+/// result.
+pub fn projection(point: [f32; 4], dir: [f32; 4]) -> f32 {
+    let y = sse_mul(point[1], dir[1]);
+    let x = sse_add(y, sse_mul(point[0], dir[0]));
+    sse_add(x, sse_mul(point[2], dir[2])).abs()
+}
+
+/// The back-transform pass's direction: `s*cand_dir + cand` with
+/// `s = -(cand · cand_dir)`.
+///
+/// The writer evaluates a candidate quad `cand`, projects it onto the mover
+/// direction, and keeps the component of `cand` that is **behind** the mover:
+/// the sweep's answer becomes a direction to walk back along. The result is
+/// not normalised here — the caller writes it as-is, exactly as the pass does.
+pub fn project_back(cand: [f32; 4], dir: [f32; 4], dir_w: f32) -> ([f32; 4], f32) {
+    let y = sse_mul(cand[1], dir[1]);
+    let x = sse_add(y, sse_mul(cand[0], dir[0]));
+    let dot = sse_add(x, sse_mul(cand[2], dir[2]));
+    let s = -dot;
+    (
+        [
+            sse_add(sse_mul(s, dir[0]), cand[0]),
+            sse_add(sse_mul(s, dir[1]), cand[1]),
+            sse_add(sse_mul(s, dir[2]), cand[2]),
+            sse_add(sse_mul(s, dir_w), cand[3]),
+        ],
+        dot,
+    )
+}
+
+/// The reflection write's two bytes: `out+0x41 |= (word >> 16) & 1` and
+/// `out+0x42 = (word >> 18) & 1`.
+///
+/// The first is an **OR** — several passes contribute to it across one solve —
+/// while the second is an assignment, so the last pass to run decides it.
+pub fn reflection_flags(word: u32) -> (bool, bool) {
+    (((word >> 16) & 1) != 0, ((word >> 18) & 1) != 0)
+}
+
+/// Everything the composition needs that comes from outside the writer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SolveContext {
+    /// `MoverWishWorldPoint(body+0x10d0)`. The extrapolation term is zero:
+    /// `FUN_140c9f110` writes a zero quad and returns it.
+    pub point: [f32; 4],
+    /// The mover's facing, `body+0xc0`.
+    pub dir: [f32; 4],
+    /// `body+0xcc`, the `w` lane's scale.
+    pub dir_w: f32,
+    /// The biased seed, already raised to `2 * [shape+0x2d2c]` if a shape is
+    /// under the mover.
+    pub seed: f32,
+    /// `fan_speed + frame_seconds`.
+    pub speed: f32,
+    /// The ring sweep, or `None` when `body+0x5bc` is zero.
+    pub ring: Option<RingSweep>,
+}
+
+/// What a completed solve hands the caller.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SolvedWish {
+    /// `out+0x00`: the direction to move, four lanes.
+    pub direction: [f32; 4],
+    /// `out+0x10`: the surface normal it came from.
+    pub normal: [f32; 4],
+    /// The hit fraction of the winning candidate.
+    pub score: f32,
+    /// `out+0x41` and `out+0x42`.
+    pub reflection: (bool, bool),
+    /// Whether the refine pass replaced the ring's pick.
+    pub refined: bool,
+}
+
+/// The writer's decision, over the composition read from `0x140cb86c0`.
+///
+/// Pass order, exactly as the client runs it:
+///
+/// 1. the ring sweep about the seed endpoint, accepting on facing **and** a
+///    strictly closer projection;
+/// 2. the five-step refinement about the accepted direction, which may
+///    replace it;
+/// 3. the back-transform, which turns the winning candidate into a direction
+///    to walk back along;
+///
+/// and then the write, with the reflection flags OR-ed in from every pass that
+/// ran. `None` is the client's no-hit path: the caller zeroes the direction
+/// and writes `out+0x40 = 0`.
+///
+/// `body` supplies the facing threshold and the enable gate; the five helpers
+/// the composition needs from elsewhere (`MoverWishQueryCached`, the shape
+/// basis, `0x140cc2290`) stay behind [`CandidateSolver`].
+pub fn solve(
+    body: &[u8],
+    ctx: &SolveContext,
+    solver: &mut dyn CandidateSolver,
+) -> Option<SolvedWish> {
+    // `body+0x659` gates the whole producer; without it the client writes the
+    // zero record and never probes.
+    if body[PASS_ENABLED] == 0 {
+        return None;
+    }
+    let threshold = facing_threshold(body);
+    let (seed_end, speed_end) = endpoints(ctx.point, ctx.dir, ctx.dir_w, ctx.seed, ctx.speed);
+    let mut reflection = (false, false);
+
+    // Pass 1: the ring.
+    let mut best: Option<SweepHit> = None;
+    let mut best_cand = [0.0f32; 4];
+    let mut best_proj = f32::MAX;
+    if let Some(sweep) = ctx.ring {
+        let step = TWO_PI / sweep.count as f32;
+        let (sin, cos) = step.sin_cos();
+        let mut pair = [1.0f32, 0.0];
+        for _ in 0..sweep.count {
+            let off = ring_offset(pair, sweep.radius);
+            let mut a = seed_end;
+            let mut b = speed_end;
+            for i in 0..4 {
+                a[i] = sse_add(a[i], off[i]);
+                b[i] = sse_add(b[i], off[i]);
+            }
+            if let Some(hit) = solver.evaluate(a, b) {
+                let (flag_a, flag_b) = reflection_flags(hit.word);
+                reflection.0 |= flag_a;
+                reflection.1 = flag_b;
+                let accepts = accepts_ring(facing(ctx.dir, hit.normal), threshold, !flag_a);
+                let proj = projection(ctx.point, ctx.dir);
+                if accepts && proj < best_proj {
+                    best_proj = proj;
+                    best = Some(hit);
+                    best_cand = a;
+                }
+            }
+            pair = rotate_pair(pair, cos, sin);
+        }
+    }
+
+    // Pass 2: the refinement about the ring's pick.
+    let best = best?;
+    let (flag_a, _) = reflection_flags(best.word);
+    let refined_hit = refine_pentagon(
+        ctx.point,
+        [1.0f32, 0.0],
+        best_cand,
+        ctx.dir,
+        threshold,
+        flag_a,
+        solver,
+    );
+    let (hit, refined) = match refined_hit {
+        Some(hit) => (hit, true),
+        None => (best, false),
+    };
+    let (flag_a, flag_b) = reflection_flags(hit.word);
+    reflection.0 |= flag_a;
+    reflection.1 = flag_b;
+
+    // Pass 3: the back-transform, over the winning candidate.
+    let (direction, _) = project_back(best_cand, ctx.dir, ctx.dir_w);
+    Some(SolvedWish {
+        direction,
+        normal: hit.normal,
+        score: hit.score,
+        reflection,
+        refined,
+    })
 }
 
 /// The seam between the producer and whatever answers "is this direction
@@ -835,7 +1078,11 @@ mod tests {
         // facing is 1.0 > 0.0, so the first candidate is kept and breaks.
         let mut solver = Counting {
             calls: 0,
-            hit: Some(SweepHit { score: 0.0, normal }),
+            hit: Some(SweepHit {
+                score: 0.0,
+                normal,
+                word: 0,
+            }),
         };
         let best = refine_pentagon([0.0; 4], [1.0, 0.0], [0.0; 4], dir, 0.0, false, &mut solver)
             .expect("a hit");
@@ -845,7 +1092,11 @@ mod tests {
         // best_y above the facing keeps the first hit but walks all five.
         let mut solver = Counting {
             calls: 0,
-            hit: Some(SweepHit { score: 0.0, normal }),
+            hit: Some(SweepHit {
+                score: 0.0,
+                normal,
+                word: 0,
+            }),
         };
         let best = refine_pentagon([0.0; 4], [1.0, 0.0], [0.0; 4], dir, 2.0, false, &mut solver)
             .expect("a hit");
@@ -855,7 +1106,11 @@ mod tests {
         // The flag bit bypasses the facing test entirely.
         let mut solver = Counting {
             calls: 0,
-            hit: Some(SweepHit { score: 0.0, normal }),
+            hit: Some(SweepHit {
+                score: 0.0,
+                normal,
+                word: 0,
+            }),
         };
         refine_pentagon([0.0; 4], [1.0, 0.0], [0.0; 4], dir, 2.0, true, &mut solver);
         assert_eq!(solver.calls, 1);
@@ -913,5 +1168,154 @@ mod tests {
         assert_eq!(b[1], sse_add(sse_add(20.0, -0.04), 0.0));
         assert_eq!(a[0], b[0]);
         assert_eq!(a[2], b[2]);
+    }
+}
+
+#[cfg(test)]
+mod composition_tests {
+    use super::*;
+
+    const DIR: [f32; 4] = [0.0, 0.0, 1.0, 0.0];
+
+    fn body_with(turn_degrees: f32, enabled: bool) -> Vec<u8> {
+        let mut body = vec![0u8; 0x700];
+        body[TURN_LIMIT..TURN_LIMIT + 4].copy_from_slice(&turn_degrees.to_le_bytes());
+        body[PASS_ENABLED] = u8::from(enabled);
+        body
+    }
+
+    struct Fixed(Option<SweepHit>);
+    impl CandidateSolver for Fixed {
+        fn evaluate(&mut self, _a: [f32; 4], _b: [f32; 4]) -> Option<SweepHit> {
+            self.0
+        }
+    }
+
+    #[test]
+    fn the_two_endpoints_carry_different_scalars() {
+        let point = [1.0, 2.0, 3.0, 4.0];
+        let (a, b) = endpoints(point, DIR, 7.0, 0.5, 2.0);
+        assert_eq!(a, [1.0, 2.0, 3.0 + 0.5, 4.0 + 0.5 * 7.0]);
+        assert_eq!(b, [1.0, 2.0, 3.0 - 2.0, 4.0 - 7.0 * 2.0]);
+        // the w lane is scaled by dir_w, not by dir[3]
+        let (_, b) = endpoints([0.0; 4], DIR, 3.0, 1.0, 1.0);
+        assert_eq!(b[3], -3.0);
+    }
+
+    #[test]
+    fn the_memo_tolerance_is_inclusive_and_ignores_w() {
+        let cached = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
+        assert!(memo_matches(cached, cached));
+        let nudged = [[1.0, 2.0, 3.0 + 0.004], [4.0, 5.0, 6.0]];
+        assert!(memo_matches(cached, nudged), "0.004 exactly still reuses");
+        let past = [[1.0, 2.0, 3.0 + 0.005], [4.0, 5.0, 6.0]];
+        assert!(!memo_matches(cached, past));
+    }
+
+    #[test]
+    fn the_facing_threshold_is_the_turn_limits_cosine() {
+        assert_eq!(facing_threshold(&body_with(0.0, true)), 1.0);
+        let t = facing_threshold(&body_with(60.0, true));
+        assert!((t - 0.5).abs() < 1e-6, "cos 60 == 0.5, got {t}");
+    }
+
+    #[test]
+    fn the_projection_is_absolute_and_ordered() {
+        assert_eq!(projection([0.0, 0.0, 2.0, 9.0], DIR), 2.0);
+        assert_eq!(projection([0.0, 0.0, -2.0, 9.0], DIR), 2.0);
+        assert_eq!(projection([1.0, 0.0, 0.0, 9.0], DIR), 0.0);
+    }
+
+    #[test]
+    fn the_back_transform_removes_the_component_along_the_mover() {
+        // out = cand - (cand . dir) * dir: the along-fan part cancels, the
+        // sideways part survives.
+        let (out, dot) = project_back([3.0, 0.0, 2.0, 0.0], DIR, 0.0);
+        assert_eq!(dot, 2.0);
+        assert_eq!(out, [3.0, 0.0, 0.0, 0.0]);
+        // already perpendicular: nothing to project
+        let (out, dot) = project_back([5.0, 0.0, 0.0, 0.0], DIR, 0.0);
+        assert_eq!(dot, 0.0);
+        assert_eq!(out, [5.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn the_reflection_flags_read_the_third_byte() {
+        assert_eq!(reflection_flags(0), (false, false));
+        assert_eq!(reflection_flags(0x1_0000), (true, false));
+        assert_eq!(reflection_flags(0x4_0000), (false, true));
+        assert_eq!(reflection_flags(0x5_0000), (true, true));
+        // bit 0 is the gate; bit 1 is not read by either output
+        assert_eq!(reflection_flags(0x3_0000), (true, false));
+    }
+
+    #[test]
+    fn the_gate_stops_the_producer_before_any_probe() {
+        struct Panic;
+        impl CandidateSolver for Panic {
+            fn evaluate(&mut self, _a: [f32; 4], _b: [f32; 4]) -> Option<SweepHit> {
+                panic!("the gated producer must not probe")
+            }
+        }
+        let ctx = SolveContext {
+            point: [0.0; 4],
+            dir: DIR,
+            dir_w: 0.0,
+            seed: 1.0,
+            speed: 1.0,
+            ring: ring_sweep(8, 1.0, 1.0),
+        };
+        assert_eq!(solve(&body_with(30.0, false), &ctx, &mut Panic), None);
+    }
+
+    #[test]
+    fn a_misaligned_ring_hit_is_rejected() {
+        // facing 0.0 against a cos(30) threshold: the ring's gate fails
+        let ctx = SolveContext {
+            point: [0.0; 4],
+            dir: DIR,
+            dir_w: 0.0,
+            seed: 1.0,
+            speed: 1.0,
+            ring: ring_sweep(8, 1.0, 1.0),
+        };
+        let mut solver = Fixed(Some(SweepHit {
+            score: 1.0,
+            normal: [1.0, 0.0, 0.0, 0.0],
+            word: 0,
+        }));
+        assert_eq!(solve(&body_with(30.0, true), &ctx, &mut solver), None);
+    }
+
+    #[test]
+    fn an_aligned_ring_hit_flows_through_refine_and_the_back_transform() {
+        let ctx = SolveContext {
+            point: [0.0, 0.0, 10.0, 0.0],
+            dir: DIR,
+            dir_w: 0.0,
+            seed: 0.5,
+            speed: 2.0,
+            ring: ring_sweep(4, 1.0, 1.0),
+        };
+        let mut solver = Fixed(Some(SweepHit {
+            score: 0.25,
+            normal: DIR,
+            word: 0,
+        }));
+        let solved = solve(&body_with(30.0, true), &ctx, &mut solver).expect("a hit");
+        // the ring's first candidate is the unrotated pair, so the endpoint is
+        // point + seed*dir + ring_offset([1,0], radius)
+        let sweep = ring_sweep(4, 1.0, 1.0).unwrap();
+        let off = ring_offset([1.0, 0.0], sweep.radius);
+        let cand = [
+            0.0 + off[0],
+            0.0 + off[1],
+            10.0 + 0.5 + off[2],
+            0.0 + off[3],
+        ];
+        let (want, _) = project_back(cand, DIR, 0.0);
+        assert_eq!(solved.direction, want);
+        assert_eq!(solved.normal, DIR);
+        assert!(solved.refined, "the refine's first candidate always wins");
     }
 }

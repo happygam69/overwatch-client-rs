@@ -1338,13 +1338,33 @@ composer runs these stages over a single `CandidateQuery`:
    the variant path and, when it resolves, runs `MoverWishTransform`
    `0x140c9e740` on the direction before writing it.
 
-**What is still unread, and it is exactly five helpers.** `solve` needs
-`FUN_1426cd3d0` (the facing threshold `local_c18`), `MoverWishQueryCached`
-(pass 0), `FUN_140c9f110` (the extrapolation vector), `func_141af0070` +
-`FUN_141ae3eb0` (the shape basis for pass 1'), and `0x140cc2290` (the `kind ==
-3` refine). None is large, all five are named here with their call sites, and
-until they are read `fan::solve` stays unwritten — the stages above are the
-table it will be written from.
+**The five helpers, now read.** `0x1426cd3d0` is `cosf`: `0x140ca7400`
+returns the cone half-angle in degrees clamped to `[0, 1.5707844]` (the
+constants are `0x142f844b8 = 0.017453292` and `TURN_LIMIT_MAX`), and the
+prologue calls `cosf` on it, so the threshold `local_c18` is
+`cos(turn_limit(body))` — the same `turn_limit` the fan already reads.
+`FUN_140c9f110` writes a zero quad and returns it, so **the extrapolation term
+is zero** and the query point is `MoverWishWorldPoint(body+0x10d0)` unchanged.
+`func_141af0070` is a three-argument thunk (`MOV RAX,RDX; MOV RDX,RCX; MOV
+RCX,RAX; JMP 0x141ae61b0`) into `0x141ae61b0`, the shape transform; the caller's
+`(&out, shape, position)` arrives as `(shape, position, &out)`. `FUN_141ae3eb0`
+is **not** a rotation basis: it takes the shape's point from `0x141ae3fc0`, then
+writes two quads — the box's low corner `point - (half, 0, half, 0)` with
+`half = [shape+0x2d28] * 0.5` and a `-0.004` on `y`, and that corner plus
+`([shape+0x2d28], [shape+0x2d2c], [shape+0x2d28], 0)`. So `local_b38` is the
+corner and `local_b28` the extent, and pass 1''s five candidates are the box's
+corners and edges. `0x140cc2290` is the mesh face pass: it walks the shape's
+face list (vtable `+0xb0`), takes each triangle's centroid and normal,
+normalizes, tests `threshold < dot(normal, dir)` — the same strict rule — and
+keeps the best, writing lanes `+2/+5/+3/+7` and the word at `+0x3e`.
+
+**In code (`crates/ow-sim/src/fan.rs`).** `solve` implements the gate, both
+endpoints, the threshold, the memo test, the ring → refine → back-transform
+order and both reflection bytes; the helpers `facing_threshold`,
+`memo_matches`, `endpoints`, `projection`, `project_back` and
+`reflection_flags` carry the arithmetic with `sse_*` rounding. Still behind the
+seam: the evaluator, pass 0's cache, the shape-ring branch, and the mesh-face
+refinement — `SolveContext` carries their inputs rather than inventing them.
 
 ### The collision query driver and the hit contract (2026-11-02)
 

@@ -18,6 +18,20 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
   `MoverWishQueryCached`, `FUN_140c9f110`, the shape basis pair, `0x140cc2290`)
   and each is named with its call site in the doc.
 
+## 2026-11-02 - `fan::solve`, the writer's decision in code
+
+- `ow-sim::fan::solve(body, ctx, solver)` now runs the composition that was
+  read: the `body+0x659` gate, both endpoints (`point + seed*dir`,
+  `point - speed*dir`), `cos(turn_limit)` as the facing threshold, the ring →
+  refine → back-transform order, and the two reflection bytes (`|=` then
+  assignment). The five helpers behind it are read and recorded:
+  `0x1426cd3d0` is `cosf`, `0x140ca7400` is the cone angle in degrees clamped
+  to `[0, 1.5707844]`, `0x140c9f110` returns a zero quad (the extrapolation is
+  zero), `0x141ae3eb0` is the shape's box corner+extent (not a basis), and
+  `0x140cc2290` is the mesh-face refinement. 123 `ow-sim` units.
+- The evaluator, pass 0's cache, the shape-ring branch and the mesh-face pass
+  stay behind `CandidateSolver` / `SolveContext`: `solve` never invents a score.
+
 ## 2026-11-02 - the ring pass's rule, and where the fan read stops
 
 - `ow-sim::fan::accepts_ring(alignment, threshold, gate)`: site `0x140cb9b6e`'s
