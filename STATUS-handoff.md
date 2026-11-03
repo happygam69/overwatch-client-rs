@@ -57,9 +57,14 @@ missing is **data, not code** — and the two producers are both blocked:
   and field dispatch `0x141334ea0`/`0x141335e60`). `C+0x98` is a 16-byte array
   header over the inline sub-object's `Vec3A[]` and `C+0xa0` the encoding tag;
   `+0x48` is an asset reference (`teStructuredDataAssetRef<STU_564B1018>`).
-  Implemented in `ow_tank::model_collision` (5 tests). The next step is data:
-  parse the model `MSTU` for an `InstanceInfo` of type `0x564B1018` and run its
-  array through the brush pipeline. The type-`0x00A` absence affects only the
+  Implemented in `ow_tank::model_collision` (5 tests). **But no model carries
+  it**: all 32,278 model assets scanned, zero hits. `C` lives in entity assets
+  (GUID type `0x112`, `FRAC`+`FSTU`, a fracturable's collision), and the
+  practice range's models carry none — so the brush route is the fracturable
+  path, not the map's static collision. The static-collision question is open
+  again with two leads: the range's 550 entity references were not checked
+  against the seven `C` assets, and `C+0x08` is a prebuilt collision mesh class
+  (`STU_537E56E4`) that may also sit in static models' `MSTU`. The type-`0x00A` absence affects only the
   other brush source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is

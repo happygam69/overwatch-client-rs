@@ -3,6 +3,23 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - C is a fracturable descriptor; no model carries it
+
+- All 32,278 readable model assets were scanned for class `0x564B1018`: zero.
+  `C` lives in entity assets (GUID type `0x112`, chunks `FRAC` + `FSTU`),
+  reached from entity component `0x09CB5A77` field `0xA7ED6024`; nine entity
+  assets name seven `C` assets, each with four instance points.
+- The range's 229 models, 79 placed assets and 34 chunks carry none, so the
+  brush route is the **fracturable** path, not the map's static collision. A
+  real brush was still pinned from a `C` asset (4 points -> 4 vertices, 2
+  triangles) conditional on the `max(1.0, [W+0xe0])` scale floor, whose writer
+  is not read.
+- Static collision is open again with three leads: the range's 550 entity
+  references vs the seven `C` assets; `STU_537E56E4` (a prebuilt mesh: 7 nodes,
+  8 points, 16 triangles) in static models' `MSTU`; and the collision chunk's
+  36-sector mesh, whose consumer search should be re-run with the RVA-dispatch
+  method.
+
 ## 2026-11-02 - C named by type identity
 
 - The release path `0x141b251d0` is generic (vtable slot `+0x18`, flags, deferred

@@ -1007,6 +1007,27 @@ real brush with no new code. Also recorded: the node-type-2 update is **one
 function at `0x14204cb40`** (its second half starts at `0x14204cbce`), with one
 static caller, the dispatch at `0x14204824a`.
 
+**But no model carries `C` (2026-11-02).** All 32,278 readable model assets in
+the install were scanned for the class hash: **zero** mention it. `C` lives in
+**entity** assets instead — GUID type `0x112`, chunks `FRAC` + `FSTU` (a
+fracturable's collision), reached from an entity component `0x09CB5A77` field
+`0xA7ED6024`. Nine entity assets name seven `C` assets, and the practice
+range's 229 models, 79 placed assets and 34 chunks carry none. So the brush
+route is the **fracturable** path, not the map's static collision; the pinned
+brush from a `C` asset (4 points -> 4 vertices, 2 triangles, conditional on the
+`max(1.0, [W+0xe0])` scale floor) is real but not the range's geometry.
+
+That reopens the static-collision question with two concrete leads: (a) the
+practice range's **550 entity references** were not checked against the seven
+`C` assets — if one is among them the range does carry a `C`; (b) `C+0x08` is a
+`STU_537E56E4` holding a **prebuilt collision mesh** (7-node array, 8 points,
+16 triangles, `nodeCount` 7, `height` 4) — the same class may sit in static
+models' `MSTU`, and the chunk's sector arrays (12-byte vertices, 16-byte
+records, 4-byte indices, 36 sectors) look like a mesh cache too. The chunk
+consumer search should also be re-run with the 4-byte-RVA dispatch method that
+the `0x14208e74e` case established, on `0x1420a02f6` (the mesh-source assembler
+whose input is the owner's descriptor container).
+
 ---
 
 ## 7. Domino schema and integration in the current image

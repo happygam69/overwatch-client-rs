@@ -22,11 +22,18 @@ registration; **reference** = the OWLib checkout's STU declarations, used as a
 its instance-point array is the `Vec3A[]` field `0x88FCECD7` of the inline
 sub-object at `C+0x90`, read through a 16-byte slot at `C+0x98` plus a tag at
 `C+0xa0`. That read expression is implemented in
-`ow_tank::model_collision::ArrayRecord` with unit tests. **Two things stay
-open**: the class id of the object that *owns* the `+0x48` pointer to `C` (the
-producer of `[node+0xe8]`, still unread -- see "What is open"), and a real brush
-instance from the install (no asset carrying `C` has been located yet, which is a
-data question, not a code one).
+`ow_tank::model_collision::ArrayRecord` with unit tests.
+
+`C` is now **found in the install and decoded**: seven type-`0x112` assets, each
+a `FRAC`+`FSTU` container whose `FSTU` chunk holds exactly one `C` instance, and
+each instance's four-point ring is pinned through `brush` -> `brush_convert` bit
+for bit. The ring is pinned at the **clamp floor** of the ring builder's scale:
+the scale's *producer* is the one read still missing.
+
+**Two things stay open**: the class id of the object that *owns* the `+0x48`
+pointer to `C` (the producer of `[node+0xe8]`), and the writer of
+`[geometry+0x88]+0xe0` -- the scale. Neither is reachable through the readable
+instruction stream; both are named exactly in "What is still open".
 
 ## The chain, re-read
 
@@ -346,25 +353,165 @@ entity-component runtime header and that `node+0x38` is an instance of a
 `STU_09CB5A77`-like component. The arithmetic fits, but nothing in the image was
 read to confirm it, so it stays a hypothesis and no code depends on it.
 
-## The install side: what is open
+## In the install: `C`'s asset, instance and payload
 
-`C`'s encoding is now fully read (array slot, tag, count guard, the two flag
-folds, the scalar offsets), but **no install asset carrying a `C` instance has
-been located**, so the practice range's brush is still not decoded. This is a
-data question with a known shape, and it is the next anchor in this order:
+### The route to a real `C` (install)
 
-1. **Find a model's `C`.** `C` is a *referenced asset*, so its payload is its
-   own STU asset rather than a field of the model's `MSTU`; the two referrers
-   above are components, so the reference is resolved through the entity
-   definition of whatever spawns the brush. A cheaper check first: parse each
-   model asset's `MSTU` (`ow_tank::mstu`) and look for an `InstanceInfo` whose
-   type hash is `0x564B1018`; if any model carries it inline, its `0x88FCECD7`
-   array is a real brush input.
-2. Then `brush::build_from_instances` -> `brush_mesh::hull_stage` ->
-   `brush_convert`, all of which are implemented and pinned against the client,
-   so a real point array can be taken to a mesh without new code.
-3. The remaining code item is `C`'s owner class (above); the map-side
-   collision-chunk cell decoder of `formats/brush-collision.md` is unchanged.
+`C` is not a model field, and it is not in any model's `MSTU`: all **32,278**
+readable model assets were scanned for the class hash and **none mentions it**;
+the 229 models the practice range places carry no `C`, and neither do its 79
+placed assets or its 34 chunks. The asset that does carry `C` is named by an
+entity component, and the route is:
+
+```text
+entity asset (GUID type 0x003)
+  instance of class 0x09CB5A77        a STUEntityComponent subclass, 57-byte payload
+    field 0xA7ED6024                  teStructuredDataAssetRef<STU_564B1018>
+      -> GUID type 0x112              the C asset
+         chunks: FRAC (64 B), FSTU    the FSTU chunk is the STU blob
+           FSTU: {i64 offset 16, i64 size} then the blob
+             exactly one instance of 0x564B1018
+             (the FSTU header rule is observed on all seven assets, not
+              read from a client function; MSTU's header is the read one)
+```
+
+Nine entity assets carry that component, and they name **seven distinct `C`
+assets**:
+
+| entity asset | `C` asset | `FSTU` header | `C` payload | ring |
+|---|---|---|---|---|
+| `0x04000000000044cd` | `0x0888000000000029` | `(16, 42206)` | 1394 | rectangle |
+| `0x04000000000044cf` | `0x088800000000002a` | `(16, 42082)` | 1398 | slanted quad |
+| `0x04000000000044d5` | `0x088800000000002c` | `(16, 42206)` | 1394 | rectangle |
+| `0x0400000000004782` | `0x0888000000000035` | `(16, 42206)` | 1394 | rectangle |
+| `0x0400000000004783` | `0x0888000000000033` | `(16, 42082)` | 1398 | slanted quad |
+| `0x0400000000004784` | `0x0888000000000033` | `(16, 42082)` | 1398 | slanted quad |
+| `0x0400000000004933` | `0x0888000000000038` | `(16, 42206)` | 1394 | rectangle |
+| `0x0400000000004934` | `0x0888000000000039` | `(16, 42082)` | 1398 | slanted quad |
+| `0x0400000000004936` | `0x0888000000000039` | `(16, 42082)` | 1398 | slanted quad |
+
+The `FRAC` chunk name and the payload's shape fit the reference's picture: the
+descriptor's own `0x20DE3871` array is a list of *pieces*, each with a shape
+array, and `C`'s 14-byte flag records are the "breakable" bits. That is a
+reading, not a client statement; what the client says is the ring.
+
+### `C`'s payload as the file carries it (install)
+
+A version-2 payload stores only the fields that differ from the class default, in
+the instance's own field bag, and that bag is **sorted by field hash** -- the 20
+fields present in `0x0888000000000029` come out in ascending hash order:
+
+| payload offset | width | field hash | declared offset (reference) |
+|---|---|---|---|
+| `+0x0008` | 1220 | `0x20DE3871` | `+0xf8`, array of `STU_7DA07223` |
+| `+0x1228` | 4 | `0x2C434213` | `+0x154`, `f32` = `0.02` |
+| `+0x1232` | 4 | `0x3115DC66` | `+0x130`, `f32` |
+| `+0x1236` | 8 | `0x33E51FDC` | `+0xd8`, asset ref (`m_material`), `0x0e00000000003da2` |
+| `+0x1244` | 8 | `0x39E8FA33` | `+0x128`, `Vec2` |
+| `+0x1252` | 4 | `0x68EE2AA8` | `+0x170`, `f32` |
+| `+0x1256` | 4 | `0x6B532115` | `+0x160`, `f32` |
+| `+0x1260` | 4 | `0x6CC45E85` | `+0x148`, `f32` |
+| `+0x1264` | 4 | `0x7E9BF4A0` | `+0x16c`, `f32` |
+| `+0x1268` | 1 | `0x82C0FDDF` | `+0x195`, `u8` |
+| `+0x1273` | 32 | `0x8649028E` | `+0x08`, inline `STU_537E56E4` (72 declared) |
+| `+0x1305` | 8 | `0x9544A61B` | `+0xb8`, asset ref, `0x050800000000000a` |
+| `+0x1313` | 8 | `0xA19B623C` | `+0x118`, `Vec2` = `(2.0, 4.0)` |
+| `+0x1321` | 4 | `0xA68A55CF` | `+0x174`, `u32` = 36 |
+| `+0x1325` | 8 | `0xAA8C3B92` | `+0x120`, `Vec2` |
+| `+0x1333` | 4 | `0xAC098B42` | `+0x14c`, `f32` = 0.1 |
+| `+0x1341` | 8 | `0xB7C8314A` | `+0x90`, the block the client reads |
+| `+0x1353` | 24 | `0xC9C8A2AB` | `+0x50`, inline `STU_D4C1CD55` (64 declared) |
+| `+0x1381` | 9 | `0xCBCB2AB9` | `+0x178`, 14-byte flag record (9 stored) |
+| `+0x1390` | 4 | `0xCC99A0E8` | `+0x138`, `f32` = 0.3 |
+
+Two widths differ from the reference's declaration (the geometry block 32 vs 72,
+`0xC9C8A2AB` 24 vs 64) because a version-2 payload carries only the bytes it
+stores, not the class's full width. Reading those two blocks by walking their own
+nested bags is what the test does, and it is where the geometry lives:
+
+- `0xB7C8314A` (`C+0x90`) -- the block `GeometryBuild` reads at `C+0x98`: one
+  field, `0x88FCECD7`, the `Vec3A[]` **instance points**;
+- `0x8649028E` (`C+0x08`) -- a `STU_537E56E4` in the data, carrying its own
+  `0x9B2111C5` node array (224 bytes), `0x88FCECD7` points (8), `0x0D50490E`
+  triangle array (384 bytes), `nodeCount` 7 and `height` 4;
+- `0xC9C8A2AB` (`C+0x50`) -- three inline arrays (12,960 and 17,280 bytes of
+  `u8`, 876 bytes of `u16`) plus two `i32`s, 540 and 17;
+- `0x20DE3871` (`C+0xf8`) -- 1220 bytes of pieces, each a `STU_7DA07223`: an
+  array of `0xB3800E70` shapes plus a `Vec2` and three floats.
+
+Only the **first** 14-byte flag record is stored (`0xCBCB2AB9`, at `+0x178`) in
+all seven instances; the second (`0x077CF4AA`, at `+0x186`) is **absent** from
+every payload, which under the version-2 rule means it sits at its class default
+-- fourteen `u8`s of `1` with the seventh `0`, so `0x141b53c40` folds it to
+`0x3fff - 0x2000 = 0x1fff` (`ow_tank::model_collision::flag_mask`). The stored
+record's `u8`s are `0`/`1`, so its fold is a bit mask too.
+
+### The real brush: ring and mesh, pinned (install + the client's own builder)
+
+`GeometryBuild` reads `C+0x98` and calls the ring builder `0x142ced620` with the
+count and a two-lane scale. The points of `0x0888000000000029` (bit patterns
+`3175c28f 3f800001`, `3175c28f 3cb30971`, `40000000 3cb30971`, `40000000
+3f800001`) quantise, with the ring builder's `roundf((v * scale) * 400)` and then
+`CVTTSS2SI`, to:
+
+| ring | quantised `x` | quantised `y` |
+|---|---|---|
+| `0x...29`, `0x...2c`, `0x...35`, `0x...38` (rectangle) | `0, 0, 800, 800` | `400, 9, 9, 400` |
+| `0x...2a`, `0x...33`, `0x...39` (slanted quad) | `0, 0, 795, 795` | `400, 9, -399, 2` |
+
+and every one of the seven meshes to **4 vertices, 2 triangles**, with the same
+record pattern in the client's six `i32` (index, half-edge mark):
+
+```text
+[3, -1, 0, -1, 1, 3]
+[3, 2, 1, -1, 2, -1]
+```
+
+That is the same pattern the emulator-pinned square in `formats/brush-mesh.md`
+produces, so real install data and the client's own bytes agree through the
+implemented pipeline: `brush::build_from_instances` ->
+`brush_convert::tree_to_mesh_variant(brush, 1)`.
+
+### The scale the ring builder takes -- read expression, unread producer
+
+In `GeometryBuild` (decompiled): `W = geometry+0x88`; `s = *(float *)(W + 0xe0)`;
+if `s < 1.0` the client first builds a transform from `W`'s `+0x18`/`+0x1c`/`+0x20`
+and applies it to the params block, then sets `s = 1.0`; the ring builder then
+receives the four-lane vector `{s, s, 0, 0}` (both lanes equal, the high lanes
+zero) and `GeometryCopyParams` scales `C+0x110`/`C+0x114` by the same `s`.
+
+So the client's effective scale is **`max(1.0, [W+0xe0])`**, and the ring above
+is pinned at that clamp's floor, `1.0`. It is the client's ring for every `W`
+whose `[+0xe0]` is at or below `1.0`; a `W` above `1.0` would scale it.
+
+**What is not read, exactly:** the writer of `[W+0xe0]`, and hence `W`'s class.
+`W` is stored at `geometry+0x88` by the geometry setter `0x142138ce0` (slot
+`+0x08` of `0x1433950b8`), and that store is at `0x142138e89` -- inside the region
+`0x142138e27..0x142138e89`, which is **not code**: it decodes as neither a linear
+instruction sequence nor a coherent jump table at any alignment, and the call
+that precedes it, `0x140543440`, is not a `.pdata` function start and no `.pdata`
+range covers it (one of the image's no-`.pdata` leaves). The setter's readable
+part ends at that call (`0x142138e22`), so the store's source register cannot be
+read and `W`'s identity -- together with the field at `W+0xe0` -- stays open.
+That is one read, not a census: the setter's argument is the node, and the value
+it stores is whatever the call at `0x142138e22` leaves behind.
+
+## What is still open
+
+1. **`C`'s owner class** -- the identity of the object at `[node+0x38]` and of
+   its `[+0x40]` STU instance, i.e. the producer of `[node+0xe8]`. The update
+   that promotes `+0xe8` is reachable (one static caller, the dispatcher at
+   `0x14204824a`), but the dispatcher is itself held as a runtime pointer.
+2. **`[W+0xe0]`, the ring builder's scale** -- see above: the store into
+   `geometry+0x88` is in a region that is not code, so the object and its field
+   stay unnamed. The ring is pinned at the clamp floor `1.0` and re-derives in one
+   line once this is read.
+3. **The practice range does not use `C`** -- measured, not assumed: 32,278 of
+   32,280 model assets scanned, none mentions the class hash; the 229 models, 79
+   placed assets and 34 chunks the range references carry no `C`; and none of the
+   seven `C` assets is among them. The brush pinned above therefore comes from the
+   seven entity-driven `C` assets, **not** from a practice-range placeable, and
+   this file says so rather than substituting a map.
 
 ## Checks
 
@@ -377,3 +524,6 @@ data question with a known shape, and it is the next anchor in this order:
 | the registry enumeration itself | `dev/model_registry.py --hash 0x564b1018` (size `0x198`, align 8, ctor `0x1413354b0`) |
 | the class's declared layout | `dev/model_class_search.py --min-size 0x190 --offset 0x186` (one class of 7,782) |
 | the field-hash dispatch agreement | `dev/model_class_search.py`'s parse against the immediates of `0x141334ea0` / `0x141335e60` (22 of 36) |
+| the seven `C` assets and their instances | `model_collision_real::the_collision_descriptor_is_reachable_through_its_asset_reference` |
+| the real ring and mesh, bit for bit | `model_collision_real::the_real_brush_ring_and_mesh_are_pinned` |
+| the practice range carries no `C` | `model_collision_real::the_practice_range_places_no_model_that_carries_the_descriptor` |
