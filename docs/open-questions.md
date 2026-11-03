@@ -1211,11 +1211,28 @@ builds the character's shape/body in that world (`0x142cf35a0` ->
 `0x142cc3f50` for tag 0, `OwnerCreateBody` for tag 1). **So the character and the
 per-model bodies share the node's world slot.**
 
-**Open:** whether a placed node passes the node gate (`[node+0x454]` bit
-`0x200`, copied from the node creation record's `+0x10` at `0x14202c6e4`; node
-`u16 +0x1c` bits `0x20`/`0x40`, model object `+0x84` bit `0x80`). The record's
-producer is unread: `0x14202c660` is reachable only through the scene-node table
-`0x143367570` slot 32. That is **runtime, not asset, data**, so no install test
+**Open (round 9):** whether a placed node passes the node gate (`[node+0x454]`
+bit `0x200`, copied from the node creation record's `+0x10` at `0x14202c6e4`).
+The creation entry is **`WorldBase` slot 8** (vtable `0x143367630`,
+`0x143367630 + 8*8 = 0x143367670`; the earlier "slot 32" measured `0x100` from a
+neighbouring table base). `WorldBase` is `0x910` bytes (ctor `0x1420271d0`,
+allocator `0x1420266d0`), and NodeType2's factory `0x142029f00` registers that
+`0x910` class with kind `0x14`.
+
+**Tool defect fixed:** `call qword ptr [reg+disp]` has a **disp8** form
+(`FF 5x 40`). The image has **0** disp32 `+0x40` call forms and **505** disp8
+sites, so a disp32-only slot scan reports a false negative for every slot below
+`0x80`; `dev/call_slot_scan.py` now scans both. None of the 505 passes a
+creation record.
+
+**Kind `0x14` is a family, not an identity:** 160 `RegisterTypeWithSize` sites
+use it with sizes `0x18` .. `0x31868`; the identity is the **size `0xad0`**
+(exactly one site, `0x14200bbb1`). A kind-based install census would match
+hundreds of unrelated classes, so none was written.
+
+**Still open:** the slot-8 transfer that hands the record over, including
+**register-indirect** forms (`mov reg,[vt+0x40]; call reg`), and the writer of
+the record's `+0x10`/`+0x18`. That is **runtime, not asset, data**, so no install test
 is written — the doc says `not tested`.
 
 ---

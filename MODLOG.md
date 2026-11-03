@@ -3,6 +3,24 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - WorldBase slot 8, and a disp8 slot-scan defect
+
+- `0x14202c660` is **slot 8** of the `WorldBase` vtable `0x143367630`
+  (`0x143367630 + 8*8 = 0x143367670`); the earlier "slot 32" measured `0x100`
+  from a neighbouring table base. `WorldBase` is `0x910` bytes (ctor
+  `0x1420271d0`, allocator `0x1420266d0`), and NodeType2's factory `0x142029f00`
+  registers a `0x910` class with kind `0x14`.
+- Tool defect: `call qword ptr [reg+disp]` has a disp8 form (`FF 5x 40`). The
+  image has **0** disp32 forms for `+0x40` and **505** disp8 sites, so a
+  disp32-only scan reports a false negative for every slot below `0x80`.
+  `dev/call_slot_scan.py` now scans both.
+- Measured negatives: none of the 505 `+0x40` sites passes a creation record,
+  and kind `0x14` is a **family** (160 `RegisterTypeWithSize` sites, sizes
+  `0x18`..`0x31868`); identity is the size `0xad0` (one site, `0x14200bbb1`),
+  so no kind-based install census is valid.
+- Open: the slot-8 transfer including register-indirect forms, and the writer of
+  the record's `+0x10`/`+0x18`.
+
 ## 2026-11-02 - the component class, and the character's world is the node's world
 
 - The collision component: constructor `0x14200a9a0` (`0xad0` bytes; primary

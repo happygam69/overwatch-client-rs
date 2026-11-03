@@ -1560,6 +1560,206 @@ placeable record to component kind `0x14` would be exactly the seed-list guess
 3. `[mover+0x650]` and `0x142cbd190` from check 11, if the sweep's per-frame
    rebuild matters for the frame loop.
 
+## Check 13 -- the class is `WorldBase`, the creation entry is its **slot 8**, and the record's flags word
+
+This check answers two questions the earlier checks left open, and corrects one
+of their addresses:
+
+1. **what the object at `0x14202c660` is** -- it is a method of the scene-graph
+   **`WorldBase`** class, and it is *slot 8* (byte offset `+0x40`) of that class's
+   vtable, **not** slot 32 of the table the checks 10 and 12 named;
+2. **how a scene node's type is selected** -- through the 144-entry node-type
+   registry at `0x144188170`, whose entries carry a `u16` type id and a factory,
+   and whose type `2` factory registers the node class itself as a reflected
+   type of size `0x910` and kind `0x14`;
+3. and it re-measures the reachability of the creation entry with both
+   memory-indirect call encodings (see the tool note below).
+
+The record's producer is still **not read**; the last paragraph of this check
+names the exact unread dispatch, which is now a single `call` form rather than
+"somewhere in the node system".
+
+### The class: `WorldBase`, size `0x910`, vtable `0x143367630`
+
+The class was already named in the program for another investigation and the
+read confirms the name operation for operation:
+
+| fact | address | what was read |
+|---|---|---|
+| constructor | `0x1420271d0` (`WorldBaseCtor`) | its first store puts **`0x143367630`** at `[this]`; it then initialises two reflected-type containers at `+0xe0` (`0x88` bytes) and `+0x100` (`0x28`), a 128-entry slot table, four pools, and defaults up to `+0x904` |
+| destructor body | `0x142027c90` | restores the same table at `[this]`, destroys the slot arrays and the two type containers, and ends by installing the third table `0x142f7d418` |
+| deleting destructor | `0x1420282e0` (vtable slot 0 of `0x143367630`) | calls the destructor body and frees **`0x910`** bytes |
+| allocation from its type | `0x1420266d0` (`WorldBaseTypeAlloc`) | takes the instance from the reflected-type container (`0x141c4b270` of `+0x10`), then inlines the whole constructor body when `[type+0x28] & 0x10` is set |
+| its type descriptor | `0x1433654a0` | `0x1420266d0` is slot 1 (the 8-byte slot at `0x1433654a8`) |
+
+The size is `0x910` from two independent reads (the deleting destructor's free
+size and the constructor's highest store at `+0x904`), and the same `0x910`
+appears as the size in the class's own type registration (below).
+
+**The correction.** `0x14202c660` sits at `.rdata 0x143367670`. The earlier
+checks measured that byte as an offset from `0x143367570` and so called it "slot
+32"; but `0x143367630` is where the **`WorldBase` vtable** starts (the
+constructor puts it at `[this]`), and `0x143367630 + 8 * 8 = 0x143367670`. The
+byte is therefore slot 8 of the `WorldBase` vtable, and the 0x100 offset the
+earlier checks used happens to cross from the neighbouring vtable into it.
+So the entry is **slot 8 of the `WorldBase` vtable** (`0x143367630`), not an
+entry of the 0x143367570 table at all. Every earlier sentence that says "slot 32 of
+`0x143367570`" should be read as "slot 8 of `0x143367630`"; the object the
+function initialises is a **`WorldBase`** (`+0x454` flags, `+0x620` geometry
+record, `+0x6a8` state record, 32 slot buffers at `+0x158`), which is what the
+earlier checks call "the node". Nothing else in those checks depends on the
+index.
+
+What slot 8 does was already read in check 10 and is unchanged: it copies the
+creation record's dword at `+0x10` into `[world+0x454]` (`0x14202c6e0` read,
+`0x14202c6e4` store), takes the record's qword at `+0x18` as the Domino world
+configuration (non-null only: two `0x142cc3c80` calls at `0x14202d1d1` and
+`0x14202d1e8`), and builds the `0x3210`-byte geometry record at `+0x620` only
+when bit `0x200` of that flags dword is set (`0x14202d0e1`).
+
+### The node-type registry: `RegisterNodeType`, 144 entries, type `2`
+
+`RegisterNodeType` (`0x141c5ff40`) is a push-front list insert: it stores the
+head global `0x144188170` into the new entry's first qword, copies three qwords
+from its argument (the `u16` type id at `+0x08`, the factory at `+0x10`, and a
+third word at `+0x18`), and writes the new head back. It has **144 `E8`
+callers**, i.e. 144 registered node types.
+
+The one that matters here:
+
+| fact | address | what was read |
+|---|---|---|
+| register type `2` | `0x1404f6e10` (`RegisterNodeType2`) | builds `{u16 type = 2, factory = 0x142029f00}` and calls `RegisterNodeType(&0x1441ba618, ...)`; the stub itself has **no `E8` caller** |
+| the type-2 factory | `0x142029f00` (`NodeType2Factory`) | allocates a `0x30`-byte reflected-type descriptor, writes vtable `0x1433654a0` at `[desc]` and the **type byte `2`** at `[desc+8]`, then calls `RegisterTypeWithSize(desc+0x10, name, 0x14, 0x910, 0, parentBuildId)` -- the parent's build id is read from `[arg+0x10]` |
+| the declaration site of that call | `0x14202a001` | the immediates of the registration: kind `0x14`, size `0x910` |
+| the look-up side | `0x141c57970` | reads the head global `0x144188170` (`0x141c579ef`), walks the list, and stores each factory into a sparse array indexed by the entry's `u16` type id: `[obj+0x10][type] = factory` (`0x141c57a17` reads the type, `0x141c57a24` stores) |
+
+So a scene node's *class* is selected by a **`u16` node type id** resolved through
+this registry, and the node class is a reflected type (`kind 0x14`, size
+`0x910`) instantiated through the reflected-type container. The node type id is
+the asset-facing selector; nothing in this check reads where the id comes from.
+
+### The kind byte `0x14` is not an identity (question 2, answered negatively)
+
+`RegisterTypeWithSize` (`0x141c4b050`) has **283 call sites** in the image. The
+kind argument is a size/behaviour family, not a name: a window check before each of the
+283 sites finds `r8d = 0x14` on **160** of them, with sizes from `0x18` to
+`0x31868` (`0x20`, `0x28`, `0x50`, `0x98`, `0xa8`, `0x140`, `0x190`, `0x368`,
+`0x910`, `0x1490`, `0x18a0`, `0x2e30`, `0x31580`, ...), spread over the whole
+image: `0x14078xxx` (entity module), `0x140c3xxx`, `0x14193xxx`, `0x141dbxxx`,
+`0x14205xxx`, `0x14206xxx`, `0x14219xxx`.
+Therefore:
+
+- **kind `0x14` cannot identify the collision component.** A census of "which
+definitions carry kind `0x14`" would match hundreds of unrelated classes.
+- the collision component's **size `0xad0`** is the discriminator: exactly one
+of the 283 sites passes `0xad0` -- `0x14200bbb1`, inside the class's own
+registration function `0x14200bab0` -- and the immediate `0xad0` in a `r9d` move
+occurs exactly **once** in `.text`. That function
+still has **no static reference** (check 12), so the type is registered by a copy
+whose caller is not in the static call graph -- the same shape as
+`RegisterNodeType2` above, which is also unreferenced.
+
+**The instantiation mechanism, read; the trigger, not.** The reflected-type
+system's instantiate entry is `0x1407803f0` (`TypeDescriptorInstantiate`): it
+takes a descriptor and an encoded instance key, decodes the key with the
+project's rotate/add/XOR idiom, calls the key's first vtable entry when
+`[descriptor+0x28] & 0x10` is set, and then calls the descriptor's container
+entry at `+0x20` slot `0x58`. That is *how* a registered type becomes an object
+(the collision component's object would be produced by its type object
+`0x1433633c8` slot 1, `0x14200a5f0`, size `0xad0`). What this turn did **not**
+read is the *entity-side trigger*: the walk over an entity's component set that
+decides to instantiate this descriptor at all, and the type-id lookups `4`,
+`0x11`, `0x31` that `0x14201cf40` performs are read as arguments of the
+*attachment*, not as a component-set decision. So question 2's answer is:
+**the set is not evident in the data read, and the code that reads it is the
+unread entity/component driver of check 12's next read 1** -- with the
+correction that "kind `0x14`" is not the thing to look for; the type's
+registration identity is its name (obfuscated, check 12) and its size.
+
+That is why **no install census of "component kind `0x14`" was written**: it would
+not be a measurement of this component. An install census keyed on size `0xad0`
+would be a different thing entirely and needs the entity-side definition schema,
+which is not read (the entity chunk's parsed field set is `entity`/`identifier`
+only, check 1).
+
+### What the stub's global is (and why it is a dead end)
+
+Earlier checks noted that the stub `0x142f2c200` copies the table `0x143367570`
+into a global. Read to its users, that global is `0x143b2e258` and it has
+**exactly three** rip-relative references in the whole image: the stub's store
+itself, and two `lea`s that store the *table address* into a field
+`[context+0x170]` -- at `0x142cbec6c` (a world/context constructor) and at
+`0x142cc4a71`, where the store is guarded by `[ctx+0x15c] == 0`, the same
+condition `OwnerCreateBody` (`0x142cc3d90`) requires. No instruction anywhere
+loads the global's value back, so the interface is reached through an object
+field, not through the global; the stub exists to give the class a stable
+descriptor, not to publish a dispatch entry. Note also that this is *the other*
+table: `0x14202c660` is not in it (it is in `0x143367630`), so the stub is not a
+route to the creation entry.
+
+### Re-measuring the reachability of the creation entry, both encodings
+
+Earlier checks counted `E8`/`E9`/`jcc`/8-byte pointers/4-byte RVAs. Two things
+are added here, both of which change how the negative must be read.
+
+**1. The 4-byte hit is exception metadata, not a dispatch.** The single 4-byte
+RVA occurrence of `0x14202c660` is at `.data 0x1446951f4`. Reading the table
+around it shows a sequence of **`{begin, end, unwind}` triples**: the entry
+covering this function is `{0x14202c660, 0x14202d676, 0x143648438}`, and the
+neighbouring entries are the same shape for other functions of the module
+(`{0x14202c3a0, 0x14202c577, 0x1436945a4}`, `{0x14202d680, 0x14202d6e4,
+0x1437788a4}`, ...). The `.rdata` occurrences at `0x1437786e0`/`0x1437786f0` are
+the chained-unwind copies of the same triple. So this table is a **second
+`RUNTIME_FUNCTION` table**, and per the project's reference rules a code-range
+copy of an address is not a dispatch entry.
+
+**2. A slot below `0x80` has no disp32 form, and the earlier scans only looked
+at disp32.** `call qword ptr [reg+disp]` is `FF /2`; with mod=01 the
+displacement is one byte (`FF 50 40` = `call [rax+0x40]`), with mod=10 it is four
+(`FF 90 00 01 00 00` = `call [rax+0x100]`). This image contains **0** occurrences
+of `FF 9x 40 00 00 00` and **505** confirmed `FF 5x 40` sites, so a disp32-only
+search reports a false negative for every early slot. `dev/call_slot_scan.py`
+scans both forms, re-decodes each candidate with capstone, prints the preceding
+instructions and resolves each hit to its `.pdata` chain root.
+
+Measurements (`python dev/call_slot_scan.py 0x40 0x100`):
+
+| slot | encoded sites | of which in the map/scene modules |
+|---|---|---|
+| `+0x40` (`WorldBase` slot 8) | **505** | 5 (`0x141ff42cf`, `0x14200476e`, `0x142006860`, `0x142063d27`, `0x1420a4203`) |
+| `+0x100` (the earlier "slot 32") | 39 | 1 (`0x1420a5707`) |
+
+Reading the five map/scene `+0x40` sites: four are calls on other interfaces
+(`0x14200476e` is inside the mover/controller per-frame update and dispatches on
+the object at `[obj+0x268]`; `0x142063d27` and `0x1420a4203` pass a stack struct
+to a different class), and **none passes a node-creation record to a
+`WorldBase`**. The single `+0x100` site (`0x1420a5707`, a property deserialiser
+that calls slots `+0x110`, `0x142040e40` and `0x142043150` around it) passes no
+second argument at all, so it cannot be the record consumer either.
+
+### Verdict for this check
+
+| question | answer | evidence |
+|---|---|---|
+| what object does `0x14202c660` initialise? | a **`WorldBase`**, size `0x910`, vtable `0x143367630` | constructor `0x1420271d0`, destructor `0x142027c90`, deleting destructor `0x1420282e0` (frees `0x910`), type allocator `0x1420266d0` at descriptor slot `0x1433654a8` |
+| which slot is `0x14202c660`? | **slot 8** (`+0x40`) of `0x143367630` -- not slot 32 of `0x143367570` | `0x143367630 + 0x40 = 0x143367670`; the earlier table ends at `0x143367630` |
+| how is a node's class selected? | by a **`u16` node type id** in the 144-entry registry at `0x144188170`; type `2` is `NodeType2Factory` | `0x141c5ff40`, `0x1404f6e10`, `0x142029f00`, look-up `0x141c57970` |
+| is the node class a reflected type? | **yes**: kind `0x14`, size `0x910`, registered by its own factory | `0x14202a001` immediates; `0x14200bab0` is the same shape for the collision component (size `0xad0`) |
+| does kind `0x14` identify a component? | **no** -- 160 of 283 registration sites use it | the registration scan above |
+| does the creation entry have a static caller? | **no**: 0 `E8`/`E9`/`jcc`, one 8-byte table entry, one 4-byte RVA that is a `RUNTIME_FUNCTION` begin | `dev/callers.py 0x14202c660`; the `.data` triple table |
+| is the record's flags word produced by asset data? | **not read** | the dispatch form is `call [WorldBase_vtable+0x40]`; 505 sites, none in the map/scene modules carries a creation record |
+
+**The exact unread store.** One call form is left: the transfer through
+`[WorldBase vtable + 0x40]` that passes the creation record in the second
+argument, plus the code that fills that record's dword at `+0x10` and qword at
+`+0x18`. The record is at least `0x90` bytes (fields `+0x00`..`+0x90` are read by
+`0x14202c660`), it is *not* built inside the function, and no dispatch site for
+it is in the image's confirmed `call [reg+0x40]` set. Until that call site is
+found, the practice range's verdict stays **open**, and no install census can
+stand in for it -- a census keyed on kind `0x14` is positively *wrong* (above),
+and a census keyed on size `0xad0` has no entity-side schema to read it against.
+
 ## What this leaves
 
 | line | state |
@@ -1579,6 +1779,10 @@ placeable record to component kind `0x14` would be exactly the seed-list guess
 | the descriptor's bounds/filter fields | documented per offset, not converted: their sources (holder parameters, component state, entity transform) were not followed field by field (check 9) |
 | the scene-side mesh query | separate and query-only (checks 4, 6) |
 | the character's world | the Domino world, swept through encoded handles (check 7) |
+| what class the creation entry belongs to | **read: `WorldBase`**, `0x910` bytes, vtable `0x143367630`; `0x14202c660` is **slot 8** of it, not slot 32 of `0x143367570` (check 13) |
+| how a node's class is selected | **read: a `u16` node type id** in the 144-entry registry at `0x144188170`; type `2` -> `NodeType2Factory` `0x142029f00`, which registers the class as a reflected type of kind `0x14`, size `0x910` (check 13) |
+| does component kind `0x14` identify anything? | **no**: 160 of the 283 `RegisterTypeWithSize` sites pass `0x14`, with sizes `0x18`..`0x31868`; the collision component is identified by its size `0xad0`, whose only registration site is `0x14200bbb1` (check 13) |
+| the record's flag word (`+0x10`, bit `0x200`) | **open**: the dispatch form is `call [WorldBase_vtable+0x40]`; a both-encodings scan finds 505 sites and none in the map/scene modules carries a creation record (check 13) |
 
 Ordered next reads (the per-model route):
 
@@ -1595,10 +1799,14 @@ Ordered next reads (the per-model route):
 2. **The producer of the node creation record.** `0x14202c660` copies the
    record's dword at `+0x10` into `[node+0x454]` at `0x14202c6e4` (read at
    `0x14202c6e0`) and hands the qword at `+0x18` to the world allocator
-   `0x142cc3c80`; the record itself arrives only through the node's own vtable
-   (slot 32 of the table at `0x143367570`, whose 8-byte entry is
+   `0x142cc3c80`; the record itself arrives only through the `WorldBase` vtable
+   (`call [WorldBase_vtable + 0x40]`, slot 8 of `0x143367630`, whose entry is
    `0x143367670`). Reading that slot's caller decides whether bit `0x200` is
    asset-derived -- and with it whether an install test can settle the range.
+   Check 13 measures the slot (`dev/call_slot_scan.py 0x40` -> 505 sites, none
+   of them in the map/scene modules passing a creation record), so the caller is
+   outside the confirmed memory-indirect set and the next read has to be a data
+   one: the record's `+0x10`/`+0x18` writers.
 2. **The mover's per-frame rebuild.** `[mover+0x650]` and `0x142cbd190`
    (`0x140ca6139`) are called right after the sweep's query record is created
    (check 11); they belong to the frame loop rather than to the collision build.
@@ -1663,3 +1871,9 @@ Ordered next reads (the per-model route):
 | the component's own attach tests no asset data | check 12: interface slot 1 `0x14200ee80` takes `[entity+0x250]` and binds |
 | the range's props against the gate | **not tested**: the four gate bits are runtime node/entity state, not asset data (check 10's table), and check 12 shows the deciding input is the entity's component set plus the node creation record -- neither read -- so no install-side test can stand in for it |
 | which of the range's 550 placeables carry the component | **not tested**: the component's own code decides nothing from asset data; the driver that instantiates it for an entity is unread (check 12's next read 1) |
+| `0x14202c660` is a `WorldBase` method at **slot 8** of `0x143367630` | check 13: the constructor `0x1420271d0` stores `0x143367630` at `[this]`, the deleting destructor `0x1420282e0` frees exactly `0x910`, and `0x143367630 + 0x40 = 0x143367670`; the byte sits `0x100` bytes past the vtable at `0x143367570`, i.e. past its end and inside the next one |
+| the node class is a reflected type selected by a `u16` node type id | check 13: `RegisterNodeType` `0x141c5ff40` (144 `E8` callers, head `0x144188170`), `RegisterNodeType2` `0x1404f6e10` (type `2`), `NodeType2Factory` `0x142029f00` (`RegisterTypeWithSize(..., 0x14, 0x910, 0, buildId)` at `0x14202a001`), look-up `0x141c57970` (`[obj+0x10][u16 type]`) |
+| component kind `0x14` is not an identity | check 13: 283 `RegisterTypeWithSize` call sites, 160 of them pass `0x14`, with sizes `0x18`..`0x31868`; the size `0xad0` occurs at one site only (`0x14200bbb1`) |
+| the creation entry has no static caller, in either call encoding | `dev/callers.py 0x14202c660` (0 `E8`/`E9`/`jcc`, one 8-byte slot, one 4-byte RVA) plus check 13: that 4-byte hit is the **begin field of a `RUNTIME_FUNCTION` triple** `{0x14202c660, 0x14202d676, 0x143648438}` in the `.data` exception table, and `dev/call_slot_scan.py 0x40 0x100` gives 505 / 39 sites, none passing a creation record |
+| a slot below `0x80` needs the disp8 form to be seen at all | `dev/call_slot_scan.py 0x40`: 505 confirmed `FF 5x 40` sites and **0** `FF 9x 40 00 00 00` bytes in the image -- a disp32-only scan reports a false negative |
+| the record's `+0x10`/`+0x18` producers | **not tested**: the `call [WorldBase_vtable+0x40]` site that hands the record over was not found, so nothing produces or consumes the record inside the read set |

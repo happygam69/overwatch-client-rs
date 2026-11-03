@@ -11,6 +11,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `audit_image.py` | Audit the ground-truth image's function bookkeeping: `.pdata` facts, bridge counts and the name table. | 253 |
 | `brush_mesh_oracle.py` | Oracle for stage 1 of the brush tree -> mesh conversion. | 450 |
 | `brush_vertex_oracle.py` | Oracle for the brush's vertex decode, and a probe of the brush builder. | 227 |
+| `call_slot_scan.py` | Find every `call qword ptr [reg + disp]` site for a set of slot offsets. | 120 |
 | `callers.py` | Find every static reference to a set of addresses, and name the function it sits in. | 134 |
 | `chunk11_probe.py` | Read windows of a chunk asset through `ow-tank-look --hex` and decode them. | 105 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
