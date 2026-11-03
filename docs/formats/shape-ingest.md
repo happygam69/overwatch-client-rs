@@ -164,9 +164,14 @@ caller, and it is the descriptor copier:
 
 `MeshShapeFill`'s four extra callers build a mesh record and then add a shape
 themselves (`formats/maps.md`'s producer census already classifies them: a
-computed box, an owner-container mesh-source assembler, a scaled fill and the
-brush collider emitter). `ShapeFillType2`'s second route is `0x14209fc90` →
-`0x142cd35a0`, which fills a type-2 record for the mover.
+computed box, a scaled fill and the brush collider emitter, plus
+**`0x14209fc90`**, which is **not** an owner-container assembler: it reads the
+**model** at `[[node+0x110]+0x28]` (else `0x141b3d1c0(node)`) and walks
+`STUModel+0x140` with the mode filter `holder+0x2a == 1` -- the per-model body
+builder uses the same list with `== 0`, so the two are two modes of one holder
+class; its scratch context is `0x50` bytes, allocated and freed around the call
+at `0x1420251d1`/`0x142025229`). `ShapeFillType2`'s second route is
+`0x14209fc90` → `0x142cd35a0`, which fills a type-2 record for the mover.
 
 **Conclusion (read).** Every `0xc0` shape entry and every per-type record in a
 world is created by `ShapeAddToBody` or `ShapeAddToOwner` from a descriptor the

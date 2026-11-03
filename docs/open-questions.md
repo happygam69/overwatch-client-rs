@@ -1049,7 +1049,14 @@ whose input is the owner's descriptor container).
    collision component's per-frame update slot (`0x142019944`, slot
    `0x142f7d688`) and from `0x14201fbe3`. The RVA census measured the fragment
    start, so its zero is a fragment artifact. **The chunk assembler is on the
-   component-update path.** The container producer remains open.
+   component-update path.** But it is **not the chunk's consumer**: it reads the
+   **model** (`[[node+0x110]+0x28]`, else `0x141b3d1c0(node)`) and walks
+   `STUModel+0x140` with `holder+0x2a == 1` -- the same list the per-model body
+   builder reads with `== 0`; its `0x50`-byte context is scratch. On the range
+   the plan is empty (279 holders, **0** with the mode byte;
+   `ow_tank::model_shape_source` + install test), and the byte is a declared
+   holder field (`0x89AABA94` at `+0x2a`, `0x141510382`), default 0. So the
+   **chunk's own consumer is unknown again.**
 
 **Next anchor: the consumer of `STUModel+0x118`.** The node-type-2 factory
 `FUN_1420d0ef0` picks a **second** geometry class (`Alloc(0xf0)`,

@@ -76,6 +76,20 @@ node from `[entity+0x250]` and tests no asset-derived condition. Whether an
 entity carries this component is therefore decided in the engine's component
 driver, which is unread -- see check 12's open item and the `not tested` row.
 
+**Check 15 closes the chunk question, and the answer is "no chunk".** The
+assembler `0x14209fc90` that check 14 put on the component-update path is **not a
+chunk consumer at all**: its context is a `0x50`-byte object the *same* function
+allocates empty (`Alloc(0x50, 0)` at `0x1420251d1`, constructor `0x14209ea30`),
+and the descriptor list it walks is the **model's own holder list** -- field
+`0xCB4D298D` at `STUModel+0x140`, the exact slot and element type the per-model
+body builder walks -- filtered on the holder's mode byte at `+0x2a` being **`1`**
+instead of `0`. That byte is a declared field of the holder class
+(`0x89AABA94`, registered at `+0x2a` by `0x141510382`), so it is model-asset
+data, not something a chunk loader or a code store writes. On this map the
+answer is a **zero**: none of the 279 holders carries the field, so the
+assembler's four counts sum to zero and it returns before allocating anything
+(`0x14209ff8a`). The kind-`0x11` chunk still has no consumer in the read set.
+
 ## Check 1 -- the range's entity references vs the nine entity / seven `C` assets
 
 `crates/ow-tank/tests/static_collision_real.rs::check_1_...` (install).
@@ -1939,12 +1953,212 @@ kind-`0x11` payload is the producer question, and it stays open. But the argumen
 and the paragraphs that used it (check 3's verdict and the scope paragraph after
 check 6) are corrected above.
 
+> **Check 15 answers that producer question, and the answer is no.** The
+> `+0x140`/`+0x148` list is **not the assembler's container**: it belongs to the
+> `STUModel` the assembler resolves from the component's node, and it is the
+> model's holder list (field `0xCB4D298D`) -- the same list the per-model body
+> builder walks, read with the opposite mode byte. The assembler's own container
+> is a `0x50`-byte context created empty two instructions earlier
+> (`Alloc(0x50, 0)` at `0x1420251d1`, constructor `0x14209ea30`). The kind-`0x11`
+> payload therefore reaches nothing here, and the range's verdict is a measured
+> zero: 0 of 279 holders carry the mode byte the assembler filters on.
+
+## Check 15 -- the assembler is a model-holder consumer, and the range has no input for it
+
+`ow_tank::model_shape_source` and
+`crates/ow-tank/tests/model_shape_source_real.rs::the_range_takes_no_holder_into_the_shape_source`
+(install), plus the code reads below.
+
+The question this check answers: the assembler `0x14209fc90` (check 14) is on the
+collision component's update path, so what does it assemble, and does the map's
+kind-`0x11` chunk feed it? **It is a second consumer of the model's holder list
+and the chunk feeds nothing.** The chain is short and every link is an address:
+
+1. `0x142024d30` allocates a **`0x50`-byte context**, constructs it empty, stores
+   it at `[component+0xc8]`, and calls the assembler with `(context, component)`.
+2. The assembler takes the **model** from the component's node and walks the
+   model's **holder list** at `+0x140` (field `0xCB4D298D`) -- the same list, the
+   same element type and the same tag rule the per-model body builder walks.
+3. It takes the holders whose **mode byte `+0x2a` is `1`** (the body builder takes
+   `0`), and files each one into one of four arrays by its shape mode `+0x20`.
+4. That byte is a **declared field of the holder class**, so its value comes from
+   the model asset. On this map no holder carries it, so the assembler's input is
+   empty and it allocates nothing.
+
+### The call site, read from the instruction boundary
+
+The earlier linear reads of this region were misaligned because the image
+obfuscates stretches of `0x142024d30`; read from `0x14202500b` (a `.pdata`
+entry) the setup is unambiguous. The assembler itself is one body in **six**
+chained `.pdata` entries -- `0x14209fc90`, `0x14209fd13`, `0x14209ff9d`,
+`0x1420a02f6`, `0x1420a075d` (the epilogue) and `0x1420a0785` -- which all chain
+to the root `0x14209fc90` and span `0x14209fc90..0x1420a07a0`
+(`dev/fn_extent.py 0x14209fc90 0x1420a0785 --group`); the earlier "four entries
+to `0x1420a075d`" counts only the ones before the epilogue.
+
+| what | address | conclusion |
+|---|---|---|
+| the gate word | `0x142024eea`, `0x142024ef1` | `[component+0x490]`'s `u16` at `+0x210` is copied to `[rsp+0x44]`; bit `2` of it is tested at `0x1420251ae` |
+| the second gate | `0x1420251b5` | `[component+0x120]` must be non-zero |
+| the context pointer | `0x1420251be` | `rax = [component+0xc8]` |
+| the allocation | `0x1420251cc`, `0x1420251d1` | `Alloc(0x50, 0)` (`rcx = 0x50`, `edx = 0`) |
+| the constructor | `0x1420251db`, `0x1420251de` | `0x14209ea30(rax)`; it returns its argument |
+| the store | `0x1420251e8` | `[component+0xc8] = rax` |
+| the call | `0x1420251ef`..`0x1420251f5` | `rdx = component`, `rcx = context`, `call 0x14209fc90` |
+| the teardown | `0x1420251fc`..`0x142025230` | if the gate fails: reset `0x1420a07a0`, destructor `0x14209ea60`, `Free(context, 0x50)` at `0x142025229`, `[component+0xc8] = 0` |
+| the alloc-failure path | `0x1420251e5` | `rax = rbx`, and `rbx` is zero at that point (`xor ebx, ebx` at `0x142024f91` is the last write to it), so the field becomes null and the assembler is still called with a null context (its first action, the reset, dereferences it). Whether this allocator can return null is **not read** |
+
+So `0x141baff30` returns **an allocation, not an object**: the caller asks for
+`0x50` bytes with no alignment flag and treats a null return as "no context".
+`0x14209ea30` is that context's **constructor**: it zeroes `+0x00`..`+0x48`
+(`+0x08`, `+0x10`, `+0x18`, `+0x20` the four array pointers; `+0x28`, `+0x2c`,
+`+0x30`, `+0x34` their counts; `+0x38` the total; `+0x40` the mask table;
+`+0x48` an id count), sets the byte at `+0x3c` to `1`, and returns `rcx`. Its
+destructor `0x14209ea60` is a tail jump to the same reset `0x1420a07a0`, so
+"destroy" and "reset" are one function: it frees `+0x08`, `+0x10`, `+0x20` and
+`+0x40`, destroys and frees the `+0x18` array element by element (element
+destructor `0x142cd3660`, size `count * 0x70 + 0x10`), and zeroes every field
+including `[context+0x00]`.
+
+### Where the `+0x2a == 1` descriptors come from: **the model**
+
+The assembler's first act after the reset is to find its model. It reads the
+node from `[component+0x250]`, then prefers `[[node+0x110]+0x28]` and falls back
+to the accessor `0x141b3d1c0(node)` (`[[node+0xe8]+0x28]`). Both `node+0xe8` and
+`node+0x110` hold the same wrapper class -- the four pointers at
+`node+0xe8`/`+0xf0`/`+0xf8`/`+0x100` and the one at `+0x110` are all
+`{+0x28` model, `+0x30` id array, `+0xac` id count `}` -- and `+0x28` is the
+`STUModel` the per-model body builder reads at `0x14201af2d`.
+
+| what | address | conclusion |
+|---|---|---|
+| the list slot | `0x14209fef6`, `0x14209ff08` | `[model+0x140]`, tag `[model+0x148]` -- field `0xCB4D298D`, the holder list |
+| the tag rule | `0x14209ff0f`..`0x14209ff37` | `tag == 1` puts the data word first, anything else the count first |
+| the elements | `0x14209ff3a`, `0x14209ff40` | a pointer array; each element is a holder |
+| the filter | `0x14209ff43`, `0x14209ff49` | `[holder+0x2a] == 1` and `[holder+0x08] != 0` |
+| the same walk in the body builder | `0x14201b6c0`, `0x14201b6de`, `0x14201b6e8` | `[model+0x140]`, `[holder+0x2a] == 0`, `[holder+0x08] != 0` |
+
+The body builder and this assembler therefore read **one list with two
+modes**: the byte at `+0x2a` selects which consumer owns a holder. The assembler
+has **no mask test** (the builder's `0x14201b6f3` has no counterpart here), so a
+mode-`1` holder is taken whatever its `+0x10` mask says.
+
+### The four arrays, and what the context holds
+
+A first pass counts the holders per arm; a zero sum skips everything
+(`0x14209ff8a` jumps to the epilogue), otherwise one array per non-empty arm is
+allocated and a second pass fills it in list order. The arm is the holder's
+`i32` shape mode at `+0x20` -- the same four-arm switch the body builder makes
+(`0`, `1`, `2`, `4`; `3` and everything else is skipped).
+
+| arm | shape mode | context array | stride | count field | allocation | record writer |
+|---|---|---|---|---|---|---|
+| mesh | `0` | `+0x20` | `0x60` | `+0x34` | `count * 0x60` | unpack `0x141b53af0` (`0x1420a068a`) then `MeshShapeFill` `0x142cae540` (`0x1420a06eb`) |
+| point cloud | `1` | `+0x18` | `0x70` | `+0x30` | `count * 0x70 + 0x10` | unpack `0x141b53b70` (`0x1420a05c5`) then `0x142cd35a0` (`0x1420a0622`); elements constructed by `0x142cd1760` (`0x1420a0228`) |
+| capsule | `2` | `+0x10` | `0x50` | `+0x2c` | `count * 0x50` | six floats from `[holder+0x08]+0x08..0x1c` and a float from `+0x20` |
+| sphere | `4` | `+0x08` | `0x40` | `+0x28` | `count * 0x40` | three floats from `[holder+0x08]+0x08..0x10` and a float from `+0x14` |
+
+The `+0x18` arm is the only one with a header: the allocation is
+`count * 0x70 + 0x10`, the count is stored in the first qword, and the context
+points past it (`0x1420a0216`, `0x1420a023e`). Every size is computed with a
+`mul` whose overflow `cmovb`s the request to `u64::MAX`, from a **sign-extended**
+count, which is what `ow_tank::model_shape_source::Shape::allocation_bytes`
+reproduces.
+
+Beyond the four arrays the context carries two derived fields:
+
+| field | source | conclusion |
+|---|---|---|
+| `+0x48` | `0x142010330(component)` = `[[component+0x8b0]+0x58]` as a `u16`, sign-extended (`0x1420a02c4`, `0x1420a02cc`) | the id count the mask table is sized for |
+| `+0x40` | `Alloc(count * 8, 0x10)` through `0x141bb0120` (`0x1420a02d7`) | a per-id `u64` mask table; every record ORs its holder's `+0x10` mask into the entry of the id that `0x142010a20(component, holder+0x24)` returns (that helper resolves `[component+0x8b0]` itself), skipping the `-1` answer (`0x1420a06ff`, `0x1420a0711`) |
+| `+0x38` | the sum of the four counts (`0x1420a0739`) | the total record count |
+
+Before the holder pass the assembler also builds an **id remap** for the model
+wrappers: for each of the four wrappers at `node+0xe8`..`+0x100` it matches the
+primary wrapper's `u32` ids (`+0x30`, count at `+0xac`) against that wrapper's
+own list, using the tree lookup `0x141b3cc70` when an id is absent, and writes
+the index map to one stack table (`rbp-0x30`). Because that table is reused by
+every iteration, only the **last** wrapper's map is live when the holder pass
+remaps each holder's `+0x10` mask. Whether that is the intended selection (LOD
+order, for instance) is **not read**; the mechanism is what the code shows.
+
+### Who writes `+0x2a == 1`: the holder class's own field, from asset data
+
+The holder class is `0x2DD96D6D`, size `0x30`, registered at `0x14034e290`. Its
+seven fields are declared by five field-installer functions in one module, and
+the offsets they register are exactly the offsets both consumers read:
+
+| offset | field hash | registered at |
+|---|---|---|
+| `+0x08` | `0xB7C8314A` (the embedded mesh block) | `0x141510438` (`0x14151054d`) |
+| `+0x10` | `0xBD18CD91` (the mask) | `0x141510438` (`0x1415105ca`) |
+| `+0x18` | `0x9B0424EB` (the parameter instance) | `0x141510631` (`0x1415106e1`) |
+| `+0x20` | `0xD833F59A` (the shape mode) | `0x141510631` (`0x1415107ea`) |
+| `+0x24` | `0x30F925F4` (the attachment index) | `0x141510805` (`0x141510879`) |
+| `+0x28` | `0x1DE83A05` (the `u16` copied to descriptors) | `0x141510805` (`0x1415108f9`) |
+| `+0x2a` | `0x89AABA94` (the mode byte) | `0x141510382` (`0x1415103ac`) |
+
+So the byte at `+0x2a` is **not written by any code store**: it is a declared
+field, filled by the same instance loader that fills the mask (which all 279
+range holders carry), and it reads as the class default `0` when the payload
+omits it. There is no chunk writer and no runtime writer to find. The mode-`1`
+population is therefore "the models whose holder assets set that field to 1", a
+per-asset fact, and `dev/static_field_scan.py 0x89AABA94` shows the hash also
+names a field of an unrelated class at `+0xcc` (`0x14150a2b1`), so the hash alone
+identifies nothing -- the offset set above does.
+
+### The range's verdict: the assembler has **no input**
+
+`model_shape_source_real::the_range_takes_no_holder_into_the_shape_source`
+(install, 229 model assets):
+
+| measurement | result |
+|---|---|
+| holders over the range's models | **279** |
+| holders that carry the mode byte (`0x89AABA94`) | **0** |
+| holders that carry the shape mode (`0xD833F59A`) | **0** |
+| holders with a mesh block (the other filter test) | **272** |
+| assembler plan, per arm `(mesh, point cloud, capsule, sphere)` | **`(0, 0, 0, 0)`** |
+| the sum the client tests at `0x14209ff8a` | **0**, so it returns before allocating |
+| counterfactual: the same holders with the mode byte at `1` | `(272, 0, 0, 0)` -- the mesh test is not what empties the plan |
+
+So on the practice range the assembler resets the context, finds the model,
+counts zero, and returns; the component keeps an empty context. The 272 mesh
+holders that become Domino body shapes through the *other* consumer are
+exactly the ones this one ignores, because their mode byte is `0`.
+
+### Verdict
+
+| question | answer |
+|---|---|
+| what `0x141baff30` returns here | an **allocation** of `0x50` bytes with no alignment flag (`0x1420251cc`, `0x1420251d1`) |
+| what `0x14209ea30` builds | the context's constructor: zeroed fields, `+0x3c = 1`, returns its argument |
+| is the assembler's container a descriptor container | **no**: it is a `0x50`-byte context of four arrays, their counts, a total and a mask table |
+| where the `+0x2a == 1` descriptors come from | **the model**: `[STUModel+0x140]`, field `0xCB4D298D`, the holder list the body builder also walks |
+| is the kind-`0x11` chunk the source | **no**: nothing in the path reads a chunk, the context is created empty in `0x142024d30`, and the chunk's own fixup (`0x142e492a0`, `formats/chunk-kinds.md`) leaves its payload in the chunk asset |
+| who writes `+0x2a == 1` | the instance loader, from the holder asset's field `0x89AABA94` (declared at `+0x2a` by `0x141510382`); **no code store writes it** |
+| does the range have input for the assembler | **no**: 0 of 279 holders carry the field, so the plan is empty and nothing is allocated |
+
+**What is still open.** (1) The **consumer** of the context's arrays: the only
+reads and writes of `[component+0xc8]` in the component's module are the build
+(`0x1420251be`/`0x1420251e8`) and the teardown (`0x1420251fc`, `0x142020cdd`,
+`0x142021afb`) sites, so nothing in the read set consumes the four arrays.
+(2) The **wrapper class** at `node+0xe8`/`node+0x110` is used, not named: its
+`+0x28` model, `+0x30` id array and `+0xac` count are read, no class
+registration was identified for it, and why `node+0x110` is preferred over
+`node+0xe8` is unread. (3) The four arms' **record writers** (`0x141b53af0`,
+`0x141b53b70`, `0x142cd1760`, `0x142cd35a0`) are not read, and with an empty plan
+on this map no test could pin them. (4) The **id remap**'s intent (which wrapper
+should win) is unread.
+
 ## What this leaves
 
 | line | state |
 |---|---|
 | the fracturable brush path on this map | closed: the range names no `C` (check 1) |
-| the map's kind-`0x11` chunk | its assembler `0x1420a02f6` is a `.pdata` **fragment** of `0x14209fc90`, which **is** called (`0x1420251f5`, inside the component-update path); the earlier "unreachable" verdict is withdrawn, the payload's producer is still unread (check 14) |
+| the map's kind-`0x11` chunk | its assembler `0x1420a02f6` is a `.pdata` **fragment** of `0x14209fc90`, which **is** called (`0x1420251f5`, inside the component-update path); the earlier "unreachable" verdict is withdrawn. Check 15 then reads that assembler: it is a **model-holder** consumer, so the chunk has no consumer in the read set and the payload stays in the chunk asset (check 15) |
+| the assembler `0x14209fc90` | **read (check 15)**: it fills a `0x50`-byte context (`Alloc(0x50,0)` `0x1420251d1`, constructor `0x14209ea30`, store `0x1420251e8`) with four arrays of shape records taken from the **model's** holder list at `+0x140`, filtered on the holder's mode byte `+0x2a == 1`; the context's arrays have no reader in the read set |
+| which holders the assembler takes on this map | **none**: 0 of the 279 holders carries the mode byte (a declared field, `0x89AABA94` at `+0x2a`), so the four counts sum to 0 and it returns before allocating (check 15) |
 | the model's prebuilt collision mesh | **per model asset**: 163/229 models carry a holder list (279 holders, 272 mesh blocks), one `STUModel` each, no model-to-model reference (check 8) |
 | a per-instance body builder | **read: `0x14201ae60..0x14201c887`**, four `E8` callers (state-sync functions of the collision component), teardown `0x14201e790`; it walks the model's holders and emits one `ShapeAddToBody` shape each (check 9) |
 | which holders become shapes on this map | **all 272 mesh holders**: mask all ones, filter byte and shape mode at the class default `0`; 161 of the 229 models (check 9) |
@@ -2069,3 +2283,9 @@ Ordered next reads (the per-model route):
 | the world-creation path is obfuscated | check 14: the constructor's only `E8` caller `0x140be1570` builds a **child** world and is called from `0x14055a346`, in the `.pdata` chained fragment `0x14055a246..0x14055a491` rooted at `0x14055a0f0` |
 | `0x1420a02f6` is reachable | check 14: its `.pdata` entry has unwind flags `4` (`CHAININFO`) -- it is a fragment of `0x14209fc90`, and that root has one `E8` at `0x1420251f5` in `0x142024d30`; check 3's "unreachable" is withdrawn |
 | the range's placed props against the gate | **not tested** (unchanged from check 12's row): the gate bits are runtime state and the record's writer is still unread |
+| the assembler's context is a `0x50`-byte object, not a descriptor container | check 15: `Alloc(0x50, 0)` at `0x1420251d1`, constructor `0x14209ea30`, store at `0x1420251e8`, free with size `0x50` at `0x142025229`; `dev/callers.py 0x14209ea30` -> one `E8` (`0x1420251de`), `0x14209fc90` -> one `E8` (`0x1420251f5`) |
+| the assembler walks the model's holder list with mode byte `1` | check 15: `0x14209fef6`/`0x14209ff08` read `[model+0x140]`/`[model+0x148]`; `0x14209ff43` tests `+0x2a == 1`; the body builder's `0x14201b6c0`/`0x14201b6de` read the same slot with `+0x2a == 0` |
+| the four arms are shape modes `0`, `1`, `2`, `4` | `model_shape_source::tests::{the_arm_set_is_the_four_shape_modes, the_arm_layout_is_the_four_arrays, the_allocation_is_the_stride_times_the_count, the_mask_table_size_is_sign_extended}` |
+| the mode byte is a declared holder field, not a code store | check 15: field `0x89AABA94` at `+0x2a`, registered by `0x141510382` (`0x1415103ac`); the other six fields' installers are `0x141510438`, `0x141510631`, `0x141510805` |
+| the range gives the assembler no input | `model_shape_source_real::the_range_takes_no_holder_into_the_shape_source` (install): 229 models, 279 holders, 0 carrying the mode byte, 272 with a mesh, plan `(0,0,0,0)`, counterfactual `(272,0,0,0)` |
+| the context's arrays have a consumer | **not tested / open**: the only reads of `[component+0xc8]` in the component's module are the build and teardown sites (check 15) |

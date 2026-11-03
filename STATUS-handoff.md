@@ -128,9 +128,15 @@ missing is **data, not code** — and the two producers are both blocked:
   **`0x142024d30`**, called from the collision component's per-frame update slot
   (`0x142019944`, slot `0x142f7d688`) and from `0x14201fbe3`. The earlier
   "unreachable" verdict measured the fragment start; the RVA zero is a fragment
-  artifact. What stays open is the **descriptor-container producer** the
-  assembler consumes. The type-`0x00A` absence affects only the other brush
-  source, not this route.
+  artifact. **But it is not the chunk's consumer**: it reads the **model** at
+  `[[node+0x110]+0x28]` (else `0x141b3d1c0(node)`) and walks `STUModel+0x140`
+  with the mode filter `holder+0x2a == 1` -- the per-model builder uses the same
+  list with `== 0`. Its `0x50`-byte context is scratch, allocated and freed
+  around the call. On the range the plan is **empty**: 279 holders, **0** carry
+  the mode byte (`ow_tank::model_shape_source` + install test
+  `model_shape_source_real`; counterfactual mode 1 gives 272 mesh entries). So
+  the chunk's own consumer remains unknown. The type-`0x00A` absence affects
+  only the other brush source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
 `MAP_CHUNK_COLLISION`, kind `0x12` is `MAP_CHUNK_PATHING` (the 220-cell

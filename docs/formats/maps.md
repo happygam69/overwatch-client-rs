@@ -1363,7 +1363,7 @@ two of the handles):
 | `0x142cf35a0` | 1 `ShapeAddToOwner` + 1 `OwnerCreateBody` | the character controller's own capsule, from the controller's config | no |
 | `0x142cdf9f2` | 1 | a domino body filled from a `0x40`-stride record array (`count << 6` bytes copied from `[rsi+0x18]`), body id from `word[rsi+0x58]` | no |
 | `0x142cb7f10` (`ShapeEntryFromDescriptor`), `0x142cb0a73`, `0x142cd4350` | 3 | the generic descriptor → `0xc0` shape entry plus the per-type record; the qword reads at `+0x68` are the **Domino descriptor's** per-type data | no: different struct, no loader call |
-| `0x140c2813f`, `0x142078562`, `0x1420a02f6`, `0x14210bac0` | 4 `MeshShapeFill` | mesh shapes: `0x140c2813f` from a collider (`ColliderMeshEmit`), `0x142078562` fills `0x58`-stride mesh records whose source is at `+0x20`, `0x1420a02f6` builds a mesh from three `0x60`-stride `{pointer, count}` pairs through `0x141b53b70`, `0x14210bac0` scales the filled vertices | no: no loader call |
+| `0x140c2813f`, `0x142078562`, `0x1420a02f6`, `0x14210bac0` | 4 `MeshShapeFill` | mesh shapes: `0x140c2813f` from a collider (`ColliderMeshEmit`), `0x142078562` fills `0x58`-stride mesh records whose source is at `+0x20`, `0x1420a02f6` builds mesh records from the model's holder list (`+0x140`) through `0x141b53af0`, `0x14210bac0` scales the filled vertices | no: no loader call |
 | `0x142134ba2`, `0x14213528a`, `0x14213ca9f`, `0x14213d0d9`, `0x14213d5b9` | 8 | the geometry object: candidates A and B, `GeometryBuild` (`0x14213c440`), `GeometryFinalize` (`0x14213d0b0`) and the pool-B record creator | no: brush/pool-sourced, read in earlier sessions |
 | `0x1420c63b0` | 5 | a 10 500-byte world ingest with four `ShapeAddToBody` sites and one `OwnerCreateBody`; no code caller and no plain pointer (its data xrefs are internal switch tables). Scanned over its full Ghidra extent (`0x2904` bytes) it reads qwords at `+0x10` but **not** at `+0x58`/`+0x68`, so it is not reading a component header | no header read; input unread past the entry |
 
@@ -1446,8 +1446,8 @@ producer with no `E8` caller can still be reached through a pointer table.
   `+0x10/0x20/0x30/0x40`, then calls `MeshShapeFill` with `record + 0x20`. The
   source arrays are the record's own, built here; the geometry is a **computed
   box**, not stored data.
-* `0x1420a02f6`: a **mesh-source assembler**. `[r8+0x140]`/`[r8+0x148]` is an
-  inline-or-heap container of pointers; the selected pointer is a descriptor
+* `0x1420a02f6`: a **shape-source assembler**. `[r8+0x140]`/`[r8+0x148]` is
+  an inline-or-heap container of pointers; the selected pointer is a descriptor
   with a type byte `+0x2a == 1`, a mode at `+0x20` (0..3) and data pointers at
   `+8/+0x10/+0x18`. Per mode it unpacks `{pointer, count}` pairs with
   `0x141b53b70` (`[pair+8]`/`[pair+0x18]`, inline when the tag word is 1) or
@@ -1458,11 +1458,29 @@ producer with no `E8` caller can still be reached through a pointer table.
   chunk decoder would have to feed — but its descriptors come from the owner's
   `+0x140` container, not from a chunk. **Correction (2026-11-02): it is not
   unreachable.** The address above is a `.pdata` **chained fragment**; the chain
-  root is **`0x14209fc90`** (four entries to `0x1420a075d`), and that root has
+  root is **`0x14209fc90`** (six chained entries spanning
+  `0x14209fc90..0x1420a07a0`, not four to `0x1420a075d`), and that root has
   one `E8` at **`0x1420251f5`** inside `0x142024d30`, which is called from the
   collision component's per-frame update slot (`0x142019944`, slot
   `0x142f7d688`) and from `0x14201fbe3`. The earlier "unreachable" verdict
   measured the fragment start and does not hold.
+  **Correction (check 15 of `formats/static-collision.md`): it is not a chunk
+  consumer, and three details above are wrong.** (a) `r8` is the **`STUModel`**
+  the assembler resolves from the component's node — `[[node+0x110]+0x28]`,
+  falling back to the accessor `0x141b3d1c0(node)` — so `+0x140`/`+0x148` is the
+  model's **holder list**, field `0xCB4D298D`, the same slot and element type
+  the per-model body builder walks at `0x14201b6c0`; it is not the assembler's
+  container, which is a separate `0x50`-byte context (`Alloc(0x50, 0)` at
+  `0x1420251d1`, constructor `0x14209ea30`). (b) The mode at `+0x20` is the
+  four-arm shape switch `0`, `1`, `2`, `4` — `3` is skipped, as in the body
+  builder. (c) The `0x60`/`0x40` strides above are two of **four**: mode `0`
+  `0x60` (array `+0x20`, count `+0x34`), mode `1` `0x70` (`+0x18`/`+0x30`, with a
+  `0x10`-byte count header), mode `2` `0x50` (`+0x10`/`+0x2c`), mode `4` `0x40`
+  (`+0x08`/`+0x28`). The descriptors are the model's holders whose **mode byte
+  `+0x2a` is `1`** (the body builder takes `0`), and that byte is the holder
+  class's declared field `0x89AABA94` at `+0x2a` (`0x141510382`), so no chunk
+  decoder feeds this function: on the practice range 0 of 279 holders carry it
+  and the assembler returns before allocating.
 
 **Anchor 3 — `0x142cdf9f2` (0x131 bytes).** A **Domino body-list appender**:
 `rsi` is a vector holder `{data +0x18, capacity +0x20, count +0x24}`; it grows
@@ -1514,6 +1532,17 @@ collision/domino module (`0x14200000`..`0x142d0000`) **no store** to `+0x140`
 or `+0x148` exists at all (a decoded scan of every `.pdata` function in that
 range, register or immediate source), so the container is filled by a
 constructor or loader outside that module — the next search starts there.
+
+**That producer is read (check 15 of `formats/static-collision.md`), and it is
+not a chunk loader.** The `+0x140`/`+0x148` list is the **model's** holder list
+(field `0xCB4D298D` of `STUModel`), the same list the per-model body builder
+walks, and the `+0x2a == 1` byte is the holder class's declared field
+`0x89AABA94` at `+0x2a` — filled by the model asset's instance loader, which is
+exactly why no store to `+0x140`/`+0x148` exists in the code module: the array
+header is written by the reflection loader from the asset, not by a hand-written
+store. `0x1420a02f6`'s own container is a `0x50`-byte context created empty at
+`0x1420251d1`; its four arrays have no reader in the read set. On the practice
+range 0 of 279 holders carry the mode byte, so the assembler takes nothing.
 
 ### Which chunk kind is which: **read** (2026-11-02)
 

@@ -3,6 +3,22 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the reachable assembler reads the model, not the chunk
+
+- `0x14209fc90` is reachable (called at `0x1420251f5` from the component
+  update), but its `[r8+0x140]` list is the **model**
+  (`[[node+0x110]+0x28]`, else `0x141b3d1c0(node)`) and its filter is
+  `holder+0x2a == 1` -- the per-model body builder reads the same list with
+  `== 0`. Its `0x50`-byte context is scratch, allocated and freed around the
+  call.
+- The `+0x2a` mode byte is a declared holder field (`0x89AABA94` registered at
+  `+0x2a` by `0x141510382`), default 0. On the range the assembler's plan is
+  **empty**: 279 holders, 0 carry the byte (`ow_tank::model_shape_source`, 7
+  unit tests, install test `model_shape_source_real`; counterfactual mode 1 gives
+  272 mesh entries).
+- So the chunk's own consumer is unknown again, and the chunk-route correction
+  in maps.md/open-questions is narrowed accordingly.
+
 ## 2026-11-02 - the chunk assembler is on the component-update path
 
 - `0x1420a02f6` is a `.pdata` **chained fragment**; the chain root is

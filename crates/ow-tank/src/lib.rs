@@ -46,6 +46,7 @@ pub mod mesh_shape;
 pub mod model;
 pub mod model_body;
 pub mod model_collision;
+pub mod model_shape_source;
 pub mod mstu;
 pub mod packages;
 pub mod replay;
