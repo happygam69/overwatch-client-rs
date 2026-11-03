@@ -1241,7 +1241,25 @@ hundreds of unrelated classes, so none was written.
 
 **Still open:** the slot-8 transfer that hands the record over, including
 **register-indirect** forms (`mov reg,[vt+0x40]; call reg`), and the writer of
-the record's `+0x10`/`+0x18`. That is **runtime, not asset, data**, so no install test
+the record's `+0x10`/`+0x18`.
+
+**Round 10 (2026-11-02): the support-point hull is exact; the GJK accept is
+open.** `0x142caed30`'s support branch is read operation for operation and
+implemented in `ow_sim::collide::mesh_sweep`: `conj(q) ⊗ block_q` (conjugate
+`XORPS` with `(-0,-0,-0,+0)`, never normalised), rotation rows with
+`1-(2s·s)-(2s·s)` and lane-3 zeroing, translation from `start - position`,
+`((p.x·row0 + t) + p.y·row1) + p.z·row2`, then the record's inverse scale; fold
+`MINPS`/`MAXPS`; `start = centre = (max+min)*0.5`, `end += centre - start`,
+`step = (max-min)*0.5 + expansion + 0.02` (unconditional). The client's triangle
+test `0x142cce430` takes the read path only when `count == 0` and all scaled
+expansion lanes are `≤ 0.005` (ordered compare, so NaN fails); otherwise it
+calls **`0x142cc9460`**, a closest-point GJK with a cached simplex, ≤ `0x13`
+iterations, subfunctions `0x142cc8d80` (3-simplex) and `0x142cc7740`
+(4-simplex). **`dev/mesh_support_diff.py`: 17 cases, 0 failures, 11 exact, 6
+open (the triangle accept).** The client's contact for the translated capsule
+case is known (tri 1, ids `0x12`/`0x22`, point `(0.75,0.9,3.01)`, normal
+`(0,0,1)`, fraction `0x3df5c290`) but not reproduced. Next: read `0x142cc9460`
+and the two simplex functions and pin those 6 cases. That is **runtime, not asset, data**, so no install test
 is written — the doc says `not tested`.
 
 ---

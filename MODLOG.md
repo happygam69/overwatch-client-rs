@@ -3,6 +3,22 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the support-point hull is exact; GJK accept still open
+
+- `0x142caed30`'s support-point branch read operation for operation and
+  implemented in `ow_sim::collide::mesh_sweep`: `conj(q) ⊗ block_q`, rotation
+  rows `1-(2s·s)-(2s·s)` with lane-3 zeroing, `((p.x·row0 + t) + p.y·row1) +
+  p.z·row2`, inverse scale, `MINPS`/`MAXPS` fold, `start = centre =
+  (max+min)*0.5`, `end += centre - start`, `step = (max-min)*0.5 + expansion +
+  0.02` (unconditional).
+- `0x142cce430` takes the read path only when count == 0 and every scaled
+  expansion lane is <= 0.005 (ordered, so NaN fails); otherwise `0x142cc9460`, a
+  closest-point GJK (<= 0x13 iterations; 0x142cc8d80, 0x142cc7740), still
+  unread.
+- `dev/mesh_support_diff.py`: 17 support queries against the real function, 0
+  failures, 11 exact agreements, 6 open triangle accepts. `fn/MeshSweep` stays
+  verified; the count-0 path is unchanged.
+
 ## 2026-11-02 - the reachable assembler reads the model, not the chunk
 
 - `0x14209fc90` is reachable (called at `0x1420251f5` from the component

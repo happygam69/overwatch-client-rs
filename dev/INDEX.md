@@ -77,6 +77,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `ks_key_test.py` | Test candidate keys/counters against the known page keystream. | 109 |
 | `ks_linear.py` | Berlekamp-Massey linear-complexity test on the page keystream. | 62 |
 | `loader_imports.py` | (no header) | 60 |
+| `mesh_support_diff.py` | Differential probe: the type-3 support-point walk, client vs `ow-sim`. | 358 |
 | `model_class_search.py` | Search the reference STU class definitions for a class whose declared field | 115 |
 | `model_registry.py` | Enumerate the client's registered class descriptors by their call sites. | 195 |
 | `offline_page_recover.py` | Recover Overwatch.exe `.text` / `.pdata` offline with the known page cipher. | 1240 |

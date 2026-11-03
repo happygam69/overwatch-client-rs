@@ -35,6 +35,35 @@
 //! fourth lane is the constant's zero and the absolute-value mask zeroes the
 //! fourth lane. It is kept even though nothing consumes it, because the client
 //! writes all four lanes and the harness compares them.
+//!
+//! # The support-point branch of the type-3 body (`0x142caef15..0x142caf1a5`)
+//!
+//! A query block with a positive support-point count is not a point sweep: the
+//! body first folds the block's transformed support points into a hull and then
+//! walks the mesh with it. The transform composes two rotations - the block's own
+//! quaternion (`block+0x40`) with the shape transform's conjugate - so each local
+//! point maps through one matrix built from that product; the translation is the
+//! shape transform's rotation applied to the sweep's start alone. The fold is
+//! `MINPS`/`MAXPS` over the transformed points, and it replaces the sweep:
+//!
+//! ```text
+//! start = centre = (max + min) * 0.5
+//! end   = end + (centre - start)          // the same delta, so `end - start`
+//!                                         // is unchanged
+//! step  = (max - min) * 0.5 + expansion + 0.02
+//! ```
+//!
+//! The `+0.02` here is unconditional (unlike the point sweep's, which only applies
+//! when all four expansion lanes are positive), and it is added after the
+//! expansion, not to it. `step` is what every bounding box the walk tests is
+//! inflated by, so both the centre and the half extent steer the walk. The body
+//! also recentres the transformed points in place for the block copy the triangle
+//! test receives; that array is only read by `0x142cc9460`.
+//!
+//! The triangle test itself (`0x142cce430`) takes two paths: the analytic one
+//! when the support-point count is zero and every lane of the block's scaled
+//! expansion compares `<= 0.005`, and `0x142cc9460` otherwise. Only the analytic
+//! path is implemented; see [`mesh_triangle`].
 
 use crate::movement::{maxss, minss};
 
@@ -544,11 +573,20 @@ fn sign_bit(v: f32) -> bool {
     v.to_bits() & 0x8000_0000 != 0
 }
 
-/// `0x142cce430`'s accepted branch: one triangle against the query segment.
+/// `0x142cce430`: one triangle against the query block.
 ///
-/// `count` is the query block's support-point count, which the mesh walk
-/// forwards untouched; a non-zero count or an expansion that is `<= 0.005` on
-/// every lane hands the triangle to `0x142cc9460`, which is unread.
+/// The leaf's first test is `CMPLEPS` of the block's scaled expansion against
+/// the `0.005` splat at `0x1435ecda0`, accepted only when all four lanes
+/// compare `<=` (an ordered compare: a `NaN` lane is not `<=`). Its second test
+/// is `dword [block+0x38] == 0`. Both must hold for the analytic path below;
+/// every other state builds a stack descriptor and calls `0x142cc9460`.
+///
+/// `count` is the query block's support-point count, forwarded untouched from
+/// the block the walk copies. `0x142cc9460` is a GJK distance solver with a
+/// cached simplex (itself calling `0x142cc8d80` for a triangle simplex and
+/// `0x142cc7740` for a tetrahedron) and is **not implemented**; this function
+/// therefore returns a miss on the path that reaches it, which is the one place
+/// where the type-3 narrowphase still differs from the client.
 fn mesh_triangle(
     vertices: [Quad; 3],
     start: Quad,
@@ -620,11 +658,189 @@ fn rot3_inverted(v: Quad) -> Quad {
     [v[2], v[0], v[1], v[3]]
 }
 
+/// `SHUFPS dst, src, imm8`: lanes 0 and 1 are picked from `dst`, lanes 2 and 3
+/// from `src`, each by the two-bit field `imm8 >> (2 * lane)`.
+#[inline]
+fn shufps(dst: Quad, src: Quad, imm: u8) -> Quad {
+    let pick = |field: u8, from: &Quad| from[(field & 3) as usize];
+    [
+        pick(imm, &dst),
+        pick(imm >> 2, &dst),
+        pick(imm >> 4, &src),
+        pick(imm >> 6, &src),
+    ]
+}
+
+/// `XORPS` against a four-lane bit mask: a sign flip that carries a `NaN`
+/// payload through unchanged and swaps `+0.0` with `-0.0`, which arithmetic
+/// negation does not.
+#[inline]
+fn xor_mask(v: Quad, mask: [u32; 4]) -> Quad {
+    [
+        f32::from_bits(v[0].to_bits() ^ mask[0]),
+        f32::from_bits(v[1].to_bits() ^ mask[1]),
+        f32::from_bits(v[2].to_bits() ^ mask[2]),
+        f32::from_bits(v[3].to_bits() ^ mask[3]),
+    ]
+}
+
+/// `ANDPS` against a four-lane bit mask: an identity on the lanes whose mask is
+/// all ones, and a zero on the lanes whose mask is zero.
+#[inline]
+fn and_mask(v: Quad, mask: [u32; 4]) -> Quad {
+    [
+        f32::from_bits(v[0].to_bits() & mask[0]),
+        f32::from_bits(v[1].to_bits() & mask[1]),
+        f32::from_bits(v[2].to_bits() & mask[2]),
+        f32::from_bits(v[3].to_bits() & mask[3]),
+    ]
+}
+
+/// `(-0, -0, -0, +0)` at `0x143110d50`: the conjugate mask. The conjugation is a
+/// sign flip, not an arithmetic negation.
+const CONJUGATE: [u32; 4] = [0x8000_0000, 0x8000_0000, 0x8000_0000, 0];
+/// `(0, 0, -0, -0)` at `0x143110d70`, `(-0, 0, 0, -0)` at `0x143110d60` and
+/// `(0, -0, 0, -0)` at `0x142f860e0`: the sign pattern of the composed
+/// quaternion's three shuffle terms.
+const PRODUCT_MASK_Z: [u32; 4] = [0, 0, 0x8000_0000, 0x8000_0000];
+const PRODUCT_MASK_X: [u32; 4] = [0x8000_0000, 0, 0, 0x8000_0000];
+const PRODUCT_MASK_Y: [u32; 4] = [0, 0x8000_0000, 0, 0x8000_0000];
+/// `(0xffffffff, 0xffffffff, 0xffffffff, 0)` at `0x1430a4b40`: every bit kept on
+/// lanes 0..2, lane 3 zeroed.
+const KEEP_LOW_THREE: [u32; 4] = [0xffff_ffff, 0xffff_ffff, 0xffff_ffff, 0];
+
+/// `0x142caef15..0x142caf055`: the support-point hull's affine map.
+///
+/// `q` is the shape transform's quaternion, `b` the query block's quaternion
+/// (`block+0x40`) and `v` the sweep's start relative to the shape's position,
+/// all before the mesh-space transform. The three returned rows are the
+/// rotation of the composed quaternion `conj(q) * b`; the fourth return is that
+/// same rotation applied to `v` alone. A point `p` of the block's local support
+/// array maps to `((p.x * row0 + t) + p.y * row1) + p.z * row2` - the sums are in
+/// that order in the leaf, which is why a re-associated form would differ in the
+/// last bit.
+fn support_hull_affine(q: Quad, b: Quad, v: Quad) -> ([Quad; 3], Quad) {
+    // `xorps` with the conjugate mask: `c = conj(q)`.
+    let c = xor_mask(q, CONJUGATE);
+    // The composed quaternion, as four shuffle-and-sign products summed left to
+    // right. `S` is `conj(q) * b`; the leaf never normalises it.
+    let mut composed = mul_lane(xor_mask(shufps(c, c, 0x1b), PRODUCT_MASK_Z), splat(b[0]));
+    composed = add_lane(composed, mul_lane(splat(b[3]), c));
+    composed = add_lane(
+        composed,
+        mul_lane(xor_mask(shufps(c, c, 0x4e), PRODUCT_MASK_X), splat(b[1])),
+    );
+    composed = add_lane(
+        composed,
+        mul_lane(xor_mask(shufps(c, c, 0xb1), PRODUCT_MASK_Y), splat(b[2])),
+    );
+    let rot_c = shufps(c, c, 0xc9);
+
+    // The translation is the same rotation applied to `v` alone: `2 * rot3(
+    // rot3(s) * c - s * rot3(c)) + v` with `s = c.w * v + rot3(rot3(v) * c -
+    // rot3(c) * v)`.
+    let cross = rot3(sub_lane(mul_lane(rot3(v), c), mul_lane(rot_c, v)));
+    let spin = add_lane(mul_lane(splat(c[3]), v), cross);
+    let cross2 = rot3(sub_lane(mul_lane(rot3(spin), c), mul_lane(spin, rot_c)));
+    let translation = add_lane(add_lane(cross2, cross2), v);
+
+    // The rotation matrix of `composed`: the diagonal from `1 - (2s * s) -
+    // (2s * s)`, the off-diagonal terms from `rot3(2s) * s.w` and the two
+    // remaining `2s * s` shuffles. `2s` is the leaf's `ADDPS` of `s` with
+    // itself; the products are the same terms `rotation_rows` builds, in the
+    // leaf's own association, and the last lane keeps the diagonal constant's
+    // zero.
+    let doubled = add_lane(composed, composed);
+    let square = mul_lane(doubled, composed);
+    let diagonal = sub_lane(
+        sub_lane(
+            DIAG_BASE,
+            and_mask(shufps(square, square, 0xc1), KEEP_LOW_THREE),
+        ),
+        and_mask(shufps(square, square, 0xda), KEEP_LOW_THREE),
+    );
+    let half = mul_lane(
+        shufps(doubled, doubled, 0xe6),
+        shufps(composed, composed, 0xd0),
+    );
+    let spin_term = mul_lane(rot3(doubled), splat(composed[3]));
+    let plus = add_lane(spin_term, half);
+    let minus = sub_lane(half, spin_term);
+
+    // The rows are assembled from lane permutations of the diagonal and of the
+    // two off-diagonal terms; the lane choices are the leaf's SHUFPS immediates.
+    let second = shufps(shufps(plus, minus, 0x49), shufps(plus, minus, 0x49), 0x78);
+    let third = shufps(shufps(plus, minus, 0xa0), shufps(plus, minus, 0xa0), 0x88);
+    let row0 = shufps(
+        shufps(diagonal, second, 0x4c),
+        shufps(diagonal, second, 0x4c),
+        0x78,
+    );
+    let row1 = {
+        let partial = shufps(diagonal, second, 0xed);
+        shufps(partial, partial, 0x72)
+    };
+    let row2 = shufps(third, diagonal, 0xe4);
+    ([row0, row1, row2], translation)
+}
+
+/// `0x142caef15..0x142caf1a5`: fold the block's transformed support points into
+/// the hull the walk continues with.
+///
+/// Each point is `((p.x * row0 + t) + p.y * row1) + p.z * row2`, scaled lane-wise
+/// by the shape's inverse scale; the fold is `MINPS`/`MAXPS` over all four lanes
+/// starting from the first point, whose rule is that the second operand wins on
+/// a tie or a `NaN`. The results are the hull's start (the cloud's centre), its
+/// end (the sweep's end moved by the same centre delta) and the inflation
+/// `(max - min) * 0.5 + expansion + 0.02`, which is added to every bounding box
+/// the walk tests. The in-place recentring of the transformed points exists only
+/// for the block copy the triangle test receives and is not needed here.
+fn support_hull(
+    points: &[u8],
+    count: usize,
+    q: Quad,
+    b: Quad,
+    v: Quad,
+    inverse: Quad,
+    start: Quad,
+    end: Quad,
+    expansion: Quad,
+) -> (Quad, Quad, Quad) {
+    let (rows, translation) = support_hull_affine(q, b, v);
+    let mut low = [0.0f32; 4];
+    let mut high = [0.0f32; 4];
+    for index in 0..count {
+        let base = index * MESH_VERTEX_LEN;
+        let mut point = add_lane(mul_lane(splat(f32_at(points, base)), rows[0]), translation);
+        point = add_lane(point, mul_lane(splat(f32_at(points, base + 4)), rows[1]));
+        point = add_lane(point, mul_lane(splat(f32_at(points, base + 8)), rows[2]));
+        let point = mul_lane(point, inverse);
+        if index == 0 {
+            low = point;
+            high = point;
+        } else {
+            for lane in 0..4 {
+                low[lane] = minss(low[lane], point[lane]);
+                high[lane] = maxss(high[lane], point[lane]);
+            }
+        }
+    }
+    let centre = mul_lane(add_lane(high, low), HALF);
+    let step = add_lane(
+        add_lane(mul_lane(sub_lane(high, low), HALF), expansion),
+        splat(0.02),
+    );
+    let end = add_lane(end, sub_lane(centre, start));
+    (centre, end, step)
+}
+
 /// `0x142caed30` type 3 (mesh): a swept query against a triangle BVH.
 ///
-/// Only the count `<= 0` path is implemented. The triangle callback argument
-/// is null on this path (the wrapper `0x142caed10` zeroes it), so the walk
-/// never stops early.
+/// The count `> 0` branch (the support-point hull at
+/// `0x142caef15..0x142caf1a5`) is implemented; what it hands each triangle to
+/// (`0x142cc9460`) is not, so a support-point query reaches the client's walk
+/// but not its triangle accept. The triangle callback argument is null on this
+/// path (the wrapper `0x142caed10` zeroes it), so the walk never stops early.
 pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) -> MeshSweep {
     let missed = MeshSweep {
         hit: None,
@@ -642,24 +858,42 @@ pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) 
 
     let position = quad_at(xform, 0x00);
     let q = quad_at(xform, 0x10);
-    let start = quad_at(block, 0x00);
-    let end = quad_at(block, 0x10);
+    let start_world = quad_at(block, 0x00);
+    let end_world = quad_at(block, 0x10);
     // The motion budget shrinks to the last accepted fraction (0x142caf5c1).
     let mut motion = quad_at(block, 0x20);
     let count = i32_at(block, 0x38);
     let mask = u16_at(block, 0x70);
     let expansion = mul_lane(quad_at(block, 0x50), inverse);
-    if count > 0 {
-        return missed;
-    }
 
-    let start = mul_lane(rotate_to_local(q, sub_lane(start, position)), inverse);
-    let end = mul_lane(rotate_to_local(q, sub_lane(end, position)), inverse);
-    let step = if all_lanes(|lane| 0.0 < expansion[lane]) {
+    let mut start = mul_lane(rotate_to_local(q, sub_lane(start_world, position)), inverse);
+    let mut end = mul_lane(rotate_to_local(q, sub_lane(end_world, position)), inverse);
+    let mut step = if all_lanes(|lane| 0.0 < expansion[lane]) {
         add_lane(splat(0.02), expansion)
     } else {
         expansion
     };
+
+    if count > 0 {
+        // The support-point hull replaces the sweep's start and end with the
+        // point cloud's centre (and the end shifted by the same delta), and
+        // the expansion with centre-relative half extent + expansion + 0.02.
+        let points = world.slice(read_pointer(block, 0x30), count as usize * MESH_VERTEX_LEN);
+        let (hull_start, hull_end, hull_step) = support_hull(
+            points,
+            count as usize,
+            q,
+            quad_at(block, 0x40),
+            sub_lane(start_world, position),
+            inverse,
+            start,
+            end,
+            expansion,
+        );
+        start = hull_start;
+        end = hull_end;
+        step = hull_step;
+    }
 
     let direction = sub_lane(end, start);
     let far = add_lane(mul_lane(motion, direction), start);
@@ -1477,6 +1711,39 @@ mod tests {
         bytes
     }
 
+    /// The free run in the test world, after the four triangles.
+    const SUPPORT_POINTS_AT: usize = 0x380;
+
+    /// A query block with `count` support points: the pointer names the array the
+    /// test world carries at [`SUPPORT_POINTS_AT`], and the block's own
+    /// quaternion is passed through.
+    fn mesh_block_with_points(
+        start: Quad,
+        end: Quad,
+        motion: f32,
+        expansion: f32,
+        quat: Quad,
+        count: i32,
+        mask: u16,
+    ) -> Vec<u8> {
+        let mut bytes = mesh_block(start, end, motion, expansion, count, mask);
+        bytes[0x30..0x38].copy_from_slice(&(MESH_BASE + SUPPORT_POINTS_AT as u64).to_le_bytes());
+        put_quad(&mut bytes, 0x40, quat);
+        bytes
+    }
+
+    fn mesh_world_with_points(points: &[[f32; 3]]) -> Vec<u8> {
+        let mut world = fixture(1.0, 1.0).world;
+        for (index, point) in points.iter().enumerate() {
+            put_quad(
+                &mut world,
+                SUPPORT_POINTS_AT + index * MESH_VERTEX_LEN,
+                [point[0], point[1], point[2], 0.0],
+            );
+        }
+        world
+    }
+
     #[test]
     fn a_mesh_sweep_down_onto_a_quad_reports_the_triangle_that_contains_it() {
         let mesh = fixture(1.0, 1.0);
@@ -1592,21 +1859,225 @@ mod tests {
         assert_eq!(sweep.leaves, 0);
     }
 
-    #[test]
-    fn a_mesh_block_with_support_points_is_not_implemented() {
-        // The count > 0 path hands every triangle to `0x142cc9460`.
+    /// One `mesh_sweep` call over a world the caller supplies (so a test can put
+    /// support points in it).
+    fn sweep_world(world: &[u8], block: &[u8], xform: &[u8]) -> MeshSweep {
         let mesh = fixture(1.0, 1.0);
-        let block = mesh_block(
+        let world = MeshWorld {
+            base: MESH_BASE,
+            bytes: world,
+        };
+        mesh_sweep(&mesh.record, &world, block, xform)
+    }
+
+    fn bits_of(quad: Quad) -> [u32; 4] {
+        [
+            quad[0].to_bits(),
+            quad[1].to_bits(),
+            quad[2].to_bits(),
+            quad[3].to_bits(),
+        ]
+    }
+
+    fn quad_of_bits(bits: [u32; 4]) -> Quad {
+        [
+            f32::from_bits(bits[0]),
+            f32::from_bits(bits[1]),
+            f32::from_bits(bits[2]),
+            f32::from_bits(bits[3]),
+        ]
+    }
+
+    /*
+     * The support-point hull (`0x142caef15..0x142caf1a5`).
+     *
+     * The expected values are a golden vector: they come from a second,
+     * independent float32 transcription of the branch's operation sequence made
+     * during the read, not from this code. The walk-level proof that the client
+     * builds the same hull is `dev/mesh_support_diff.py`, which compares these
+     * counters against the real `0x142caed30`.
+     */
+
+    /// The affine map's rows and translation for a rotated block quaternion and a
+    /// rotated shape transform, pinned bit for bit.
+    #[test]
+    fn the_support_hull_affine_is_the_read_map() {
+        let q = quad_of_bits([0x3e4c_cccd, 0xbe99_999a, 0x3dcc_cccd, 0x3f6d_6796]);
+        let b = quad_of_bits([0x3f00_0000, 0x3e80_0000, 0xbe00_0000, 0x3f51_d689]);
+        let v = quad_of_bits([0x3fc0_0000, 0xc010_0000, 0x3f40_0000, 0x0000_0000]);
+        let (rows, translation) = support_hull_affine(q, b, v);
+        assert_eq!(
+            bits_of(translation),
+            [0x3fc0_0000, 0xc010_0000, 0x3f40_0000, 0x0000_0000]
+        );
+        assert_eq!(
+            [bits_of(rows[0]), bits_of(rows[1]), bits_of(rows[2])],
+            [
+                [0x3eb7_ca19, 0xbec4_56f7, 0xbf59_d6e9, 0x0000_0000],
+                [0x3f58_a1f4, 0x3f04_b2a0, 0x3dfc_ae44, 0x0000_0000],
+                [0x3ec9_9c36, 0xbf43_ada4, 0x3f02_b504, 0x0000_0000],
+            ]
+        );
+    }
+
+    /// An identity block quaternion and an identity shape quaternion leave the
+    /// rotation at the identity and the translation at the start: the hull is the
+    /// plain point box then.
+    #[test]
+    fn an_identity_block_quaternion_is_the_identity_rotation() {
+        let identity = [0.0, 0.0, 0.0, 1.0];
+        let v = [1.0, 2.0, 3.0, 0.0];
+        let (rows, translation) = support_hull_affine(identity, identity, v);
+        assert_eq!(translation, v);
+        assert_eq!(rows[0], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(rows[1], [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(rows[2], [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    /// The fold's four outputs, pinned bit for bit on a two-point capsule-shaped
+    /// cloud: the centre, the shifted end and the inflated step.
+    #[test]
+    fn the_support_hull_folds_two_points_into_the_walk_hull() {
+        let q = quad_of_bits([0x3e4c_cccd, 0xbe99_999a, 0x3dcc_cccd, 0x3f6d_6796]);
+        let b = quad_of_bits([0x3f00_0000, 0x3e80_0000, 0xbe00_0000, 0x3f51_d689]);
+        let v = quad_of_bits([0x3fc0_0000, 0xc010_0000, 0x3f40_0000, 0x0000_0000]);
+        let start = quad_of_bits([0x4060_0000, 0xbfa0_0000, 0x4000_0000, 0x0000_0000]);
+        let end = quad_of_bits([0x4060_0000, 0xc114_0000, 0x4000_0000, 0x0000_0000]);
+        let expansion = quad_of_bits([0x3ecc_cccd; 4]);
+        let points = points(&[[0.0, 0.0, 0.0], [0.0, 0.0, 1.8]]);
+        let (centre, shifted_end, step) =
+            support_hull(&points, 2, q, b, v, [1.0; 4], start, end, expansion);
+        assert_eq!(
+            bits_of(centre),
+            [0x3fed_5cbf, 0xc03c_0712, 0x3f9a_d175, 0x0000_0000]
+        );
+        assert_eq!(
+            bits_of(shifted_end),
+            [0x3fed_5cbf, 0xc12f_01c4, 0x3f9a_d175, 0x0000_0000]
+        );
+        assert_eq!(
+            bits_of(step),
+            [0x3f46_3e9c, 0x3f8d_d0b2, 0x3f61_2808, 0x3ed7_0a3e]
+        );
+    }
+
+    /// A capsule-shaped query reaches the client's walk: the hull's centre and
+    /// step decide which leaves the walk expands, and the counters are the ones
+    /// the client's `0x142caed30` publishes for this query
+    /// (`dev/mesh_support_diff.py`, case "capsule over quad A").
+    ///
+    /// The contact is **not** reproduced: the client's triangle test accepts here
+    /// and `0x142cc9460` is not implemented, so this reports a miss where the
+    /// client reports a hit. That is the one remaining deviation of the type-3
+    /// narrowphase and it is the last assertion below.
+    #[test]
+    fn a_support_point_hull_reaches_the_client_walk() {
+        let world = mesh_world_with_points(&[[0.0, 0.0, 0.4], [0.0, 0.0, -0.4]]);
+        let block = mesh_block_with_points(
             [0.75, 0.9, 5.0, 0.0],
             [0.75, 0.9, -5.0, 0.0],
             1.0,
-            0.0,
-            1,
+            0.4,
+            [0.0, 0.0, 0.0, 1.0],
+            2,
             0x0001,
         );
-        let sweep = mesh.sweep(&block, &identity_xform([0.0, 0.0, 0.0]));
+        let sweep = sweep_world(&world, &block, &identity_xform([0.0, 0.0, 0.0]));
+        assert_eq!(sweep.internals, 1);
+        assert_eq!(sweep.leaves, 1);
+        assert!(sweep.hit.is_none(), "0x142cc9460 is unread");
+    }
+
+    /// Beside the quads the same capsule expands the root and clears both leaves;
+    /// the counters are again the client's.
+    #[test]
+    fn a_support_point_hull_beside_the_mesh_clears_the_leaves() {
+        let world = mesh_world_with_points(&[[0.0, 0.0, 0.4], [0.0, 0.0, -0.4]]);
+        let block = mesh_block_with_points(
+            [3.0, 0.5, 5.0, 0.0],
+            [3.0, 0.5, -5.0, 0.0],
+            1.0,
+            0.4,
+            [0.0, 0.0, 0.0, 1.0],
+            2,
+            0x0001,
+        );
+        let sweep = sweep_world(&world, &block, &identity_xform([0.0, 0.0, 0.0]));
+        assert_eq!(sweep.internals, 1);
+        assert_eq!(sweep.leaves, 0);
         assert!(sweep.hit.is_none());
-        assert_eq!(sweep.internals, 0);
+    }
+
+    /// The leaf reach sits exactly on `centre + step`: at that boundary the leaf
+    /// is expanded and one ULP further out it is not. The two runs differ, which
+    /// is what makes the step an observable; the client agrees on both
+    /// (`dev/mesh_support_diff.py`, the step ladder).
+    #[test]
+    fn the_support_point_step_decides_the_leaf_reach() {
+        let points = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]];
+        let block = mesh_block_with_points(
+            [0.0, 0.0, 5.0, 0.0],
+            [0.0, 0.0, -5.0, 0.0],
+            1.0,
+            0.0,
+            [0.0, 0.0, 0.0, 1.0],
+            2,
+            0x0001,
+        );
+        let at = f32::from_bits(0x3ed7_0a3e); // 0.4 + 0.02
+        let mut leaves = Vec::new();
+        for boundary in [at, f32::from_bits(at.to_bits() + 1)] {
+            let mut world = mesh_world_with_points(&points);
+            // A root whose second child sits two nodes on, one leaf square
+            // starting at the boundary, and a masked-out third node.
+            let mut nodes = vec![0u8; MESH_NODE_LEN * 3];
+            put_node(
+                &mut nodes,
+                0,
+                [-8.0, -8.0, -8.0],
+                [8.0, 8.0, 8.0],
+                2,
+                0x0001,
+                0,
+                0,
+            );
+            put_node(
+                &mut nodes,
+                MESH_NODE_LEN,
+                [boundary, 0.0, 0.0],
+                [boundary + 1.0, 1.0, 0.0],
+                0,
+                0x0001,
+                0,
+                1,
+            );
+            put_node(
+                &mut nodes,
+                2 * MESH_NODE_LEN,
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+                0,
+                0x0000,
+                0,
+                0,
+            );
+            world[NODES_AT..NODES_AT + nodes.len()].copy_from_slice(&nodes);
+            put_quad(&mut world, VERTICES_AT, [boundary, 0.0, 0.0, 0.0]);
+            put_quad(
+                &mut world,
+                VERTICES_AT + MESH_VERTEX_LEN,
+                [boundary + 1.0, 0.0, 0.0, 0.0],
+            );
+            put_quad(
+                &mut world,
+                VERTICES_AT + 2 * MESH_VERTEX_LEN,
+                [boundary + 1.0, 1.0, 0.0, 0.0],
+            );
+            put_triangle(&mut world, TRIANGLES_AT, [0, 1, 2], [0x51, 0x52], 0x0001);
+            let sweep = sweep_world(&world, &block, &identity_xform([0.0, 0.0, 0.0]));
+            leaves.push(sweep.leaves);
+        }
+        assert_eq!(leaves, vec![1, 0]);
     }
 
     #[test]

@@ -2195,25 +2195,128 @@ copies the descriptor into a stack block that runs from the start quad through
 the byte at `+0x72`, `0x73` bytes; the tests hand the narrowphase a `0x78`-byte
 block so every four-lane read stays inside it.
 
-`MeshTriangleTest` (`0x142cce430`) takes its read triangle path only when **the
-support-point count is exactly `0`** and **every lane of the scaled expansion is
-at most `0.005`**. Every other state builds a stack descriptor from the query
-and calls `0x142cc9460`, which is **unread**. So:
+Where each field comes from is read: the dispatcher `0x142cc45a0` copies the
+support-point pointer from the query descriptor's `+0x28`, the count from its
+`+0x30`, the block quaternion from its `+0x40`, the expansion from its `+0x50`
+splatted across all four lanes, the layer mask from its `+0x58` and the `+0x72`
+byte from its `+0x70`, with the motion scalar (descriptor `+0x20`) splatted too.
+The descriptor is the **querying** shape's: the driver `0x142cbd510` runs
+`sweep_bounds` (`0x142cd5540`) on the block and hands a copy to
+`ShapeNarrowphase` (`0x142cc1610`). So a support point is the querying shape's own
+local point - for a capsule, one of its two axis ends plus the radius in the
+expansion - and not a world position; the block's start and end are where that
+shape is.
 
-- a **capsule** query (support points, and a radius far above `0.005`) never
-  reaches the read triangle test: it takes `0x142cc9460`, and the contact it
-  produces cannot be stated from the read set;
-- `ow_sim::collide::mesh_sweep` returns a **miss** when the count is above zero,
-  while `0x142caed30` in that case builds the support-point hull (centre,
-  half-extent and a `+0.02` inflation) and **continues** the walk. That early
-  return is a stand-in for the unread slow path and can report a miss where the
-  client reports a hit; it is recorded here rather than patched, and `ow-sim` is
-  otherwise untouched.
+`MeshTriangleTest` (`0x142cce430`) has two paths. It takes the analytic one below
+only when **the support-point count is exactly `0`** (`dword [block+0x38] == 0`)
+and **every lane of the block's scaled expansion compares `<= 0.005`** (one
+`CMPLEPS` against the `0.005` splat at `0x1435ecda0`; that compare is ordered, so
+a `NaN` lane fails it and takes the slow path). Every other state builds a stack
+descriptor from the query and calls `0x142cc9460`.
 
-The tests therefore drive the swept-**point** query: count `0`, expansion base
-`0`, the identity rotation. That is also the only state in which `sweep_bounds`
-(`0x142cd5540`) short-circuits and returns its own three inputs, so the block the
-narrowphase reads is exactly what that function produces.
+### The support-point hull (`0x142caef15..0x142caf1a5`)
+
+A query block with a positive support-point count is **not** a point sweep, and
+`0x142caed30` does not stop there: it folds the block's transformed support
+points into a hull and walks the mesh with it. Read operation for operation, the
+branch is:
+
+1. **The rotation is a product of two quaternions.** The result is the shape
+   transform's conjugate times the block's own quaternion at `+0x40`, in that
+   order; the conjugate is a sign **flip** (`XORPS` with `(-0,-0,-0,+0)` at
+   `0x143110d50`), not an arithmetic negation, so a zero lane stays `+0` and a
+   `NaN` keeps its payload. The four terms of the product are summed left to
+   right, each a shuffle of the conjugate times one lane of the block quaternion,
+   with the sign patterns at `0x143110d70`, `0x143110d60` and `0x142f860e0`. The
+   result is **not normalised** - the leaf never divides by its length, so a
+   non-unit block quaternion scales the hull exactly as far as it would.
+2. **The rotation matrix is that product's.** The diagonal is
+   `1 - (2s * s) - (2s * s)` with lane-wise products masked by the
+   `(0xffffffff, 0xffffffff, 0xffffffff, 0)` splat at `0x1430a4b40` (which keeps
+   lanes 0..2 and zeroes lane 3 - it is not an absolute value); the off-diagonal
+   terms are `rot3(2s) * s.w` and two further `2s * s` shuffles. `2s` is an
+   `ADDPS` of `s` with itself, and the rows are assembled by `SHUFPS` from those
+   two vectors and the diagonal, so the last bit follows the leaf's association,
+   not a re-derived one.
+3. **The translation uses the conjugate alone**: `v = start - position` rotated
+   by `conj(q)` the same way (two cross products and a doubled `rot3`, then
+   `+ v`). A support point `p` therefore maps to
+   `((p.x * row0 + t) + p.y * row1) + p.z * row2`, then lane-wise times the
+   record's inverse scale. The sums are in that order.
+4. **The fold** is `MINPS`/`MAXPS` over every lane starting from the first point,
+   so a second operand wins a tie or a `NaN`.
+5. **What the hull replaces** (the sweep's start, end and step):
+
+   ```text
+   start = centre = (max + min) * 0.5
+   end   = end + (centre - start)        // same delta on both ends, so
+                                         // `end - start` is unchanged
+   step  = (max - min) * 0.5 + expansion + 0.02
+   ```
+
+   The `+0.02` splat is `0x1435ec2c0` and here it is **unconditional** - unlike
+   the point sweep's step, which only adds `0.02` when all four expansion lanes
+   are positive - and it is added **after** the expansion, not folded into it.
+   `step` inflates every bounding box the walk tests (both the axis-aligned test
+   and the oriented rod test use it), so the centre and the half extent steer the
+   walk directly.
+
+What happens next is the read walk: `direction = end - start`, `far =
+start + motion * direction`, and the triangle test above per leaf. The body also
+recentres the transformed points on the centre in place for the block copy that
+`0x142cc9460` receives (that array is read only by that function), and the copy's
+quaternion lane is the identity.
+
+### What is still open here, exactly
+
+`0x142cc9460` (`.pdata` extent `0xb8b` bytes) is a **closest-point (GJK-style)
+solver with a cached simplex**. Read at its interface, not operation for
+operation:
+
+- **Inputs.** `0x142cce430` builds a stack descriptor and passes it: the
+triangle's three vertices (the caller copies them out of the record) behind a
+pointer, a mode word `3`, the block's expansion clamped by `maxps(0.01,
+expansion)` against the `0.01` splat at `0x14311e0c0`, the support-point pointer and
+count (with the count forced to `1` and the pointer replaced by the block itself
+when the block has no support points), the block's start and end, the direction
+`end - start`, the block's motion, and the byte at `+0x72`.
+- **What it does.** It transforms the support points and the triangle into one
+frame, forms an extent quad and two squared tolerances from it (`+0.00125` and
+`-0.005 + 0.00125`), then iterates a closest-point search of at most `0x13`
+steps over a simplex of one to four vertices, keeping barycentric weights and the
+witness points of both sides. The three-vertex sub-solve is `0x142cc8d80`
+(`0x6d2` bytes) and the four-vertex sub-solve is `0x142cc7740` (`0x1632` bytes),
+both reachable only through it.
+- **Outputs.** The contact point at the output's `+0x00`, a normalised direction
+at `+0x10`, a third lane group at `+0x20` that the walk adopts as its new motion
+budget, and an iteration count at `+0x30`. The exact terms behind each were not
+followed operation for operation, so no bit pattern of theirs is stated here.
+
+So `0x142cc9460` is **read at that interface level and not implemented**. In
+turn:
+
+- `ow_sim::collide::mesh_sweep` now builds the read hull and runs the client's
+  walk for a support-point query, and its counters are the client's; but the
+  **triangle accept on that path is missing**, so a capsule query reports a miss
+  where the client may report a hit;
+- the point query (count `0`, expansion `<= 0.005` on every lane) is unchanged and
+  bit-identical, including the `0.02` step's conditional.
+
+The tests drive both: the swept-**point** query (count `0`, expansion base `0`,
+the identity rotation - also the only state in which `sweep_bounds`
+(`0x142cd5540`) short-circuits and returns its own three inputs), and a
+support-point query against the same mesh by its walk counters and by a
+last-bit ladder on the hull's reach.
+
+The differential (`dev/mesh_support_diff.py`) pins the hull's **reach**
+(`centre + step` on x) to the last bit: two three-rung ladders sit one ULP apart
+around the boundary where a leaf flips from expanded to culled, and the client and
+`ow-sim` step across it at the same rung. The other lanes of the hull are
+exercised by the corpus (a rotated block quaternion, a rotated and a translated
+shape transform, a non-unit scale, one to three points) but are not pinched to an
+exact boundary, so a last-bit difference in a lane that never decides a cull
+would not show. The `end` shift is likewise exercised, not pinched: it leaves
+`end - start` unchanged in exact arithmetic and only its last bits can move.
 
 ### What is assembled
 
@@ -2283,10 +2386,12 @@ line, the union of all 272 root boxes (`-28.35, -14.51, -14.01` to
 
 ### What is open here, exactly
 
-1. **The capsule (support-point) narrowphase.** `0x142cc9460`, and the
-   `0x142caed30` hull path that leads to it. A real capsule-vs-mesh contact
-   cannot be stated until it is read, and `mesh_sweep`'s count-above-zero miss is
-   a stand-in, not the client's answer.
+1. **The capsule (support-point) contact.** `0x142caed30`'s hull branch is read
+   and shipped (see "The support-point hull" above), so the walk is the client's;
+   but the triangle test it hands each candidate to, `0x142cc9460`, is not
+   implemented, so a real capsule-vs-mesh *contact* still cannot be stated. A
+   support-point query therefore reports a miss where the client's triangle test
+   accepts.
 2. **The scene's placement transform.** The model meshes are in their own local
    frames; the chain from a placeable's parsed translation/rotation/scale to the
    shape's world transform runs through `OwnerCreateBody`'s `0x30`-byte config and
@@ -2329,7 +2434,7 @@ line, the union of all 272 root boxes (`-28.35, -14.51, -14.01` to
 | the record's flag word (`+0x10`, bit `0x200`) | **open**: the dispatch form is `call [WorldBase_vtable+0x40]`; checks 13 and 14 count every encoding of it (492 + 31 memory/tail, 109 register-indirect) and none of the sites read carries a creation record |
 | the mesh record's node / triangle / vertex layout | **read (check 16)**: `0x142caed30` gives node stride `0x20` (adjacent child `+0x20`, second child `i32` at `+0x18` times `0x20`), triangle stride `0x20`, vertex stride `0x10`, node box `+0x00`/`+0x0c`, mask `+0x1c`, axis `+0x1e`, leaf count `+0x1f`; the block's own `nodeCount` and `0x38B71436` word agree on 272 of 272 |
 | the range's collision as one addressable world | **assembled and swept (check 16)**: 272 shapes from 161 models in one 4,797,872-byte buffer, every record addressing its own arrays; the pinned block's sweep hits `(0.9950001, 4.0, 0.9950001)` at fraction `0x3e8051b8`, triangle `7` |
-| the capsule (support-point) narrowphase | **open**: `0x142cc9460`, reached whenever the support-point count is non-zero or the scaled expansion exceeds `0.005` (`0x142cce430`); `mesh_sweep` returns a miss there today, which is a stand-in and not the client's answer |
+| the capsule (support-point) narrowphase | **half read and shipped**: the hull branch of `0x142caed30` (`0x142caef15..0x142caf1a5`) and the walk it feeds are implemented and differenced against the client's bytes; the triangle test on that path (`0x142cc9460`) is **open**, so a capsule query reports a miss where the client may accept. `0x142cc9460`'s interface, its GJK loop and its two simplex sub-solvers (`0x142cc8d80` `0x6d2` bytes, `0x142cc7740` `0x1632` bytes) are read at that level only |
 | the scene's placement transform | **open**: a model mesh is assembled in its own local frame; the placeable transform to shape/boss transform chain was not read, so no range sweep names a map location |
 
 Ordered next reads (the per-model route):
@@ -2445,9 +2550,11 @@ Ordered next reads (the per-model route):
 | the range gives the assembler no input | `model_shape_source_real::the_range_takes_no_holder_into_the_shape_source` (install): 229 models, 279 holders, 0 carrying the mode byte, 272 with a mesh, plan `(0,0,0,0)`, counterfactual `(272,0,0,0)` |
 | the context's arrays have a consumer | **not tested / open**: the only reads of `[component+0xc8]` in the component's module are the build and teardown sites (check 15) |
 | the mesh layout is the walk's, not a guess | check 16: `0x142caed30` (node stride `0x20`, triangle stride `0x20`, vertex stride `0x10`, node/triangle field offsets) and the block's own words (`288 / 9`, and `0x38B71436 * 0x20` = the triangle bytes on 272 of 272 blocks) |
+| the support-point hull is the client's, bit for bit | `collide::tests::the_support_hull_affine_is_the_read_map`, `the_support_hull_folds_two_points_into_the_walk_hull` (golden bit patterns from a second float32 transcription of the branch), `an_identity_block_quaternion_is_the_identity_rotation`, `a_support_point_hull_reaches_the_client_walk`, `a_support_point_hull_beside_the_mesh_clears_the_leaves`, `the_support_point_step_decides_the_leaf_reach` |
+| the hull is the client's on the real walk | `dev/mesh_support_diff.py`: 17 support-point queries through the real `0x142caed30` and through `ow_sim::collide::mesh_sweep`; 0 failures, 11 exact agreements (including the ladder rungs one ULP apart), 6 open triangle-accepts |
 | `mesh_world::tests::*` | the strides against `ow_sim::collide`'s constants, the append order and guest addresses, the record's pointer lanes, the query block's fields, the compile-time field-in-record checks, the array-length refusals |
 | the pinned block's sweep, bit-exact | `mesh_world_real::the_pinned_model_mesh_sweeps_to_an_exact_hit`: point `(0.9950001, 4.0, 0.9950001, 0)`, normal `(0,1,0,0)`, fraction `0x3e8051b8` x4, triangle `7`, ids `[0x8000, 0]`, 4 internal nodes, 1 leaf |
 | the range's 272 shapes in one world | `mesh_world_real::the_ranges_mesh_shapes_assemble_into_one_world`: 229 models, 161 with a shape, 279 holders, 272 shapes, 4,797,872 bytes, every record addresses its own arrays, first shape round-trips byte for byte |
 | the range's first hit, by model identity | same test: 3 of 272 shapes hit by one line through the unplaced assembly; nearest is shape 49, model `0x0d000000000010f5`, point `(-13.212505, 100.0, 2.619999, 0)`, fraction `0x3c8aedfa`, triangle `14` |
-| a capsule against the mesh | **not tested / open**: the support-point path is `0x142cc9460` and `mesh_sweep` returns a miss for a non-zero count where the client walks (check 16) |
+| a capsule against the mesh | **walk tested, contact open**: `mesh_sweep` builds the read hull and the walk's `internals`/`leaves` match the client's `0x142caed30` on 17 differenced queries (`dev/mesh_support_diff.py`, zero failures), including three-rung last-bit ladders on the hull's reach; the **contact** that `0x142cc9460` produces is not implemented, and the six differenced queries whose triangle test accepts are reported as open handoffs, not compared |
 | a placed mesh in map coordinates | **not tested / open**: the placement transform chain is unread, so every assembled shape stays in its own local frame (check 16) |
