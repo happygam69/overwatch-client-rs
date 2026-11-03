@@ -76,8 +76,15 @@ missing is **data, not code** — and the two producers are both blocked:
   conversion). Its caller is a broadphase (`FUN_1421088e0`, four buckets at
   `+0x1e8`, sphere cull) reached from `0x14212e070`, and it calls **no**
   shape-add — so the model mesh may be query-only, not the character's world.
-  Next: `0x142caf6c0` and that caller chain, to classify it. The chunk's own
-  consumer is not RVA-dispatch reachable (277 tables, 0 hits). The type-`0x00A` absence affects only the
+  Classified: `0x142caf6c0` writes nothing persistent (inline stack buffer of
+  `0x80` candidates, per-triangle `0x142cc6740`), and its owner
+  `FUN_14212e070` is a scene-side **query** owner, not the Domino world. The
+  character's own ingest `0x142cbcd40` has six callers, all in the mover/AI
+  ranges, and `RunCharacterControllerSweep`'s nine `E8` sites likewise. So **no
+  read path fills the character's Domino world with the range's static
+  collision**; the last question is whether the sweep queries the scene-side
+  owner through a vtable instead. The chunk's own consumer is not
+  RVA-dispatch reachable (277 tables, 0 hits). The type-`0x00A` absence affects only the
   other brush source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is

@@ -3,6 +3,21 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the model mesh is query-only; the Domino world has no map source
+
+- `0x142caf6c0` writes nothing persistent: it bounds the query points, collects
+  candidate triangles into an inline `0x80`-entry stack buffer and runs
+  `0x142cc6740` per triangle. Its owner `FUN_14212e070` is a scene-side static
+  collision **query** owner (0x18-byte entries, six bounding volumes, lazy
+  broadphase), not the Domino world. Triangle stride corrected to `0x20`
+  (12 records of 32 B for the box, not 24 x 16).
+- The `f0` class's slot `+0x50` (`0x142134f70`) reads `C` and builds the
+  fracturable body. The character ingest `0x142cbcd40` has six callers, all in
+  the mover/AI ranges; `RunCharacterControllerSweep`'s nine `E8` sites likewise.
+- Verdict: no read path fills the character's Domino world with the practice
+  range's static collision. The last read is whether the sweep queries the
+  scene-side owner through a vtable; otherwise this is a scope decision.
+
 ## 2026-11-02 - the model-mesh consumer read; the offset was +0x140, not +0x118
 
 - The second geometry class (`0x142132f20`) is not the consumer: its 20 slots

@@ -23,8 +23,9 @@ block with `0x141b53af0`, fills a `0x4c`-byte shape record with `MeshShapeFill`
 (`0x142cae540`) and hands it to the collision query `0x142caf6c0`; and the
 kind-`0x11` chunk's candidate consumer `0x1420a02f6` is **not reachable** under
 the four-byte-RVA dispatch method either. There is **no vertex or index
-conversion** in that path -- the three arrays are passed by pointer -- so what
-remains is the record's element layouts, which live inside `0x142caf6c0`.
+conversion** in that path -- the three arrays are passed by pointer -- and the
+path is **query-only**: `0x142caf6c0` tests triangles in a stack buffer and
+writes nothing (check 6), so it is not the character's collision world.
 
 ## Check 1 -- the range's entity references vs the nine entity / seven `C` assets
 
@@ -329,29 +330,166 @@ vtable `0x143394ed0` and then **`0x143394fb0`**, whose slots are:
 0x143394fb0`). The `0xf0` class builds geometry from its own packed source array
 and calls `OwnerCreateBody` on it; the model's prebuilt mesh is not its input.
 
+## Check 6 -- the classification: the model-mesh path is **query-only**
+
+The question this settles: is the model's prebuilt mesh the character's collision
+world, or a query-only system? It is **query-only**, and the character's world is
+a different structure that none of the read paths fills with the practice range's
+geometry.
+
+### What `0x142caf6c0` does with the `0x4c`-byte record
+
+Read end to end (decompiled; the function's second chunk starts at `0x142caf6ed`):
+its parameters are the shape record, a **point array** `param_2[16]`, an `int*`
+count `param_3`, a per-lane **margin** `param_4`, and a `u16` `param_5`.
+
+1. It bounds the point array (`minps`/`maxps` over `*param_3` points) and expands
+   that box by the margin lanes into `min - margin` / `max + margin`.
+2. `0x142caea70(record, buffer, &box, flags)` collects candidate triangles from
+   the mesh into an **inline stack buffer of `0x80` entries**
+   (`puStack_58 = auStack_258; uStack_50 = 0x80`), freed through
+   `0x142cadf00` if it spills.
+3. Per collected triangle it reads the record's **scale lanes** `record[0..3]`,
+   the **points pointer** at record `+0x28` and the **triangle array** at record
+   `+0x30`, takes the triangle's record at `index * 0x20`, scales the three
+   vertices by the record's scale lanes, copies the triangle record's `+0x18`
+   (`i32`) and `+0x1c` (`u16`), builds a per-triangle transform with
+   `0x142cc5ba0`, and runs the test `0x142cc6740`, breaking out when
+   `movmskps(...) == 0xf` (every lane separated).
+
+**It fills no persistent structure.** There is no world, no body, no shape entry:
+the only thing it builds is the stack triangle list. That is the definition of a
+query.
+
+It also corrects the previous turn's byte-count guess: the triangle record stride
+is **`0x20` (32 bytes)**, so the block measured there (`384 B`) holds **12**
+triangle records -- a box's twelve triangles for eight points -- not the `24 x 16`
+the byte count alone suggested. The node array stays `32` B per node (`288 / 9`).
+
+### The caller chain and the system it belongs to
+
+```text
+FUN_141fb87e0            the query's entry (called from 0x141fb69f0-fn and 0x141fb8460-fn)
+  FUN_14202c3a0          decode the owner at [param_1+0x6a8], fill the query context, call, then 0x14212d710
+    FUN_14212e070        the query dispatcher over the owner object
+      FUN_1421088e0      broadphase: four buckets at param_1+0x1e8, sphere cull, first hit wins
+        FUN_14210bac0    the model's collision list at +0x140 (check 4)
+          0x142caf6c0    the per-triangle test above
+```
+
+`FUN_14212e070(param_1, param_2)` is a **query owner**, not a world:
+
+- `[param_1+0x2b0]` is an array of `0x18`-byte entries with its count at
+  `[param_1+0x2b8]`; each entry is tested against the query's mask
+  (`[ctx+8] & entry[8]`), the entry's bounding sphere at `+0x170..+0x180`
+  against the query's point at `[ctx_object+0x450..]` and radius at `+0x460`,
+  then `0x1420af7c0` and `0x1420b01e0`.
+- Six bounding volumes at `+0x20`, `+0x70`, `+0xc0`, `+0x110`, `+0x160` and
+  `+0x1b0` (`0x50` stride) are box-tested against the query point and, when they
+  pass, `FUN_142101fb0(volume, ctx)` runs.
+- `[param_1+0x2d8]` is a **lazily initialised** sub-structure: it is taken under
+  a lock word at `[param_1+0x2c0]` (`LOCK CMPXCHG` driving a `0x400` flag), and
+  the call inside it is `FUN_1421088e0` -- the broadphase that ends at the mesh
+  test.
+
+**Why it is not the Domino world.** `formats/domino.md`'s world has its body pool
+at `+0x288` (stride `0x1c0`), the pair pool at `+0x2b8` (stride `0xc0`), the
+constraint pool at `+0x390` (stride `0xe0`) and its counts in the config block.
+Here `+0x2b8` is a *count* of `0x18`-byte entries held at `+0x2b0`; there is no
+body pool, no constraint pool and no config, and nothing here is ever written --
+the owner's entries are only read and tested.
+
+`FUN_14202c3a0` supplies the query: `param_3` carries the point/threshold block
+(`param_3[0..4]`, flags at `+0x22`, a `u64` mask at `+0x10`) and a **callback
+`FUN_14203d6c0`** in the stack context it fills (`local_4d8`), with `0x80000020`
+thresholds, `0xffff` and `0xf` flags. After the query it runs
+`0x14212d710(owner, param_2, param_3)` unless `param_3[0x10] & 0x400000000000000`.
+
+### The character path is separate (assembly)
+
+- `RunCharacterControllerSweep` (`0x142cbcee0`) has **nine** `E8` sites, and they
+  are the mover/AI modules: `MoverAdvance` (`0x140ca7f30`), `0x140dc6e3b`,
+  `0x140eb7b52`, `0x140ee8960`, `0x140f148f7`, `0x140f17983`. `MoverAdvance`
+  itself is called from `MoverInvoker` (`0x1407ffc50`).
+- The mesh-query chain has **no** `E8` site anywhere in the mover modules
+  (`0x140c00000..0x141100000`): `0x142caf6c0`, `FUN_1421088e0`,
+  `FUN_14210bac0` and `FUN_14212e070` are called only from `0x141fb8xxx` and
+  `0x1420xxxxx`.
+- The character's own query driver `0x142cbd510` is reached from
+  `0x142cc4728`-fn, inside the Domino module, not from the mesh chain.
+
+So the character sweeps the Domino world while the model mesh answers a scene-side
+query; the two share the low-level triangle test `0x142caf6c0` (its fourth caller
+is in `0x142cb8e70`-fn, the Domino module) and nothing else.
+
+### The `f0` class's slot `+0x50`: what it actually builds
+
+`0x142134f70` (`0x142134f70..0x142135370`, slot `+0x50` of `0x143394fb0`) reads, at
+`0x1421351c4` (assembly):
+
+```text
+mov rcx, [rax + 0x38]      ; the node's loaded asset object
+mov rax, [rcx + 0x40]      ; its STU instance
+mov r14, [rax + 0x48]      ; C -- the fracturable descriptor
+...  CALL OwnerCreateBody (0x142cc3d90) at 0x142135330
+```
+
+That is **the same chain `GeometryBuild` walks** (`formats/model-collision.md`),
+and the body it creates is built from **`C`** -- the fracturable descriptor whose
+asset carries the `FRAC` chunk -- not from the model's prebuilt mesh and not from
+the map's collision-chunk sectors. The `f0` class is the fracturable flavour of
+node-type-2 geometry.
+
+### Verdict
+
+**The model-mesh path is query-only.** It is a scene-side static-collision query
+component (`FUN_14212e070`'s owner, with a lazily built broadphase at `+0x2d8`),
+consumed through `FUN_14202c3a0` and its hit callback `FUN_14203d6c0`, entered
+from `FUN_141fb87e0`. It writes nothing, so it cannot be the character's world.
+
+**None of the read paths fills the Domino world the character sweeps with the
+practice range's static collision.** The separation, with its addresses:
+
+| path | what it does | evidence |
+|---|---|---|
+| the model mesh | per-query triangle tests in a stack buffer; no body | `0x142caf6c0` read end to end (this check) |
+| the geometry classes | `GeometryBuild` creates a body from `C`'s params; the `f0` class creates one from **`C`**; neither reads the model mesh | `0x14213c440`; `0x142134f70` at `0x1421351c4` |
+| the character | sweeps the Domino world from `MoverAdvance`; also calls the ingest entry `0x142cbcd40` for its **own** body | `0x142cbcee0`'s nine sites; `0x142cbcd40`'s six sites, one of which (`0x140ca6123`) is inside `MoverAdvance` |
+| the map's kind-`0x11` chunk | its candidate consumer `0x1420a02f6` is unreachable | check 3 |
+
+The **exact missing read**: the producer that turns map data into Domino shape
+entries. The ingest chain is `0x142cbcd40` -> `0x142cf35a0` ->
+`ShapeAddToOwner` (`0x142cd4ef0`) -> `0x142cd4350` ->
+`ShapeEntryFromDescriptor` (`0x142cb7f10`), and its only six entry points are
+`MoverAdvance` (`0x140ca6123`) and five further mover/scene functions
+(`0x140801c24`, `0x140dc6e14`, `0x140eb7b22`, `0x140f1528b`, `0x140f17f4a`) --
+all feeding a character-like body, none a map. Combined with check 3 (the chunk's
+assembler is unreachable under every reference form), **the practice range's
+static collision has no producer in the paths read so far**. That is a scope
+statement for the operator, not a missing instruction: either the map feed is a
+runtime registration no static reference reaches, or the character's world in this
+build is built by a system outside these paths.
+
 ## What this leaves
 
 | line | state |
 |---|---|
 | the fracturable brush path on this map | closed: the range names no `C` (check 1) |
-| the model's prebuilt collision mesh | **present** in 161 of 229 range models; the data chain (`STUModel` `0xCB4D298D` at `+0x140` -> holder `0x2DD96D6D` -> `0xB7C8314A` -> `STU_537E56E4`) and its **consumer** (`FUN_14210bac0`, reached from the broadphase `FUN_1421088e0`) are read; the block is passed as a shape record, never converted |
-| the `0xf0` geometry class | not the consumer: no slot reads the list or calls the mesh path (check 5) |
-| the kind-`0x11` chunk's consumer | candidate `0x1420a02f6` unreachable under every reference form; the container's producer is the missing read |
+| the model's prebuilt collision mesh | present in 161 of 229 range models; the data chain and its consumer are read; the consumer is a **scene-side query** that writes nothing (check 6) |
+| the `f0` geometry class | creates a Domino body from **`C`**, the fracturable descriptor, not from the model mesh (check 6) |
+| the character's world | swept by `RunCharacterControllerSweep` from `MoverAdvance`; **no read path feeds it the range's static collision** |
 
 Ordered next reads:
 
-1. **`0x142caf6c0`, the Domino mesh query** -- the only function that walks the
-   three arrays the shape record points at. It fixes the node record (`32` B by
-   the byte count, `288 / 9`) and the triangle record (`16` B, `384 / 24`). That
-   is the last read between the stored model mesh and a collider's geometry.
-2. **Whether the model path ingests as well as queries**: no `ShapeAddToBody`,
-   `ShapeEntryFromDescriptor` or `OwnerCreateBody` appears in `FUN_14210bac0`, so
-   as read it is query-only; the ingest for a *model* would have to be
-   `ShapeEntryFromDescriptor` (`0x142cb7f10`), which shares `MeshShapeFill` with
-   this path.
-3. The producer of an owner's `+0x140`/`+0x148` container is no longer open for
-   the model route (the list is filled by the STU loader from `STUModel`'s
-   field); it stays open only for the *kind-`0x11` chunk* form.
+1. **The producer of Domino shape entries from map data.** The ingest chain is
+   `0x142cbcd40` -> `0x142cf35a0` -> `ShapeAddToOwner` -> `0x142cd4350` ->
+   `ShapeEntryFromDescriptor`, and all six of its entry points are mover/scene
+   functions feeding a character-like body. A seventh entry point -- or a caller
+   of one of those six that carries a chunk-derived mesh source -- is what would
+   close the map's static collision.
+2. **`0x142caf6c0`'s fourth caller**, `0x142cb8e70`-fn in the Domino module: it
+   runs the same triangle test, so it shows how the world tests *its* shapes --
+   and whether those shapes can come from the model mesh by another route.
 
 ## Checks
 
@@ -367,4 +505,7 @@ Ordered next reads:
 | the collision list is at `+0x140` in this build | `dev/static_field_scan.py 0xCB4D298D` -> the single registration at `0x14150bf65` with offset `0x140`; the same helper's offsets for `C` match `GeometryCopyParams` |
 | `FUN_14210bac0` reads it, and the `0xf0` class does not | `dev/static_slots.py --vt 0x143394fb0` (no `+0x140`/`+0x118` read, no mesh call) |
 | the block's stored mesh, bit-exact | `model_mesh_real::the_range_models_prebuilt_mesh_and_its_shape_record` |
+| the mesh test fills nothing and returns | check 6: `0x142caf6c0` writes only its stack triangle list (`0x200` bytes at `auStack_258`, `0x80` entries) |
+| the query owner is not the Domino world | check 6: `+0x2b0`/`+0x2b8` are `0x18`-byte entries plus a count, and `formats/domino.md`'s `+0x2b8` is a `0xc0`-stride pair pool |
+| the character path never calls the mesh chain | check 6: the chain's `E8` sites are all in `0x141fb8xxx`/`0x1420xxxxx`; `RunCharacterControllerSweep`'s nine are mover/AI |
 | the unpack and the shape record, dword for dword | `mesh_shape::tests::the_shape_record_is_mesh_shape_fill_dword_for_dword`, `the_array_header_offset_is_the_tag_test`, `a_zero_scale_is_an_infinity_lane`, `the_field_offsets_are_the_unpackers` |

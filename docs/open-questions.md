@@ -1085,6 +1085,32 @@ the system: character sweep, or raycast/overlap. If query-only, the character's
 world source is still missing and the remaining candidate is the second class's
 slot `+0x50` (`0x142134f70`, which does call `OwnerCreateBody`).
 
+**The classification verdict (2026-11-02): the model-mesh path is query-only, and
+no read path fills the character's Domino world with the range's static
+collision.** `0x142caf6c0` writes **nothing persistent** — it bounds the query
+points, collects candidate triangles into an inline `0x80`-entry stack buffer,
+and runs `0x142cc6740` per triangle; no world, body or shape entry. Its owner
+`FUN_14212e070` is a scene-side static-collision **query** owner (0x18-byte
+entries at `+0x2b0`, count at `+0x2b8`, six `0x50` bounding volumes, a lazily
+built broadphase at `+0x2d8`), not the Domino world (whose `+0x2b8` is a
+`0xc0`-stride pool). The `f0` class's slot `+0x50` (`0x142134f70`) reads
+`[node+0x38] → [+0x40] → [+0x48]` = `C` and builds the **fracturable** body.
+And the character's own ingest entry `0x142cbcd40` has exactly six callers —
+`0x140801c24`, `0x140ca6123` (inside `MoverAdvance`), `0x140dc6e14`,
+`0x140eb7b22`, `0x140f1528b`, `0x140f17f4a` — all in the mover/AI ranges
+(`0x140c`..`0x140f`), none a map loader; `RunCharacterControllerSweep`'s nine
+`E8` sites are likewise all in `0x140c`..`0x140f`.
+
+So the ingest chain `0x142cbcd40 → 0x142cf35a0 → ShapeAddToOwner → 0x142cd4350
+→ ShapeEntryFromDescriptor` is character-only, and the map-side shape
+producers we read (`GeometryBuild`, the brush sources) need a `C` the range
+does not have. **The remaining read is the sweep's world argument**: does
+`RunCharacterControllerSweep` query the scene-side static-collision owner
+(via a vtable) rather than the Domino world? That would make the model mesh the
+character's collision after all. If it does not, the client's local collision
+for the range has no source in the read paths and the movement plan needs a
+scope decision.
+
 ---
 
 ## 7. Domino schema and integration in the current image
