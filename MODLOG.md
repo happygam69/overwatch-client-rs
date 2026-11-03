@@ -3,6 +3,23 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the static collision is the model mesh; its consumer is the open read
+
+- The range carries no `C`: the 550-placeable kind-`0x0B` chunk was searched
+  byte- and field-level against the nine referrer entities and seven `C`
+  assets, 0 hits. The brush route is dead for this map.
+- The range's models carry a **prebuilt collision mesh**: 161 of 229 models,
+  272 `STU_537E56E4` instances inside 279 holders of class `0x2DD96D6D`,
+  reached as `STUModel 0x871BD3D0 -> 0xCB4D298D (+0x118) -> 0x2DD96D6D ->
+  0xB7C8314A -> STU_537E56E4`. `GeometryBuild` does not read it; the consumer
+  is the missing read, and the second geometry class `0x142132f20` is the
+  candidate.
+- The chunk's consumer is not RVA-dispatch reachable: 277 tables holding code
+  RVAs, 0 hits for `0x20a02f6`; the control `0x208edf6` hits table
+  `0x142090988`, validating the method.
+- New doc: `docs/formats/static-collision.md`; install test pins the mesh
+  counts (2 tests).
+
 ## 2026-11-02 - C is a fracturable descriptor; no model carries it
 
 - All 32,278 readable model assets were scanned for class `0x564B1018`: zero.

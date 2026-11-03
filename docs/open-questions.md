@@ -1028,6 +1028,33 @@ consumer search should also be re-run with the 4-byte-RVA dispatch method that
 the `0x14208e74e` case established, on `0x1420a02f6` (the mesh-source assembler
 whose input is the owner's descriptor container).
 
+**The three checks are in (2026-11-02).**
+
+1. **The range does not carry a `C`.** The kind-`0x0B` chunk
+   `0x0DD0_000B_0F69_002E` (550 placeables, 202,688 B) was searched byte-level
+   and field-level against the nine referrer entities and seven `C` assets: **0
+   hits**, over 80 distinct parsed entity GUIDs. So the brush route is dead for
+   this map.
+2. **The range's models do carry a prebuilt collision mesh.** 229/229 have an
+   `MSTU`; **161 of 229** carry `STU_537E56E4` (272 instances) inside holders of
+   class `0x2DD96D6D` (279 instances), reached as
+   `STUModel 0x871BD3D0 -> field 0xCB4D298D (+0x118) -> 0x2DD96D6D ->
+   0xB7C8314A -> STU_537E56E4` (nodes/points/triangles/nodeCount/height).
+   `GeometryBuild` does **not** read it, so the missing read is **the consumer
+   of `STUModel`'s `0xCB4D298D`**. That is now the static-collision route.
+3. **The chunk's consumer is unreachable by the validated RVA method.** The
+   switch form was validated on the control `0x208edf6` (hit, table
+   `0x142090988`); over **277** tables holding code RVAs, `0x20a02f6` and every
+   RVA in `0x20a02f6..0x20a075d` have **0** dispatch hits. The three 4-byte
+   occurrences are code-range metadata and `.pdata` copies. So the assembler is
+   not table-reachable either.
+
+**Next anchor: the consumer of `STUModel+0x118`.** The node-type-2 factory
+`FUN_1420d0ef0` picks a **second** geometry class (`Alloc(0xf0)`,
+`0x142132f20`) when `[node+0x29] != 0`; that class is the natural consumer
+candidate, since `GeometryBuild` is the first class and does not read the model
+mesh.
+
 ---
 
 ## 7. Domino schema and integration in the current image

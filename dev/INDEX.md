@@ -88,6 +88,8 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `rd.py` | Disassemble or hex-dump a virtual-address range of the local image. | 55 |
 | `rdc.py` | Disassemble a VA range, resolving RIP-relative operands to their float quads. | 36 |
 | `remove_fns.py` | Remove a named set of functions from Rust files. | 68 |
+| `static_field_scan.py` | Where the client's own code compares an STU field hash or class hash. | 110 |
+| `static_rva_tables.py` | The image-base-relative 4-byte RVA dispatch tables, and what they select. | 138 |
 | `tex_oracle.py` | Cross-check our texture decoders against an independent implementation. | 300 |
 | `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 81 |
 | `verify_harness/apply_character_move_fixture.py` | Inputs for the `fn/ApplyCharacterControllerMove` unit (no-shape path). | 43 |

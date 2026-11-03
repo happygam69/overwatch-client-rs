@@ -63,8 +63,13 @@ missing is **data, not code** — and the two producers are both blocked:
   practice range's models carry none — so the brush route is the fracturable
   path, not the map's static collision. The static-collision question is open
   again with two leads: the range's 550 entity references were not checked
-  against the seven `C` assets, and `C+0x08` is a prebuilt collision mesh class
-  (`STU_537E56E4`) that may also sit in static models' `MSTU`. The type-`0x00A` absence affects only the
+  against the seven `C` assets (checked: 0 hits in the range's 550 placeables),
+  and `C+0x08` is a prebuilt collision mesh class (`STU_537E56E4`) that **is**
+  in static models: 161 of the range's 229 models carry 272 instances through
+  the holder `0x2DD96D6D` at `STUModel+0x118` (field `0xCB4D298D`). The missing
+  read is the consumer of `STUModel+0x118`; the second geometry class
+  (`0x142132f20`, chosen when `[node+0x29] != 0`) is the candidate. The chunk's
+  own consumer is not RVA-dispatch reachable (277 tables, 0 hits). The type-`0x00A` absence affects only the
   other brush source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
