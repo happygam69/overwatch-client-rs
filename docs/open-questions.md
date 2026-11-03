@@ -1055,6 +1055,36 @@ whose input is the owner's descriptor container).
 candidate, since `GeometryBuild` is the first class and does not read the model
 mesh.
 
+**The model-mesh consumer is read (2026-11-02).** The second class is **not**
+the consumer (its 20 vtable slots never read `+0x118`/`+0x140`). The offset was
+wrong in the reference: the client registers `STUModel` at **`0x200` bytes**
+(`0x14034af00`) and its field registration passes **`0x140`** for
+`0xCB4D298D`, not `0x118` — proved by the same helper's offsets for `C`
+(`0x3963555A → 0x110`, `0x12B475D4 → 0x194`). The consumer is
+**`FUN_14210bac0`** (array-header idiom at `0x14210bb6b`/`0x14210bc04`):
+elements are pointers to holders, it requires `holder+0x20 == 0` (mode) and
+`holder+0x08 != 0` (mesh block), and its entry chain is
+`param_2+0xe8 → object; object+0x28 → STUModel; object+0x08 → attachment table`.
+It calls the unpacker `0x141b53af0` and `MeshShapeFill` (`0x142cae540`, read
+exactly: a `0x4c`-byte record with scale, `1/scale`, three pointers, four words,
+`scale × m_5BD33E19`), consumed by `0x142caf6c0`.
+
+**There is no conversion: the mesh is passed by pointer.** Implemented in
+`ow_tank::mesh_shape` (4 tests). The block in the install: 161/229 range
+models, 272 blocks; first block (model `0x0d0000000000078c`): 288 B of 9×32
+nodes, 8 points, 384 B of 16×24 triangles, `nodeCount` 9, `+0x3c` 12, `height`
+5, `+0x44` 96.0f; a 4-unit box.
+
+**The classification question is now decisive.** `FUN_14210bac0` contains **no**
+`ShapeAddToBody`/`ShapeEntryFromDescriptor`/`OwnerCreateBody`, and its caller
+is a broadphase `FUN_1421088e0` (four bucket arrays at `+0x1e8`, sphere cull
+against `model+0x450`) with caller `0x14212e070`. So the model mesh may be a
+**query-only** structure, not the character's Domino world. The next read is
+`0x142caf6c0` (what the `0x4c` record fills) and that caller chain, to classify
+the system: character sweep, or raycast/overlap. If query-only, the character's
+world source is still missing and the remaining candidate is the second class's
+slot `+0x50` (`0x142134f70`, which does call `OwnerCreateBody`).
+
 ---
 
 ## 7. Domino schema and integration in the current image

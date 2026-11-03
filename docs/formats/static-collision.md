@@ -16,11 +16,15 @@ Every address is a current-image address (`0x140000000` + RVA).
 
 The range's entity chunks name **none** of the fracturable assets (0 of 550
 placeables, 0 byte-level hits in 202,688 bytes); the range's **models do carry a
-prebuilt collision mesh** (`STU_537E56E4`: 161 of 229 models, 272 blocks) and the
-data-side chain that reaches it is read, but **no consumer of it was found** in
-code; and the kind-`0x11` chunk's candidate consumer `0x1420a02f6` is **not
-reachable** under the four-byte-RVA dispatch method either. So the static source
-is **not established**, and the next read on each line is named below.
+prebuilt collision mesh** (`STU_537E56E4`: 161 of 229 models, 272 blocks); its
+**consumer is found** -- `FUN_14210bac0` walks the model's collision list, which
+this build keeps at **`+0x140`** (not the reference's `+0x118`), unpacks the
+block with `0x141b53af0`, fills a `0x4c`-byte shape record with `MeshShapeFill`
+(`0x142cae540`) and hands it to the collision query `0x142caf6c0`; and the
+kind-`0x11` chunk's candidate consumer `0x1420a02f6` is **not reachable** under
+the four-byte-RVA dispatch method either. There is **no vertex or index
+conversion** in that path -- the three arrays are passed by pointer -- so what
+remains is the record's element layouts, which live inside `0x142caf6c0`.
 
 ## Check 1 -- the range's entity references vs the nine entity / seven `C` assets
 
@@ -84,15 +88,18 @@ The block's own stored fields in the install (hash, stored width): `0x9B2111C5`
 
 ```text
 model asset (type 0x00C) -> MSTU -> STUModel (0x871BD3D0)
-  field 0xCB4D298D (declared +0x118)   array of 0x2DD96D6D
+  field 0xCB4D298D (reference +0x118, this build +0x140; check 4)   array of
+    0x2DD96D6D
     instance of 0x2DD96D6D
       field 0xB7C8314A                 embedded STU_537E56E4
         m_nodes / m_88FCECD7 / m_triangles / m_nodeCount / m_height
 ```
 
-`STUModel`'s field at `+0x118` is the model's collision list; that is the
+`STUModel`'s field `0xCB4D298D` is the model's collision list; that is the
 "which field/class references the model's collision" answer, read from the
 class's own declaration and confirmed by the embedder field of all 272 blocks.
+Check 4 fixes the field's *runtime* offset for this build: `+0x140`, not the
+reference's `+0x118`.
 
 **The consumer is not found.** Two measurements, both negative:
 
@@ -115,14 +122,9 @@ class's own declaration and confirmed by the embedder field of all 272 blocks.
   object and calls its slots. So the prebuilt node/triangle mesh has no reader in
   the type-2 path, and `C`'s own `+0x08` copy of it is dead for that route.
 
-**Verdict: the range has a prebuilt collision mesh, but nobody reads it in the
-code read so far.** The exact missing read: **the consumer of `STUModel`'s field
-`0xCB4D298D`** (the model collision list) -- the function that walks a model's
-collision instances and turns them into Domino shapes. It is not the geometry
-module (which never touches `+0x118`), so the search starts at the model asset's
-own post-load path or at the node types that call `ShapeAddToBody`
-(`0x142cb3940`): `probe_node_types.py` already lists node types 4 and 23 as
-calling it, and type 4 is `0x14200bab0`, outside the geometry module.
+**Verdict at this point: the range has a prebuilt collision mesh.** (The
+consumer was found afterwards; see check 4. It is `FUN_14210bac0`, and the field
+it walks is at `+0x140` in this build.)
 
 ## Check 3 -- the kind-`0x11` chunk's consumer, with the RVA-dispatch method
 
@@ -199,24 +201,157 @@ the **producer of the owner's `+0x140`/`+0x148` container** (the descriptors wit
 outside it. Adding this check's result to that: the producer is not reached
 *through* the assembler, so it must be found from the container's own type.
 
+## Check 4 -- the consumer of the model's collision list: **found**
+
+This is the read the previous section left open, and it started with a correction
+to the field's offset.
+
+### The collision list is at `+0x140` in this build, not `+0x118`
+
+The reference's `STUModel` declares `0xCB4D298D` at `+0x118` and is 472 (`0x1D8`)
+bytes; the client's registration of the same class (`0x14034af00`) gives **size
+`0x200`**. The field's real offset is in the client's own field registration:
+
+- `0x1421d4f70` is the field-descriptor constructor. It stores its **fifth
+  argument (the stack word at `[rsp+0x20]`) into the descriptor at `+0x08`**, the
+  field's offset slot, and the field hash (`r8d`) at `+0x30`.
+- For `C`'s fields that fifth argument is exactly the offset the client's code
+  reads: `0x3963555A` -> `0x110` at `0x141333889` (and `GeometryCopyParams` reads
+  `C+0x110`), `0x12B475D4` -> `0x194` at `0x141334499` (and it reads `C+0x194`).
+  So the argument **is** the runtime offset.
+- `0xCB4D298D` is declared once, at `0x14150bf65` (helper `0x1421d4f70`), with
+  fifth argument **`0x140`**.
+
+The client therefore keeps the model's collision list at **`+0x140`** (its tag
+word at `+0x148`), and the earlier searches for `+0x118` were aimed at the
+reference's build, not the install's.
+
+### Who reads it
+
+`crates/ow-tank/tests/model_mesh_real.rs` and `dev/static_mesh_consumers.py`
+(install / assembly):
+
+- `FUN_14210bac0` (`0x14210bac0..0x14210bfa5`, `0x4e5` bytes) is the reader. Its
+  arm is exactly the array-header idiom at the corrected offset (assembly at
+  `0x14210bb6b` and `0x14210bc04`): `rcx = [rdi+0x140]; cmp qword [rdi+0x148],
+  1; lea rax,[rcx+8]; cmovne rax,rcx; movsxd rcx,[rax]` -- the count -- then the
+  element array through the same tag test.
+- Each element is a **pointer** to a holder instance. The reader requires
+  `holder+0x20 == 0` (the holder's mode word) and `holder+0x08 != 0` (the
+  embedded mesh block) -- the `0x2DD96D6D` layout from check 2: `+0x08` mesh,
+  `+0x20` mode, `+0x24` an index into an attachment table.
+- Decompiled, its entry is `param_2+0xe8 -> object; object+0x28 -> the STUModel
+  instance; object+0x08 -> an attachment table whose `+0x66` is a `short`
+  count`. That is the same `+0xe8` slot the node-type-2 update promotes
+  (`formats/model-collision.md`), so the model object reached from a node and the
+  model object read here have the same shape.
+- Its caller is `FUN_1421088e0` (`0x1421088e0`, call sites `0x142108bbf` and
+  `0x142108d18`), a **broadphase**: four bucket arrays at `param_1+0x1e8`
+  (count plus `0x40`-stride records), a bounding-sphere cull against
+  `model+0x450`, then `FUN_14210bac0` per candidate, breaking on the first hit and
+  invoking a caller-supplied callback. `FUN_1421088e0`'s own caller is
+  `FUN_14212e070` (`0x14212e070`).
+
+### What the client does with the mesh: pass it on
+
+The block becomes a shape record that is handed to the collision query. Three
+functions, all read:
+
+| function | what it does |
+|---|---|
+| `0x141b53af0` | **the unpacker**: from the block, writes a `0x30`-byte source -- `[+0x00]` node data pointer, `[+0x08]` point data pointer, `[+0x10]` triangle data pointer, `[+0x18]` `m_nodeCount`, `[+0x1c]` the point array's count, `[+0x20]` `m_38B71436`, `[+0x24]` `m_height`, `[+0x28]` `m_5BD33E19`. Each pointer is read through the block's own tag rule: the 16-byte header `{data pointer, u64 count}` sits at the field's pointer when the tag at `field+8` is `1`, else eight bytes past it. The offsets are `+0x08` (nodes), `+0x18` (points), `+0x28` (triangles), `+0x38` (nodeCount), `+0x3c`, `+0x40` (height), `+0x44` -- the class's declared offsets. |
+| `MeshShapeFill` `0x142cae540` | writes a **`0x4c`-byte (19-dword) record**: four scale lanes at `+0x00`, four `1/scale` lanes (a `divss`) at `+0x10`, the three data pointers at `+0x20`/`+0x28`/`+0x30`, four copied words at `+0x38`/`+0x3c`/`+0x40`/`+0x44`, and `scale * m_5BD33E19` at `+0x48`. |
+| `0x142caf6c0` | the consumer of the record: a `0x408`-byte-frame function that takes the record and the query's parameters. |
+
+**There is no vertex or index conversion anywhere in this path**: the arrays stay
+as stored and only their *pointers* are copied. `ow_tank::mesh_shape` is the read
+expression of the first two (offsets, tag rule, record layout), with unit tests;
+it deliberately converts nothing.
+
+### The block in the install (install)
+
+`crates/ow-tank/tests/model_mesh_real.rs`, on the practice-range scene:
+
+| measurement | result |
+|---|---|
+| models carrying the block | 161 of 229 |
+| blocks | 272 |
+| first block, model `0x0d0000000000078c` | node array **288 B** (`9 x 32`), **8** points, triangle array **384 B** (`24 x 16`), `nodeCount` **9**, `+0x3c` **12**, `height` **5**, `+0x44` **96.0f** |
+| its first four points (bits) | `00000000 00000000 40800000 00000000`, `40800000 00000000 40800000 00000000`, `00000000 40800000 40800000 00000000`, `40800000 40800000 40800000 00000000` -- the corners of a 4-unit box |
+| its first twelve triangle words | `4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0` |
+| the record at unit scale | `3f800000` x8, then the three offsets, `9`, `8`, `12`, `5`, `42c00000` |
+
+The node array is `32` bytes per node (`288 / 9`) and the triangle array `16`
+bytes per record (`384 / 24`) -- both **derived from the byte counts**, not from a
+decoded record, because the record layout lives in the query.
+
+### What is still open here, exactly
+
+The element layouts of the node array (`32` B) and the triangle array (`16` B).
+`0x141b53af0` hands their *pointers* over and nothing in the read path dereferences
+them, so the next read is **`0x142caf6c0`**, the Domino mesh query, the only
+function that walks them. A second question it answers: whether this path
+*queries* the model's mesh (the record built per test, the broadphase sweeping
+four buckets and stopping at the first hit) or also *ingests* it into a Domino
+body -- no `ShapeAddToBody`, `ShapeEntryFromDescriptor` or `OwnerCreateBody` call
+appears in `FUN_14210bac0`, so as read it is query-only.
+
+## Check 5 -- the second geometry class (`Alloc(0xf0)`, `0x142132f20`): not the consumer
+
+`FUN_1420d0ef0`'s other branch allocates `0xf0` bytes and constructs
+`0x142132f20` (`0x142132f20..0x142132fd8`). The constructor installs the base
+vtable `0x143394ed0` and then **`0x143394fb0`**, whose slots are:
+
+| slot | function | reads (displacements) |
+|---|---|---|
+| `+0x00` | `0x142133010` | `+0x08`, `+0x30` |
+| `+0x08` | `0x1421334b0` | `+0x08`, `+0x40`, `+0x48` |
+| `+0x10` | `0x142133790` | `+0x28` |
+| `+0x18` | `0x1421347b0` | `+0x10`, `+0x18`, `+0x28`, `+0x40`, `+0x48`, `+0x90`, `+0xb0`, `+0xf0` |
+| `+0x20` | `0x142134790` | `+0x28` |
+| `+0x28` | `0x142133350` | -- |
+| `+0x30` | `0x142133b30` | `+0x08`, `+0x10`, `+0x18`, `+0x30`, `+0x40`, `+0x48`, `+0x90`, `+0xa0`, `+0xf0` |
+| `+0x38` | `0x140548d00` (generic) | `+0x08` .. `+0x40` |
+| `+0x40` | `0x142133cf0` | `+0x08`, `+0x10`, `+0x18`, `+0x30`, `+0xa0` |
+| `+0x48` | `0x142135b70` | `+0x08`, `+0x10`, `+0x40`, `+0x48` |
+| `+0x50` | `0x142134f70` | `+0x08`, `+0x10`, `+0x18`, `+0x30`, `+0x40`, `+0x48`, `+0xa0`, `+0xc0`; **calls `OwnerCreateBody` (`0x142cc3d90`)** at `0x142135330` |
+| `+0x58` | `0x142135030` | `+0x08`, `+0x10`, `+0xa0` |
+| `+0x60` | `0x1421332a0` | `+0x10`, `+0x28`, `+0xa0`, `+0xb0`, `+0xc0` |
+| `+0x68` | `0x142133280` | `+0x30` |
+| `+0x70` | `0x142133110` | `+0x08`, `+0xa0` |
+| `+0x78` | `0x14053a420` (generic) | `+0x08`, `+0x10`, `+0x18` |
+| `+0x80` | `0x142133da0` | -- |
+| `+0x88`, `+0x90` | `0x14053a420` (generic) | as above |
+| `+0x98` | `0x1421337e0` | `+0x10`, `+0xa0` |
+
+**No slot reads `+0x140`/`+0x148` or `+0x118`/`+0x120`,** and none calls
+`MeshShapeFill`, `0x141b53af0` or `0x142caf6c0` (`dev/static_slots.py --vt
+0x143394fb0`). The `0xf0` class builds geometry from its own packed source array
+and calls `OwnerCreateBody` on it; the model's prebuilt mesh is not its input.
+
 ## What this leaves
 
 | line | state |
 |---|---|
 | the fracturable brush path on this map | closed: the range names no `C` (check 1) |
-| a prebuilt model collision mesh | **present** in 161 of 229 range models; data chain read (`STUModel` `0xCB4D298D` -> `0x2DD96D6D` -> `0xB7C8314A` -> `STU_537E56E4`); **no consumer read** |
+| the model's prebuilt collision mesh | **present** in 161 of 229 range models; the data chain (`STUModel` `0xCB4D298D` at `+0x140` -> holder `0x2DD96D6D` -> `0xB7C8314A` -> `STU_537E56E4`) and its **consumer** (`FUN_14210bac0`, reached from the broadphase `FUN_1421088e0`) are read; the block is passed as a shape record, never converted |
+| the `0xf0` geometry class | not the consumer: no slot reads the list or calls the mesh path (check 5) |
 | the kind-`0x11` chunk's consumer | candidate `0x1420a02f6` unreachable under every reference form; the container's producer is the missing read |
 
 Ordered next reads:
 
-1. The consumer of `STUModel`'s `0xCB4D298D` -- the model collision list. If that
-   consumer builds Domino shapes, the range's static collision is the models'
-   prebuilt meshes and the kind-`0x11` chunk is not needed for it.
-2. The producer of the owner's `+0x140`/`+0x148` container, from the container's
-   own initialisers (not from `0x1420a02f6`).
-3. The kind-`0x11` sector runs themselves: their shape is measured but no reader
-   of the 36-sector layout has been found, so the chunk is neither the source nor
-   excluded.
+1. **`0x142caf6c0`, the Domino mesh query** -- the only function that walks the
+   three arrays the shape record points at. It fixes the node record (`32` B by
+   the byte count, `288 / 9`) and the triangle record (`16` B, `384 / 24`). That
+   is the last read between the stored model mesh and a collider's geometry.
+2. **Whether the model path ingests as well as queries**: no `ShapeAddToBody`,
+   `ShapeEntryFromDescriptor` or `OwnerCreateBody` appears in `FUN_14210bac0`, so
+   as read it is query-only; the ingest for a *model* would have to be
+   `ShapeEntryFromDescriptor` (`0x142cb7f10`), which shares `MeshShapeFill` with
+   this path.
+3. The producer of an owner's `+0x140`/`+0x148` container is no longer open for
+   the model route (the list is filled by the STU loader from `STUModel`'s
+   field); it stays open only for the *kind-`0x11` chunk* form.
 
 ## Checks
 
@@ -229,3 +364,7 @@ Ordered next reads:
 | the dispatch tables, and the known positive | `dev/static_rva_tables.py 0x208edf6` -> HIT `0x142090988` |
 | `0x1420a02f6` is selected by no dispatch table | `dev/static_rva_tables.py 0x20a02f6 0x20a075d` -> 0 hits over 277 tables |
 | `0x1420a02f6` has no other static reference | `dev/xref_rva.py ... 0x20a02f6` (0 pages), plus the `E8`/`E9`/8-byte counts in `dev/static_rva_tables.py`'s occurrence report |
+| the collision list is at `+0x140` in this build | `dev/static_field_scan.py 0xCB4D298D` -> the single registration at `0x14150bf65` with offset `0x140`; the same helper's offsets for `C` match `GeometryCopyParams` |
+| `FUN_14210bac0` reads it, and the `0xf0` class does not | `dev/static_slots.py --vt 0x143394fb0` (no `+0x140`/`+0x118` read, no mesh call) |
+| the block's stored mesh, bit-exact | `model_mesh_real::the_range_models_prebuilt_mesh_and_its_shape_record` |
+| the unpack and the shape record, dword for dword | `mesh_shape::tests::the_shape_record_is_mesh_shape_fill_dword_for_dword`, `the_array_header_offset_is_the_tag_test`, `a_zero_scale_is_an_infinity_lane`, `the_field_offsets_are_the_unpackers` |

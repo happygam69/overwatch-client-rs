@@ -3,6 +3,22 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the model-mesh consumer read; the offset was +0x140, not +0x118
+
+- The second geometry class (`0x142132f20`) is not the consumer: its 20 slots
+  never read `+0x118`/`+0x140`. The client registers `STUModel` at `0x200`
+  bytes and the field registration passes `0x140` (proved by the same helper's
+  offsets for `C`).
+- Consumer `FUN_14210bac0`: holder pointers, requires `holder+0x20 == 0` and
+  `holder+0x08 != 0`; calls `0x141b53af0` and `MeshShapeFill` (`0x4c`-byte
+  record: scale, 1/scale, three pointers, four words, `scale*m_5BD33E19`),
+  consumed by `0x142caf6c0`. **No vertex conversion — the mesh is passed by
+  pointer.** `ow_tank::mesh_shape` (4 tests). Install: 272 blocks, first is a
+  4-unit box (9 nodes, 8 points, 16 triangles).
+- The path calls no shape-add and its caller is a broadphase
+  (`FUN_1421088e0` -> `0x14212e070`), so whether the model mesh is the
+  character's world or query-only is the next read.
+
 ## 2026-11-02 - the static collision is the model mesh; its consumer is the open read
 
 - The range carries no `C`: the 550-placeable kind-`0x0B` chunk was searched

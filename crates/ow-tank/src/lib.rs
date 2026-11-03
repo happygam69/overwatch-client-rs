@@ -41,6 +41,7 @@ pub mod mapchunk;
 pub mod mapguid;
 pub mod mapresolve;
 pub mod material;
+pub mod mesh_shape;
 pub mod model;
 pub mod model_collision;
 pub mod mstu;

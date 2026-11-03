@@ -68,8 +68,16 @@ missing is **data, not code** — and the two producers are both blocked:
   in static models: 161 of the range's 229 models carry 272 instances through
   the holder `0x2DD96D6D` at `STUModel+0x118` (field `0xCB4D298D`). The missing
   read is the consumer of `STUModel+0x118`; the second geometry class
-  (`0x142132f20`, chosen when `[node+0x29] != 0`) is the candidate. The chunk's
-  own consumer is not RVA-dispatch reachable (277 tables, 0 hits). The type-`0x00A` absence affects only the
+  (`0x142132f20`, chosen when `[node+0x29] != 0`) is **not** it (20 slots, no
+  `+0x118`/`+0x140` read). The consumer is **`FUN_14210bac0`**, reading the list
+  at **`+0x140`** — the client registers `STUModel` at `0x200` bytes, not the
+  reference's 472 — and handing the mesh by **pointer** (`0x141b53af0`,
+  `MeshShapeFill` -> `0x142caf6c0`, `ow_tank::mesh_shape`, 4 tests, no vertex
+  conversion). Its caller is a broadphase (`FUN_1421088e0`, four buckets at
+  `+0x1e8`, sphere cull) reached from `0x14212e070`, and it calls **no**
+  shape-add — so the model mesh may be query-only, not the character's world.
+  Next: `0x142caf6c0` and that caller chain, to classify it. The chunk's own
+  consumer is not RVA-dispatch reachable (277 tables, 0 hits). The type-`0x00A` absence affects only the
   other brush source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
