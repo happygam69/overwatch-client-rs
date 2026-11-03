@@ -106,14 +106,22 @@ missing is **data, not code** — and the two producers are both blocked:
   7 tests). A node allocates **two worlds** (`0x14202c660`, `+0x31f8`/`+0x31fa`)
   and creates its own static body from `+0x31f8` at `0x14202d268`, so a per-model
   body is a sibling of the node's own body in the node's world.
-  **Open:** which class allocates the component (its interface table `0x142f7d320`
-  is a COMDAT-folded shared base: no RTTI, no pointer to itself, and both the
-  interface `this` and the worker object are 0x20 apart), whether a placed node
-  passes the attachment gate (`[node+0x454]` bit `0x200` from the node creation
-  record, node `u16 +0x1c` bits `0x20` set / `0x40` clear, model object `+0x84`
-  bit `0x80`, `+0x242` bit 7 clear), and whether the character's own handle names
-  the same world slot. The descriptor's bounds/filter fields are documented but
-  not converted.
+  **The component is named:** constructor `0x14200a9a0` (size `0xad0`, primary
+  vtable `0x142f7d608`, base interface `0x142f7d648` at `+0x20`, third vtable
+  `0x142f7d458` at `+0x118`), registration `0x14200bab0`
+  (`RegisterTypeWithSize`, kind `0x14`, name decodes to `Unknown`), type object
+  vtable `0x1433633c8` whose slot 1 is the factory `0x14200a5f0`, and the
+  pair-with-node `0x14200f840` -> `0x14201cf40(object, entity)`; the attach hooks
+  take the node from `[entity+0x250]` and test **no asset-derived condition**.
+  **The character's world slot is the node's slot:** the mover descriptor's
+  `+0x46` gets `0x14202f800(node)` (the `u16` at `[node+0x620]+0x31f8`, same
+  accessor the per-model builder uses), and `0x142cbcd40` builds the character's
+  shape/body in that world (`0x142cf35a0` -> `0x142cc3f50`). **So per-model
+  bodies and the character share the node's world.** **Open:** whether a placed
+  node passes the node gate (`[node+0x454]` bit `0x200`, copied from the node
+  creation record's `+0x10`; node `u16 +0x1c` bits `0x20`/`0x40`, model `+0x84`
+  bit `0x80`) -- the record's producer is unread and is runtime, not asset, data.
+  The descriptor's bounds/filter fields are documented but not converted.
   The chunk's own consumer is not RVA-dispatch reachable (277 tables, 0 hits).
   The type-`0x00A` absence affects only the other brush source, not this route.
 

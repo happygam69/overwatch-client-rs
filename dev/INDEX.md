@@ -60,6 +60,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `data/tmp/stats35.py` | (no header) | 12 |
 | `data/tmp/stats42.py` | (no header) | 7 |
 | `deviation_check.py` | Check that the legacy deviations and the code agree. | 92 |
+| `disp_scan.py` | Every instruction in `.text` whose memory operand has a given displacement. | 117 |
 | `field_index.py` | Field-access index over the complete client image. | 417 |
 | `find_anim_decoder.py` | Find code that reads the animation clip header, by the loads it must make. | 107 |
 | `find_field_writes.py` | Find the code that reads or writes one struct-field offset. | 124 |

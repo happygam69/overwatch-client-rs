@@ -3,6 +3,22 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the component class, and the character's world is the node's world
+
+- The collision component: constructor `0x14200a9a0` (`0xad0` bytes; primary
+  vtable `0x142f7d608`, base interface `0x142f7d648` at `+0x20`, third vtable
+  `0x142f7d458` at `+0x118`), registration `0x14200bab0` (kind `0x14`, size
+  `0xad0`, name `Unknown`), type-object vtable `0x1433633c8` slot 1 the factory
+  `0x14200a5f0`, pair-with-node `0x14200f840` -> `0x14201cf40(object, entity)`.
+  The attach hooks test no asset-derived condition.
+- The character's `[controller+0x1ad8]` is written only at `0x140ca6132` from
+  `0x142cbcd40`; the mover descriptor `+0x46` is `0x14202f800(node)` (the `u16`
+  at `[node+0x620]+0x31f8`), the same accessor the per-model builder uses. So the
+  character and the per-model bodies share the node's world slot.
+- Open: whether a placed node passes the node gate (`[node+0x454]` bit `0x200`
+  from the node creation record `+0x10`); the record's producer is unread and is
+  runtime data, so no install test is written (`not tested`).
+
 ## 2026-11-02 - the per-model body's owner is a Domino world slot
 
 - `0x14202f800` returns `[[node+0x620]+0x31f8]` (a `u16`); `OwnerCreateBody`

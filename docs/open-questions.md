@@ -1193,6 +1193,31 @@ an unread table. Also: whether the character's own handle
 (`[controller+0x1ad8]`) names the same world slot. Descriptor bounds/filter
 fields remain documented, not converted.
 
+**Round 8 (2026-11-02): the component is named, and the character's world is the
+node's world.** Constructor `0x14200a9a0` (`0xad0` bytes; primary vtable
+`0x142f7d608`, base interface **`0x142f7d648`** at `+0x20` — the earlier
+`0x142f7d320` is a neighbouring folded table; third vtable `0x142f7d458` at
+`+0x118`); registration `0x14200bab0` (`RegisterTypeWithSize`, kind `0x14`,
+size `0xad0`, name decodes to `Unknown`); type-object vtable `0x1433633c8`,
+slot 1 the factory `0x14200a5f0`; pair-with-node `0x14200f840` ->
+`0x14201cf40(object, entity)`. The attach hooks take the node from
+`[entity+0x250]` and test no asset-derived condition.
+
+The character's `[controller+0x1ad8]` is written only at `0x140ca6132` from
+`0x142cbcd40`'s return, and `RunCharacterControllerSweep` is called with it at
+`0x140ee8ad1`. The mover's descriptor `+0x46` is `0x14202f800(node)` — the same
+`u16` at `[node+0x620]+0x31f8` the per-model builder reads — and `0x142cbcd40`
+builds the character's shape/body in that world (`0x142cf35a0` ->
+`0x142cc3f50` for tag 0, `OwnerCreateBody` for tag 1). **So the character and the
+per-model bodies share the node's world slot.**
+
+**Open:** whether a placed node passes the node gate (`[node+0x454]` bit
+`0x200`, copied from the node creation record's `+0x10` at `0x14202c6e4`; node
+`u16 +0x1c` bits `0x20`/`0x40`, model object `+0x84` bit `0x80`). The record's
+producer is unread: `0x14202c660` is reachable only through the scene-node table
+`0x143367570` slot 32. That is **runtime, not asset, data**, so no install test
+is written — the doc says `not tested`.
+
 ---
 
 ## 7. Domino schema and integration in the current image
