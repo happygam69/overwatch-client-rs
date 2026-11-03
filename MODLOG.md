@@ -3,6 +3,23 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - C named by type identity
+
+- The release path `0x141b251d0` is generic (vtable slot `+0x18`, flags, deferred
+  destruction), so the class cannot come from there; type identity did:
+  **`C` = registered class `0x564B1018`, size `0x198`, vtable `0x1431dd118`**
+  (registration `0x1402db070` passes `r8d = 0x564B1018` and `size 0x198`; 22 of
+  36 field hashes are immediates in the client's dispatch
+  `0x141334ea0`/`0x141335e60`; OWLib used only as a check).
+- `C+0x98` is a 16-byte array header over the inline sub-object's `Vec3A[]`,
+  `C+0xa0` the encoding tag (`1` = `{points,count}`); implemented in
+  `ow_tank::model_collision` (5 tests). `+0x48` is an asset reference
+  (`teStructuredDataAssetRef<STU_564B1018>`, declared at `+0x08` of
+  `STU_09CB5A77`).
+- Correction: the node-type-2 update is one function at `0x14204cb40` with one
+  static caller, `0x14204824a`.
+- Next: the model `MSTU`'s `InstanceInfo` of type `0x564B1018` -> the real brush.
+
 ## 2026-11-02 - the chain to C ends in a measured negative
 
 - Three probes for `[node+0xe8]` (the pending object moved into `[node+0x38]`)

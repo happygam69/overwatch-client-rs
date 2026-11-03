@@ -73,6 +73,8 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `ks_key_test.py` | Test candidate keys/counters against the known page keystream. | 109 |
 | `ks_linear.py` | Berlekamp-Massey linear-complexity test on the page keystream. | 62 |
 | `loader_imports.py` | (no header) | 60 |
+| `model_class_search.py` | Search the reference STU class definitions for a class whose declared field | 115 |
+| `model_registry.py` | Enumerate the client's registered class descriptors by their call sites. | 195 |
 | `offline_page_recover.py` | Recover Overwatch.exe `.text` / `.pdata` offline with the known page cipher. | 1240 |
 | `patch_clean_pe.py` | Build a clean analysis PE: the install's headers plus the recovered .text. | 96 |
 | `pdata_lookup.py` | Lookup .pdata function ranges containing given rvas. | 65 |

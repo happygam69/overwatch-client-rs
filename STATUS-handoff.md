@@ -52,17 +52,15 @@ missing is **data, not code** — and the two producers are both blocked:
   `brush_convert` (25 tests, client-emulated meshes pinned). **All four**
   fixture meshes now reproduce bit for bit; the arrow's divergence was two
   wrong link reads (ops 2/5 use `+0x28`, not `+0x30`), found by single-stepping
-  the client. `C`'s instance encoding is read; **its class is not**, and the
-  census gives a structural negative (no function stores both `+0x186` and
-  `+0x98`). The chain back from `GeometryBuild` is walked to the node-type
-  factory `FUN_1420d0ef0` and the node update
-  (`0x14204cbce..0x14204cfc9`), which moves `[node+0xe8]` into `[node+0x38]`;
-  the producers of `[object+0x40]` and `[instance+0x48]` are outside it. Three
-  probes for the writer of `[node+0xe8]` came back negative, so the census line
-  is closed; the remaining approaches are the node's loader (a vtable/callback
-  path the handler's lack of a code reference points to) and a data-side search
-  in the model asset. The type-`0x00A` absence affects only the other brush
-  source, not this route.
+  the client. `C` is **named by type identity**: registered class `0x564B1018`, size
+  `0x198`, vtable `0x1431dd118` (the client's own registration `0x1402db070`
+  and field dispatch `0x141334ea0`/`0x141335e60`). `C+0x98` is a 16-byte array
+  header over the inline sub-object's `Vec3A[]` and `C+0xa0` the encoding tag;
+  `+0x48` is an asset reference (`teStructuredDataAssetRef<STU_564B1018>`).
+  Implemented in `ow_tank::model_collision` (5 tests). The next step is data:
+  parse the model `MSTU` for an `InstanceInfo` of type `0x564B1018` and run its
+  array through the brush pipeline. The type-`0x00A` absence affects only the
+  other brush source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
 `MAP_CHUNK_COLLISION`, kind `0x12` is `MAP_CHUNK_PATHING` (the 220-cell

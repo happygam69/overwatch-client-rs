@@ -42,6 +42,7 @@ pub mod mapguid;
 pub mod mapresolve;
 pub mod material;
 pub mod model;
+pub mod model_collision;
 pub mod mstu;
 pub mod packages;
 pub mod replay;

@@ -976,14 +976,36 @@ computed jump is the switch at `0x14208e74e` that selects fragments of one
 function body. That is a fragment dispatch, not an external call, so the
 reachability claim is withdrawn.
 
-**Two approaches remain, both untried.** (a) Read the node's *loader* — the
-handler `0x14204cbce` has no code reference and the loader may hand the node
-its object through a vtable/callback (the project's node-type table lists 144
-types; the type-2 entry's context may name it). (b) A data-side search: if `C`
-is a sub-object of the model asset, `ow-tank`'s model parser may reach the
-`+0x98` two-word record directly from the install (the instance points are
-4-float arrays, and `+0x98`'s record has a distinctive two-word shape). Both
-are reads, not censuses; per the project rule, the census line is now closed.
+**`C` is named by type identity (2026-11-02).** The release path showed that
+`[node+0x38]`/`[node+0x40]` are refcounted resources whose class is only a
+runtime vtable (`0x141b251d0` calls vtable slot `+0x18`), so the class came
+from the registration direction instead:
+
+* **`C` = registered class `0x564B1018`, size `0x198`, vtable `0x1431dd118`** —
+  the client's own registration `0x1402db070` passes `r8d = 0x564B1018` and
+  `size 0x198` to `0x1421cd360`, and 22 of the class's 36 declared field hashes
+  are immediates in the client's two field-dispatch functions
+  (`0x141334ea0`/`0x141335e60`); `0x077CF4AA` (`+0x186`), `0x88FCECD7` (the
+  array at `+0x98`) and `0x06A1888C` (the inline sub-object at `+0x90`) all
+  appear in the client's own code. OWLib's registry was used only as a check
+  (size and the unique `+0x186` field), not as the source.
+* `C+0x98` is a pointer to a 16-byte array header, `C+0xa0` a whole-qword tag,
+  `1` selecting `{points, count}` and anything else `{count, points}`; the array
+  is a `Vec3A[]` of the inline sub-object at `C+0x90` — the model's instance
+  points. Implemented in `ow_tank::model_collision` (5 tests).
+* `+0x48` is an **asset reference**: `C` is the loaded instance of
+  `teStructuredDataAssetRef<STU_564B1018>`, declared at `+0x08` of the entity
+  component `STU_09CB5A77` (size `0x30`) and `+0x28` of `STU_2FD9D8D6` (size
+  `0x38`). `0x48 = 0x08 + 0x40`.
+
+**The one read still missing** is the class at `[node+0x38]` (the producer of
+`[node+0xe8]`), which nothing on the chain names. The next anchor is data, not
+code: parse the model's `MSTU` blob for an `InstanceInfo` of type `0x564B1018`
+and read its `0x88FCECD7` array through the already-pinned
+`brush`/`brush_mesh`/`brush_convert` pipeline; that yields the practice range's
+real brush with no new code. Also recorded: the node-type-2 update is **one
+function at `0x14204cb40`** (its second half starts at `0x14204cbce`), with one
+static caller, the dispatch at `0x14204824a`.
 
 ---
 
