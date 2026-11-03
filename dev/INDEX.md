@@ -72,12 +72,17 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `gh.py` | Call the Ghidra bridge over HTTP. | 67 |
 | `gh_apply_names.py` | Name the client's functions in the Ghidra project, and carry the written findings with them. | 172 |
 | `gh_apply_types.py` | Apply the understood struct layouts and function prototypes to the Ghidra program. | 172 |
+| `gjk_closest_diff.py` | Differential probe: the closest-point GJK, client vs `ow-sim`. | 238 |
+| `gjk_simplex_diff.py` | Differential probe: the closest-point sub-simplex bodies, client vs `ow-sim`. | 203 |
+| `gjk_simplex_probe.py` | Oracle probe for the closest-point sub-simplex routines. | 134 |
+| `gjk_trace.py` | Trace the type-3 triangle test's closest-point GJK over the diff corpus. | 166 |
+| `gjk_trace_one.py` | Trace the client's closest-point GJK one descriptor at a time. | 143 |
 | `imm_scan.py` | Scan warm .text pages for 4/8-byte little-endian immediate constants. | 78 |
 | `ks_hash_test.py` | Test hash-based keystream constructions against the known page stream. | 82 |
 | `ks_key_test.py` | Test candidate keys/counters against the known page keystream. | 109 |
 | `ks_linear.py` | Berlekamp-Massey linear-complexity test on the page keystream. | 62 |
 | `loader_imports.py` | (no header) | 60 |
-| `mesh_support_diff.py` | Differential probe: the type-3 support-point walk, client vs `ow-sim`. | 358 |
+| `mesh_support_diff.py` | Differential probe: the type-3 support-point walk, client vs `ow-sim`. | 376 |
 | `model_class_search.py` | Search the reference STU class definitions for a class whose declared field | 115 |
 | `model_registry.py` | Enumerate the client's registered class descriptors by their call sites. | 195 |
 | `offline_page_recover.py` | Recover Overwatch.exe `.text` / `.pdata` offline with the known page cipher. | 1240 |

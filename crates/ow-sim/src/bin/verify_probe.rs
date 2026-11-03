@@ -1315,6 +1315,135 @@ fn mover_world_position_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), 
     Ok((position_bits(out), vec![state]))
 }
 
+/// The two closest-point sub-simplex bodies, `0x142cc8d80` (3-simplex) and
+/// `0x142cc7740` (4-simplex): `(direction out, simplex block)`.
+///
+/// The simplex block is the client's own layout - four `0x50`-byte records and
+/// the live count at `+0x140` - so both sides are compared byte for byte,
+/// including the vertices the routine moves and the direction it writes.
+fn gjk_simplex_entry(args: Vec<Arg>, which: u32) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x40 => b,
+        _ => return Err("arg0 must be the 0x40-byte direction out".into()),
+    };
+    let mut block = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x150 => b,
+        _ => return Err("arg1 must be the 0x150-byte simplex".into()),
+    };
+    let mut simplex = ow_sim::collide::Simplex::from_bytes(&block);
+    let mut direction: ow_sim::collide::Quad = [0.0; 4];
+    for (lane, value) in direction.iter_mut().enumerate() {
+        *value = f32::from_le_bytes(out[lane * 4..lane * 4 + 4].try_into().unwrap());
+    }
+    let accepted = if which == 3 {
+        ow_sim::collide::simplex3(&mut direction, &mut simplex)
+    } else {
+        ow_sim::collide::simplex4(&mut direction, &mut simplex)
+    };
+    for (lane, value) in direction.iter().enumerate() {
+        out[lane * 4..lane * 4 + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    simplex.write_to(&mut block);
+    let ret = if accepted {
+        "1".to_string()
+    } else {
+        "0".to_string()
+    };
+    Ok((ret, vec![out, block]))
+}
+
+/// `0x142cc9460`: the closest-point GJK the type-3 triangle test falls into.
+///
+/// Args: the `0x40`-byte output, the descriptor, then the two point arrays.
+/// The descriptor is the client's own block; its two pointer fields are
+/// ignored because the arrays arrive as arguments (fixture plumbing only).
+fn gjk_closest_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x40 => b,
+        _ => return Err("arg0 must be the 0x40-byte output".into()),
+    };
+    let desc = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0xA4 => b,
+        _ => return Err("arg1 must be the descriptor".into()),
+    };
+    let first = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg2 must be the first point array".into()),
+    };
+    let second = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg3 must be the second point array".into()),
+    };
+    let quad = |bytes: &[u8], at: usize| -> ow_sim::collide::Quad {
+        let mut lane = [0.0f32; 4];
+        for (slot, value) in lane.iter_mut().enumerate() {
+            *value =
+                f32::from_le_bytes(bytes[at + slot * 4..at + slot * 4 + 4].try_into().unwrap());
+        }
+        lane
+    };
+    let points = |bytes: &[u8], count: i32| -> Vec<ow_sim::collide::Quad> {
+        (0..count.max(0) as usize)
+            .map(|index| quad(bytes, index * 0x10))
+            .collect()
+    };
+    let count_a = i32::from_le_bytes(desc[0x08..0x0C].try_into().unwrap());
+    let count_b = i32::from_le_bytes(desc[0x28..0x2C].try_into().unwrap());
+    let points_a = points(&first, count_a);
+    let points_b = points(&second, count_b);
+    let input = ow_sim::collide::GjkInput {
+        a: &points_a,
+        b: &points_b,
+        shape_a: ow_sim::collide::GjkShape {
+            radius: quad(&desc, 0x10),
+            translation: quad(&desc, 0x40),
+            rotation: quad(&desc, 0x50),
+        },
+        shape_b: ow_sim::collide::GjkShape {
+            radius: quad(&desc, 0x30),
+            translation: quad(&desc, 0x60),
+            rotation: quad(&desc, 0x70),
+        },
+        direction: quad(&desc, 0x80),
+        motion: quad(&desc, 0x90),
+        flag0: desc[0xA0],
+        flag1: desc[0xA1],
+    };
+    let mut result = ow_sim::collide::GjkOutput::default();
+    let accepted = ow_sim::collide::closest_point(&input, &mut result);
+    if accepted {
+        for (at, value) in [
+            (0x00, result.point),
+            (0x10, result.normal),
+            (0x20, result.residual),
+        ] {
+            for (lane, lane_value) in value.iter().enumerate() {
+                out[at + lane * 4..at + lane * 4 + 4].copy_from_slice(&lane_value.to_le_bytes());
+            }
+        }
+    }
+    // The client stores the iteration count inside its loop, so a rejection
+    // that happens after the first completed iteration still leaves it behind;
+    // a rejection before any completed iteration leaves the caller's bytes.
+    if accepted || result.iterations != 0 {
+        out[0x30..0x34].copy_from_slice(&result.iterations.to_le_bytes());
+    }
+    let ret = if accepted {
+        "1".to_string()
+    } else {
+        "0".to_string()
+    };
+    Ok((ret, vec![out, desc, first, second]))
+}
+
 fn handle_call(
     entry: &str,
     args: Vec<Arg>,
@@ -1348,6 +1477,10 @@ fn handle_call(
         "triangle_degenerate" => triangle_degenerate_entry(args),
         "collision_capsule" => collision_capsule_entry(args),
 
+        // crates/ow-sim/src/collide.rs, the closest-point GJK
+        "gjk_simplex3" => gjk_simplex_entry(args, 3),
+        "gjk_simplex4" => gjk_simplex_entry(args, 4),
+        "gjk_closest" => gjk_closest_entry(args),
         "build_bvh" => build_bvh_entry(args),
         "mesh_sweep" => mesh_sweep_entry(args),
         "mover_variant_position" => mover_variant_position_entry(args),

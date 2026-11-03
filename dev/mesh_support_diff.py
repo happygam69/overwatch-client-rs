@@ -13,10 +13,17 @@ What this proves and what it does not:
   the recalculated direction) is the one `ow-sim` builds - every case below
   reaches the client's walk, and the walk's node culling depends on every lane
   of that hull;
-* the *triangle accept* on that path is `0x142cc9460`, which `ow-sim` does not
-  implement yet. A case the client's triangle test accepts therefore shows a hit
-  on the client side and none here; when the walk's counters still agree, that
-  difference is reported as an `OPEN` handoff, not as a failure.
+* the *triangle accept* on that path is `0x142cc9460`, the closest-point solver
+  `ow_sim::collide::closest_point` implements; a case the client's triangle test
+  accepts is compared on the contact too (point, normal, fraction, triangle and
+  ids), so the six queries that reach it are exact agreements rather than
+  handoffs. The `OPEN` classification below is kept as a diagnostic: it fires
+  only if the client hits and `ow-sim` misses while the walk's counters agree,
+  which is what a regression in the solver would look like.
+
+The solver's own body is differenced separately, on captured and seeded
+descriptors, by `dev/gjk_closest_diff.py`; its three-vertex sub-solve by
+`dev/gjk_simplex_diff.py`.
 
 The oracle dereferences the block's support pointer as a raw arena address and
 the probe resolves the same array against the element pointee, so the two sides
@@ -165,6 +172,15 @@ def corpus():
             0.1,
             quat=(0.0, 0.0, 0.7071067811865476, 0.7071067811865476),
         ),
+        ident,
+    )
+    add(
+        # No support points at all, but an expansion lane above the 0.005 gate:
+        # the triangle test still takes the closest-point solver, with the block
+        # itself as the second set and a count of one.
+        "point query above the expansion gate",
+        plain,
+        support_block([0.75, 0.9, 5.0, 0.0], [0.75, 0.9, -5.0, 0.0], 0, 0.4),
         ident,
     )
     add(
@@ -350,6 +366,8 @@ def main(argv) -> int:
         f"cases: {len(corpus())}  failures: {failures}  "
         f"open support-point handoffs: {open_handoffs}"
     )
+    if not failures and not open_handoffs:
+        print("every support-point query agrees byte for byte with 0x142caed30")
     return 1 if failures else 0
 
 

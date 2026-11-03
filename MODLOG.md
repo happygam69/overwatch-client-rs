@@ -3,6 +3,24 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the GJK triangle accept is read; mesh cases all agree
+
+- `0x142cce430` is a chain root whose slow path is the fragment
+  `0x142cce5bb..0x142cce82b`; it calls `0x142cc9460` (closest-point GJK: radii
+  floored at `0.01`, `r = radA + radB - 0.01 + 0.00125`, `|XMM2|^2 < r^2`
+  convergence, support argmaxes onto `XMM3`, fraction refine with `1.1920929e-07`,
+  cap `0x14`).
+- `0x142cc8d80` (3-simplex) read fully: six signed dots, the face vector, three
+  plane terms, eight regions, face weights = plane terms over their sum,
+  per-edge surviving-vertex permutations.
+- Implemented in `ow_sim::collide`; `dev/mesh_support_diff.py` 18 cases, 0
+  failures, 0 open, with the pinned contact reproduced (tri 1, ids 0x12/0x22,
+  point (0.75,0.9,3.01), normal (0,0,1), fraction 0x3df5c290);
+  `dev/gjk_simplex_diff.py` 30 seeded 3-simplices; `dev/gjk_closest_diff.py` 17
+  live + 120 seeded, 0 failures.
+- Open: the 4-simplex `0x142cc7740` (read structurally only; 7/120 seeded
+  descriptors reach it, 0/18 mesh cases); `simplex4` is a documented open branch.
+
 ## 2026-11-02 - the support-point hull is exact; GJK accept still open
 
 - `0x142caed30`'s support-point branch read operation for operation and

@@ -2267,46 +2267,123 @@ recentres the transformed points on the centre in place for the block copy that
 `0x142cc9460` receives (that array is read only by that function), and the copy's
 quaternion lane is the identity.
 
-### What is still open here, exactly
+### The closest-point solver (`0x142cc9460`) -- read and implemented
 
-`0x142cc9460` (`.pdata` extent `0xb8b` bytes) is a **closest-point (GJK-style)
-solver with a cached simplex**. Read at its interface, not operation for
-operation:
+`0x142cc9460` (`.pdata` extent `0x142cc9460..0x142cc9feb`, `0xb8b` bytes) is the
+contact solver the triangle test calls whenever the query block carries support
+points or an expansion lane above `0.005`. It is a closest-point search with a
+cached simplex, and it is now transcribed operation for operation into
+`ow_sim::collide::closest_point`.
 
-- **Inputs.** `0x142cce430` builds a stack descriptor and passes it: the
-triangle's three vertices (the caller copies them out of the record) behind a
-pointer, a mode word `3`, the block's expansion clamped by `maxps(0.01,
-expansion)` against the `0.01` splat at `0x14311e0c0`, the support-point pointer and
-count (with the count forced to `1` and the pointer replaced by the block itself
-when the block has no support points), the block's start and end, the direction
-`end - start`, the block's motion, and the byte at `+0x72`.
-- **What it does.** It transforms the support points and the triangle into one
-frame, forms an extent quad and two squared tolerances from it (`+0.00125` and
-`-0.005 + 0.00125`), then iterates a closest-point search of at most `0x13`
-steps over a simplex of one to four vertices, keeping barycentric weights and the
-witness points of both sides. The three-vertex sub-solve is `0x142cc8d80`
-(`0x6d2` bytes) and the four-vertex sub-solve is `0x142cc7740` (`0x1632` bytes),
-both reachable only through it.
-- **Outputs.** The contact point at the output's `+0x00`, a normalised direction
-at `+0x10`, a third lane group at `+0x20` that the walk adopts as its new motion
-budget, and an iteration count at `+0x30`. The exact terms behind each were not
-followed operation for operation, so no bit pattern of theirs is stated here.
+**The descriptor** `0x142cce430` builds at `0x142cce6e8` and passes in `RDX`:
 
-So `0x142cc9460` is **read at that interface level and not implemented**. In
-turn:
+| offset | field | value on the mesh path |
+|---|---|---|
+| `+0x00` / `+0x08` | pointer to the first point array and its `i32` count | the triangle's three vertices (the caller's stack copy), count `3` |
+| `+0x10` | `Vec3A` radius of the first set | the `0.01` splat at `0x14311e0c0` |
+| `+0x20` / `+0x28` | pointer to the second point array and its count | the block copy's support array; when the count is zero the pointer is the block itself and the count is `1` |
+| `+0x30` | `Vec3A` radius of the second set | the scaled expansion |
+| `+0x40` / `+0x50` | translation and quaternion of the first set | zero / `(0,0,0,1)` |
+| `+0x60` / `+0x70` | translation and quaternion of the second set | the block copy's start and `(0,0,0,1)` (`0x142f8cd50`); zero and identity when the count is zero |
+| `+0x80` | `Vec3A` the sweep's `end - start` | as the walk computes it |
+| `+0x90` | `Vec3A` the motion budget | the block copy's `+0x20`, which the walk rewrites with each accepted fraction |
+| `+0xa0` | byte | the query block's `+0x72` |
+| `+0xa1` | byte | `0`, written by the triangle test |
 
-- `ow_sim::collide::mesh_sweep` now builds the read hull and runs the client's
-  walk for a support-point query, and its counters are the client's; but the
-  **triangle accept on that path is missing**, so a capsule query reports a miss
-  where the client may report a hit;
-- the point query (count `0`, expansion `<= 0.005` on every lane) is unchanged and
-  bit-identical, including the `0.02` step's conditional.
+The second set is the **recentred** support array: the walk transforms the
+points, subtracts the cloud's centre (`0x142caf170`) and the descriptor's
+translation adds that centre back, so the solver sees `(p - c) + c` and the two
+roundings are the client's. The function replaces both radii by
+`max(radius, 0.01)` (a `maxps`, so the second operand wins on `NaN`) and builds
+two rotation matrices from the two quaternions with the construction already
+recorded for the hull's affine map (`1 - (2q*q)` diagonal, `half`/`spin`
+off-diagonals, three shuffle rows). Both point sets are then expressed relative
+to the second set's first transformed point, and the second set's first entry is
+the zero vector by construction.
 
-The tests drive both: the swept-**point** query (count `0`, expansion base `0`,
-the identity rotation - also the only state in which `sweep_bounds`
-(`0x142cd5540`) short-circuits and returns its own three inputs), and a
-support-point query against the same mesh by its walk counters and by a
-last-bit ladder on the hull's reach.
+**The loop.** State: the cached simplex (up to four vertices), the running
+fraction `t` (`XMM15`), the search direction and its closest point, and
+`r = radius_a + radius_b - 0.01 + 0.00125` with `0.00125` at `0x1435eccf0`.
+Each pass:
+
+1. **Termination.** If every lane of `|v|^2` is below `r^2` (`CMPLTPS`, so a
+   `NaN` lane keeps searching) the search stops. A non-zero fraction goes to the
+   output; a zero fraction with `+0xa1` clear inspects `+0xa0` (`0` rejects); a
+   zero fraction with `+0xa1` set either records `|v|^2` as the new best
+   (`0x142cc987d`) when the best is not below it, or - when the best is still at
+   least `|v|^2` and `|v|^2 > 1e-4` - **shrinks** the radius to
+   `sqrt(|v|^2) - 0.005 + 0.00125` and keeps searching.
+2. **Support.** The first set maximises `dot(p_i - p_0, v)` and the second
+   maximises `dot(p_j - p_0, -v)`; both loops start at index `1` and require a
+   strictly positive projection, so index `0` is the fallback.
+3. **Progress.** With `d = v/|v|` the value `-(dot(p_a - p_b - t*dir, d))` is
+   compared with `r`: at or above it the support pair is appended; below it (or
+   after a shrink) the fraction is refined to
+   `t + (value - radius_offset) / (-dot(d, dir))`, rejected when that denominator
+   is under `1.1920929e-07` or when the new `t` reaches the motion budget.
+4. **Append.** Every cached vertex is re-projected to
+   `p_b[index_b] + t*dir` with `dw = w - p` recomputed; a repeated index pair
+   suppresses the append, otherwise the support pair is appended with
+   barycentric `(1,1,1,1)`.
+5. **Reduce.** One vertex keeps `dw`; two run the inline two-vertex reduction
+   (`0x142cc9b8b`); three call `0x142cc8d80`; four call `0x142cc7740`. The
+   closest point is recomputed from the barycentrics, the iteration counter is
+   bumped into the output's `+0x30`, and at `0x14` passes the output stage runs.
+   A four-vertex simplex that survives its reduction is penetration: it goes
+   straight to the output when `+0xa0` is set.
+
+**The output** (`0x142cc9e3e`). The contact point is the barycentric
+combination of the vertices' `p` points - the first set's own points, with the
+first relative `A` point as the accumulator's prior value when the simplex is
+still empty - plus the second frame's origin, plus `radius_a` along the normal.
+The **normal is the direction the last reduction left in `XMM3`**, not the
+closest point: it is normalised by `1/sqrt`, with `end - start` negated and
+normalised as the fallback when that direction's squared length is at or below
+`FLT_MIN` (`0x143391030`, `0x143110818`). `+0x20` receives the fraction, which is
+why the walk adopts it as its motion budget: on this path that lane is the sweep
+fraction, not a unit vector. A rejection writes nothing, except that a rejection
+after the first completed iteration leaves the counter at `+0x30` behind - the
+client stores it inside its loop.
+
+### The sub-simplex bodies
+
+Both take the simplex block by pointer - `0x50`-byte records at `+0x00` `dw`,
+`+0x10` `p`, `+0x20` `w`, `+0x30` barycentric, `+0x40` the two `i32` indices,
+with the live count at `+0x140` - and a `Vec3A` output they fill with a
+direction, and both return `AL = 0` on a degenerate face.
+
+`0x142cc8d80` (3-simplex, `0x142cc8d80..0x142cc9452`, `0x6d2` bytes) is
+implemented as `ow_sim::collide::simplex3`. With `a`, `b`, `c` the three `dw`
+points and `u = b - a`, `v = c - b`, `w = c - a` it derives six signed dots
+(`-dot(u,a)`, `dot(u,b)`, `-dot(w,a)`, `dot(w,c)`, `-dot(v,b)`, `dot(v,c)`), a
+face vector `x = rot3(rot3(w)*u - rot3(u)*w)` - the negation of `cross(w, u)` on
+the low three lanes - and three plane terms, the triple products of the vertex
+pairs against `x`. The regions are tested in this order: vertex `a`, vertex `b`,
+vertex `c`, edge `a`-`b` (survivors `a`,`b`), edge `a`-`c` (`a`,`c`), edge
+`b`-`c` (`c`,`b`), then the face. A vertex keeps a barycentric of `(1,1,1,1)`;
+an edge splits `1/dot(edge, edge)` between the two endpoint dots; the face's
+weights are its **three plane terms over their own sum**, not the edge dots, and
+its direction is `x` or `-x`, whichever faces the origin. The edge and face
+directions are the double cross product `rot3(rot3(e)*S - rot3(S)*e)` applied
+twice with `S` the surviving pair's sum - the same expression the output's
+normal is built from.
+
+`0x142cc7740` (4-simplex, `0x142cc7740..0x142cc8d72`, `0x1632` bytes) is **open**.
+Read of it: it takes the same block and output, and its first act is an
+orientation fix-up that swaps two vertices when the tetrahedron is negatively
+oriented (`0x142cc7807`). It then runs the same region family one dimension up -
+four vertex regions (count `1`, at `0x142cc8026`, `0x142cc8091`, `0x142cc812e`,
+`0x142cc81cf`), six edge regions (count `2`), face regions (count `3`) and an
+interior case (count `4`, `0x142cc8ce5`) that spreads `1/sum(lambda)` over all
+four vertices - over the tetrahedron's six edge dots and four plane terms. Its
+lambda slots, its per-region copy order and its direction terms are not
+transcribed, so `ow_sim::collide::simplex4` returns the miss the type-3
+narrowphase reported before this change. The branch is reached only when a
+fourth support point puts the origin inside the tetrahedron: **zero** of the 18
+differenced queries reach it, while 10 of 120 seeded descriptors in
+`dev/gjk_closest_diff.py` do - that is exactly where the remaining divergence
+sits (7 of 120 with the default seed). Everything the mesh walk can witness is exact; the penetration state is
+open rather than guessed.
 
 The differential (`dev/mesh_support_diff.py`) pins the hull's **reach**
 (`centre + step` on x) to the last bit: two three-rung ladders sit one ULP apart
@@ -2434,7 +2511,7 @@ line, the union of all 272 root boxes (`-28.35, -14.51, -14.01` to
 | the record's flag word (`+0x10`, bit `0x200`) | **open**: the dispatch form is `call [WorldBase_vtable+0x40]`; checks 13 and 14 count every encoding of it (492 + 31 memory/tail, 109 register-indirect) and none of the sites read carries a creation record |
 | the mesh record's node / triangle / vertex layout | **read (check 16)**: `0x142caed30` gives node stride `0x20` (adjacent child `+0x20`, second child `i32` at `+0x18` times `0x20`), triangle stride `0x20`, vertex stride `0x10`, node box `+0x00`/`+0x0c`, mask `+0x1c`, axis `+0x1e`, leaf count `+0x1f`; the block's own `nodeCount` and `0x38B71436` word agree on 272 of 272 |
 | the range's collision as one addressable world | **assembled and swept (check 16)**: 272 shapes from 161 models in one 4,797,872-byte buffer, every record addressing its own arrays; the pinned block's sweep hits `(0.9950001, 4.0, 0.9950001)` at fraction `0x3e8051b8`, triangle `7` |
-| the capsule (support-point) narrowphase | **half read and shipped**: the hull branch of `0x142caed30` (`0x142caef15..0x142caf1a5`) and the walk it feeds are implemented and differenced against the client's bytes; the triangle test on that path (`0x142cc9460`) is **open**, so a capsule query reports a miss where the client may accept. `0x142cc9460`'s interface, its GJK loop and its two simplex sub-solvers (`0x142cc8d80` `0x6d2` bytes, `0x142cc7740` `0x1632` bytes) are read at that level only |
+| the capsule (support-point) narrowphase | **shipped and exact on every witness**: the hull branch of `0x142caed30` (`0x142caef15..0x142caf1a5`), the walk it feeds, the triangle test's slow path (`0x142cc9460`) and its three-vertex body (`0x142cc8d80`) are implemented and differenced against the client's bytes on 18 queries (`dev/mesh_support_diff.py`, 18 agreements, 0 failures) and on 17 captured plus 120 seeded descriptors (`dev/gjk_closest_diff.py`). **One branch stays open**: the four-vertex body `0x142cc7740`, reached only when a fourth support point puts the origin inside the tetrahedron (0 of the 18 queries, 7 of 120 seeded descriptors) |
 | the scene's placement transform | **open**: a model mesh is assembled in its own local frame; the placeable transform to shape/boss transform chain was not read, so no range sweep names a map location |
 
 Ordered next reads (the per-model route):
@@ -2551,10 +2628,14 @@ Ordered next reads (the per-model route):
 | the context's arrays have a consumer | **not tested / open**: the only reads of `[component+0xc8]` in the component's module are the build and teardown sites (check 15) |
 | the mesh layout is the walk's, not a guess | check 16: `0x142caed30` (node stride `0x20`, triangle stride `0x20`, vertex stride `0x10`, node/triangle field offsets) and the block's own words (`288 / 9`, and `0x38B71436 * 0x20` = the triangle bytes on 272 of 272 blocks) |
 | the support-point hull is the client's, bit for bit | `collide::tests::the_support_hull_affine_is_the_read_map`, `the_support_hull_folds_two_points_into_the_walk_hull` (golden bit patterns from a second float32 transcription of the branch), `an_identity_block_quaternion_is_the_identity_rotation`, `a_support_point_hull_reaches_the_client_walk`, `a_support_point_hull_beside_the_mesh_clears_the_leaves`, `the_support_point_step_decides_the_leaf_reach` |
-| the hull is the client's on the real walk | `dev/mesh_support_diff.py`: 17 support-point queries through the real `0x142caed30` and through `ow_sim::collide::mesh_sweep`; 0 failures, 11 exact agreements (including the ladder rungs one ULP apart), 6 open triangle-accepts |
+| the hull is the client's on the real walk | `dev/mesh_support_diff.py`: 18 support-point queries through the real `0x142caed30` and through `ow_sim::collide::mesh_sweep`; 0 failures, 18 exact agreements (including the ladder rungs one ULP apart and the seven that reach the closest-point solver) |
+| the closest-point solver is the client's | `dev/gjk_closest_diff.py`: the 17 descriptors the real narrowphase builds, plus 120 seeded ones (and three further seeded runs of 80 with other seeds), run through `0x142cc9460` and through `ow_sim::collide::closest_point`; every live descriptor agrees (output block and flag) and every seeded one agrees except the four-vertex cases, which are counted as open |
+| the three-vertex body is the client's | `dev/gjk_simplex_diff.py --only 3`: 100 seeded 3-simplices through `0x142cc8d80` and `ow_sim::collide::simplex3`, block and direction byte for byte, 0 failures |
+| the pinned translated contact | `collide::tests::the_pinned_translated_support_point_contact_is_reproduced` |
+| the capsule contact on the walk | `collide::tests::a_support_point_hull_reaches_the_client_walk` |
 | `mesh_world::tests::*` | the strides against `ow_sim::collide`'s constants, the append order and guest addresses, the record's pointer lanes, the query block's fields, the compile-time field-in-record checks, the array-length refusals |
 | the pinned block's sweep, bit-exact | `mesh_world_real::the_pinned_model_mesh_sweeps_to_an_exact_hit`: point `(0.9950001, 4.0, 0.9950001, 0)`, normal `(0,1,0,0)`, fraction `0x3e8051b8` x4, triangle `7`, ids `[0x8000, 0]`, 4 internal nodes, 1 leaf |
 | the range's 272 shapes in one world | `mesh_world_real::the_ranges_mesh_shapes_assemble_into_one_world`: 229 models, 161 with a shape, 279 holders, 272 shapes, 4,797,872 bytes, every record addresses its own arrays, first shape round-trips byte for byte |
 | the range's first hit, by model identity | same test: 3 of 272 shapes hit by one line through the unplaced assembly; nearest is shape 49, model `0x0d000000000010f5`, point `(-13.212505, 100.0, 2.619999, 0)`, fraction `0x3c8aedfa`, triangle `14` |
-| a capsule against the mesh | **walk tested, contact open**: `mesh_sweep` builds the read hull and the walk's `internals`/`leaves` match the client's `0x142caed30` on 17 differenced queries (`dev/mesh_support_diff.py`, zero failures), including three-rung last-bit ladders on the hull's reach; the **contact** that `0x142cc9460` produces is not implemented, and the six differenced queries whose triangle test accepts are reported as open handoffs, not compared |
+| a capsule against the mesh | **the walk and the contact are the client's**: `mesh_sweep` builds the read hull, runs the client's walk and calls the read closest-point solver, and all 18 differenced queries agree byte for byte through the real `0x142caed30` (`dev/mesh_support_diff.py`: 0 failures, 0 open handoffs), including the seven that the triangle test accepts; the pinned translated contact (triangle `1`, ids `0x12`/`0x22`, point `(0.75, 0.9, 3.01)`, normal `(0, 0, 1)`, fraction `0x3df5c290`) is a unit test. The one state not compared is a four-vertex penetration simplex (`0x142cc7740`, open) |
 | a placed mesh in map coordinates | **not tested / open**: the placement transform chain is unread, so every assembled shape stays in its own local frame (check 16) |

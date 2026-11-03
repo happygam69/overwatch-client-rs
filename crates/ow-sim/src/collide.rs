@@ -62,8 +62,10 @@
 //!
 //! The triangle test itself (`0x142cce430`) takes two paths: the analytic one
 //! when the support-point count is zero and every lane of the block's scaled
-//! expansion compares `<= 0.005`, and `0x142cc9460` otherwise. Only the analytic
-//! path is implemented; see [`mesh_triangle`].
+//! expansion compares `<= 0.005`, and the closest-point solver `0x142cc9460`
+//! otherwise. Both are implemented; the solver's four-vertex reduction
+//! (`0x142cc7740`) is the one branch still open. See [`mesh_triangle`] and
+//! [`closest_point`].
 
 use crate::movement::{maxss, minss};
 
@@ -582,11 +584,15 @@ fn sign_bit(v: f32) -> bool {
 /// every other state builds a stack descriptor and calls `0x142cc9460`.
 ///
 /// `count` is the query block's support-point count, forwarded untouched from
-/// the block the walk copies. `0x142cc9460` is a GJK distance solver with a
-/// cached simplex (itself calling `0x142cc8d80` for a triangle simplex and
-/// `0x142cc7740` for a tetrahedron) and is **not implemented**; this function
-/// therefore returns a miss on the path that reaches it, which is the one place
-/// where the type-3 narrowphase still differs from the client.
+/// the block the walk copies, and `support` is that copy's point array - the
+/// hull's transformed points with the centre subtracted, which is what the
+/// client's descriptor points at (`0x142caf170`). `flag0` is the query block's
+/// byte at `+0x72`, the descriptor's `+0xa0` flag.
+///
+/// Every other state - a support-point count of any size, or an expansion lane
+/// above `0.005` - builds the descriptor at `0x142cce6e8` and calls the
+/// closest-point solver `0x142cc9460`, whose output's residual is the hit
+/// fraction and whose point and normal are the contact.
 fn mesh_triangle(
     vertices: [Quad; 3],
     start: Quad,
@@ -594,11 +600,46 @@ fn mesh_triangle(
     motion: Quad,
     expansion: Quad,
     count: i32,
+    support: &[Quad],
+    flag0: u8,
 ) -> Option<(Quad, Quad, Quad)> {
     // The client's fast path runs when every lane of the scaled expansion is
     // at most 0.005; anything else is the support-point (slow) path.
     if count != 0 || !all_lanes(|lane| expansion[lane] <= 0.005) {
-        return None;
+        // The descriptor is built from the query block copy the walk made: the
+        // identity rotation for the triangle, and for the second set either the
+        // block's own start point (count zero, one point) or the recentred
+        // support array at the block's start.
+        let zero = [0.0f32; 4];
+        let identity = [0.0, 0.0, 0.0, 1.0];
+        let (points, translation) = if count > 0 {
+            (support, start)
+        } else {
+            (&[start][..], zero)
+        };
+        let input = GjkInput {
+            a: &vertices,
+            b: points,
+            shape_a: GjkShape {
+                radius: splat(0.01),
+                translation: zero,
+                rotation: identity,
+            },
+            shape_b: GjkShape {
+                radius: expansion,
+                translation,
+                rotation: identity,
+            },
+            direction: sub_lane(end, start),
+            motion,
+            flag0,
+            flag1: 0,
+        };
+        let mut out = GjkOutput::default();
+        if !closest_point(&input, &mut out) {
+            return None;
+        }
+        return Some((out.point, out.normal, out.residual));
     }
 
     let [v0, v1, v2] = vertices;
@@ -805,16 +846,19 @@ fn support_hull(
     start: Quad,
     end: Quad,
     expansion: Quad,
+    buffer: &mut Vec<Quad>,
 ) -> (Quad, Quad, Quad) {
     let (rows, translation) = support_hull_affine(q, b, v);
     let mut low = [0.0f32; 4];
     let mut high = [0.0f32; 4];
+    buffer.clear();
     for index in 0..count {
         let base = index * MESH_VERTEX_LEN;
         let mut point = add_lane(mul_lane(splat(f32_at(points, base)), rows[0]), translation);
         point = add_lane(point, mul_lane(splat(f32_at(points, base + 4)), rows[1]));
         point = add_lane(point, mul_lane(splat(f32_at(points, base + 8)), rows[2]));
         let point = mul_lane(point, inverse);
+        buffer.push(point);
         if index == 0 {
             low = point;
             high = point;
@@ -831,15 +875,23 @@ fn support_hull(
         splat(0.02),
     );
     let end = add_lane(end, sub_lane(centre, start));
+    // The client keeps the transformed points in a scratch buffer and subtracts
+    // the centre from each (0x142caf170); that recentred array is what its
+    // triangle test's descriptor points at.
+    for point in buffer.iter_mut() {
+        *point = sub_lane(*point, centre);
+    }
     (centre, end, step)
 }
 
 /// `0x142caed30` type 3 (mesh): a swept query against a triangle BVH.
 ///
-/// The count `> 0` branch (the support-point hull at
-/// `0x142caef15..0x142caf1a5`) is implemented; what it hands each triangle to
-/// (`0x142cc9460`) is not, so a support-point query reaches the client's walk
-/// but not its triangle accept. The triangle callback argument is null on this
+/// Both query shapes are the client's: the count `> 0` branch builds the
+/// support-point hull (`0x142caef15..0x142caf1a5`) and keeps the recentred
+/// points for the triangle test, and every triangle is tested by
+/// [`mesh_triangle`], which reaches the closest-point solver
+/// ([`closest_point`]) whenever the block carries support points or an
+/// expansion lane above `0.005`. The triangle callback argument is null on this
 /// path (the wrapper `0x142caed10` zeroes it), so the walk never stops early.
 pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) -> MeshSweep {
     let missed = MeshSweep {
@@ -866,6 +918,10 @@ pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) 
     let mask = u16_at(block, 0x70);
     let expansion = mul_lane(quad_at(block, 0x50), inverse);
 
+    // The recentred support points the walk keeps for the triangle test
+    // (`0x142caf170`); empty when the query carries none.
+    let mut support: Vec<Quad> = Vec::new();
+    let flag0 = block[0x72];
     let mut start = mul_lane(rotate_to_local(q, sub_lane(start_world, position)), inverse);
     let mut end = mul_lane(rotate_to_local(q, sub_lane(end_world, position)), inverse);
     let mut step = if all_lanes(|lane| 0.0 < expansion[lane]) {
@@ -889,6 +945,7 @@ pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) 
             start,
             end,
             expansion,
+            &mut support,
         );
         start = hull_start;
         end = hull_end;
@@ -955,6 +1012,8 @@ pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) 
                         motion,
                         expansion,
                         count,
+                        &support,
+                        flag0,
                     ) {
                         motion = fraction;
                         low = quad_min(start, point);
@@ -1281,6 +1340,664 @@ pub fn triangle_degenerate(a: Quad, b: Quad, c: Quad) -> u32 {
         return 1;
     }
     0
+}
+
+// ---------------------------------------------------------------------------
+// The closest-point GJK the type-3 triangle test falls into (`0x142cc9460`).
+// ---------------------------------------------------------------------------
+
+/// One simplex vertex: the client's 0x50-byte record.
+///
+/// `dw` is `w - p`, the Minkowski point the region tests work on; `p` is the
+/// point taken from the first set and `w` the point from the second set moved
+/// along the sweep by the running fraction; `bary` is the weight the
+/// sub-simplex routines rewrite; `index` are the two support-array indices.
+#[derive(Clone, Copy, Default)]
+pub struct SimplexVertex {
+    pub dw: Quad,
+    pub p: Quad,
+    pub w: Quad,
+    pub bary: Quad,
+    pub index: [i32; 2],
+    pub pad: [u8; 8],
+}
+
+/// The cached simplex: four vertices and the live count at `+0x140`.
+#[derive(Clone, Copy, Default)]
+pub struct Simplex {
+    pub vertex: [SimplexVertex; 4],
+    pub count: i32,
+}
+
+/// One simplex vertex record's length (`0x50`).
+pub const SIMPLEX_VERTEX_LEN: usize = 0x50;
+/// The whole simplex block the sub-simplex routines take: four records plus
+/// the count (`0x140`), `0x150` bytes.
+pub const SIMPLEX_BYTES_LEN: usize = 0x150;
+
+impl Simplex {
+    /// Read the client's byte layout (`0x142cc8d80`/`0x142cc7740` take this
+    /// block by pointer).
+    pub fn from_bytes(bytes: &[u8]) -> Simplex {
+        let mut out = Simplex::default();
+        for (index, vertex) in out.vertex.iter_mut().enumerate() {
+            let at = index * SIMPLEX_VERTEX_LEN;
+            let quad = |offset: usize| -> Quad {
+                let mut lane = [0.0f32; 4];
+                for (slot, value) in lane.iter_mut().enumerate() {
+                    *value = f32_at(bytes, at + offset + slot * 4);
+                }
+                lane
+            };
+            vertex.dw = quad(0x00);
+            vertex.p = quad(0x10);
+            vertex.w = quad(0x20);
+            vertex.bary = quad(0x30);
+            vertex.index = [
+                i32::from_le_bytes(bytes[at + 0x40..at + 0x44].try_into().unwrap()),
+                i32::from_le_bytes(bytes[at + 0x44..at + 0x48].try_into().unwrap()),
+            ];
+            vertex.pad.copy_from_slice(&bytes[at + 0x48..at + 0x50]);
+        }
+        out.count = i32::from_le_bytes(
+            bytes[SIMPLEX_VERTEX_LEN * 4..SIMPLEX_VERTEX_LEN * 4 + 4]
+                .try_into()
+                .unwrap(),
+        );
+        out
+    }
+
+    /// Write the block back in the client's layout.
+    pub fn write_to(&self, bytes: &mut [u8]) {
+        for (index, vertex) in self.vertex.iter().enumerate() {
+            let at = index * SIMPLEX_VERTEX_LEN;
+            for (offset, quad) in [
+                (0x00, vertex.dw),
+                (0x10, vertex.p),
+                (0x20, vertex.w),
+                (0x30, vertex.bary),
+            ] {
+                for (slot, value) in quad.iter().enumerate() {
+                    bytes[at + offset + slot * 4..at + offset + slot * 4 + 4]
+                        .copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            bytes[at + 0x40..at + 0x44].copy_from_slice(&vertex.index[0].to_le_bytes());
+            bytes[at + 0x44..at + 0x48].copy_from_slice(&vertex.index[1].to_le_bytes());
+            bytes[at + 0x48..at + 0x50].copy_from_slice(&vertex.pad);
+        }
+        let at = SIMPLEX_VERTEX_LEN * 4;
+        bytes[at..at + 4].copy_from_slice(&self.count.to_le_bytes());
+    }
+}
+
+/// `(1, 1, 1, 1)` at `0x142fa62f0`: the dividend of every barycentric
+/// reciprocal.
+const ONE: Quad = [1.0, 1.0, 1.0, 1.0];
+
+#[inline]
+fn per_lane_div(a: Quad, b: Quad) -> Quad {
+    [a[0] / b[0], a[1] / b[1], a[2] / b[2], a[3] / b[3]]
+}
+
+/// `0x142cc8d80`: reduce a 3-simplex to the face, edge or vertex nearest the
+/// origin, rewriting the surviving vertices' barycentrics.
+///
+/// `a`, `b`, `c` are the three `dw` points; `u = b - a`, `v = c - b` and
+/// `w = c - a` are the edges the region tests are written against. The five
+/// scalars are the signed dot products the tests compare (`nd*` are the
+/// negated forms the client keeps in its registers), and `x` is the face term
+/// the three plane tests use: `rot3(rot3(w) * u - rot3(u) * w)`, which is
+/// `-cross(w, u)` on the low three lanes. Returns false only when the face's
+/// denominator is non-positive.
+pub fn simplex3(out: &mut Quad, s: &mut Simplex) -> bool {
+    let a = s.vertex[0].dw;
+    let b = s.vertex[1].dw;
+    let c = s.vertex[2].dw;
+
+    let u = sub_lane(b, a);
+    let v = sub_lane(c, b);
+    let w = sub_lane(c, a);
+
+    let rot_u = rot3(u);
+    let ndu_a = negate(dot3(u, a));
+    let du_b = dot3(u, b);
+    let ndw_a = negate(dot3(w, a));
+    let dw_c = dot3(w, c);
+    let ndv_b = negate(dot3(v, b));
+    let dv_c = dot3(v, c);
+
+    let x = rot3(sub_lane(mul_lane(rot3(w), u), mul_lane(rot_u, w)));
+    let face1 = dot3(
+        rot3(sub_lane(mul_lane(rot3(c), b), mul_lane(rot3(b), c))),
+        x,
+    );
+    let face2 = dot3(
+        rot3(sub_lane(mul_lane(rot3(a), c), mul_lane(rot3(c), a))),
+        x,
+    );
+    let face3 = dot3(
+        rot3(sub_lane(mul_lane(rot3(b), a), mul_lane(rot3(a), b))),
+        x,
+    );
+
+    // Vertex regions.
+    if all_lanes(|lane| ndu_a[lane] <= 0.0) && all_lanes(|lane| ndw_a[lane] <= 0.0) {
+        s.vertex[0].bary = ONE;
+        s.count = 1;
+        *out = negate(a);
+        return true;
+    }
+    if all_lanes(|lane| du_b[lane] <= 0.0) && all_lanes(|lane| ndv_b[lane] <= 0.0) {
+        s.vertex[1].bary = ONE;
+        s.vertex[0] = s.vertex[1];
+        s.count = 1;
+        *out = negate(b);
+        return true;
+    }
+    if all_lanes(|lane| dw_c[lane] <= 0.0) && all_lanes(|lane| dv_c[lane] <= 0.0) {
+        s.vertex[2].bary = ONE;
+        s.vertex[0] = s.vertex[2];
+        s.count = 1;
+        *out = negate(c);
+        return true;
+    }
+
+    // Edge `a`-`b`.
+    if all_lanes(|lane| 0.0 < du_b[lane])
+        && all_lanes(|lane| 0.0 < ndu_a[lane])
+        && all_lanes(|lane| face3[lane] <= 0.0)
+    {
+        let sum = add_lane(b, a);
+        let inv = per_lane_div(ONE, add_lane(ndu_a, du_b));
+        s.count = 2;
+        s.vertex[1].bary = mul_lane(inv, ndu_a);
+        s.vertex[0].bary = mul_lane(inv, du_b);
+        let t = rot3(sub_lane(mul_lane(sum, rot_u), mul_lane(rot3(sum), u)));
+        *out = rot3(sub_lane(mul_lane(t, rot_u), mul_lane(rot3(t), u)));
+        return true;
+    }
+
+    // Edge `a`-`c`: the surviving pair is (slot 0 = `a`, slot 1 = `c`).
+    if all_lanes(|lane| 0.0 < dw_c[lane])
+        && all_lanes(|lane| 0.0 < ndw_a[lane])
+        && all_lanes(|lane| face2[lane] <= 0.0)
+    {
+        let inv = per_lane_div(ONE, add_lane(ndw_a, dw_c));
+        s.count = 2;
+        s.vertex[2].bary = mul_lane(inv, ndw_a);
+        s.vertex[0].bary = mul_lane(inv, dw_c);
+        s.vertex[1].dw = c;
+        s.vertex[1].p = s.vertex[2].p;
+        s.vertex[1].w = s.vertex[2].w;
+        s.vertex[1].bary = s.vertex[2].bary;
+        s.vertex[1].index = s.vertex[2].index;
+        let sum = add_lane(c, a);
+        let rot_w = rot3(w);
+        let t = rot3(sub_lane(mul_lane(rot_w, sum), mul_lane(rot3(sum), w)));
+        *out = rot3(sub_lane(mul_lane(rot_w, t), mul_lane(rot3(t), w)));
+        return true;
+    }
+
+    // Edge `b`-`c`: the surviving pair is (slot 0 = `c`, slot 1 = `b`); the
+    // weights are written in the client's own order, slot 1 holding `c`'s.
+    if all_lanes(|lane| 0.0 < dv_c[lane])
+        && all_lanes(|lane| 0.0 < ndv_b[lane])
+        && all_lanes(|lane| face1[lane] <= 0.0)
+    {
+        let inv = per_lane_div(ONE, add_lane(ndv_b, dv_c));
+        s.count = 2;
+        s.vertex[0].dw = c;
+        s.vertex[2].bary = mul_lane(inv, ndv_b);
+        s.vertex[1].bary = mul_lane(inv, dv_c);
+        s.vertex[0].p = s.vertex[2].p;
+        s.vertex[0].w = s.vertex[2].w;
+        s.vertex[0].bary = mul_lane(inv, ndv_b);
+        s.vertex[0].index = s.vertex[2].index;
+        let sum = add_lane(c, b);
+        let rot_v = rot3(v);
+        let t = rot3(sub_lane(mul_lane(rot_v, sum), mul_lane(rot3(sum), v)));
+        *out = rot3(sub_lane(mul_lane(t, rot_v), mul_lane(rot3(t), v)));
+        return true;
+    }
+
+    // Face `a`-`b`-`c`: the weights are the three plane terms over their own
+    // sum, and the direction is `x` or `-x`, whichever faces the origin.
+    let denom = add_lane(add_lane(face2, face1), face3);
+    if all_lanes(|lane| denom[lane] <= 0.0) {
+        return false;
+    }
+    let inv = per_lane_div(ONE, denom);
+    s.count = 3;
+    let sum = add_lane(add_lane(b, a), c);
+    s.vertex[1].bary = mul_lane(inv, face2);
+    s.vertex[0].bary = mul_lane(inv, face1);
+    s.vertex[2].bary = mul_lane(inv, face3);
+    let face_dot = dot3(sum, x);
+    *out = if all_lanes(|lane| 0.0 < negate(face_dot)[lane]) {
+        x
+    } else {
+        negate(x)
+    };
+    true
+}
+
+/// The rotation matrix a quaternion's rows build, in the GJK's own operand
+/// order (`0x142cc94f0..0x142cc9655` for the second quaternion and
+/// `0x142cc957b..0x142cc9624` for the first).
+///
+/// The diagonal is `1 - (2q * q)`'s two shuffles subtracted from `(1,1,1,0)`;
+/// the off-diagonal terms are `half = shufps(2q, 0xe6) * shufps(q, 0xd0)` and
+/// `spin = rot3(2q) * q.w`, from which the three rows are assembled by the
+/// leaf's shuffle immediates. This is the same construction
+/// [`support_hull_affine`] folds into its composed rotation; the GJK applies it
+/// to a shape's own quaternion, so the two are kept apart.
+fn gjk_rotation_rows(q: Quad) -> [Quad; 3] {
+    let doubled = add_lane(q, q);
+    let square = mul_lane(doubled, q);
+    let diagonal = sub_lane(
+        sub_lane(
+            DIAG_BASE,
+            and_mask(shufps(square, square, 0xc1), KEEP_LOW_THREE),
+        ),
+        and_mask(shufps(square, square, 0xda), KEEP_LOW_THREE),
+    );
+    let half = mul_lane(shufps(doubled, doubled, 0xe6), shufps(q, q, 0xd0));
+    let spin_term = mul_lane(rot3(doubled), splat(q[3]));
+    let plus = add_lane(spin_term, half);
+    let minus = sub_lane(half, spin_term);
+    let second = shufps(shufps(plus, minus, 0x49), shufps(plus, minus, 0x49), 0x78);
+    let third = shufps(shufps(plus, minus, 0xa0), shufps(plus, minus, 0xa0), 0x88);
+    let row0 = shufps(
+        shufps(diagonal, second, 0x4c),
+        shufps(diagonal, second, 0x4c),
+        0x78,
+    );
+    let row1 = {
+        let partial = shufps(diagonal, second, 0xed);
+        shufps(partial, partial, 0x72)
+    };
+    let row2 = shufps(third, diagonal, 0xe4);
+    [row0, row1, row2]
+}
+
+/// `rows * p + t`, with the sums in the client's order
+/// (`p.x * row0 + t + p.y * row1 + p.z * row2`).
+#[inline]
+fn gjk_transform(rows: &[Quad; 3], t: Quad, p: Quad) -> Quad {
+    let mut out = mul_lane(splat(p[0]), rows[0]);
+    out = add_lane(out, t);
+    out = add_lane(out, mul_lane(splat(p[1]), rows[1]));
+    add_lane(out, mul_lane(splat(p[2]), rows[2]))
+}
+
+/// One shape's half of the descriptor: the radius the caller passes (the GJK
+/// floors it at `0.01`), its translation and its rotation quaternion.
+#[derive(Clone, Copy, Default)]
+pub struct GjkShape {
+    pub radius: Quad,
+    pub translation: Quad,
+    pub rotation: Quad,
+}
+
+/// The descriptor the triangle test builds at `0x142cce6e8` and hands to
+/// `0x142cc9460`.
+///
+/// In the client the two point arrays are pointers inside the descriptor; here
+/// they are slices whose length is the descriptor's count. The two byte flags
+/// are `+0xa0` (from the query block's `+0x72`) and `+0xa1` (the caller writes
+/// zero); `direction` is the sweep's `end - start` and `motion` its budget.
+#[derive(Clone, Copy)]
+pub struct GjkInput<'a> {
+    pub a: &'a [Quad],
+    pub b: &'a [Quad],
+    pub shape_a: GjkShape,
+    pub shape_b: GjkShape,
+    pub direction: Quad,
+    pub motion: Quad,
+    pub flag0: u8,
+    pub flag1: u8,
+}
+
+/// What `0x142cc9460` writes through its first argument on acceptance.
+#[derive(Clone, Copy, Default)]
+pub struct GjkOutput {
+    pub point: Quad,
+    pub normal: Quad,
+    pub residual: Quad,
+    pub iterations: i32,
+}
+
+/// `0x142cc9460`: the closest-point GJK the triangle test takes whenever the
+/// query block carries support points or an expansion lane above `0.005`.
+///
+/// The two point sets are expressed relative to the second set's first point
+/// after each set's own rotation and translation; the loop then walks the
+/// cached simplex toward the origin, stopping when the closest point's squared
+/// length falls under `r * r` for `r = radius_a + radius_b - 0.01 + 0.00125`.
+/// On a contact it publishes the contact point (the barycentric combination of
+/// the first set's points, moved into the second set's frame and out by
+/// `radius_a` along the normal), the unit normal, the residual vector and the
+/// iteration count. Returning false leaves the caller's output untouched.
+///
+/// **One branch is open**: the four-vertex reduction `0x142cc7740` is not
+/// transcribed, so a simplex that becomes a tetrahedron around the origin
+/// reports a miss instead of a penetration contact. That state never arises in
+/// the 17-query differential corpus, which is exact; see
+/// `docs/formats/static-collision.md`.
+pub fn closest_point(input: &GjkInput<'_>, out: &mut GjkOutput) -> bool {
+    debug_assert!(!input.a.is_empty() && !input.b.is_empty());
+    let rows_a = gjk_rotation_rows(input.shape_a.rotation);
+    let rows_b = gjk_rotation_rows(input.shape_b.rotation);
+    let rad_a = quad_max(input.shape_a.radius, splat(0.01));
+    let rad_b = quad_max(input.shape_b.radius, splat(0.01));
+    let t_a = input.shape_a.translation;
+    let t_b = input.shape_b.translation;
+
+    // Both arrays are taken relative to the second set's first point.
+    let origin = gjk_transform(&rows_b, t_b, input.b[0]);
+    let mut points_a = Vec::with_capacity(input.a.len());
+    for point in input.a {
+        points_a.push(sub_lane(gjk_transform(&rows_a, t_a, *point), origin));
+    }
+    let mut points_b = Vec::with_capacity(input.b.len());
+    points_b.push([0.0; 4]);
+    for point in input.b.iter().skip(1) {
+        points_b.push(sub_lane(gjk_transform(&rows_b, t_b, *point), origin));
+    }
+
+    // The support searches measure from each array's own first point, so the
+    // offset is constant and never re-derived (`0x142cc9743`).
+    let probe = points_a[0];
+    let zero = [0.0f32; 4];
+
+    let mut extend = zero;
+    let mut radius_offset = sub_lane(add_lane(rad_b, rad_a), splat(0.01));
+    let mut radius = add_lane(splat(0.00125), radius_offset);
+    let mut radius_sq = mul_lane(radius, radius);
+    let mut best = splat(f32::MAX);
+    let mut shrunk = false;
+    let mut normal_hint = zero;
+    let mut simplex = Simplex::default();
+    let mut closest = sub_lane(points_b[0], probe);
+    // `XMM3`: the direction the last reduction left behind. The output stage
+    // takes the normal from this register, not from the closest point.
+    let mut reduced = closest;
+    let mut iterations: i32 = 0;
+
+    loop {
+        // The convergence test: `|closest|^2 < r^2` on every lane. The client
+        // squares `XMM2` here, so from this point on the support searches use
+        // `XMM3` - the direction the last reduction left - and not the closest
+        // point, which is a parallel vector of a different length.
+        let distance_sq = dot3(closest, closest);
+        let mut to_output = false;
+        if all_lanes(|lane| distance_sq[lane] < radius_sq[lane]) {
+            if !all_lanes(|lane| extend[lane] == 0.0) {
+                to_output = true;
+            } else if input.flag1 == 0 {
+                if input.flag0 == 0 {
+                    return false;
+                }
+                to_output = true;
+            } else if !all_lanes(|lane| best[lane] <= distance_sq[lane]) {
+                // The distance improved on the running best: record it and
+                // keep the radius (`0x142cc987d`).
+                shrunk = true;
+                best = distance_sq;
+            } else {
+                if !all_lanes(|lane| 0.0001 < distance_sq[lane]) {
+                    return false;
+                }
+                let shortened = sub_lane(per_lane_sqrt(distance_sq), splat(0.005));
+                shrunk = false;
+                radius_offset = shortened;
+                radius = add_lane(shortened, splat(0.00125));
+                radius_sq = mul_lane(radius, radius);
+            }
+        }
+
+        let mut penetration = false;
+        if !to_output {
+            // The two support searches (`0x142cc9885`): the first maximises
+            // along `closest`, the second along its negation, both measured
+            // from the arrays' own origins and both requiring a strictly
+            // positive projection.
+            let mut top_a = zero;
+            let mut top_b = zero;
+            let mut index_a = 0usize;
+            let mut index_b = 0usize;
+            for index in 1..input.a.len() {
+                let along = dot3(sub_lane(points_a[index], probe), reduced);
+                if all_lanes(|lane| top_a[lane] < along[lane]) {
+                    top_a = along;
+                    index_a = index;
+                }
+            }
+            let backwards = negate(reduced);
+            for index in 1..input.b.len() {
+                let along = dot3(sub_lane(points_b[index], points_b[0]), backwards);
+                if all_lanes(|lane| top_b[lane] < along[lane]) {
+                    top_b = along;
+                    index_b = index;
+                }
+            }
+            let support_a = points_a[index_a];
+            let support_b = points_b[index_b];
+
+            // How far the new difference point lies beyond the radius along
+            // the unit direction; at or below it the walk refines the sweep
+            // fraction instead of growing the simplex (`0x142cc99e1`).
+            // The client normalises `XMM3` - the direction the last reduction
+            // left - not the closest point, which is a parallel vector of a
+            // different length and rounds differently.
+            let unit = mul_lane(splat(1.0f32 / length_sq(reduced)[0].sqrt()), reduced);
+            normal_hint = unit;
+            let advance = dot3(
+                sub_lane(
+                    sub_lane(support_a, support_b),
+                    mul_lane(extend, input.direction),
+                ),
+                unit,
+            );
+            let reach = negate(advance);
+            if all_lanes(|lane| radius[lane] < reach[lane]) && !shrunk {
+                let slope = negate(dot3(unit, input.direction));
+                if all_lanes(|lane| slope[lane] < f32::from_bits(0x3400_0000)) {
+                    return false;
+                }
+                let step = add_lane(per_lane_div(sub_lane(reach, radius_offset), slope), extend);
+                extend = step;
+                if all_lanes(|lane| input.motion[lane] <= step[lane]) {
+                    return false;
+                }
+            }
+
+            // Append the support point, or re-project the cached ones when the
+            // same pair arrives twice (`0x142cc9a50`).
+            let shift = mul_lane(extend, input.direction);
+            let mut duplicate = false;
+            for slot in 0..simplex.count as usize {
+                let vertex = &mut simplex.vertex[slot];
+                let second = vertex.index[1] as usize;
+                vertex.w = add_lane(points_b[second], shift);
+                vertex.dw = sub_lane(vertex.w, vertex.p);
+                if vertex.index[0] as usize == index_a && second == index_b {
+                    duplicate = true;
+                }
+            }
+            if !duplicate {
+                let slot = simplex.count as usize;
+                let mut vertex = SimplexVertex {
+                    p: support_a,
+                    w: add_lane(support_b, shift),
+                    index: [index_a as i32, index_b as i32],
+                    bary: ONE,
+                    ..SimplexVertex::default()
+                };
+                vertex.dw = sub_lane(vertex.w, vertex.p);
+                simplex.vertex[slot] = vertex;
+                simplex.count += 1;
+            }
+
+            match simplex.count {
+                1 => reduced = simplex.vertex[0].dw,
+                2 => match reduce_segment(&mut simplex) {
+                    Some(direction) => reduced = direction,
+                    None => return false,
+                },
+                3 => {
+                    let mut direction = zero;
+                    if !simplex3(&mut direction, &mut simplex) {
+                        return false;
+                    }
+                    reduced = negate(direction);
+                }
+                4 => {
+                    let mut direction = zero;
+                    if !simplex4(&mut direction, &mut simplex) {
+                        return false;
+                    }
+                    reduced = negate(direction);
+                }
+                _ => closest = zero,
+            }
+
+            if simplex.count == 4 {
+                if input.flag0 == 0 {
+                    return false;
+                }
+                penetration = true;
+            }
+            if !penetration {
+                // The closest point of the reduced simplex, from its own
+                // barycentrics (`0x142cc9d69`).
+                closest = simplex_point(&simplex, false, zero);
+                iterations += 1;
+                out.iterations = iterations;
+                if iterations >= 0x14 {
+                    to_output = true;
+                }
+            }
+        }
+
+        if !to_output && !penetration {
+            continue;
+        }
+
+        // The output stage (`0x142cc9e3e`): the contact point, the normal and
+        // the residual. The normal is the reduced direction, not the closest
+        // point.
+        let contact = simplex_point(&simplex, true, points_a[0]);
+        let reduced_sq = dot3(reduced, reduced);
+        let normal = if reduced_sq[0] > eps() {
+            mul_lane(reduced, splat(1.0f32 / reduced_sq[0].sqrt()))
+        } else {
+            let direction_sq = dot3(input.direction, input.direction);
+            if direction_sq[0] > eps() {
+                negate(mul_lane(
+                    input.direction,
+                    splat(1.0f32 / direction_sq[0].sqrt()),
+                ))
+            } else {
+                normal_hint
+            }
+        };
+        out.point = add_lane(add_lane(contact, origin), mul_lane(normal, rad_a));
+        out.normal = normal;
+        out.iterations = iterations;
+        out.residual = extend;
+        return true;
+    }
+}
+
+/// `0x142cc7740`: reduce a 4-simplex to its nearest face, edge or vertex.
+///
+/// **Open.** The body (`.pdata` `0x142cc7740..0x142cc8d72`, `0x1632` bytes) has
+/// the same shape as [`simplex3`] one dimension up: an orientation fix-up that
+/// swaps two vertices when the tetrahedron is negatively oriented, four vertex
+/// regions, six edge regions, four face regions - each with the same
+/// origin-relative dot tests and barycentric reciprocal the three-vertex body
+/// uses - and an interior case that spreads `1 / sum(lambda)` over all four
+/// vertices. Its three-term and four-term stack layout, its `lambda` slots and
+/// its copy order are not transcribed, so this branch returns the miss the
+/// triangle test reported before this change. It is reached only when the walk
+/// appends a fourth support point that puts the origin inside the tetrahedron,
+/// i.e. on penetration; the 17-case differential corpus calls it zero times.
+/// `docs/formats/static-collision.md` records it as the one open piece.
+pub fn simplex4(_out: &mut Quad, _s: &mut Simplex) -> bool {
+    false
+}
+
+/// The two-vertex reduction the walk performs inline (`0x142cc9b8b`).
+///
+/// Returns the reduced simplex's direction - the value the output stage takes
+/// the normal from - or `None` for the degenerate rejection at `0x142cc9c7f`.
+/// The walk recomputes the closest point from the barycentrics immediately
+/// after, so the direction and the closest point are different values.
+fn reduce_segment(s: &mut Simplex) -> Option<Quad> {
+    let first = s.vertex[0].dw;
+    let second = s.vertex[1].dw;
+    let edge = sub_lane(second, first);
+    let at_first = negate(dot3(edge, first));
+    if all_lanes(|lane| at_first[lane] <= 0.0) {
+        s.vertex[0].bary = ONE;
+        s.count = 1;
+        return Some(first);
+    }
+    let at_second = dot3(edge, second);
+    if all_lanes(|lane| at_second[lane] <= 0.0) {
+        s.vertex[1].bary = ONE;
+        s.vertex[0] = s.vertex[1];
+        s.vertex[0].bary = ONE;
+        s.count = 1;
+        return Some(second);
+    }
+    let denominator = add_lane(at_second, at_first);
+    if all_lanes(|lane| denominator[lane] <= 0.0) {
+        return None;
+    }
+    // `1/denominator`, or zero where the denominator is not above `FLT_MIN`.
+    let mut inv = [0.0f32; 4];
+    for lane in 0..4 {
+        if eps() < denominator[lane].abs() {
+            inv[lane] = 1.0 / denominator[lane];
+        }
+    }
+    s.count = 2;
+    s.vertex[0].bary = mul_lane(inv, at_second);
+    s.vertex[1].bary = mul_lane(inv, at_first);
+    // `rot3(rot3(edge) * sum - rot3(sum) * edge)` and then the same form again,
+    // negated into the direction slot (`0x142cc9ce3..0x142cc9d1f`).
+    let sum = add_lane(second, first);
+    let t = rot3(sub_lane(
+        mul_lane(rot3(edge), sum),
+        mul_lane(rot3(sum), edge),
+    ));
+    Some(negate(rot3(sub_lane(
+        mul_lane(t, rot3(edge)),
+        mul_lane(rot3(t), edge),
+    ))))
+}
+
+/// The barycentric combination of a simplex's `dw` points (`from_p = false`)
+/// or its `p` points (`from_p = true`), in the client's slot order.
+///
+/// `empty` is the value the client's accumulator already holds when the
+/// simplex is empty: zero for the closest point (`0x142cc9d86`) and the first
+/// relative `A` point for the contact sum, which is what `XMM9` was left with
+/// before the walk ever ran (`0x142cc9799`).
+fn simplex_point(s: &Simplex, from_p: bool, empty: Quad) -> Quad {
+    if s.count <= 0 {
+        return empty;
+    }
+    let mut out = [0.0f32; 4];
+    for slot in 0..s.count.clamp(0, 4) as usize {
+        let vertex = &s.vertex[slot];
+        let point = if from_p { vertex.p } else { vertex.dw };
+        out = add_lane(out, mul_lane(vertex.bary, point));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1945,8 +2662,19 @@ mod tests {
         let end = quad_of_bits([0x4060_0000, 0xc114_0000, 0x4000_0000, 0x0000_0000]);
         let expansion = quad_of_bits([0x3ecc_cccd; 4]);
         let points = points(&[[0.0, 0.0, 0.0], [0.0, 0.0, 1.8]]);
-        let (centre, shifted_end, step) =
-            support_hull(&points, 2, q, b, v, [1.0; 4], start, end, expansion);
+        let mut recentred = Vec::new();
+        let (centre, shifted_end, step) = support_hull(
+            &points,
+            2,
+            q,
+            b,
+            v,
+            [1.0; 4],
+            start,
+            end,
+            expansion,
+            &mut recentred,
+        );
         assert_eq!(
             bits_of(centre),
             [0x3fed_5cbf, 0xc03c_0712, 0x3f9a_d175, 0x0000_0000]
@@ -1966,10 +2694,10 @@ mod tests {
     /// the client's `0x142caed30` publishes for this query
     /// (`dev/mesh_support_diff.py`, case "capsule over quad A").
     ///
-    /// The contact is **not** reproduced: the client's triangle test accepts here
-    /// and `0x142cc9460` is not implemented, so this reports a miss where the
-    /// client reports a hit. That is the one remaining deviation of the type-3
-    /// narrowphase and it is the last assertion below.
+    /// The contact the client's closest-point solver produces on the same
+    /// query, pinned bit for bit: the second quad's triangle, its two record
+    /// ids, the contact at the point cloud's centre pushed out to the capsule
+    /// surface and the fraction the solver's residual leaves.
     #[test]
     fn a_support_point_hull_reaches_the_client_walk() {
         let world = mesh_world_with_points(&[[0.0, 0.0, 0.4], [0.0, 0.0, -0.4]]);
@@ -1985,7 +2713,49 @@ mod tests {
         let sweep = sweep_world(&world, &block, &identity_xform([0.0, 0.0, 0.0]));
         assert_eq!(sweep.internals, 1);
         assert_eq!(sweep.leaves, 1);
-        assert!(sweep.hit.is_none(), "0x142cc9460 is unread");
+        let hit = sweep.hit.expect("the closest-point solver accepts here");
+        assert_eq!(hit.triangle, 1);
+        assert_eq!(hit.ids, [0x12, 0x22]);
+        assert_eq!(
+            bits_of(hit.point),
+            [0x3f40_0000, 0x3f66_6666, 0x3c23_d70a, 0x0000_0000]
+        );
+        assert_eq!(
+            bits_of(hit.normal),
+            [0x0000_0000, 0x0000_0000, 0x3f80_0000, 0x0000_0000]
+        );
+        assert_eq!(bits_of(hit.fraction), [0x3ed7_0a3d; 4]);
+    }
+
+    /// The pinned translated contact: the same support-point query through a
+    /// shape transform lifted by three units reproduces the client's hit
+    /// exactly - the second quad's triangle, ids `0x12`/`0x22`, the point
+    /// `(0.75, 0.9, 3.01)` and the fraction `0x3df5c290`.
+    #[test]
+    fn the_pinned_translated_support_point_contact_is_reproduced() {
+        let world = mesh_world_with_points(&[[0.0, 0.0, 0.4], [0.0, 0.0, -0.4]]);
+        let block = mesh_block_with_points(
+            [0.75, 0.9, 5.0, 0.0],
+            [0.75, 0.9, -5.0, 0.0],
+            1.0,
+            0.4,
+            [0.0, 0.0, 0.0, 1.0],
+            2,
+            0x0001,
+        );
+        let sweep = sweep_world(&world, &block, &identity_xform([0.0, 0.0, 3.0]));
+        let hit = sweep.hit.expect("the transparent shift keeps the contact");
+        assert_eq!(hit.triangle, 1);
+        assert_eq!(hit.ids, [0x12, 0x22]);
+        assert_eq!(
+            bits_of(hit.point),
+            [0x3f40_0000, 0x3f66_6666, 0x4040_a3d7, 0x0000_0000]
+        );
+        assert_eq!(
+            bits_of(hit.normal),
+            [0x0000_0000, 0x0000_0000, 0x3f80_0000, 0x0000_0000]
+        );
+        assert_eq!(bits_of(hit.fraction), [0x3df5_c290; 4]);
     }
 
     /// Beside the quads the same capsule expands the root and clears both leaves;

@@ -1259,7 +1259,28 @@ iterations, subfunctions `0x142cc8d80` (3-simplex) and `0x142cc7740`
 open (the triangle accept).** The client's contact for the translated capsule
 case is known (tri 1, ids `0x12`/`0x22`, point `(0.75,0.9,3.01)`, normal
 `(0,0,1)`, fraction `0x3df5c290`) but not reproduced. Next: read `0x142cc9460`
-and the two simplex functions and pin those 6 cases. That is **runtime, not asset, data**, so no install test
+and the two simplex functions and pin those 6 cases.
+
+**Round 11 (2026-11-02): the GJK accept is read and the mesh cases all agree.**
+`0x142cce430` is a chain root (`0x9e` B) whose slow path is the fragment
+`0x142cce5bb..0x142cce82b` (the earlier function reading missed it);
+`0x142cc9460` is read operation for operation (radii floored at `0.01`,
+`r = radA + radB - 0.01 + 0.00125`, `|XMM2|² < r²` convergence, support argmaxes
+onto `XMM3`, fraction refine with `1.1920929e-07`, reduce dispatch, cap `0x14`),
+and `0x142cc8d80` (3-simplex) is fully read: six signed dots, the face vector,
+three plane terms, the eight regions in order, face weights = plane terms over
+their sum, per-edge surviving-vertex permutations. Implemented in
+`ow_sim::collide`; `dev/mesh_support_diff.py` is **18 cases, 0 failures, 0
+open**, and the pinned contact (tri 1, ids `0x12`/`0x22`, point
+`(0.75,0.9,3.01)`, normal `(0,0,1)`, fraction `0x3df5c290`) is reproduced.
+`dev/gjk_simplex_diff.py` 30 seeded 3-simplices agree; `dev/gjk_closest_diff.py`
+17 live + 120 seeded, 0 failures.
+
+**Open: the 4-simplex `0x142cc7740`** (`0x1632` B, read structurally only: the
+orientation fix-up, four vertex / six edge / face regions, the interior
+`1/Σλ`); a tetrahedron around the origin reports a miss. It is reached by 7 of
+120 seeded descriptors and 0 of the 18 mesh cases. `simplex4` is a documented
+open branch, not a guess. That is **runtime, not asset, data**, so no install test
 is written — the doc says `not tested`.
 
 ---
