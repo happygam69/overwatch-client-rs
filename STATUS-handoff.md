@@ -80,12 +80,17 @@ missing is **data, not code** — and the two producers are both blocked:
   `0x80` candidates, per-triangle `0x142cc6740`), and its owner
   `FUN_14212e070` is a scene-side **query** owner, not the Domino world. The
   character's own ingest `0x142cbcd40` has six callers, all in the mover/AI
-  ranges, and `RunCharacterControllerSweep`'s nine `E8` sites likewise. So **no
-  read path fills the character's Domino world with the range's static
-  collision**; the last question is whether the sweep queries the scene-side
-  owner through a vtable instead. The chunk's own consumer is not
-  RVA-dispatch reachable (277 tables, 0 hits). The type-`0x00A` absence affects only the
-  other brush source, not this route.
+  ranges, and `RunCharacterControllerSweep`'s nine `E8` sites likewise. The
+  sweep's world was then read: it is the **Domino world** (variant tag at
+  `[world+0]`, handle decode through `0x1442a0bc0`, `[world+0x2b8]` `0xc0`-entry
+  and `[world+0x348]` `0x58` walks), with no vtable and no scene-owner call. So
+  **no read path fills the character's Domino world with the range's static
+  collision** — a **scope statement**: either the client receives that
+  collision from outside the binary (server-authoritative movement), or an
+  unread system inserts it (one named anchor: the pool-A importer
+  `0x1421363d1`). The chunk's own consumer is not RVA-dispatch reachable (277
+  tables, 0 hits). The type-`0x00A` absence affects only the other brush source,
+  not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
 `MAP_CHUNK_COLLISION`, kind `0x12` is `MAP_CHUNK_PATHING` (the 220-cell

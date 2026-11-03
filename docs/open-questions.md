@@ -1111,6 +1111,30 @@ character's collision after all. If it does not, the client's local collision
 for the range has no source in the read paths and the movement plan needs a
 scope decision.
 
+**The sweep's world is the Domino world — no vtable, no scene owner
+(2026-11-02).** `RunCharacterControllerSweep` (`0x142cbcee0`) takes the world
+struct as `param_1`; its one real call is the 10-byte thunk `0x142cf5660`
+(`test rcx,rcx; jne 0x142cf3f80`), body `0x142cf3f80` (four `.pdata` chunks).
+The world struct's **first dword is a variant tag**: `1` selects handle
+`[world+0x10]` and the `0x142cb5xxx` accessors, otherwise handle `[world+0x08]`
+and `0x142cd4fxx`/`0x142cd5xxx`. Every accessor decodes the handle exactly like
+the query driver (`slot = handle>>0x30`, rejected ≥ `0x3fff`, then
+`*(0x1442a0bc0 + slot*8)` XOR/add decode), and `FUN_142cd4d90` walks
+`[world+0x2b8]` (stride `0xc0`, next `+0x54`, link `+0x48`) and
+`[world+0x348]` (stride `0x58`) — the Domino shape entries and pairs. All four
+chunks contain **zero indirect calls** and no call to `FUN_14212e070`,
+`FUN_1421088e0`, `FUN_14210bac0`, `0x142caf6c0` or `0x142caea70`.
+
+**So the character's collision world is the Domino world, and the model mesh is
+not in it.** Combined with the ingest census (six callers, all mover/AI), the
+brush needing a `C` the range does not carry, and the chunk being unreachable,
+**no read path inserts the practice range's static collision into the character's
+world.** That is a scope statement, not a missing instruction: either the client
+receives that collision from outside the binary (server-authoritative
+movement), or it is inserted by a system not in any path read so far. One
+concrete unread anchor remains if the search continues: the pool-A importer
+`0x1421363d1`, named in the geometry-object chain but never read.
+
 ---
 
 ## 7. Domino schema and integration in the current image

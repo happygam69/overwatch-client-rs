@@ -25,7 +25,11 @@ kind-`0x11` chunk's candidate consumer `0x1420a02f6` is **not reachable** under
 the four-byte-RVA dispatch method either. There is **no vertex or index
 conversion** in that path -- the three arrays are passed by pointer -- and the
 path is **query-only**: `0x142caf6c0` tests triangles in a stack buffer and
-writes nothing (check 6), so it is not the character's collision world.
+writes nothing (check 6). The character's sweep does not use it either: it
+sweeps the **Domino world** through an encoded handle at `world+0x08`/`+0x10`
+(`0x142cbcee0` -> thunk `0x142cf5660` -> `0x142cf3f80`), with no vtable dispatch
+and no call to the scene owner (check 7). So the range's static collision has no
+producer in the read paths -- the scope statement.
 
 ## Check 1 -- the range's entity references vs the nine entity / seven `C` assets
 
@@ -470,26 +474,143 @@ statement for the operator, not a missing instruction: either the map feed is a
 runtime registration no static reference reaches, or the character's world in this
 build is built by a system outside these paths.
 
+## Check 7 -- what world `RunCharacterControllerSweep` sweeps: the **Domino world**
+
+This is the classification that decides the scope question: the character's sweep
+does **not** go through the scene-side model-mesh query. It sweeps the Domino
+world, through body/shape handles, with no vtable dispatch anywhere on the path.
+
+### The arguments and the hop
+
+`RunCharacterControllerSweep` (`0x142cbcee0..0x142cbcf6f`, decompiled):
+
+| argument | role |
+|---|---|
+| `param_1` | the **world/query struct**; only `*param_1` (its first qword) is used, as the first argument of the sweep |
+| `param_2` | the **output record**: the sweep writes `+0x200` (a `0x20`-stride array) with count `+0x208`/`+0x20c`, `+0x610` (another array) with `+0x618`/`+0x61c`, and the result floats `+0x620..+0x63c`, `+0x640`/`+0x644` |
+| `param_3` | the **query block**: two vec4s (`param_3[0..7]`), a radius at `+0x20`, an iteration count at `[param_3+0x2c]`, flags at `[param_3+0x20]` |
+
+The one meaningful call is `0x142cf5660(*param_1, buffer, &query)`. That address
+is a **10-byte thunk**, not a function:
+
+```text
+test rcx, rcx
+jne  0x142cf3f80
+ret
+```
+
+so the sweep's body is **`0x142cf3f80`** (`0x142cf3f80..0x142cf42da`, four
+`.pdata` chunks).
+
+### What `0x142cf3f80` works on: handles, not a vtable
+
+The world struct's **first dword is a variant tag**:
+
+- `*world == 1` (rigid): the handle is `[world+0x10]`, and the calls are
+  `0x142cb5260`, `0x142cc4cd0`, `0x142cb47f0`, `0x142cb4140`, `0x142cb3d00`,
+  all in the 0x142cb-0x142cc (Domino) range.
+- otherwise (character): the handle is `[world+0x08]`, and the calls are
+  `0x142cd4ff0` (a no-`.pdata` leaf with the same handle decode as
+  `VariantPosition`), `0x142cd50f0`, `0x142cd5070`, `0x142cd5170`,
+  `FUN_142cd4d90`, `FUN_142cd5270`.
+
+**There is no vtable dispatch on this path**: a scan of all four chunks finds
+**zero indirect calls**, and the only direct calls are those Domino accessors
+plus the allocator (`0x142cadee0`), the free (`0x142cadf00`), the grow memcpy
+(`0x142efe2b0`) and the stack check (`0x1426c3d40`). No scene-owner function
+(`FUN_14212e070`, `FUN_1421088e0`, `FUN_14210bac0`, `0x142caf6c0`,
+`0x142caea70`) is called, so the "vtable route" is checked and empty as well as
+the call graph.
+
+### The handles decode to the Domino world (decompiled)
+
+Every accessor begins with the same handle decode:
+
+```text
+slot  = handle >> 0x30                     ; a world slot, rejected at >= 0x3fff
+world = *(u64 *)(0x1442a0bc0 + slot*8) + 0xb3269b88d44d5fb2 ^ 0x77600ba5adcc265c
+```
+
+(the encoded-pointer form the project documents; `0x1442a0bc0` is the world
+handle table `formats/maps.md` names). Then:
+
+- `VariantPosition` (`0x142cbcec0`), variant `!= 1`: index guard `[world+0x2ac]`,
+  entry `[world+0x2a0] + index*0x50`, `id` at `+0x20` and generation at `+0x34`,
+  the position at `+0x10` -- the **shape-entry pool `+0x2a0`, stride `0x50`** of
+  `formats/domino.md`.
+  Variant `== 1`: guard `[world+0x294]`, entry `[world+0x288] + index*0x1c0`,
+  `id` at `+0x00` and generation at `+0x198`, position at `+0x10` -- the **body
+  pool `+0x288`, stride `0x1c0`**.
+- `FUN_142cd4d90`: walks the shape entry's pair list `+0x24` into the **pair pool
+  `[world+0x2b8]`, stride `0xc0`** (next at `+0x54`, link at `+0x48`), and each
+  pair's `+0x58`-stride records at `[world+0x348]`, calling `0x142cc56b0` on
+  each -- the Domino pair/constraint-link walk.
+- `FUN_142cd5270`: returns the shape entry's `+0x10` vec4, or a value from
+  `FUN_142cd4610(entry, ...)` when the query point is finite.
+
+So the "world" the character sweep uses is the **Domino world**: `+0x288` body
+pool (`0x1c0`), `+0x294` body count, `+0x2a0` shape pool (`0x50`), `+0x2ac` its
+count, `+0x2b8` pair pool (`0xc0`), `+0x348` link pool (`0x58`). It is reached
+through an encoded handle and a global table, which is why no static reference
+from the mover points at the world object itself.
+
+### Where the world struct comes from
+
+The nine call sites pass the struct in `RCX`, and two shapes appear:
+
+- a `mov rcx, <local>` immediate owner: `0x140dc6edc` (`rcx = rdi`),
+  `0x140eb7bcb` (`rcx = rbx`), `0x140f15a9b` (`rcx = r13`) -- the caller's own
+  controller record;
+- a **field read**: `0x140ee8aca`, `0x140ee9631`, `0x140ee99df`, `0x140ee9d06`
+  all do `rcx = [[rdi+8] + 0x1ad8]`, i.e. the world struct hangs at **`+0x1ad8`**
+  of the controller/entity record those AI/mover functions carry.
+
+`MoverAdvance` (`0x140ca7f30`) is one of the nine. So the owner of the world the
+character sweeps is the **controller record's Domino world**, not the scene
+geometry object and not the query owner of checks 4-6.
+
+### Verdict, and the scope statement
+
+**`RunCharacterControllerSweep` sweeps the Domino world** -- via the thunk
+`0x142cf5660` into `0x142cf3f80`, on a handle at `world+0x08` (character shape
+pool `+0x2a0`) or `world+0x10` (rigid body pool `+0x288`), with no vtable and no
+call into the scene-side model-mesh query. The model-mesh path stays a separate,
+query-only system (check 6).
+
+**No map-side producer inserts shapes into that world in the paths read.** The
+ingest chain is `0x142cbcd40` -> `0x142cf35a0` -> `ShapeAddToOwner`
+(`0x142cd4ef0`) -> `0x142cd4350` -> `ShapeEntryFromDescriptor` (`0x142cb7f10`),
+and its six `E8` entry points are `MoverAdvance` (`0x140ca6123`) and five further
+mover/scene functions (`0x140801c24`, `0x140dc6e14`, `0x140eb7b22`,
+`0x140f1528b`, `0x140f17f4a`): every one of them feeds a character-like body,
+none a map. Together with check 3 (the kind-`0x11` chunk's assembler
+`0x1420a02f6` is unreachable under `E8`/`E9`/pointer/`imm64`/encoded-pointer and
+four-byte-RVA dispatch tests), **the practice range's static collision has no
+producer in the read paths**. That is the scope statement: the range's world is
+either fed by a registration no static reference reaches, or built by a system
+outside these paths.
+
 ## What this leaves
 
 | line | state |
 |---|---|
 | the fracturable brush path on this map | closed: the range names no `C` (check 1) |
-| the model's prebuilt collision mesh | present in 161 of 229 range models; the data chain and its consumer are read; the consumer is a **scene-side query** that writes nothing (check 6) |
+| the model's prebuilt collision mesh | present in 161 of 229 range models; reaches a **query-only** scene-side consumer that writes nothing (checks 4, 6) |
 | the `f0` geometry class | creates a Domino body from **`C`**, the fracturable descriptor, not from the model mesh (check 6) |
-| the character's world | swept by `RunCharacterControllerSweep` from `MoverAdvance`; **no read path feeds it the range's static collision** |
+| the character's world | the **Domino world**, swept through encoded handles at `world+0x08`/`+0x10` with no vtable and no scene-owner call (check 7) |
+| the range's static collision | **no producer in the read paths** -- scope statement for the operator |
 
-Ordered next reads:
+Ordered next reads (only if the scope decision is to keep looking):
 
-1. **The producer of Domino shape entries from map data.** The ingest chain is
-   `0x142cbcd40` -> `0x142cf35a0` -> `ShapeAddToOwner` -> `0x142cd4350` ->
-   `ShapeEntryFromDescriptor`, and all six of its entry points are mover/scene
-   functions feeding a character-like body. A seventh entry point -- or a caller
-   of one of those six that carries a chunk-derived mesh source -- is what would
-   close the map's static collision.
-2. **`0x142caf6c0`'s fourth caller**, `0x142cb8e70`-fn in the Domino module: it
-   runs the same triangle test, so it shows how the world tests *its* shapes --
-   and whether those shapes can come from the model mesh by another route.
+1. **The Domino world handle table `0x1442a0bc0`.** The sweep reaches its world
+   only through `table[handle>>0x30]`; whoever registers a world there is the
+   owner of the character's world, and a registration is exactly the kind of
+   route a static call graph cannot show.
+2. **A seventh entry point to the ingest chain** (`0x142cbcd40` ->
+   `0x142cf35a0` -> `ShapeAddToOwner` -> `0x142cd4350` ->
+   `ShapeEntryFromDescriptor`). All six known ones feed a character-like body;
+   a caller carrying a chunk-derived mesh source is what would close the map's
+   static collision.
 
 ## Checks
 
@@ -508,4 +629,6 @@ Ordered next reads:
 | the mesh test fills nothing and returns | check 6: `0x142caf6c0` writes only its stack triangle list (`0x200` bytes at `auStack_258`, `0x80` entries) |
 | the query owner is not the Domino world | check 6: `+0x2b0`/`+0x2b8` are `0x18`-byte entries plus a count, and `formats/domino.md`'s `+0x2b8` is a `0xc0`-stride pair pool |
 | the character path never calls the mesh chain | check 6: the chain's `E8` sites are all in `0x141fb8xxx`/`0x1420xxxxx`; `RunCharacterControllerSweep`'s nine are mover/AI |
+| the character sweep uses the Domino world, not the scene owner | check 7: 0 indirect calls in `0x142cf3f80`'s four chunks; only Domino accessors called; `VariantPosition` reads `[world+0x2a0]` (0x50) / `[world+0x288]` (0x1c0) |
+| the sweep's world is reached through the encoded handle table | check 7: `world = *(u64*)(0x1442a0bc0 + slot*8) + K1 ^ K2` in every accessor |
 | the unpack and the shape record, dword for dword | `mesh_shape::tests::the_shape_record_is_mesh_shape_fill_dword_for_dword`, `the_array_header_offset_is_the_tag_test`, `a_zero_scale_is_an_infinity_lane`, `the_field_offsets_are_the_unpackers` |

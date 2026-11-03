@@ -3,6 +3,20 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the sweep's world is the Domino world; no map source reaches it
+
+- `RunCharacterControllerSweep` (`0x142cbcee0`) takes the world struct as
+  `param_1`; its one real call is the 10-byte thunk `0x142cf5660` to
+  `0x142cf3f80` (four `.pdata` chunks). The world struct's first dword is a
+  variant tag; both routes decode the handle through `0x1442a0bc0` and walk
+  `[world+0x2b8]` (`0xc0` entries) and `[world+0x348]` (`0x58`). Zero indirect
+  calls in all four chunks; no call to the scene-side query owner.
+- Verdict: the model mesh is query-only, the brush needs a `C` the range lacks,
+  the chunk is unreachable, and the character ingest's six callers are all
+  mover/AI. **No read path inserts the practice range's static collision into
+  the Domino world.** Scope statement; the pool-A importer `0x1421363d1` is the
+  one named unread anchor.
+
 ## 2026-11-02 - the model mesh is query-only; the Domino world has no map source
 
 - `0x142caf6c0` writes nothing persistent: it bounds the query points, collects
