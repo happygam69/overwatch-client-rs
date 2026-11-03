@@ -3,6 +3,19 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the chain to C walked backwards; the RVA-table blind spot
+
+- The geometry is created by the node-type factory `FUN_1420d0ef0` (two classes
+  on `[node+0x29]`); `geometry+0x80` is written by the class's vtable slot
+  `+0x08` (`0x142138ce0`); the node-type-2 update
+  (`0x14204cbce..0x14204cfc9`) moves `[node+0xe8]` into `[node+0x38]` and reads
+  the same three links `GeometryBuild` does. The producers of `[object+0x40]`
+  and `[instance+0x48]` are outside that function: next anchor is `[node+0xe8]`.
+- Correction: `0x14208edf6` does have a static route — a 4-byte RVA
+  computed-jump table at `0x142090988`, indexed at `0x14208e74e`. Reachability
+  claims must test RVA tables; the earlier "unreachable" notes are marked as
+  not relied on in `formats/maps.md`.
+
 ## 2026-11-02 - the brush -> mesh conversion is bit-exact on all four fixtures
 
 - The five-point arrow's divergence was not the tag test: ops 1, 2 and 5 all

@@ -956,10 +956,20 @@ the image stores both `+0x186` and `+0x98`**, and the function that writes a
 near-perfect match for `GeometryCopyParams`' field set
 (`0x14208edf6..0x14209087f`) has **no static reference at all** — no call, no
 tail jump, no pointer — so its "builds `C`" reading is downgraded. The lesson
-is recorded in `formats/brush-mesh.md`: a displacement is not a type. The next
-anchor is the **producer of `[instance+0x48]`**, read backwards from
-`GeometryBuild`'s chain (`[node+0x38] → [+0x40] → [+0x48]`), not another
-census.
+is recorded in `formats/brush-mesh.md`: a displacement is not a type.
+
+The chain has since been walked backwards (2026-11-02): the geometry is created
+by the node-type factory `FUN_1420d0ef0` (two classes chosen on
+`[node+0x29]`), `geometry+0x80` is written by the class's own vtable slot
+`+0x08` (`0x142138ce0`), and the node-type-2 update
+(`0x14204cbce..0x14204cfc9`) moves `[node+0xe8]` into `[node+0x38]` and reads
+the three-link chain exactly as `GeometryBuild` does. The producers of
+`[object+0x40]` and `[instance+0x48]` are **not in that function**, so the next
+anchor is a single field: **`[node+0xe8]`**, the loader that hands the node its
+object. The same pass corrected a claim: `0x14208edf6` *is* reachable, through
+a 4-byte RVA computed-jump table (`0x142090988`, dispatch at `0x14208e74e`), so
+reachability claims need the RVA-table method; the content census is
+unaffected.
 
 ---
 

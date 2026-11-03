@@ -433,6 +433,67 @@ Two facts about the triangle list that the questions asked for:
 them — the groups in group order, and inside a group the ears in the order they
 were collected, then the final three. There is no sort of the faces.
 
+## The chain to `C`, walked backwards (partly read)
+
+`GeometryBuild` reaches the brush through `geometry+0x80` -> `[node+0x38]` ->
+`[object+0x40]` -> `[instance+0x48]` = `C`. Each of those was followed
+structurally, from the constructors and the tables, never from an offset match.
+What landed:
+
+**1. `geometry+0x80` is the node, and it is written by the geometry class's own
+vtable slot +0x08.** The geometry object is created by the node-type factory
+`FUN_1420d0ef0` (`0x1420d0ef0`), which picks between **two** classes on
+`[node+0x29]`: `== 0` -> `Alloc(0x240)` + constructor `0x142135c10` (the class
+`GeometryBuild` fills — its fields reach `+0x224`), otherwise `Alloc(0xf0)` +
+`0x142132f20`. The constructor `0x142135c10` installs vtable **`0x1433950b8`** at
+`+0x00` (slot `+0x08` = `0x142138ce0`, slot `+0x18` = `GeometryBuild`) and
+`0x1433950b0` at `+0xa0`, and it only *zeroes* `+0x80`/`+0x88` — the factory then
+calls slot `+0x08` as `(self, node, &flag)`, and **`0x142138ce0` stores
+`geometry+0x80 = node`** (`param_1[0x10] = param_2`) and `geometry+0x78 = *flag`,
+and builds `geometry+0x88` (the model object `GeometryBuild` uses for the shape id
+and the transform). Evidence: the two allocations, the two vtable dwords and that
+store, all read from the image; the factory has one direct caller at
+`0x14204ccb2` and one table entry at `0x14469c5e0`.
+
+**2. The node is a map-placeable record, and the node-type-2 update
+`0x14204cbce..0x14204cfc9` consumes the whole chain.** It:
+
+- writes **`[node+0x38]` at `0x14204cc20`**, as a **move out of `[node+0xe8]`**
+  (which is cleared at `0x14204cc24`), after releasing the previous `+0x38` and
+  `+0x40` through `0x141b251d0`;
+- reads `[node+0x38]` -> `[+0x40]` -> `[+0x48]` at `0x14204cc7b`, `0x14204cc7f`
+  and `0x14204cc88`, where `[+0x48]` is only *compared against zero* (a presence
+  test) — the same three loads `GeometryBuild` performs;
+- tests `[object+0x1c] & 0x40` at `0x14204cc2b`;
+- creates or refreshes the geometry at **`[node+0x30] = factory(node, &node+0x28)`**
+  (`0x14204ccab`..`0x14204ccb7`), so `geometry+0x78` is the node's `+0x28` byte and
+  `+0x29` chooses the geometry class;
+- feeds `[model_object+0x250]` into the shape-id resolver `0x14202f800`
+  (`0x14204cc3e`..`0x14204cc5d`), the same resolver `GeometryBuild` calls.
+
+So `node+0x30` -> geometry -> `geometry+0x80` -> node is a mutual link, and the
+node also carries `+0x28`/`+0x29` (two byte flags), `+0x90`/`+0x98`/`+0xa0`/
+`+0xa8` (arrays), `+0xb0`/`+0xb4` (counters) and `+0xe8` (a pending object).
+
+**3. What was NOT found, and that is where this stops.** None of the three
+producers is in the one function that touches the chain:
+
+| link | store found | producer |
+|---|---|---|
+| `[node+0x38]` | `0x14204cc20`, a move from `[node+0xe8]` | **not found** — the creator is whoever fills `[node+0xe8]` |
+| `[object+0x40]` | not stored here; only read (`0x14204cc07`) and cleared (`0x14204cc15`) | **not found** |
+| `[instance+0x48]` | not stored here; only compared (`0x14204cc88`) | **not found** |
+
+**Correction to the previous round.** The claim that `0x14208edf6` — the writer of
+`C`'s parameter-block field set — has "no static reference at all" is **wrong**,
+and the reason is instructive: the image's function tables hold **4-byte RVAs**,
+while the earlier scan looked for `E8`/`E9`/8-byte pointers. In fact
+`0x14208edf6` **is** a computed-jump target from `0x14208e75f` (inside the range
+`0x14208d109..0x14208ed29`) and has an RVA-table entry at `0x144699a84`; its
+sibling `0x14208d109` likewise (table entry `0x144699a6c`). So that cluster is a
+**table-driven body split into .pdata fragments**, not unreachable code, and the
+lead is alive: the next read is that table's index, not a displacement.
+
 ## The whole conversion, pinned by the emulator
 
 `dev/brush_mesh_oracle.py` now runs **both** stages. `mesh()` calls
@@ -833,17 +894,16 @@ as a mesh the client would not emit:
    `{+0x98, +0x194, +0x195}` leaves **0**. So **no function in the image stores
    both `+0x186` and `+0x98`**, and the one `+0x195` store (`0x142915c1f`) is in
    `0x142915b60`, whose object is a different layout entirely (`+0x168…+0x214`).
-2. **`0x14208edf6` has no static reference at all.** It has a real `.pdata` range
-   (`0x14208edf6..0x14209087f`) and no Ghidra function, and an image-wide scan
-   finds **no `E8` call**, **no `E9` tail jump** and **no 8-byte pointer** to it
-   anywhere. Its field set matches `C`'s parameter block, but nothing can be shown
-   to reach it, so "it builds `C`" cannot be confirmed from references and the
-   identification is downgraded to "a writer of that field set". That is where the
-   displacement route stops: **a displacement is not a type** — two classes share
-   offsets, which is exactly why the combined filters collapse to zero. The next
-   anchor must be the *producer of `[instance+0x48]`* read backwards from
-   `GeometryBuild`'s chain (`[node+0x38] → [+0x40] → [+0x48]`), not another
-   census.
+2. **`C`'s producer, and the exact place the walk stops.** The chain is read back
+   to the node: `geometry+0x80` is written by `0x142138ce0` from the factory
+   argument, and the node-type-2 update `0x14204cbce` writes `[node+0x38]` at
+   `0x14204cc20` as a **move out of `[node+0xe8]`**. The three producers still
+   missing are named in "The chain to `C`": the writer of `[node+0xe8]`, the writer
+   of `[object+0x40]`, and the writer of `[instance+0x48]`. The next anchor is
+   `[node+0xe8]` — one field, in the loader that hands the node its object.
+   Separately, `0x14208edf6` is **not** unreachable after all (a computed-jump
+   target from `0x14208e75f`, RVA-table entry `0x144699a84`), so the
+   parameter-block writer is still a live lead through that table's index.
 3. **Whether a two-ring brush can bridge.** The hole fixture faults in the face
    writer; whether a real brush's op sequence bridges instead is unknown until a
    real brush is decoded (item 2).

@@ -54,9 +54,12 @@ missing is **data, not code** — and the two producers are both blocked:
   wrong link reads (ops 2/5 use `+0x28`, not `+0x30`), found by single-stepping
   the client. `C`'s instance encoding is read; **its class is not**, and the
   census gives a structural negative (no function stores both `+0x186` and
-  `+0x98`), so the next anchor is the producer of `[instance+0x48]` read
-  backwards from `GeometryBuild`'s chain. The type-`0x00A` absence affects only
-  the other brush source, not this route.
+  `+0x98`). The chain back from `GeometryBuild` is walked to the node-type
+  factory `FUN_1420d0ef0` and the node update
+  (`0x14204cbce..0x14204cfc9`), which moves `[node+0xe8]` into `[node+0x38]`;
+  the producers of `[object+0x40]` and `[instance+0x48]` are outside it, so the
+  next anchor is `[node+0xe8]`, the loader that hands the node its object. The
+  type-`0x00A` absence affects only the other brush source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
 `MAP_CHUNK_COLLISION`, kind `0x12` is `MAP_CHUNK_PATHING` (the 220-cell

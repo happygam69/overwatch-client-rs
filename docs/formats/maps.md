@@ -1484,8 +1484,19 @@ reads (0 code xrefs to the table addresses) and which chain into each other.
 `docs/ghidra-project.md` documents why Ghidra's caller metadata cannot be used
 alone.
 
+**Reachability caveat (2026-11-02, corrected).** The "unreachable" test above
+used `E8`, `E9`, 8-byte pointers, `imm64` and the encoded-pointer idiom — but
+**not 4-byte RVA tables**. That blind spot is real: `0x14208edf6`, which was
+called "no static reference at all", is in fact a **computed-jump target** of
+the table at `0x142090988`, indexed by the dispatch at `0x14208e74e..0x14208e75f`
+(`lea` the image base, `mov ecx,[base+rax*4+0x2090988]`, `add`, `jmp rcx`). So
+the three "unreachable" claims here are **not** relied on; what stands is the
+content census (no decoded store fills the pools from a chunk payload), not the
+reachability argument. Re-testing a candidate must include its RVA-table
+dispatch, if one exists.
+
 **What remains.** The chunk path is neither opened nor closed by these reads:
-the three next readers are Domino/brush-side and unreachable, so they cannot be
+the three next readers are Domino/brush-side, so they cannot be
 the cell consumer for a live path, and they say nothing about a consumer that
 does not exist yet. The single next reader is the **producer of the owner's
 mesh-descriptor container at `+0x140`/`+0x148`** (whoever fills it with the
