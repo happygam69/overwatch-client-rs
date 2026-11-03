@@ -57,9 +57,12 @@ missing is **data, not code** — and the two producers are both blocked:
   `+0x98`). The chain back from `GeometryBuild` is walked to the node-type
   factory `FUN_1420d0ef0` and the node update
   (`0x14204cbce..0x14204cfc9`), which moves `[node+0xe8]` into `[node+0x38]`;
-  the producers of `[object+0x40]` and `[instance+0x48]` are outside it, so the
-  next anchor is `[node+0xe8]`, the loader that hands the node its object. The
-  type-`0x00A` absence affects only the other brush source, not this route.
+  the producers of `[object+0x40]` and `[instance+0x48]` are outside it. Three
+  probes for the writer of `[node+0xe8]` came back negative, so the census line
+  is closed; the remaining approaches are the node's loader (a vtable/callback
+  path the handler's lack of a code reference points to) and a data-side search
+  in the model asset. The type-`0x00A` absence affects only the other brush
+  source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
 `MAP_CHUNK_COLLISION`, kind `0x12` is `MAP_CHUNK_PATHING` (the 220-cell

@@ -1484,16 +1484,18 @@ reads (0 code xrefs to the table addresses) and which chain into each other.
 `docs/ghidra-project.md` documents why Ghidra's caller metadata cannot be used
 alone.
 
-**Reachability caveat (2026-11-02, corrected).** The "unreachable" test above
-used `E8`, `E9`, 8-byte pointers, `imm64` and the encoded-pointer idiom — but
-**not 4-byte RVA tables**. That blind spot is real: `0x14208edf6`, which was
-called "no static reference at all", is in fact a **computed-jump target** of
-the table at `0x142090988`, indexed by the dispatch at `0x14208e74e..0x14208e75f`
-(`lea` the image base, `mov ecx,[base+rax*4+0x2090988]`, `add`, `jmp rcx`). So
-the three "unreachable" claims here are **not** relied on; what stands is the
-content census (no decoded store fills the pools from a chunk payload), not the
-reachability argument. Re-testing a candidate must include its RVA-table
-dispatch, if one exists.
+**Reachability caveat (2026-11-02, then corrected the same day).** The
+"unreachable" test above used `E8`, `E9`, 8-byte pointers, `imm64` and the
+encoded-pointer idiom — not 4-byte RVA tables. A first pass then read the
+`0x14469xxxx` region as a dispatch table and called `0x14208edf6` reachable;
+that was **wrong**: those records are 12-byte `.pdata` copies
+(`{unwind RVA, begin RVA, end RVA}`), not dispatches. The only computed jump
+found is the one at `0x14208e74e..0x14208e75f` (`mov ecx,[base+rax*4+0x2090988];
+add; jmp rcx`), and its table selects **fragments of one function body**, so it
+proves the fragment is a switch case, not that anything calls the function. So
+the three "unreachable" claims here are **not** relied on either way; what
+stands is the content census (no decoded store fills the pools from a chunk
+payload), not a reachability argument.
 
 **What remains.** The chunk path is neither opened nor closed by these reads:
 the three next readers are Domino/brush-side, so they cannot be

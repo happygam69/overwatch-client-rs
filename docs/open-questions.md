@@ -958,18 +958,32 @@ near-perfect match for `GeometryCopyParams`' field set
 tail jump, no pointer — so its "builds `C`" reading is downgraded. The lesson
 is recorded in `formats/brush-mesh.md`: a displacement is not a type.
 
-The chain has since been walked backwards (2026-11-02): the geometry is created
-by the node-type factory `FUN_1420d0ef0` (two classes chosen on
-`[node+0x29]`), `geometry+0x80` is written by the class's own vtable slot
-`+0x08` (`0x142138ce0`), and the node-type-2 update
-(`0x14204cbce..0x14204cfc9`) moves `[node+0xe8]` into `[node+0x38]` and reads
-the three-link chain exactly as `GeometryBuild` does. The producers of
-`[object+0x40]` and `[instance+0x48]` are **not in that function**, so the next
-anchor is a single field: **`[node+0xe8]`**, the loader that hands the node its
-object. The same pass corrected a claim: `0x14208edf6` *is* reachable, through
-a 4-byte RVA computed-jump table (`0x142090988`, dispatch at `0x14208e74e`), so
-reachability claims need the RVA-table method; the content census is
-unaffected.
+The chain was then walked backwards (2026-11-02): the geometry is created by
+the node-type factory `FUN_1420d0ef0` (two classes on `[node+0x29]`),
+`geometry+0x80` is written by the class's own vtable slot `+0x08`
+(`0x142138ce0`), and the node-type-2 update (`0x14204cbce..0x14204cfc9`) moves
+`[node+0xe8]` into `[node+0x38]` and reads the three links exactly as
+`GeometryBuild` does. The writers of `[node+0xe8]`, `[object+0x40]` and
+`[instance+0x48]` were **not found**: three probes came back negative (the
+field-set fingerprint `{+0x28,+0x29,+0xe8}` hits only a hash-table relocator; the
+"calls the GUID resolver ∩ stores `[reg+0xe8]`" intersection is empty; no
+function in the node-type module writes `+0xe8`). So `C`'s class, the `+0xa0`
+encoding value and an install brush remain open.
+
+Correction on the way: `0x14208edf6` was called reachable through an RVA table,
+but the `0x14469xxxx` records are **`.pdata` copies**, not dispatches; the only
+computed jump is the switch at `0x14208e74e` that selects fragments of one
+function body. That is a fragment dispatch, not an external call, so the
+reachability claim is withdrawn.
+
+**Two approaches remain, both untried.** (a) Read the node's *loader* — the
+handler `0x14204cbce` has no code reference and the loader may hand the node
+its object through a vtable/callback (the project's node-type table lists 144
+types; the type-2 entry's context may name it). (b) A data-side search: if `C`
+is a sub-object of the model asset, `ow-tank`'s model parser may reach the
+`+0x98` two-word record directly from the install (the instance points are
+4-float arrays, and `+0x98`'s record has a distinctive two-word shape). Both
+are reads, not censuses; per the project rule, the census line is now closed.
 
 ---
 

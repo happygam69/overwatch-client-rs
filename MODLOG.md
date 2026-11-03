@@ -3,6 +3,21 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the chain to C ends in a measured negative
+
+- Three probes for `[node+0xe8]` (the pending object moved into `[node+0x38]`)
+  are negative: the `{+0x28,+0x29,+0xe8}` fingerprint hits only a hash-table
+  relocator; "calls the GUID resolver" ∩ "stores `[reg+0xe8]`" is empty (742
+  sites in 612 functions against 1 004 resolver callers); and no function in
+  the node-type module writes `+0xe8` at all. `[object+0x40]` and
+  `[instance+0x48]` are only read/cleared/compared wherever found.
+- Correction: the `0x14469xxxx` records are `.pdata` copies, not a dispatch
+  table, so the earlier "`0x14208edf6` is reachable through an RVA table" is
+  withdrawn. The only computed jump is a fragment switch at `0x14208e74e`.
+- Census line closed. Two different approaches remain: the node's loader
+  (vtable/callback), and a data-side search in the model asset for `C`'s
+  `+0x98` record.
+
 ## 2026-11-02 - the chain to C walked backwards; the RVA-table blind spot
 
 - The geometry is created by the node-type factory `FUN_1420d0ef0` (two classes

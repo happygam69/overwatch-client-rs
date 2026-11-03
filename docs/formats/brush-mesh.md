@@ -494,6 +494,53 @@ sibling `0x14208d109` likewise (table entry `0x144699a6c`). So that cluster is a
 **table-driven body split into .pdata fragments**, not unreachable code, and the
 lead is alive: the next read is that table's index, not a displacement.
 
+## `[node+0xe8]`: the store was not found (measured negative)
+
+The node-type-2 update moves `[node+0xe8]` into `[node+0x38]` and clears it, so
+whoever fills `+0xe8` creates the object whose `+0x40` is the model instance.
+Three probes were run; none found it, and the probes themselves are the result.
+
+1. **Field-set fingerprint, `{+0x28, +0x29, +0xe8}`** (the node's two byte flags
+   plus the pending pointer; store census over `disp8` and `disp32`, grouped by
+   containing `.pdata` function): exactly **one** function, `0x141ad6670`. It is a
+   **false positive**: its caller `0x141ad6ad0` is a hash-table rebuild (it
+   allocates `count*4` index buckets, fills them with `-1`, relocates the
+   `0x10`-byte entries, and rechains each by `index % bucketCount`), so
+   `0x141ad6670` is that table's *record relocator* and its `+0x28`/`+0x29`/
+   `+0xe8` are offsets inside a generic record. **Discarded, not used.**
+2. **GUID-resolver intersection.** The model instance should be created from an
+   asset, so: functions that both call the GUID resolver `0x141fd3a90` (or the
+   type extractor `0x141fd3b20`) **and** write a *qword* `[reg+0xe8]` with a
+   non-stack base. There are 742 such store sites in 612 functions and 1 004
+   functions calling the resolvers; the intersection is **0**.
+3. **Module confinement.** No function in the node-type module
+   (`0x14204…`/`0x14205…`, where the handler `0x14204cbce` and the geometry
+   factory `0x1420d0ef0` live) writes a qword `[reg+0xe8]` at all — **0** of
+   them. So the producer is not in the code that owns the node.
+
+The node-type-2 handler itself has **no code reference** in the image: the only
+references to `0x14204cbce` are `.rdata` unwind entries
+(`0x14377a918`, `…934`, `…94c`, `…95c`) and the `.pdata` copy, and a scan for its
+RVA (`0x0204CBCE`) or its VA finds nothing else, so its dispatcher cannot be
+located by reference scanning either. That is where this stops.
+
+**Correction, again about tables.** The `0x14469xxxx` region is a **`.pdata`
+copy**, not a dispatch table: its records are 12-byte `{unwind RVA, begin RVA,
+end RVA}` triples (e.g. `{0x0377A8F8, 0x0204CBCE, 0x0204CFC9}` for the handler
+itself, and `{0x0377E888, 0x0208EDF6, 0x0209087F}` for the parameter-block
+writer). So the previous round's "reachable through an RVA-table entry" was
+wrong as stated — the *reachability* of `0x14208edf6` comes from the real jump
+table dispatch at `0x14208e74e`
+(`mov ecx,[base+rax*4+0x2090988]; add; jmp rcx`), which is the form to test for
+any future "no reference" claim.
+
+**So the chain reads:** `geometry+0x80` = the node (written by `0x142138ce0`);
+`[node+0x38]` written at `0x14204cc20` from `[node+0xe8]`; `[object+0x40]` and
+`[instance+0x48]` only ever read/cleared/compared in every function found.
+**Missing, and named:** the writer of `[node+0xe8]`, the writer of
+`[object+0x40]`, the writer of `[instance+0x48]`. `C`'s class, the `+0xa0`
+encoding value and any install brush remain open.
+
 ## The whole conversion, pinned by the emulator
 
 `dev/brush_mesh_oracle.py` now runs **both** stages. `mesh()` calls
@@ -894,16 +941,15 @@ as a mesh the client would not emit:
    `{+0x98, +0x194, +0x195}` leaves **0**. So **no function in the image stores
    both `+0x186` and `+0x98`**, and the one `+0x195` store (`0x142915c1f`) is in
    `0x142915b60`, whose object is a different layout entirely (`+0x168…+0x214`).
-2. **`C`'s producer, and the exact place the walk stops.** The chain is read back
-   to the node: `geometry+0x80` is written by `0x142138ce0` from the factory
-   argument, and the node-type-2 update `0x14204cbce` writes `[node+0x38]` at
-   `0x14204cc20` as a **move out of `[node+0xe8]`**. The three producers still
-   missing are named in "The chain to `C`": the writer of `[node+0xe8]`, the writer
-   of `[object+0x40]`, and the writer of `[instance+0x48]`. The next anchor is
-   `[node+0xe8]` — one field, in the loader that hands the node its object.
-   Separately, `0x14208edf6` is **not** unreachable after all (a computed-jump
-   target from `0x14208e75f`, RVA-table entry `0x144699a84`), so the
-   parameter-block writer is still a live lead through that table's index.
+2. **`C`'s producer: `[node+0xe8]` was searched for and not found.** Three probes
+   are recorded in "`[node+0xe8]`: the store was not found" — the `{+0x28,+0x29,
+   +0xe8}` fingerprint (one hit, a hash-table record relocator, discarded), the
+   GUID-resolver intersection (742 store sites against 1 004 resolver callers, **0**
+   overlap), and module confinement (no `0x1420…` function writes a heap
+   `[reg+0xe8]`). The missing stores are: the writer of `[node+0xe8]`, the writer
+   of `[object+0x40]`, the writer of `[instance+0x48]`. `0x14208edf6` is reachable
+   only through the real jump table at `0x142090988` (dispatch at `0x14208e74e`);
+   the `0x14469…` entries that looked like a table are a `.pdata` copy.
 3. **Whether a two-ring brush can bridge.** The hole fixture faults in the face
    writer; whether a real brush's op sequence bridges instead is unknown until a
    real brush is decoded (item 2).
