@@ -1456,7 +1456,13 @@ producer with no `E8` caller can still be reached through a pointer table.
   (`[r14+8] + [r14+0x28] * 0x40`, mode 3). This is the consumer of the
   three-array mesh-source form the ingest contract describes — the *end* a
   chunk decoder would have to feed — but its descriptors come from the owner's
-  `+0x140` container, not from a chunk, and it is unreachable (below).
+  `+0x140` container, not from a chunk. **Correction (2026-11-02): it is not
+  unreachable.** The address above is a `.pdata` **chained fragment**; the chain
+  root is **`0x14209fc90`** (four entries to `0x1420a075d`), and that root has
+  one `E8` at **`0x1420251f5`** inside `0x142024d30`, which is called from the
+  collision component's per-frame update slot (`0x142019944`, slot
+  `0x142f7d688`) and from `0x14201fbe3`. The earlier "unreachable" verdict
+  measured the fragment start and does not hold.
 
 **Anchor 3 — `0x142cdf9f2` (0x131 bytes).** A **Domino body-list appender**:
 `rsi` is a vector holder `{data +0x18, capacity +0x20, count +0x24}`; it grows

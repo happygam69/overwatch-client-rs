@@ -122,8 +122,15 @@ missing is **data, not code** — and the two producers are both blocked:
   creation record's `+0x10`; node `u16 +0x1c` bits `0x20`/`0x40`, model `+0x84`
   bit `0x80`) -- the record's producer is unread and is runtime, not asset, data.
   The descriptor's bounds/filter fields are documented but not converted.
-  The chunk's own consumer is not RVA-dispatch reachable (277 tables, 0 hits).
-  The type-`0x00A` absence affects only the other brush source, not this route.
+  **The chunk's consumer is reachable after all** (2026-11-02): the assembler
+  `0x1420a02f6` is a `.pdata` **fragment**; its chain root **`0x14209fc90`**
+  (four entries to `0x1420a075d`) has one `E8` at **`0x1420251f5`** inside
+  **`0x142024d30`**, called from the collision component's per-frame update slot
+  (`0x142019944`, slot `0x142f7d688`) and from `0x14201fbe3`. The earlier
+  "unreachable" verdict measured the fragment start; the RVA zero is a fragment
+  artifact. What stays open is the **descriptor-container producer** the
+  assembler consumes. The type-`0x00A` absence affects only the other brush
+  source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
 `MAP_CHUNK_COLLISION`, kind `0x12` is `MAP_CHUNK_PATHING` (the 220-cell

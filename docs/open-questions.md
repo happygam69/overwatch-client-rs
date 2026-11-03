@@ -1042,12 +1042,14 @@ whose input is the owner's descriptor container).
    0xB7C8314A -> STU_537E56E4` (nodes/points/triangles/nodeCount/height).
    `GeometryBuild` does **not** read it, so the missing read is **the consumer
    of `STUModel`'s `0xCB4D298D`**. That is now the static-collision route.
-3. **The chunk's consumer is unreachable by the validated RVA method.** The
-   switch form was validated on the control `0x208edf6` (hit, table
-   `0x142090988`); over **277** tables holding code RVAs, `0x20a02f6` and every
-   RVA in `0x20a02f6..0x20a075d` have **0** dispatch hits. The three 4-byte
-   occurrences are code-range metadata and `.pdata` copies. So the assembler is
-   not table-reachable either.
+3. ~~The chunk's consumer is unreachable by the validated RVA method.~~
+   **Withdrawn (2026-11-02):** the address was a `.pdata` **chained fragment**.
+   Its chain root is **`0x14209fc90`** (four entries to `0x1420a075d`) and it has
+   one `E8` at **`0x1420251f5`** inside **`0x142024d30`**, called from the
+   collision component's per-frame update slot (`0x142019944`, slot
+   `0x142f7d688`) and from `0x14201fbe3`. The RVA census measured the fragment
+   start, so its zero is a fragment artifact. **The chunk assembler is on the
+   component-update path.** The container producer remains open.
 
 **Next anchor: the consumer of `STUModel+0x118`.** The node-type-2 factory
 `FUN_1420d0ef0` picks a **second** geometry class (`Alloc(0xf0)`,

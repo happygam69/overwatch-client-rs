@@ -231,16 +231,22 @@ entry:
 
 `.pdata` itself confirms the function: `0x20a02f6..0x20a075d`, length `0x467`,
 which starts exactly where `0x209ff9d..0x20a02f6` ends. The remaining spellings
-are all empty for this address: **no** `E8`, **no** `E9`, **no** rip-relative
-`lea`/`mov` (the whole-image scan `dev/xref_rva.py` reports 0 hits), **no** 8-byte
-absolute pointer, and no image-base-relative dispatch entry.
+are all empty for this **fragment start**: **no** `E8`, **no** `E9`, **no**
+rip-relative `lea`/`mov` (the whole-image scan `dev/xref_rva.py` reports 0 hits),
+**no** 8-byte absolute pointer, and no image-base-relative dispatch entry. (The
+chain root is a different address and does have a caller; see below.)
 
-**Verdict: unreachable**, now under the dispatch method as well, and the method is
-demonstrated on a known positive in the same run. Consequently the
-"who fills the owner's descriptor container at `+0x140`/`+0x148`" question cannot
-be answered through this consumer: the assembler is not on any static path, so
-whatever fills the container does so for a caller that does not exist in a static
-call graph.
+**Verdict: unreachable** -- **this verdict is wrong, and check 14 corrects it.**
+The `.pdata` entry `0x1420a02f6..0x1420a075d` carries unwind flags `4`
+(`UNW_FLAG_CHAININFO`): it is a **fragment**, not a function start, and the chain
+root is `0x14209fc90`. That root is statically called from `0x1420251f5` inside
+the chain-rooted function `0x142024d30`. The address was tested as a function
+start, so this check's own rule -- a fragment start is not a function start -- was
+not applied to it. Everything else in this check stands: the 4-byte occurrences
+are `.pdata`/`RUNTIME_FUNCTION` copies, no image-base-relative table selects the
+address, and no `E8`/`E9`/`jcc` targets the *fragment*. The reachability answer is
+in check 14, and the "who fills `+0x140`/`+0x148`" question is therefore back on
+the table through this consumer.
 
 **The exact next read** is unchanged and is the same one `formats/maps.md` names:
 the **producer of the owner's `+0x140`/`+0x148` container** (the descriptors with
@@ -512,8 +518,10 @@ entries. The ingest chain is `0x142cbcd40` -> `0x142cf35a0` ->
 `ShapeEntryFromDescriptor` (`0x142cb7f10`), and its only six entry points are
 `MoverAdvance` (`0x140ca6123`) and five further mover/scene functions
 (`0x140801c24`, `0x140dc6e14`, `0x140eb7b22`, `0x140f1528b`, `0x140f17f4a`) --
-all feeding a character-like body, none a map. Combined with check 3 (the chunk's
-assembler is unreachable under every reference form), **the practice range's
+all feeding a character-like body, none a map. Check 3's "the chunk's assembler
+is unreachable under every reference form" is **withdrawn** in check 14 (the
+assembler is a fragment of `0x14209fc90`, which is called), so the kind-`0x11`
+consumer is back on the table; on the ingest side, **the practice range's
 static collision has no producer in the paths read so far**. That is a scope
 statement for the operator, not a missing instruction: either the map feed is a
 runtime registration no static reference reaches, or the character's world in this
@@ -628,9 +636,10 @@ ingest chain is `0x142cbcd40` -> `0x142cf35a0` -> `ShapeAddToOwner`
 and its six `E8` entry points are `MoverAdvance` (`0x140ca6123`) and five further
 mover/scene functions (`0x140801c24`, `0x140dc6e14`, `0x140eb7b22`,
 `0x140f1528b`, `0x140f17f4a`): every one of them feeds a character-like body,
-none a map. Together with check 3 (the kind-`0x11` chunk's assembler
-`0x1420a02f6` is unreachable under `E8`/`E9`/pointer/`imm64`/encoded-pointer and
-four-byte-RVA dispatch tests), **the practice range's static collision has no
+none a map. Check 3's "the kind-`0x11` chunk's assembler `0x1420a02f6` is
+unreachable" is **withdrawn** (check 14: it is a chain fragment of `0x14209fc90`,
+which is called from `0x1420251f5`), so the kind-`0x11` consumer is back on the
+table; on the ingest side, **the practice range's static collision has no
 producer in the read paths**. That is the scope statement: the range's world is
 either fed by a registration no static reference reaches, or built by a system
 outside these paths.
@@ -1137,6 +1146,15 @@ initialiser is the top of such a chain and allocates.
 So: the id the builder uses is the slot the node itself created a body in
 (`record+0x31fc`) and registered its geometry in. The per-model body is a
 sibling of the node's own static body, in the node's world.
+
+**The node side has exactly one writer.** `dev/disp_scan.py 0x454 --writes`
+reports 37 stores through displacement `0x454` in the image; exactly one is a
+dword store inside `0x14202c660` (`0x14202c6e4`, the record copy). The rest are
+other classes' fields that happen to sit at the same displacement -- `movss` and
+byte stores and comparisons, in functions such as `0x140545240`, `0x140652e70`,
+`0x142015c60`, `0x14208d010` and `0x142090e00`. So a node's gate word is never
+re-derived anywhere in the read set: it is the record's `+0x10` verbatim, which
+puts the missing store on the **record**, not on the node.
 
 ### Verdict
 
@@ -1718,8 +1736,10 @@ copy of an address is not a dispatch entry.
 at disp32.** `call qword ptr [reg+disp]` is `FF /2`; with mod=01 the
 displacement is one byte (`FF 50 40` = `call [rax+0x40]`), with mod=10 it is four
 (`FF 90 00 01 00 00` = `call [rax+0x100]`). This image contains **0** occurrences
-of `FF 9x 40 00 00 00` and **505** confirmed `FF 5x 40` sites, so a disp32-only
-search reports a false negative for every early slot. `dev/call_slot_scan.py`
+of `FF 9x 40 00 00 00` and **492 distinct** `FF 5x 40` sites (**505** printed
+lines: the tool counts one line per pattern match, and 13 lines are the same
+site reached by two patterns), so a disp32-only search reports a false negative
+for every early slot. `dev/call_slot_scan.py`
 scans both forms, re-decodes each candidate with capstone, prints the preceding
 instructions and resolves each hit to its `.pdata` chain root.
 
@@ -1727,7 +1747,7 @@ Measurements (`python dev/call_slot_scan.py 0x40 0x100`):
 
 | slot | encoded sites | of which in the map/scene modules |
 |---|---|---|
-| `+0x40` (`WorldBase` slot 8) | **505** | 5 (`0x141ff42cf`, `0x14200476e`, `0x142006860`, `0x142063d27`, `0x1420a4203`) |
+| `+0x40` (`WorldBase` slot 8) | **492 distinct** (505 printed lines) | 5 (`0x141ff42cf`, `0x14200476e`, `0x142006860`, `0x142063d27`, `0x1420a4203`) |
 | `+0x100` (the earlier "slot 32") | 39 | 1 (`0x1420a5707`) |
 
 Reading the five map/scene `+0x40` sites: four are calls on other interfaces
@@ -1748,7 +1768,7 @@ second argument at all, so it cannot be the record consumer either.
 | is the node class a reflected type? | **yes**: kind `0x14`, size `0x910`, registered by its own factory | `0x14202a001` immediates; `0x14200bab0` is the same shape for the collision component (size `0xad0`) |
 | does kind `0x14` identify a component? | **no** -- 160 of 283 registration sites use it | the registration scan above |
 | does the creation entry have a static caller? | **no**: 0 `E8`/`E9`/`jcc`, one 8-byte table entry, one 4-byte RVA that is a `RUNTIME_FUNCTION` begin | `dev/callers.py 0x14202c660`; the `.data` triple table |
-| is the record's flags word produced by asset data? | **not read** | the dispatch form is `call [WorldBase_vtable+0x40]`; 505 sites, none in the map/scene modules carries a creation record |
+| is the record's flags word produced by asset data? | **not read** | the dispatch form is `call [WorldBase_vtable+0x40]`; 492 distinct sites (check 14 completes the census with the register-indirect and tail-jump forms), none of the sites read carries a creation record |
 
 **The exact unread store.** One call form is left: the transfer through
 `[WorldBase vtable + 0x40]` that passes the creation record in the second
@@ -1760,12 +1780,171 @@ found, the practice range's verdict stays **open**, and no install census can
 stand in for it -- a census keyed on kind `0x14` is positively *wrong* (above),
 and a census keyed on size `0xad0` has no entity-side schema to read it against.
 
+## Check 14 -- the slot-8 census completed, and the `0x1420a02f6` negative **fails**
+
+Two jobs: finish the dispatch census for `WorldBase` slot 8 with the encodings
+check 13 could not see (the slot value loaded into a register, and the tail jump),
+and re-test the "unreachable" verdict on `0x1420a02f6` with those same encodings.
+The re-test changes the answer -- not through a new encoding, but because the
+address is a `.pdata` **fragment**. This check records the census, the record's
+field map (with a second reader of the world description), the exact unread store,
+and the refutation.
+
+### Two new tools, and why both
+
+| tool | method | cost |
+|---|---|---|
+| `dev/slot_call_backscan.py` | sweeps each `.pdata` chain root **once**, linearly, keeping a per-register and per-stack-slot marker for "the last load of slot +N" through `mov` copies, `push`/`pop` and spills, and reports every `call reg` / `jmp reg` that consumes one | 119,802 root functions, two slots in 1m49s; linear in call sites, not in loads |
+| `dev/slot_reg_scan.py` | the other direction: from every `mov reg, [base+disp]` whose displacement is the slot, walks the CFG forward (worklist, taint merged at joins, bounded by the chain root's extent) to the `call reg` / `jmp reg` that consumes it | 32,414 byte-anchored loads at `+0x40` (31,637 decoded inside root bodies), 5m33s |
+
+Both resolve every hit to its chain root through `dev/fn_extent.py`. They are not
+interchangeable: the backscan is exact on straight-line data flow but sweeps some
+non-code bytes, the forward scan follows branches but over-approximates where paths
+join. A site is counted when either finds it; the addresses below are the
+backscan's, which is the tighter of the two (109 against 96).
+
+### The census for slot `+0x40` (`0x14202c660`)
+
+| encoding | count | how it was measured |
+|---|---|---|
+| `E8` / `E9` / `jcc` | **0** | `dev/callers.py 0x14202c660` |
+| 8-byte absolute pointer | **1**: `0x143367670`, the vtable slot itself | same |
+| 4-byte RVA | **1**: `0x1446951f4`, the `.pdata` `begin` of the entry covering the function | same |
+| rip-relative reference to the **slot** `0x143367670` | **0** | `dev/rip_refs.py 0x143367670` |
+| rip-relative reference to the **vtable** `0x143367630` | **2**: `0x1420271fb` (constructor), `0x142027cab` (destructor body) -- the only installers | `dev/rip_refs.py 0x143367630` |
+| `call qword ptr [reg+0x40]`, disp8 | **492 distinct** (505 printed lines, 13 of them the same site reached by two byte patterns) | pattern scan with an exact re-decode, REX variants none / `0x40` / `0x41` / `0x42` / `0x44` / `0x48` / `0x49` / `0x4a` / `0x4c` |
+| `call qword ptr [reg+0x40]`, disp32 | **0** | same |
+| `jmp qword ptr [reg+0x40]`, disp8 | **31** (a form never scanned before) | same |
+| `jmp qword ptr [reg+0x40]`, disp32 | **0** | same |
+| `mov reg,[base+0x40]` then `call reg` / `jmp reg` | **109** | `dev/slot_call_backscan.py 0x40 0x100` |
+| the same for `+0x100` (the earlier "slot 32" reading) | **35** register-indirect, 1,542 loads | same |
+
+Because the slot's address is never read through a static address (`0x143367670`
+has zero rip-relative references and exactly one 8-byte occurrence in the image), a
+dispatch to this function **must** be `[vtable+0x40]` on a `WorldBase` whose vtable
+is `0x143367630`, or the slot value carried in a register. Both shapes are now
+counted in full: 492 + 31 + 109 sites. No further encoding can appear.
+
+### What the sites were read for
+
+The five scene-band memory-indirect sites and the ten scene-band register-indirect
+sites were read instruction by instruction -- sites in `0x141ff40f0`,
+`0x142004690`, `0x142006790`, `0x142063b70`, `0x1420a39c0`, `0x141fa34f0`,
+`0x141fa5960`, `0x141fdf510`, `0x141fe3010`, `0x141feafa0`, `0x14210d610`,
+`0x1421619f0`, `0x1421a3ce0`, `0x1421c47c0`, `0x1421cd960`. Each passes the
+caller's own object, a sub-object, a stack struct or an immediate as the second
+argument; none passes a pointer to something with slot 8's record shape (a GUID at
+`+0x00`, flags at `+0x10`, a Domino world description at `+0x18`).
+
+For the rest, a mechanical filter over the containing functions: 378 of the 381
+decompile, 267 of those show at least one `+ 0x40` dispatch in the decompiled
+text, and 48 call expressions in that text pass a second argument that is a stack
+address or a pointer. Those 48 were listed by
+argument shape; the ones with a **pointer** second argument were read in full and
+none is a world creation: `0x1423165f0` (the pointer is into the caller's own
+object at `+0xf8`, then a `0x20`-byte record is built and stored in a map),
+`0x140bf5ab0` (a table rebuild that dispatches slots `+0x38`/`+0x40` per element),
+`0x141bafef0` (a finaliser that dispatches slot 8 on a global object with the
+object being destroyed), `0x141fe3010` (a 64-entry job-completion dispatch table at
+`0x1441b3cb0`).
+
+### Why a decompiler sweep cannot finish this, read from the creation side
+
+The `WorldBase` constructor `0x1420271d0` has **one** `E8` caller, `0x140be1591`
+inside `0x140be1570`, and that function builds a **child** world: a `0x910`-byte
+`WorldBase` plus a `0x2ad0`-byte child object, pushed onto the parent's child
+vector at `+0x610` and linked back at `+0x278`. It passes no creation record.
+
+`0x140be1570` is itself called from `0x14055a346`, which lies in a `.pdata`
+chained fragment `0x14055a246..0x14055a491` whose root is `0x14055a0f0`; that
+region decodes as obfuscated code (constant chains with rotates and xors, mixed
+with data). So the client's world-creation path runs through an obfuscated
+fragment chain -- which is exactly what a sweep over decompiled functions cannot
+follow, and it is why the remaining question is no longer a call-form question.
+
+### The record, field by field, and its second reader
+
+Slot 8 reads its second argument like this:
+
+| record offset | what the function does with it |
+|---|---|
+| `+0x00` | decodes it with the client's GUID type-id idiom (bit-reverse of bits 48..59, plus one); the status word at geometry `+0x404a` becomes `1` and a `0xa0`-byte object is built (`0x142066960`, then `0x142066a20(obj, node)`) only when the decoded type id is **2**, otherwise `3` |
+| `+0x08` | zero selects the name-registration branch (`0x141bb96d0` on `node+0x20` with a keyed name), non-zero the other (`0x141bba6a0`) |
+| `+0x10` | copied to `[node+0x454]` at `0x14202c6e4`; bit `0x200` gates the `0x3210`-byte geometry record, bit `0x20` the `0x300`-byte state record, bits `1`, `2`, `0x80`, `0x4000` further subsystems, `& 0x15` a notification |
+| `+0x18` | the Domino **world description**: four dwords copied to `+0x630`..`+0x63c`, then two `0x142cc3c80` world-slot allocations |
+| `+0x28`..`+0x50`, `+0x58`, `+0x60`..`+0x68` | copied into the `0x300` record, and to node `+0x878`/`+0x880` |
+| `+0x70`..`+0x8c` | eight dwords into `+0x888`..`+0x8a4` |
+| `+0x90` | handed to `0x141c60250` (a container insert), so the record owns a container |
+
+**Corroboration of `+0x18`.** The Domino world creator `0x142cde350` reads the
+same struct from its own third argument: `+0x10`..`+0x1c` as a normalised
+quaternion, `+0x20` as a count, `+0x80`/`+0x88` scalars, `+0x90`..`+0xa4`, bytes at
+`+0xa8`/`+0xb0`, pointers at `+0xc0`..`+0xf0`, `+0x140` (child head) and `+0x160`
+(child count). So the record's `+0x18` is a Domino world description and the flags
+word at `+0x10` is the node's own class flags -- two different things, which is
+what `formats/domino.md` assumed and this check now measures from a second,
+independent reader.
+
+**A record names a map.** The type-id test on `+0x00` accepts type `2`, the id
+`formats/maps.md` records for a map header, and the record carries the world
+description that becomes the node's Domino world. So the record is a map/world
+creation descriptor, and the flags word is per-node class data that travels with
+it.
+
+### Verdict
+
+| question | answer |
+|---|---|
+| is the dispatch census complete? | **yes**: 0 `E8`/`E9`/`jcc`, 1 8-byte slot, 1 4-byte `.pdata` RVA, 492 memory-indirect, 31 tail-jump, 109 register-indirect |
+| which site calls slot 8? | **not decided**: deciding needs the *dynamic* receiver class at each site; every static route to the vtable and to the slot is now counted |
+| who writes the record's `+0x10`? | **not read** |
+| who writes the record's `+0x18` (the Domino world description)? | **not read** |
+| is the range's gate decidable from the install? | **no, still open**: the flags word's producer is unread, so no census can stand in for it |
+| does a decompiler sweep reach the creation path? | **no**: the only `E8` caller of the constructor is itself called from an obfuscated chained fragment (`0x14055a346`) |
+
+**The exact unread store.** The store that puts a value with bit `0x200` into the
+`+0x10` dword of the record that reaches slot 8, together with whatever writes
+`+0x18`. It is not in any of the 632 enumerated dispatch sites, and the creation
+path that would fill it runs through the obfuscated fragment `0x14055a246..` whose
+root is `0x14055a0f0`. Until that region is read, the practice range's verdict
+stays **open** and no install census can stand in for it.
+
+### The `0x1420a02f6` re-check: the negative does **not** hold
+
+The candidate is the kind-`0x11` mesh-source assembler that check 3 and
+`formats/maps.md` called unreachable. Re-tested here with the disp8
+memory-indirect form, the register-indirect form and the tail-jump form:
+
+| measurement | result |
+|---|---|
+| `E8` / `E9` / 8-byte pointer / 4-byte RVA to `0x1420a02f6` | still **0** (the 4-byte hits are `.pdata`/`RUNTIME_FUNCTION` copies) |
+| the `.pdata` entry covering it | `0x1420a02f6..0x1420a075d`, unwind flags **`4` = `UNW_FLAG_CHAININFO`** -- a **fragment**, not a function start |
+| its chain root | **`0x14209fc90`**, one body in four chained entries up to `0x1420a0785` |
+| the root's static references | **one `E8` at `0x1420251f5`**, inside the chain-rooted function `0x142024d30` (three entries, `0x142024d30..0x142026024`); the call's first argument is the object at `[rdi+0xc8]`, the second is `rdi` |
+| `jcc` sites inside the chain | two (`0x14209ff29`, `0x14209ff8a`) target `0x1420a075d`, the last fragment -- one body, as the chain already says |
+
+So the "unreachable" verdict came from testing a **fragment start as if it were a
+function start** -- the one rule `dev/fn_extent.py` exists to enforce. The negative
+fails on the plainest form (`E8` to the chain root), not on a new encoding: the
+register-indirect and disp8 scans were not needed to refute it. `0x142024d30` is
+itself called from `0x142019944` (inside `0x142019880`, the collision component's
+update slot `0x142f7d688`) and from `0x14201fbe3` (inside `0x14201ed10`), so the
+kind-`0x11` assembler sits on the collision component's update path -- it is not an
+editor-only or orphan path.
+
+What that does **not** say: it does not put the range's chunk bytes into the Domino
+world. Whether the assembler's container (`+0x140`/`+0x148`) ever receives the
+kind-`0x11` payload is the producer question, and it stays open. But the argument
+"the assembler is unreachable, so no chunk consumer exists" is no longer available,
+and the paragraphs that used it (check 3's verdict and the scope paragraph after
+check 6) are corrected above.
+
 ## What this leaves
 
 | line | state |
 |---|---|
 | the fracturable brush path on this map | closed: the range names no `C` (check 1) |
-| the map's kind-`0x11` chunk | not reachable; no producer read (check 3) |
+| the map's kind-`0x11` chunk | its assembler `0x1420a02f6` is a `.pdata` **fragment** of `0x14209fc90`, which **is** called (`0x1420251f5`, inside the component-update path); the earlier "unreachable" verdict is withdrawn, the payload's producer is still unread (check 14) |
 | the model's prebuilt collision mesh | **per model asset**: 163/229 models carry a holder list (279 holders, 272 mesh blocks), one `STUModel` each, no model-to-model reference (check 8) |
 | a per-instance body builder | **read: `0x14201ae60..0x14201c887`**, four `E8` callers (state-sync functions of the collision component), teardown `0x14201e790`; it walks the model's holders and emits one `ShapeAddToBody` shape each (check 9) |
 | which holders become shapes on this map | **all 272 mesh holders**: mask all ones, filter byte and shape mode at the class default `0`; 161 of the 229 models (check 9) |
@@ -1782,7 +1961,7 @@ and a census keyed on size `0xad0` has no entity-side schema to read it against.
 | what class the creation entry belongs to | **read: `WorldBase`**, `0x910` bytes, vtable `0x143367630`; `0x14202c660` is **slot 8** of it, not slot 32 of `0x143367570` (check 13) |
 | how a node's class is selected | **read: a `u16` node type id** in the 144-entry registry at `0x144188170`; type `2` -> `NodeType2Factory` `0x142029f00`, which registers the class as a reflected type of kind `0x14`, size `0x910` (check 13) |
 | does component kind `0x14` identify anything? | **no**: 160 of the 283 `RegisterTypeWithSize` sites pass `0x14`, with sizes `0x18`..`0x31868`; the collision component is identified by its size `0xad0`, whose only registration site is `0x14200bbb1` (check 13) |
-| the record's flag word (`+0x10`, bit `0x200`) | **open**: the dispatch form is `call [WorldBase_vtable+0x40]`; a both-encodings scan finds 505 sites and none in the map/scene modules carries a creation record (check 13) |
+| the record's flag word (`+0x10`, bit `0x200`) | **open**: the dispatch form is `call [WorldBase_vtable+0x40]`; checks 13 and 14 count every encoding of it (492 + 31 memory/tail, 109 register-indirect) and none of the sites read carries a creation record |
 
 Ordered next reads (the per-model route):
 
@@ -1803,10 +1982,15 @@ Ordered next reads (the per-model route):
    (`call [WorldBase_vtable + 0x40]`, slot 8 of `0x143367630`, whose entry is
    `0x143367670`). Reading that slot's caller decides whether bit `0x200` is
    asset-derived -- and with it whether an install test can settle the range.
-   Check 13 measures the slot (`dev/call_slot_scan.py 0x40` -> 505 sites, none
-   of them in the map/scene modules passing a creation record), so the caller is
-   outside the confirmed memory-indirect set and the next read has to be a data
-   one: the record's `+0x10`/`+0x18` writers.
+   Check 14 completes that measurement: every encoding of the dispatch is
+   counted (492 memory-indirect, 31 tail-jump, 109 register-indirect, plus the
+   single 8-byte slot and the single `.pdata` RVA), and none of the sites read
+   passes a creation record -- but the count cannot say which site's receiver is a
+   `WorldBase` at run time. The creation path itself is obfuscated: the
+   constructor's only `E8` caller `0x140be1570` is called from `0x14055a346`, in
+   the chained fragment `0x14055a246..` rooted at `0x14055a0f0`. The next read is
+   therefore **that fragment chain**, not another call form: it is where a
+   world is created, so it is where the record is built.
 2. **The mover's per-frame rebuild.** `[mover+0x650]` and `0x142cbd190`
    (`0x140ca6139`) are called right after the sweep's query record is created
    (check 11); they belong to the frame loop rather than to the collision build.
@@ -1874,6 +2058,14 @@ Ordered next reads (the per-model route):
 | `0x14202c660` is a `WorldBase` method at **slot 8** of `0x143367630` | check 13: the constructor `0x1420271d0` stores `0x143367630` at `[this]`, the deleting destructor `0x1420282e0` frees exactly `0x910`, and `0x143367630 + 0x40 = 0x143367670`; the byte sits `0x100` bytes past the vtable at `0x143367570`, i.e. past its end and inside the next one |
 | the node class is a reflected type selected by a `u16` node type id | check 13: `RegisterNodeType` `0x141c5ff40` (144 `E8` callers, head `0x144188170`), `RegisterNodeType2` `0x1404f6e10` (type `2`), `NodeType2Factory` `0x142029f00` (`RegisterTypeWithSize(..., 0x14, 0x910, 0, buildId)` at `0x14202a001`), look-up `0x141c57970` (`[obj+0x10][u16 type]`) |
 | component kind `0x14` is not an identity | check 13: 283 `RegisterTypeWithSize` call sites, 160 of them pass `0x14`, with sizes `0x18`..`0x31868`; the size `0xad0` occurs at one site only (`0x14200bbb1`) |
-| the creation entry has no static caller, in either call encoding | `dev/callers.py 0x14202c660` (0 `E8`/`E9`/`jcc`, one 8-byte slot, one 4-byte RVA) plus check 13: that 4-byte hit is the **begin field of a `RUNTIME_FUNCTION` triple** `{0x14202c660, 0x14202d676, 0x143648438}` in the `.data` exception table, and `dev/call_slot_scan.py 0x40 0x100` gives 505 / 39 sites, none passing a creation record |
-| a slot below `0x80` needs the disp8 form to be seen at all | `dev/call_slot_scan.py 0x40`: 505 confirmed `FF 5x 40` sites and **0** `FF 9x 40 00 00 00` bytes in the image -- a disp32-only scan reports a false negative |
+| the creation entry has no static caller, in either call encoding | `dev/callers.py 0x14202c660` (0 `E8`/`E9`/`jcc`, one 8-byte slot, one 4-byte RVA) plus check 13: that 4-byte hit is the **begin field of a `RUNTIME_FUNCTION` triple** `{0x14202c660, 0x14202d676, 0x143648438}` in the `.data` exception table, and `dev/call_slot_scan.py 0x40 0x100` gives 505 / 39 printed site lines (492 distinct at `+0x40`); check 14 adds the register-indirect and tail-jump forms and still finds no site passing a creation record |
+| a slot below `0x80` needs the disp8 form to be seen at all | `dev/call_slot_scan.py 0x40`: 492 distinct `FF 5x 40` sites (505 printed lines) and **0** `FF 9x 40 00 00 00` bytes in the image -- a disp32-only scan reports a false negative |
 | the record's `+0x10`/`+0x18` producers | **not tested**: the `call [WorldBase_vtable+0x40]` site that hands the record over was not found, so nothing produces or consumes the record inside the read set |
+| the dispatch census for slot 8 is complete | check 14: `dev/callers.py 0x14202c660` (0 `E8`/`E9`/`jcc`, 1 8-byte slot `0x143367670`, 1 4-byte `.pdata` RVA), `dev/rip_refs.py 0x143367670` (0) and `0x143367630` (2, ctor/dtor only), a disp8/disp32 scan for `call`/`jmp qword ptr [reg+0x40]` (492 + 31 distinct, 0 + 0 at disp32), `dev/slot_call_backscan.py 0x40 0x100` (109 + 35 register-indirect) |
+| the slot address is never read statically | check 14: `0x143367670` has zero rip-relative references and exactly one 8-byte occurrence in the image, so every dispatch must load it through the vtable |
+| the `+0x18` of the record is a Domino world description, not raw asset bytes | check 14: two independent readers -- `0x14202c660` (four dwords to `+0x630`..`+0x63c`, then two `0x142cc3c80` slot allocations) and `0x142cde350` (`+0x10`..`+0x1c` as a normalised quaternion, `+0x20` count, `+0x140` child head, `+0x160` child count) |
+| the record's first qword is a map GUID | check 14: the client's GUID type-id idiom on bits 48..59 plus one is compared against `2`, and only a match builds the `0xa0`-byte object at geometry `+0x404a` = `1` |
+| a node's gate word is never re-derived | check 14: `dev/disp_scan.py 0x454 --writes` -- 37 stores at that displacement, one dword store inside `0x14202c660` (`0x14202c6e4`), the rest other classes' `movss`/byte/comparison operands |
+| the world-creation path is obfuscated | check 14: the constructor's only `E8` caller `0x140be1570` builds a **child** world and is called from `0x14055a346`, in the `.pdata` chained fragment `0x14055a246..0x14055a491` rooted at `0x14055a0f0` |
+| `0x1420a02f6` is reachable | check 14: its `.pdata` entry has unwind flags `4` (`CHAININFO`) -- it is a fragment of `0x14209fc90`, and that root has one `E8` at `0x1420251f5` in `0x142024d30`; check 3's "unreachable" is withdrawn |
+| the range's placed props against the gate | **not tested** (unchanged from check 12's row): the gate bits are runtime state and the record's writer is still unread |

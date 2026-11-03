@@ -3,6 +3,24 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the chunk assembler is on the component-update path
+
+- `0x1420a02f6` is a `.pdata` **chained fragment**; the chain root is
+  **`0x14209fc90`** (four entries to `0x1420a075d`), with one `E8` at
+  **`0x1420251f5`** inside `0x142024d30`, called from the collision component's
+  per-frame update slot (`0x142019944`, slot `0x142f7d688`) and from
+  `0x14201fbe3`. The earlier "chunk consumer unreachable" verdict (and the
+  277-table RVA zero) measured the fragment start and is withdrawn in
+  `maps.md`, `open-questions.md` and `systems-coverage.md`.
+- The `WorldBase` slot-8 dispatch census is complete in every encoding: 492
+  distinct `call [reg+0x40]` disp8, 0 disp32, 31 `jmp [reg+0x40]`, 109
+  register-indirect (new `dev/slot_call_backscan.py`), and the slot's address has
+  no rip-relative reference; no site passes a creation record. The creation path
+  goes through an obfuscated chained fragment (`0x14055a0f0`), which is why the
+  decompiler sweep cannot follow it.
+- Open: the chunk assembler's **descriptor-container producer** and the record's
+  `+0x10`/`+0x18` writers.
+
 ## 2026-11-02 - WorldBase slot 8, and a disp8 slot-scan defect
 
 - `0x14202c660` is **slot 8** of the `WorldBase` vtable `0x143367630`

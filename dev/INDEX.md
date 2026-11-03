@@ -93,6 +93,8 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `rdc.py` | Disassemble a VA range, resolving RIP-relative operands to their float quads. | 36 |
 | `remove_fns.py` | Remove a named set of functions from Rust files. | 68 |
 | `rip_refs.py` | Find RIP-relative references (lea/mov/cmp, any opcode) to a set of addresses. | 90 |
+| `slot_call_backscan.py` | Count every register-indirect dispatch that consumes a vtable slot value. | 229 |
+| `slot_reg_scan.py` | Find vtable-slot dispatches that go through a **register**, not a memory operand. | 251 |
 | `static_field_scan.py` | Where the client's own code compares an STU field hash or class hash. | 110 |
 | `static_mesh_consumers.py` | Who builds a Domino shape, and does the builder read a stored mesh? | 150 |
 | `static_model_schema.py` | Decode a class's field table from its field-table installer function. | 151 |
