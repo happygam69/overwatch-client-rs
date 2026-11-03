@@ -28,8 +28,29 @@ path is **query-only**: `0x142caf6c0` tests triangles in a stack buffer and
 writes nothing (check 6). The character's sweep does not use it either: it
 sweeps the **Domino world** through an encoded handle at `world+0x08`/`+0x10`
 (`0x142cbcee0` -> thunk `0x142cf5660` -> `0x142cf3f80`), with no vtable dispatch
-and no call to the scene owner (check 7). So the range's static collision has no
-producer in the read paths -- the scope statement.
+and no call to the scene owner (check 7). The range's static collision has no
+producer in the read paths -- **but the per-model route changes the picture**:
+the models carry their collision per model asset (163 of 229 have a holder list,
+279 holders, 272 mesh blocks, one `STUModel` each, no model-to-model reference),
+and the client contains a per-instance builder (`0x14201af49` + chunk
+`0x14201b1cd..`) that turns each holder's mesh into a Domino body shape through
+`ShapeAddToBody`/`OwnerCreateBody`. The one open link is that the builder has no
+static reference and must be handed to a runtime table (check 8).
+
+**That last line is superseded by check 9.** The builder is the function at
+**`0x14201ae60`** (six contiguous `.pdata` fragments to `0x14201c887`), and it
+has **four `E8` callers**, all state-sync functions of the same collision
+component: `0x142022030` ("make the body match the state"), `0x1420195e0`
+(mask-membership change), `0x142014b50` and `0x142015f70`. Two of those are
+reached from the component's per-frame update, and the component's own
+guards are runtime scene-graph reads (the node's model object
+`+0xe8 -> +0x28`, the node's Domino owner id `+0x620 -> +0x31f8`), so the
+per-model route is **live code, not an editor path**. On this map **all 272 mesh
+holders** of the 229 models pass its filter (mask all ones, filter byte and
+shape mode default `0`), so a placed instance of any of the **161**
+mesh-carrying models builds one body with one type-3 mesh shape per holder.
+What is still unread is which *static* map nodes are given the component (check
+9's open list).
 
 ## Check 1 -- the range's entity references vs the nine entity / seven `C` assets
 
@@ -590,27 +611,446 @@ producer in the read paths**. That is the scope statement: the range's world is
 either fed by a registration no static reference reaches, or built by a system
 outside these paths.
 
+## Check 8 -- the per-model route: the models **do** carry collision, and a per-model body builder exists
+
+The operator's hypothesis, in one line: the map is a set of models, each model
+carries its own collision, so the client should build collision per placed model
+instead of ingesting a map-wide chunk. Against this image and this install it is
+**confirmed on both sides that can be read** -- the collision is per model asset,
+and the client contains a builder that turns it into a Domino body shape -- with
+one open link: that builder has no static reference.
+
+### The client's `STUModel` schema, in full
+
+`0x14034af00` registers only the **class** (hash `0x871BD3D0`, size `0x200`,
+align 8, the hooks); it makes no field registration. The **fields** are
+registered by four installers, each field through `0x1421d4f70` /
+`0x1421d4f30`, which store the hash in the descriptor's `+0x30`, the type
+argument in `+0x34` and the **runtime offset** (the call argument) in `+0x08`.
+`dev/static_model_schema.py <installer>` prints a table like this one:
+
+| installer | fields | offsets |
+|---|---|---|
+| `0x14150b78c` | 8 | `+0x08` .. `+0x140` |
+| `0x14150bfe0` | 10 | `+0x150` .. `+0x1E0` |
+| `0x14150c7e8` | 3 | `+0x1E8` .. `+0x1F4` |
+| `0x14150ca47` | 4 | `+0x1F8` .. `+0x1FB` |
+
+The four are consecutive in one module and together cover `+0x08`..`+0x1FB` of
+the `0x200`-byte class with **no gap and no overlap**, which is what identifies
+them as this class's installers (a neighbouring installer in the same module,
+`0x14150a2b1`, registers the *same hashes* at a different, compact set of
+offsets -- it belongs to another class).
+
+The complete schema, in the client's own order, with the reference's declared
+layout as the cross-check ("ref") and the type argument where the client passes
+one:
+
+| hash | offset | ref | type argument | kind |
+|---|---|---|---|---|
+| `0xC4A1DCA0` | `+0x08` | `+0x08` | -- | inline instance (96 B) |
+| `0xE52AB6E7` | `+0x68` | `+0x68` | -- | inline instance `m_info` (80 B) |
+| `0xF5E50593` | `+0xB8` | `+0xB8` | -- | inline instance (48 B) |
+| `0xE86D2174` | `+0xE8` | -- | -- | **client-only field** |
+| `0x818D011C` | `+0x110` | `+0xE8` | -- | `m_skeleton`, an asset ref |
+| `0xFD232466` | `+0x120` | `+0xF8` | -- | instance array |
+| `0xC45F5F6F` | `+0x130` | `+0x108` | -- | `m_hardPoints`, instance array |
+| `0xCB4D298D` | `+0x140` | `+0x118` | -- | **the collision holder list** |
+| `0x51CD98D2` | `+0x150` | `+0x128` | -- | instance array |
+| `0x8289A6C9` | `+0x160` | `+0x138` | `0x4189AEA5` | instance array |
+| `0x0C8F8DC6` | `+0x170` | `+0x148` | -- | instance array |
+| `0xE9A9B868` | `+0x180` | `+0x158` | `0xCBD8CDF3` | array of asset refs |
+| `0xC6B4CACB` | `+0x190` | `+0x168` | `0xCBD8CDF3` | `u32` array |
+| `0xAD47190C` | `+0x1A0` | `+0x178` | **`0x871BD3D0`** | asset ref **to a model** |
+| `0x37ED05D0` | `+0x1B0` | `+0x188` | **`0x871BD3D0`** | asset ref **to a model** |
+| `0xC67B4D05` | `+0x1C0` | `+0x198` | **`0x871BD3D0`** | **array to models** |
+| `0x43CEF9BB` | `+0x1D0` | `+0x1A8` | `0x5CA5A90D` | asset ref |
+| `0x7E48C526` | `+0x1E0` | `+0x1B8` | `0x5CA5A90D` | `m_breakable` |
+| `0x78985272` | `+0x1E8` | `+0x1C0` | -- | inline instance |
+| `0x87916047` | `+0x1F0` | `+0x1C8` | -- | enum |
+| `0x53BD772C` | `+0x1F4` | `+0x1CC` | -- | enum |
+| `0xD64F7813` | `+0x1F8` | `+0x1D0` | -- | `u8` |
+| `0xADC54E57` | `+0x1F9` | `+0x1D1` | -- | `u8` |
+| `0x81AF6609` | `+0x1FA` | `+0x1D2` | -- | enum (`m_usageCategory`) |
+| `0x646E63C6` | `+0x1FB` | `+0x1D3` | -- | `u8` |
+
+Every reference hash appears; the only client-only entry is `0xE86D2174` at
+`+0xE8` -- the field that shifts the reference's `+0xE8`.. tail to `+0x110`.. in
+this build, which is why the collision list is at `+0x140` here and `+0x118`
+there.
+
+**Which fields are collision-like.** By what their type reads:
+
+- **`0xCB4D298D` (`+0x140`)** -- the only field whose readers build geometry: an
+  array of holders (`0x2DD96D6D`), each with the mesh block `STU_537E56E4` at
+  `+0x08` (unpacked by `0x141b53af0`), a filter mask at `+0x10`, an inline
+  parameter instance at `+0x18` (the `0x4EFF450F` family: floats at
+  `+0x30`/`+0x38`/`+0x40`/`+0x44`/`+0x54`/`+0x58`, a byte at `+0x76`), mode
+  `i32` at `+0x20`, an index at `+0x24`, `u16` at `+0x28`, byte at `+0x2A`.
+- `0xFD232466`, `0xC45F5F6F` (`m_hardPoints`), `0x51CD98D2`, `0x8289A6C9`,
+  `0x0C8F8DC6` -- other instance arrays; no reader of them builds a shape
+  (see check 6's reader census), and in this install they are essentially empty.
+- `0xAD47190C`, `0x37ED05D0`, `0xC67B4D05` -- **model-typed references**
+  (`0x871BD3D0`). The schema therefore *allows* a model to name another model, a
+  separate collision model. Measured below: **none does**.
+- There is **no hull, capsule or box field, and no second mesh field**: the only
+  mesh is `STU_537E56E4` through the holder list.
+
+### The range's models, per model (install)
+
+`crates/ow-tank/tests/model_schema_real.rs` over the practice range's 229 model
+assets:
+
+| measurement | result |
+|---|---|
+| `STUModel` instances per model asset | **1** on all 229 |
+| models with a holder list (`0xCB4D298D`) | **163** (66 have none) |
+| holders | **279** |
+| holders per model (histogram) | `{0: 66, 1: 61, 2: 96, 3: 2, 4: 2, 6: 2}` |
+| models carrying a mesh block in their own `MSTU` | **161** (272 blocks; 7 holders carry no mesh) |
+| models whose `0xAD47190C`/`0x37ED05D0`/`0xC67B4D05` name another model | **0** |
+| referenced models carrying a mesh block | 0 of 0 |
+| other collision-like arrays | `0xFD232466` on 1 model (2 elements), `0xC45F5F6F` on 1 model (1 element), the rest absent |
+
+So the collision sits **on the model asset itself** -- one `STUModel` per model,
+holders as separate top-level instances of the same `MSTU` blob -- and **no model
+in the range references another model**, so the "visual model -> separate
+collision model" shape the hypothesis allows is not what this map does.
+
+### The per-instance body path: read, and it is a **body** path
+
+`0x14201af49` with its chunk `0x14201b1cd..0x14201c887` (and two siblings,
+`0x1420c685d..0x1420c8784` and `0x1420cade1..0x1420ccdeb`, with the same shape)
+walks the model's list and builds body shapes:
+
+The builder's holder walk is at `0x14201b6c0` (the `+0x140` slot with its tag
+at `+0x148`), the three filter tests at `0x14201b6de`, `0x14201b6e8` and
+`0x14201b6fd`, the parameter instance load at `0x14201b706`, the mesh unpack
+call at `0x14201c3e6`, the source pointer store at `0x14201c421`, the two
+`ShapeAddToBody` calls at `0x14201bc8e` and `0x14201bce1`, and `OwnerCreateBody`
+at `0x14201b571`.
+
+So a holder with mode `+0x2a == 0`, a mesh, and a passing mask becomes a **Domino
+shape on a Domino body** -- `ShapeAddToBody` (`0x142cb3940`) and
+`OwnerCreateBody` (`0x142cc3d90`), the ingest side, not a query. Note the two
+mode fields differ: the *query* consumer `FUN_14210bac0` tests `holder+0x20 == 0`
+and its other branch is a **skip** (`jne 0x14210bf47`, check 6), while this
+builder tests the byte at `holder+0x2a`.
+
+**Where the builder is reached.** This section originally scanned the fragment
+starts and found no reference; **that scan was wrong** -- the addresses are
+fragment starts inside a six-entry `.pdata` chain whose root is `0x14201ae60`.
+The root has four `E8` callers. See check 9 ("the four callers"), which
+supersedes this paragraph.
+
+### Verdict
+
+**The map's models do carry collision, one set per model asset, and the client
+does contain a per-instance builder that turns it into a Domino body shape** --
+the operator's hypothesis is right about the shape of the system, and the
+"collision is per model" direction is the one this image supports: the fracturable
+route (check 6) and the map chunk (check 3) are both closed, while this route is
+per model and reads exactly the mesh the range's models carry.
+
+What is missing is the **trigger**: the builder (`0x14201af49` + its chunk
+`0x14201b1cd`, and its two siblings `0x1420c685d` and `0x1420cade1`) has no static
+reference of any of the six forms above, so it must be handed to a runtime table.
+The **exact missing read** is that registration: who stores `0x14201af49` (or a
+sibling) into a registry/vtable at load, and at which type it is registered -- the
+same class of runtime table that registers node types through `0x141c5ff40`, and
+the same wall that `0x1420a02f6` sits behind (check 3). Until it is read, whether
+the range's placeables hit this builder cannot be stated from the image.
+
+> **This section's address is wrong, and so is its "no reference" result.
+> Check 9 replaces it.** `0x14201af49` is not a function: it is the third of six
+> `.pdata` fragments of the function that starts at **`0x14201ae60`**, and that
+> function has **four** `E8` callers. The two "siblings" this section calls
+> "the same shape" are **not** the same: neither walks the model's holder list
+> (check 9 classifies them). The rest of check 8 -- the schema, the per-model
+> inventory and the descriptor pass-through -- stands.
+
+## Check 9 -- the builder is `0x14201ae60`, four state-sync functions call it, and the range's 272 mesh holders all become shapes
+
+### The function's true extent
+
+`.pdata` makes `0x14201ae60` the root of a **six-entry unwind chain**: the root
+entry `0x14201ae60..0x14201aee1` (unwind flags `3`, both handlers) and five
+chained fragments at `0x14201aee1`, `0x14201af25`, `0x14201af49`, `0x14201b1ad`
+and `0x14201b1cd`, the last covering `0x14201b1cd..0x14201c887`. The six are
+**contiguous**, so the body is `0x14201ae60..0x14201c887` (0x1a27 bytes), and the
+root begins a real prologue: four callee-saved pushes, a frame-pointer `lea`
+that puts `rbp` inside the frame, a `0x3a8`-byte frame, then the `/GS` cookie
+load. The addresses the
+earlier notes called the builder and its chunk are fragment starts inside this
+function; a reference search aimed at them finds nothing because the function
+starts earlier.
+
+`dev/fn_extent.py <addr>` prints the chain (root, every fragment, and whether the
+union extent is contiguous) for any address; every address in this check was
+resolved through it. `dev/callers.py <addr>` then reports `E8`, `E9`, `jcc`,
+8-byte-pointer and 4-byte-RVA references, each mapped to the **chain root** of
+its containing function.
+
+### What `0x14201ae60` does
+
+The two arguments are `rcx` = the collision component and `rdx` = a second
+object (see "the four callers": each caller decodes it through the engine's
+pointer-registry idiom before the call). In the client's order:
+
+1. **Guards.** The function returns unless **all** of these hold:
+   - `[component+0x88]` (the body handle) **is** the invalid sentinel
+     `0xffff_0000_ffff_ffff` -- so the builder runs only when no body exists yet;
+   - `0x141ffe7b0(second)` is true, i.e. **bit 7 of `[second+0x242]` is clear**
+     (a leaf accessor: load the byte, shift, invert);
+   - `[component+0x250] != 0` (the component's scene node) and
+     `[[component+0x250]+0xe8] != 0` (the node's model object);
+   - `[[second+0x250]] != 0` and `0x14202f800([second+0x250])` is not `0xffff`
+     -- that leaf reads the **Domino owner id** from
+     `[[second+0x250]+0x620]` at `+0x31f8` (a `u16`), falling back to a global
+     `u16` when the node has no owner record;
+   - `[[[[component+0x250]+0xe8]]+0x28] != 0`: the **model**. `0x141b3d1c0` is
+     the same expression out of line (`[node+0xe8] -> [that+0x28]`), and it is
+     the accessor the two siblings use.
+2. **The mask word.** `eax = [component+0x420]`, `bt rax,0x19`: **bit 25**
+   selects `[component+0x580]` and otherwise `[component+0x470]` is the `u64`
+   the holder filter tests against.
+3. **The holder list.** `[model+0x140]` (field `0xCB4D298D`) with the tag at
+   `[model+0x148]`; the tag rule is the one `ArrayRecord` in
+   `ow_tank::model_collision` documents -- tag `1` puts the data word first and
+   the count second, anything else puts the count first -- and the elements are
+   read in index order.
+4. **The filter**, per holder: `[holder+0x2a] == 0`, then `[holder+0x08] != 0`
+   (the embedded mesh block), then `mask == u64::MAX || (mask_word & mask) != 0`.
+5. **The shape**, from the `i32` at `[holder+0x20]`, a four-arm switch:
+
+   | `[holder+0x20]` | descriptor type byte (`+0x67`) | which source it fills |
+   |---|---|---|
+   | `0` | `3` (mesh) | `0x141b53af0` unpacks `[holder+0x08]` |
+   | `1` | `2` | `0x141b53b70` then `0x1420c2220` |
+   | `2` | `1` | `0x141b53c40` then `0x1420c20d0` |
+   | `4` | `0` (sphere) | `0x141b53c40`; also adds a shape to the body at `+0x90` |
+   | anything else | -- | skipped |
+
+   The switch is a `test`/`je` then two `sub ecx,1`/`je` and a `cmp ecx,2`/`jne`,
+   so it is arithmetic on the mode value, not a jump table: `3`, negatives and
+   values above `4` all fall through to the skip. (The decompiler presents these
+   four arms in a different textual order from the address order; the switch
+   tests are at `0x14201b9ba`..`0x14201b9da` and the arms begin at
+   `0x14201c1f8`, `0x14201c029`, `0x14201bddc`, `0x14201b9e0`.)
+6. **The body.** `OwnerCreateBody` (`0x142cc3d90`) is called with the owner id
+   and a `0x30`-byte config (the entity's transform quad, plus the maximum of the
+   holders' `[params+0x4c]` float as its last field), and the result is stored at
+   `[component+0x88]`. A second body at `+0x90` is created only when
+   `[component+0xd8] != 0`, `0x141b53a80` of the list's maximum mode byte returns
+   `0`, and the global `_DAT_14414e45c != 2`; a third handle from `0x142cc3ea0`
+   goes to `+0x9c`.
+7. **The shapes.** One `ShapeAddToBody` (`0x142cb3940`) per selected holder,
+   with `[component+0x88]` as the body; the sphere arm adds a second call on
+   `[component+0x90]`. Afterwards `0x14201c507`..`0x14201c817` forms two
+   four-lane vectors from the model's bounds and the body's current values
+   (`0x142cb4350` reads three, `0x142cb4e90` and `0x142cb50e0` write), and
+   `0x142030f10` is called on `[second+0x250]` when `[component+0x386]` is set.
+   What the two vectors mean (centre of mass and inertia is the likely reading)
+   was **not** read.
+
+### The descriptor it fills
+
+The builder's stack descriptor is the pointer `ShapeAddToBody` receives
+(`lea rdx,[rbp+0x70]` at both call sites), and its offsets agree with the
+consumer's reads documented in `formats/domino.md` (`+0x67` type, `+0x68` scale,
+`+0x70` source), which is a second, independent read of the same layout. The
+fields this function writes, with the arm that writes them:
+
+| offset | width | value | arm |
+|---|---|---|---|
+| `+0x00` | quad | the entity's bounds quad, first lane pair | all |
+| `+0x08` | `f32` | `100.0` (`0x42c80000`) | all |
+| `+0x10` | `u16` | `1` | all |
+| `+0x14` | 2 x `u32` | `-1`, `-1` | all |
+| `+0x20` | `f32` | `0.8` (`0x3f4ccccd`) then the holder's parameter floats | all |
+| `+0x50` | `f32` | `10.0` (`0x41200000`) | all |
+| `+0x54` | `f32` | `0.7` (`0x3f333333`) | all |
+| `+0x58` | `u16` | the shape's collision category, four-way: `0x800` if the parameter copy's byte at `[rbp+0x146]` is set, else `0x100` if the byte at `[rbp+0x145]` is clear, else `0x1000` when `[component+0xb9]` is set and `1` when it is not | all |
+| `+0x5a` | `u16` | `0x141b53c40`'s fold of a 14-byte flag record (`model_collision::flag_mask`); the record it is given was not followed | all |
+| `+0x5c` | `u16` | `[component+0x98]` | all |
+| `+0x5e`, `+0x60` | `u16` | two words taken from the stack block the holder's parameter instance is unpacked into (`[rbp+0x160]`, `[rbp+0x168]`); that block's own field mapping was not followed | all |
+| `+0x62` | `u16` | `0xffff` | mesh arm |
+| `+0x64`, `+0x65` | `u8` | flag bytes | all |
+| `+0x66` | `u8` | the arm's flag byte: `0` on the mesh, point-cloud and sphere arms; the capsule arm stores a computed byte here | per arm |
+| `+0x67` | `u8` | the type byte of the table above | per arm |
+| `+0x68` | `f32` | the mesh scale: `maxss(scale, 0.01)` when uniform, `1.0` when baked | mesh |
+| `+0x70` | `u64` | the source: `&` the unpacked `0x30` record when uniform, `&` the baked copy otherwise | mesh |
+
+**The mesh scale's two paths.** `0x14201c3eb` takes the entity's three scale
+components, forms `sx - sy` and `sy - sz`, and compares each absolute value with
+`0.01` using `comiss` + `jae`. If either is `0.01` or more (an infinity is; a NaN
+disassembles as "not greater or equal") the shape is **baked**: a `0x30`-byte
+record is appended to the component's array at `+0xa8`/`+0xb0` (`0x141027b80`
+grows it), `0x142ccbd60(record, &unpacked, &scales)` writes the scaled mesh, and
+the descriptor gets scale `1.0` and that record as its source. Otherwise the
+descriptor points at the unpacked record and stores `maxss(scale, 0.01)`.
+
+### The four callers
+
+All four `E8` sites resolve to small functions in the same module as the builder,
+and each pairs the call with `0x14201e790` (`0x14201e790..0x14201ea43`), the
+**teardown** (one of the four reaches it by tail jump instead of a call): it
+releases the bodies at `+0x88`,
+`+0x90` and `+0x9c` through `0x142cc4150`/`0x142cc4230`, frees every `0x30`-byte
+baked record at `+0xa8` (`0x142ccc1a0`), truncates that array and clears the flag
+bytes `+0xb9`, `+0xba`, `+0x331`, `+0x384`, `+0x386`.
+
+| caller root | call site | callers of it | what it is |
+|---|---|---|---|
+| `0x142022030` | `0x142022219` | `0x142018cc0` (`0x142018d09`), `0x142024d30` (`0x1420258c6`), and an `E9` at `0x14201616b` that sits in a region with **no `.pdata` entry** (it may not be code) | **"make the body match the state"**: it compares "has a body" (`[component+0x88]` valid) with "should have one" (`_DAT_14414e45c == 2 || [component+0xd0] == 1`), tears down when they differ, and rebuilds when the answer is "should" |
+| `0x1420195e0` | `0x14201985c` | `0x142023cd0` (`0x142023d45`), which is itself called from `0x142017c60`, `0x142018f40`, `0x14201cf40` and `0x14200ed00` | **mask-membership change**: it walks the model's holders itself, looks each holder's index (`+0x24`) up in `[component+0x8b0]` with `0x140678850`, and for every holder whose mask membership differs between the caller's two mask words it tears down and rebuilds. The model comes from `0x141b3d1c0` (the node's model). `0x142023cd0` re-reads the mask word pair (`[+0x420]` bit 25 -> `0x470`/`0x580`), calls `0x142023780` and then this pass with both words; `0x142018f40` is the per-id reference-count hub that calls it |
+| `0x142014b50` | `0x142014d07` | `0x140a2d390` (`0x140a2f6c8`, inside that function's second `.pdata` fragment) | **rebuild with a new mask set**: it clears two of the component's bytes (`+0x58`, `+0x59`), decodes the second argument through the registry idiom, tears down and rebuilds |
+| `0x142015f70` | `0x142016129` | `0x1420ec020` (`0x1420ec4d8`), `0x1420ec670` (`0x1420ecb4d`) | **destroy or build**: one branch **tail-jumps** into the teardown (`E9` at `0x142015f95`, with `.pdata` showing no separate root because the jump *is* the entry fragment), clearing `[+0x331]` and the `u16` at `+0x384` on the way; the other branch is the same decode/build |
+
+(Every `E8`/`E9`/`jcc`/8-byte-pointer/4-byte-RVA reference to each of these
+roots was counted with `dev/callers.py`; the only 4-byte hits are the
+`.pdata` records themselves and their copies inside the unwind data, which the
+raw scan shows as `RUNTIME_FUNCTION` triples -- `begin` `0x14201ae60`, `end`,
+`unwind` -- not dispatch entries.)
+
+The teardown `0x14201e790` has **eight `E8` callers plus one `E9`**: the four
+builder callers above, plus `0x14200f7b0`, `0x142011970`, `0x142020a90`,
+`0x142021920` and `0x142024d30`, and the tail jump from `0x142015f70`. So the
+build and the teardown are the two halves of one "refresh this component's
+collision body" operation, driven from several places in the same module.
+
+**The live update.** `0x142019880` is the component's per-frame update and is a
+**function-pointer slot** of the shared base interface at `.rdata`
+`0x142f7d688`; the "make the body match the state" function above sits at
+`0x142f7d678` of the same table, and `0x14201cf40` at `0x142f7d628`. The table's
+base is `0x142f7d320` and `.text` loads it with `lea` in place of a vtable store;
+it carries no RTTI locator (its `-8` word is `4`) and **no 8-byte pointer to it
+exists anywhere in the image**, so its class cannot be named from RTTI. What its
+slots do is readable: `0x142019880` calls `0x142024d30` ("promote the pending
+node and rebuild") when bit 0 of `[component+0x400]` is set and takes the
+`0x1420218b0` path when it is clear, and
+`0x142024d30` itself only reaches the physics setup when the node's `u16` at
+`+0x1c` has bit `0x20` set and bit `0x40` clear. `0x142018f40` is the
+**mask-reference hub**: it takes an array of `u32` ids and a sign `+-1`, adds the
+sign to the `i32` count paired with each id in one of two 16-byte array slots at
+`component+0x4c8` and `+0x4d8` (selected by its last argument), appending an
+entry when the id is new, and then calls `0x142023cd0` whenever the component has
+a node with a model object. That is a membership counter: it is what lets a
+placed object's collision appear when it enters a collision layer and disappear
+when it leaves.
+
+### The two earlier "siblings"
+
+Neither is a copy of `0x14201ae60`, and neither is a body builder for a model's
+holder list:
+
+| function | true extent | what it is |
+|---|---|---|
+| `0x1420c63b0` | root `0x1420c63b0..0x1420c646b` + fragments to `0x1420c8784` (contiguous) | a **per-attachment shape builder**: it indexes a table of `0x38`-byte records (`[owner+0xd0]`, count `[owner+0xf8]`), switches on each record's type code (cases `8`, `9`, ... are visible), and for the mesh case calls the same `0x141b53af0` + `ShapeAddToBody`. It takes the model from `0x141b3d1c0(node)` and calls the component's `0x142023d70` refresh |
+| `0x1420ca550` | root `0x1420ca550..0x1420ca5ba` + fragments to `0x1420ccdeb` (contiguous) | the same shape for a second attachment set: same `0x38`-byte record table, same unpacker, same `ShapeAddToBody`, four `0x142cc3ea0` calls |
+
+`0x1420c63b0`'s only `E8` caller is `0x1420c8a50` (`0x1420c8db5`), and
+`0x1420c63b0` calls `0x1420c8a50` back: the pair recurses over a sub-object tree.
+`0x1420ca550`'s callers are `0x1420c45e0` (`0x1420c4d4f`), `0x1420c9f10`
+(`0x1420ca12e`), `0x1420d0db0` (`0x1420d0e48`) and the two jump thunks
+`0x1420d0ce0`/`0x1420d0d50`. All three functions share the descriptor write
+targets, the mesh unpacker and the two Domino entry points, so the *family* is
+one system: the component's own body build (`0x14201ae60`) and two
+attachment-driven builds (`0x1420c63b0`, `0x1420ca550`).
+
+### The verdict for the practice range
+
+**The collision really is per model instance, and the builder is live code, not
+an editor path.** The reasons, in order of strength:
+
+1. It has four static callers, all of them state-sync functions of the same
+   runtime component (table above); none is an editor, exporter or tool function.
+   Two of them are themselves slots of the shared base-interface table
+   (`0x142018cc0` at `0x142f7d678`), i.e. reached through the component's virtual
+   interface, and one of them (`0x142018f40`) is a reference-count hub for
+   collision-layer membership -- a streaming/range mechanism, not a tool.
+2. Its guards are runtime scene-graph reads: the second argument's byte
+   `+0x242`, the node's model object `+0xe8 -> +0x28` (the same accessor
+   `0x141b3d1c0` other systems use), the node's Domino owner id
+   `+0x620 -> +0x31f8`, and the component's existing body handle.
+3. It is the **only** producer of `ShapeAddToBody` shapes that walks a model's
+   holder list. `domino.md`'s open question ("who produces the source
+descriptors") is answered by this function for model geometry.
+
+**The range's numbers, from the install** (`model_body_real::
+the_range_models_holder_plan`): of the 229 model assets the range's
+model-group placeables name, **279 holders** exist, **272** carry a mesh block,
+**279** carry the mask word and every one of those is **all ones**, and **none**
+carries the filter byte (`+0x2A`) or the shape mode (`+0x20`) -- both are the
+class default `0`. So under the builder's filter **all 272 mesh holders are
+selected**, each as shape mode `0`, i.e. **one type-3 mesh shape per holder**,
+over the **161** models that carry a mesh block. The seven holders without a
+mesh block are the only ones skipped. Pinned: model `0x0d0000000000078c` has
+exactly one holder, mask all ones, mesh present, and its plan is one mesh shape.
+
+So: **yes -- a placed instance of any of the range's 161 mesh-carrying models
+builds one Domino body with one mesh shape per holder, 272 of them per
+instantiation set.** What still cannot be stated is how many of the range's
+placeables get the component (see below).
+
+### What is still open here
+
+1. **The component's owner, and therefore which map nodes get one.** The
+   interface table `0x142f7d320` has no RTTI and no pointer to itself in the
+   image, so the class that implements it cannot be named from the image; the
+   site that gives a *static map prop's* node a collision component was not read.
+   The nearest read facts are the conditions the component itself checks: the
+   node's `+0x1c` bits `0x20`/`0x40` and the byte `+0x242` bit 7. Until that is
+   read, "does the range's stone wall get a body" stays open -- the builder is
+   live, but the *number of bodies* on this map is not established.
+2. **The second argument's type.** Each caller decodes it through the same
+   pointer-registry idiom (the `+0x110`/`+0x80` table walk keyed by an id from
+   `0x142001f80`, ending in a rotate and a mask), so the class it points at is
+   not named here. Only two of its fields are read by the builder: the byte at
+   `+0x242` and the node pointer at `+0x250` used to find the owner id.
+3. **The descriptor's numbers above `+0x20`.** The bounds quads at `+0x00`/
+   `+0x10`, the filter words at `+0x24`..`+0x4c` and the floats at `+0x88`..`+0x94`
+   are written from the holder's parameter instance (`+0x18`), the component's
+   fields and the entity's transform; the per-field source of every one of those
+   writes was not followed to the field level, so `ow_tank::model_body` converts
+   the filter, the switch, the type bytes and the mesh scale, and leaves the rest
+   documented but unconverted.
+4. **The inertia/centre-of-mass block.** `0x14201c507`..`0x14201c817` computes
+   the body's centre-of-mass offset and inertia from the shapes and sets them
+   with `0x142cb4e90`/`0x142cb50e0`; the per-shape area/inertia terms
+   (`0x142cc41a0`-family) were not read.
+
 ## What this leaves
 
 | line | state |
 |---|---|
 | the fracturable brush path on this map | closed: the range names no `C` (check 1) |
-| the model's prebuilt collision mesh | present in 161 of 229 range models; reaches a **query-only** scene-side consumer that writes nothing (checks 4, 6) |
-| the `f0` geometry class | creates a Domino body from **`C`**, the fracturable descriptor, not from the model mesh (check 6) |
-| the character's world | the **Domino world**, swept through encoded handles at `world+0x08`/`+0x10` with no vtable and no scene-owner call (check 7) |
-| the range's static collision | **no producer in the read paths** -- scope statement for the operator |
+| the map's kind-`0x11` chunk | not reachable; no producer read (check 3) |
+| the model's prebuilt collision mesh | **per model asset**: 163/229 models carry a holder list (279 holders, 272 mesh blocks), one `STUModel` each, no model-to-model reference (check 8) |
+| a per-instance body builder | **read: `0x14201ae60..0x14201c887`**, four `E8` callers (state-sync functions of the collision component), teardown `0x14201e790`; it walks the model's holders and emits one `ShapeAddToBody` shape each (check 9) |
+| which holders become shapes on this map | **all 272 mesh holders**: mask all ones, filter byte and shape mode at the class default `0`; 161 of the 229 models (check 9) |
+| the two "siblings" | not copies: `0x1420c63b0` and `0x1420ca550` are attachment-driven shape builders over a `0x38`-byte record table (check 9) |
+| the component's owner class | open: the interface table `0x142f7d320` has no RTTI and no pointer to itself, so which nodes get a component is unread (check 9) |
+| the descriptor's bounds/filter fields | documented per offset, not converted: their sources (holder parameters, component state, entity transform) were not followed field by field (check 9) |
+| the scene-side mesh query | separate and query-only (checks 4, 6) |
+| the character's world | the Domino world, swept through encoded handles (check 7) |
 
-Ordered next reads (only if the scope decision is to keep looking):
+Ordered next reads (the per-model route):
 
-1. **The Domino world handle table `0x1442a0bc0`.** The sweep reaches its world
-   only through `table[handle>>0x30]`; whoever registers a world there is the
-   owner of the character's world, and a registration is exactly the kind of
-   route a static call graph cannot show.
-2. **A seventh entry point to the ingest chain** (`0x142cbcd40` ->
-   `0x142cf35a0` -> `ShapeAddToOwner` -> `0x142cd4350` ->
-   `ShapeEntryFromDescriptor`). All six known ones feed a character-like body;
-   a caller carrying a chunk-derived mesh source is what would close the map's
-   static collision.
+1. **Who gives a map node a collision component.** The builder and its four
+   callers are read; the missing link is the site that allocates the component
+   (whose update is the base-interface slot `0x142f7d688`/`0x142f7d678` of the
+   table at `0x142f7d320`) for a static placeable's node. The component's own
+   conditions are the lead: the node's `+0x1c` bits `0x20`/`0x40`, the byte
+   `+0x242` bit 7, and the owner id path `+0x620 -> +0x31f8`.
+2. **The descriptor's remaining fields.** The parameter instance at
+   `[holder+0x18]` (`0x4EFF450F`) supplies the filter words and radii the
+   descriptor carries at `+0x24`..`+0x4c`, and the entity's transform supplies
+   the quads at `+0x00`/`+0x10`; each write is at a known address (see check 9's
+   table) but its source field was not followed.
+3. **The inertia block.** `0x14201c507`..`0x14201c817` turns the built shapes'
+   bounds into the body's centre of mass and inertia; the per-shape terms
+   (`0x142cc41a0` family) are unread.
 
 ## Checks
 
@@ -631,4 +1071,14 @@ Ordered next reads (only if the scope decision is to keep looking):
 | the character path never calls the mesh chain | check 6: the chain's `E8` sites are all in `0x141fb8xxx`/`0x1420xxxxx`; `RunCharacterControllerSweep`'s nine are mover/AI |
 | the character sweep uses the Domino world, not the scene owner | check 7: 0 indirect calls in `0x142cf3f80`'s four chunks; only Domino accessors called; `VariantPosition` reads `[world+0x2a0]` (0x50) / `[world+0x288]` (0x1c0) |
 | the sweep's world is reached through the encoded handle table | check 7: `world = *(u64*)(0x1442a0bc0 + slot*8) + K1 ^ K2` in every accessor |
+| the client's `STUModel` schema is complete and gap-free | check 8: four installers cover `+0x08`..`+0x1FB` of the `0x200`-byte class; `dev/static_model_schema.py <installer>` |
+| the collision is per model asset | `model_schema_real::the_range_models_collision_fields_and_where_they_live` (1 `STUModel` per model, 163 with a list, 279 holders, 0 model-to-model refs) |
+| the per-instance builder reads the mesh into a body | check 8: `0x14201af49`/`0x14201b1cd` walk `+0x140`, filter `holder+0x2a`, unpack `0x141b53af0`, call `ShapeAddToBody`/`OwnerCreateBody` |
+| the builder has no static reference | check 8: E8/E9/jcc/8-byte/lea/imm/RVA-dispatch all negative except the internal chunk branch |
+| **that is a fragment start, and the builder has four callers** | check 9: `.pdata` chain root `0x14201ae60` (six contiguous fragments to `0x14201c887`); `dev/fn_extent.py 0x14201af49` prints the chain; `dev/callers.py 0x14201ae60` -> 4 `E8`, 0 `E9`, 0 `jcc`, 0 8-byte pointer, 3 dword-RVA hits that are all `RUNTIME_FUNCTION` triples |
+| the four callers are state-sync functions, none an editor | check 9's caller table; `dev/callers.py 0x142022030 0x1420195e0 0x142014b50 0x142015f70` |
+| the component's update and its body sync are function-pointer slots | check 9: `0x142f7d688 -> 0x142019880`, `0x142f7d678 -> 0x142018cc0`, table base `0x142f7d320`, no RTTI locator, no 8-byte pointer to it in the image |
+| the filter, the switch, the type bytes and the mesh scale | `model_body::tests::{the_world_mask_is_selected_by_bit_25_of_the_flags_dword, the_holder_filter_is_the_mode_byte_the_mesh_and_the_mask, the_shape_mode_is_the_four_arm_switch, the_descriptor_type_byte_is_the_shape, the_holder_array_is_the_tag_swap, the_mesh_scale_is_uniform_within_the_epsilon, the_mesh_descriptor_scale_is_maxss_or_one}` |
+| the range's holders, against that filter | `model_body_real::the_range_models_holder_plan`: 279 holders, 272 mesh, mask all ones on all 279, filter byte and shape mode not carried (default `0`), shape histogram `{Mesh: 272, None: 7}`, 161 models with a shape, model `0x0d0000000000078c` pinned to one mesh shape |
+| the two "siblings" are different functions | check 9: `0x1420c63b0` -> fragments to `0x1420c8784`, `0x1420ca550` -> fragments to `0x1420ccdeb`; both index a `0x38`-byte record table and switch on a type code, neither walks `+0x140` |
 | the unpack and the shape record, dword for dword | `mesh_shape::tests::the_shape_record_is_mesh_shape_fill_dword_for_dword`, `the_array_header_offset_is_the_tag_test`, `a_zero_scale_is_an_infinity_lane`, `the_field_offsets_are_the_unpackers` |

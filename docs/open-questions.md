@@ -1135,6 +1135,36 @@ movement), or it is inserted by a system not in any path read so far. One
 concrete unread anchor remains if the search continues: the pool-A importer
 `0x1421363d1`, named in the geometry-object chain but never read.
 
+**Round 6 (2026-11-02): the per-model route is live.** The operator's framing
+was right: collision is a property of the model. The builder is
+**`0x14201ae60..0x14201c887`** (a six-entry `.pdata` chain; the earlier
+`0x14201af49`/`0x14201b1cd` were **fragment starts** inside it, which is why the
+first reference search found nothing). Its root has **four `E8` callers** —
+`0x142022030`, `0x1420195e0`, `0x142014b50`, `0x142015f70` (call sites
+`0x142022219`, `0x14201985c`, `0x142014d07`, `0x142016129`), all runtime
+state-sync functions of one collision component, two of them interface slots of
+the table at `0x142f7d320` driven by the per-frame update `0x142019880`. It
+walks `[model+0x140]` (tag `+0x148`), filters `[holder+0x2a] == 0`,
+`[holder+0x08] != 0` and the mask word (bit 25 of `[component+0x420]` selects
+`+0x580` else `+0x470`), and for each selected holder emits a Domino shape
+through `ShapeAddToBody` (`0x142cb3940`) on a body from `OwnerCreateBody`
+(`0x142cc3d90`); mode `0` is descriptor type 3 (the mesh, unpacked by
+`0x141b53af0`), modes `1`/`2`/`4` are types 2/1/0. Read and implemented in
+`ow_tank::model_body` (8 unit tests; install test `model_body_real`).
+
+**The range's plan:** 163 of 229 models carry a holder list (279 holders, 272
+mesh blocks); every mask is all ones, and the filter byte and shape mode are at
+the class default `0`, so **all 272 mesh holders become type-3 mesh shapes** over
+161 models.
+
+**Open:** which nodes receive the component (its interface table has no RTTI or
+self-pointer; the leading facts are node `+0x1c` bits `0x20`/`0x40`, byte
+`+0x242` bit 7, and the owner path `+0x620 → +0x31f8`), whether the range's
+static props receive it and whether that owner is the world the sweep uses, and
+the descriptor's bounds/filter/`+0x5c..+0x62` sources (documented, not
+converted). No runtime body count has been observed — everything above is the
+plan from the install's bytes plus the read filter.
+
 ---
 
 ## 7. Domino schema and integration in the current image

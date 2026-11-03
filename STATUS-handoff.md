@@ -87,10 +87,23 @@ missing is **data, not code** — and the two producers are both blocked:
   **no read path fills the character's Domino world with the range's static
   collision** — a **scope statement**: either the client receives that
   collision from outside the binary (server-authoritative movement), or an
-  unread system inserts it (one named anchor: the pool-A importer
-  `0x1421363d1`). The chunk's own consumer is not RVA-dispatch reachable (277
-  tables, 0 hits). The type-`0x00A` absence affects only the other brush source,
-  not this route.
+  unread system inserts it. **That system is now found, and it is per model**
+  (2026-11-02): the builder `0x14201ae60..0x14201c887` (a six-entry `.pdata`
+  chain; the earlier `0x14201af49`/`0x14201b1cd` were fragment starts inside it)
+  walks `[model+0x140]`, filters the holders, and emits one Domino shape per
+  selected holder through `ShapeAddToBody`/`OwnerCreateBody`. It has four `E8`
+  callers, all runtime state-sync functions of one collision component
+  (`0x142022030`, `0x1420195e0`, `0x142014b50`, `0x142015f70`); the teardown is
+  `0x14201e790`. Read and implemented in `ow_tank::model_body` (8 unit tests,
+  install test `model_body_real`): for the range, 163 of 229 models carry a
+  holder list, 279 holders, 272 mesh blocks, and **all 272 mesh holders become
+  type-3 mesh shapes** (mask all ones, filter byte and shape mode at the class
+  default 0). **Open:** which nodes receive the component (its interface table
+  `0x142f7d320` has no RTTI or self-pointer), whether the range's static props
+  receive it, and whether that owner is the world `RunCharacterControllerSweep`
+  uses; the descriptor's bounds/filter fields are documented but not converted.
+  The chunk's own consumer is not RVA-dispatch reachable (277 tables, 0 hits).
+  The type-`0x00A` absence affects only the other brush source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
 `MAP_CHUNK_COLLISION`, kind `0x12` is `MAP_CHUNK_PATHING` (the 220-cell

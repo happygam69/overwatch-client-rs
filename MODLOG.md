@@ -3,6 +3,24 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - collision is built per model instance, and it is live
+
+- The per-model body builder is **`0x14201ae60..0x14201c887`** (a six-entry
+  `.pdata` chain). The earlier `0x14201af49`/`0x14201b1cd` were fragment starts
+  inside it; scanning them found no reference, scanning the root finds four `E8`
+  callers (`0x142022030`, `0x1420195e0`, `0x142014b50`, `0x142015f70`), all
+  runtime state-sync functions of one collision component.
+- It walks `[model+0x140]`, filters `[holder+0x2a]`, the mesh and the mask word
+  (bit 25 of `[component+0x420]` selects `+0x580`/`+0x470`), and emits one
+  Domino shape per selected holder through `ShapeAddToBody`/`OwnerCreateBody`;
+  mode 0 is the mesh (type 3).
+- `ow_tank::model_body` (8 unit tests) + install test `model_body_real`: the
+  range's 229 models -> 279 holders -> 272 mesh blocks, mask all ones, filter
+  byte and shape mode at the class default 0, so **all 272 mesh holders become
+  type-3 mesh shapes over 161 models**.
+- Open: which nodes receive the component (interface table `0x142f7d320`, no
+  RTTI or self-pointer) and whether the range's static props receive it.
+
 ## 2026-11-02 - the sweep's world is the Domino world; no map source reaches it
 
 - `RunCharacterControllerSweep` (`0x142cbcee0`) takes the world struct as

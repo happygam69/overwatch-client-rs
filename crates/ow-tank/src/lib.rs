@@ -43,6 +43,7 @@ pub mod mapresolve;
 pub mod material;
 pub mod mesh_shape;
 pub mod model;
+pub mod model_body;
 pub mod model_collision;
 pub mod mstu;
 pub mod packages;

@@ -11,6 +11,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `audit_image.py` | Audit the ground-truth image's function bookkeeping: `.pdata` facts, bridge counts and the name table. | 253 |
 | `brush_mesh_oracle.py` | Oracle for stage 1 of the brush tree -> mesh conversion. | 450 |
 | `brush_vertex_oracle.py` | Oracle for the brush's vertex decode, and a probe of the brush builder. | 227 |
+| `callers.py` | Find every static reference to a set of addresses, and name the function it sits in. | 134 |
 | `chunk11_probe.py` | Read windows of a chunk asset through `ow-tank-look --hex` and decode them. | 105 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
 | `clip_fp.py` | Byte-level orientation probes for the first-person clip family 0x00020400. | 100 |
@@ -63,6 +64,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `find_anim_decoder.py` | Find code that reads the animation clip header, by the loads it must make. | 107 |
 | `find_field_writes.py` | Find the code that reads or writes one struct-field offset. | 124 |
 | `find_tables.py` | Find large arrays of code pointers (jump/dispatch tables) in the module image. | 79 |
+| `fn_extent.py` | Recover a function's TRUE extent when the image stores it as `.pdata` fragments. | 152 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
 | `frame_check.py` | Check cited addresses and function-name entries against the one address frame. | 317 |
 | `gh.py` | Call the Ghidra bridge over HTTP. | 67 |
@@ -88,8 +90,10 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `rd.py` | Disassemble or hex-dump a virtual-address range of the local image. | 55 |
 | `rdc.py` | Disassemble a VA range, resolving RIP-relative operands to their float quads. | 36 |
 | `remove_fns.py` | Remove a named set of functions from Rust files. | 68 |
+| `rip_refs.py` | Find RIP-relative references (lea/mov/cmp, any opcode) to a set of addresses. | 90 |
 | `static_field_scan.py` | Where the client's own code compares an STU field hash or class hash. | 110 |
 | `static_mesh_consumers.py` | Who builds a Domino shape, and does the builder read a stored mesh? | 150 |
+| `static_model_schema.py` | Decode a class's field table from its field-table installer function. | 151 |
 | `static_rva_tables.py` | The image-base-relative 4-byte RVA dispatch tables, and what they select. | 138 |
 | `static_slots.py` | What a set of client functions read and call, by displacement. | 130 |
 | `tex_oracle.py` | Cross-check our texture decoders against an independent implementation. | 300 |
