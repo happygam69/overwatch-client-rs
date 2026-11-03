@@ -28,13 +28,14 @@ Read and shipped (`ow-sim::fan`, six new units):
   earlier pass's `local_c18` captured before the loop and never updated, and the
   **first** hit kept even when it fails the facing test.
 
-**Still open: the outer walk.** The writer calls the evaluator at four sites
-inside three enclosing loops, and which one runs — what the query carries and
-what the final `+0x1140` write takes from the record — is not read. `fan::solve`
-stays unwritten until it is; writing it now would invent the composition.
-
-**Next anchors.** The first two evaluator call sites and their loop headers in
-`0x140cb86c0`, then the `+0x1140` write.
+**The outer walk is read and implemented (2026-11-02).** The writer's four
+call sites, the query each carries and the `+0x1140` write are read, and
+`ow-sim::fan::solve` runs that composition (gate `body+0x659`, both endpoints,
+the facing threshold, the memo test, the ring → refine → back-transform order
+and both reflection bytes). What remains behind the `CandidateSolver` seam is
+not the loop but two inputs: pass 0's `MoverWishQueryCached`, and the shape-ring
+branch behind the global toggle (`0x141ae3eb0`'s corner/extent pair,
+`0x140cc2290`'s mesh-face refinement). Those are the next anchors.
 
 ## 1. The mover's input→velocity control law
 

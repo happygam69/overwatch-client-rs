@@ -159,9 +159,12 @@ record shows what was claimed and why it failed.
 - New read units: `fan::ring_sweep` (count and the `0.35` radius floor),
   `fan::ring_offset` (`(sin*R, 0, cos*R, 0)`) and `fan::shape_ring_offset`
   (`(sin*(seed-0.015), 0.015, cos*(seed-0.015), 0)`). 114 `ow-sim` units green.
-- `fan::solve` still unwritten: five helpers remain (`FUN_1426cd3d0`,
-  `MoverWishQueryCached`, `FUN_140c9f110`, the shape basis pair, `0x140cc2290`)
-  and each is named with its call site in the doc.
+- **Superseded the same day:** `fan::solve` was written and tested (the entry
+  below "`fan::solve`, the writer's decision in code"), and the five helpers
+  named here were read in that pass (`FUN_1426cd3d0` = `cosf`, `0x140c9f110`
+  returns a zero quad, `0x141ae3eb0` is the shape's box corner + extent,
+  `0x140cc2290` the mesh-face refinement). The shape-ring branch and that
+  refinement stay behind the `CandidateSolver` seam.
 
 ## 2026-11-02 - FinishMapChunkAsset repaired; two consumer hypotheses ruled out
 

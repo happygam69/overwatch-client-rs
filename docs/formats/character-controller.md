@@ -1278,13 +1278,12 @@ implemented (`ow-sim::fan::refine_pentagon`): five pentagon candidates at
 `offset*0.02 + refined*0.005`, the ground probe `0.04` lower, and the keep-first
 / replace-on-facing / break-on-facing rule.
 
-**Still open:** which of the four call sites runs under which input (the
-`uVar21` / `cVar6` preconditions differ per site, and sites two and four are
-unread), the `B` endpoint's scale quad, and the `+0x1140` write (the block is
-only ever *read* at `0x140cb86c0`'s head in the decompiled body, so the write
-lives in a callee or the caller). None of that is guessed in `ow-sim`:
-`fan::solve` does not exist, and `CandidateSolver` is documented as the seam
-rather than the loop.
+**Superseded (2026-11-02).** The paragraph that used to stand here said the
+four call sites and the `+0x1140` write were unread and `fan::solve` did not
+exist. Both are now read and implemented — see "The writer's composition, read"
+immediately below and `ow-sim::fan::solve`. The shape-ring branch behind the
+global toggle and `0x140cc2290`'s mesh-face refinement remain behind the
+`CandidateSolver` seam; those are inputs, not the loop.
 
 ### The writer's composition, read (2026-11-02)
 
