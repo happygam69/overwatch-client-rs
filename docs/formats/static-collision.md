@@ -50,7 +50,13 @@ holders** of the 229 models pass its filter (mask all ones, filter byte and
 shape mode default `0`), so a placed instance of any of the **161**
 mesh-carrying models builds one body with one type-3 mesh shape per holder.
 What is still unread is which *static* map nodes are given the component (check
-9's open list).
+9's open list). **Check 10 narrows that further**: the id the builder hands to
+`OwnerCreateBody` is a Domino **world slot** in the same table (`0x1442a0bc0`)
+and the same encoded-pointer decode the character sweep uses, the node creates
+its own static body in that same slot (`[node+0x620]+0x31fc`), and the
+deciding gate is four runtime node/entity bits -- none of them model-asset data.
+The one thing still open is the allocation site that gives a node the component
+at all.
 
 ## Check 1 -- the range's entity references vs the nine entity / seven `C` assets
 
@@ -1020,6 +1026,204 @@ placeables get the component (see below).
    with `0x142cb4e90`/`0x142cb50e0`; the per-shape area/inertia terms
    (`0x142cc41a0`-family) were not read.
 
+## Check 10 -- the owner id is a **world slot**, and the node's own body lives in it
+
+The question this settles: the `u16` the builder hands to `OwnerCreateBody` at
+`[node+0x620]+0x31f8` -- is it a world slot, a body id or an entity id? It is a
+**world slot in the same global table and the same encoded-pointer idiom the
+character sweep's handle decode uses**, so the per-model body is a Domino body
+in a Domino world, not a scene-side record.
+
+### What the builder hands over
+
+`0x14201ae60` reads the id once, at the top, and passes it unchanged
+(assembly, current image):
+
+| address | what it does |
+|---|---|
+| `0x14201aee9` | `[node+0xe8]` -- the node's model object; a zero here returns |
+| `0x14201aef9` | the node itself, from `[second+0x250]`; a zero returns |
+| `0x14201af0d` | calls `0x14202f800(node, &out)` |
+| `0x14201af1a` | rejects the id when it equals `0xffff` |
+| `0x14201b560` | loads that same stack word as the first argument |
+| `0x14201b571` | `OwnerCreateBody` (`0x142cc3d90`) |
+| `0x14201b57d` | stores the returned handle at `[component+0x88]` |
+
+The accessor `0x14202f800` is a leaf with no `.pdata`: it loads
+`[node+0x620]`, and on a non-null record returns the `u16` at `+0x31f8`; with
+no record it falls back to a global `u16` at `0x143363470` (this is the
+"a node with no owner record still has an id" case).
+
+### What `OwnerCreateBody` does with a `u16`
+
+`0x142cc3d90` (263 bytes, decompiled) takes the id and a `0x30`-byte config and:
+
+1. rejects `id >= 0x3fff`;
+2. rejects the slot whose entry in the table at **`0x1442a0bc0`** is the
+   empty-slot sentinel `0xc439_701c_d97e_c6aa`;
+3. resolves the world pointer as `(entry + 0xb3269b88d44d5fb2) ^ 0x77600ba5adcc265c`
+   -- the project's encoded-pointer idiom;
+4. requires the world's `+0x15c` dword to be `0`, allocates a body index with
+   `0x142cbff20`, and returns
+   `(slot << 0x30) | (generation << 0x20) | index`, the generation read from
+   the body entry `[world+0x288] + index*0x1c0` at `+0x198`;
+5. on any refusal returns `0xffff_0000_ffff_ffff`.
+
+Every constant here is the sweep's: `0x1442a0bc0` is the world handle table
+check 7 decodes handles through, `0x3fff` is the slot bound those accessors
+reject at, the two addends/XOR word are the same, and the body pool
+`[world+0x288]` with stride `0x1c0` and the generation at `+0x198` is the pool
+`VariantPosition`'s rigid branch reads. **The `u16` is therefore a world slot,
+not a body id and not an entity id** -- a body id would be the `index` field,
+which the id never touches.
+
+### Where the slot comes from, and what else uses it
+
+The slot is filled by the node's own geometry initialiser
+`FUN_14202c660` (`0x14202c660..0x14202d676`), which the node's creation path
+reaches through the table entry at `0x143367670`:
+
+| address | what it does |
+|---|---|
+| `0x14202d0e1` | tests bit `0x200` of the node's flags dword at `+0x454`; without it the node gets **no** `+0x620` record at all |
+| `0x14202d112` | the `0x3210`-byte record: `GeometryBaseCtor`, its two tables `0x143367678`/`0x1433676b0`, body handle `0xffff_0000_ffff_ffff` at `+0x31fc` |
+| `0x14202d198` | stores it at `[node+0x620]` |
+| `0x14202d1d1`, `0x14202d1e8` | two `FUN_142cc3c80(config)` calls: the world slots at `+0x31f8` and `+0x31fa` |
+| `0x14202d202`, `0x14202d210` | both must not be `0xffff` |
+| `0x14202d268`/`0x14202d26f` | `OwnerCreateBody(+0x31f8, config)` -- the **node's own static body** |
+| `0x14202d27b` | stores that handle at `+0x31fc` |
+| `0x14202d290`, `0x14202d2aa` | `0x142cc4af0`/`0x142cc4b50` on the slot |
+| `0x14202d2f5` | `0x14209ae30(record, +0x31f8, node)` -- the geometry registration |
+
+`FUN_142cc3c80` (59 bytes of loop, decompiled) is the **world allocator**: it
+walks the table at `0x1442a0bc0` for the first entry equal to the sentinel,
+allocates a `0x4d0`-byte world, calls `DmWorldConstruct(world, config)`, and
+stores the encoded pointer `(world ^ 0x77600ba5adcc265c) + 0x4cd964772bb2a04e`
+with the slot written back into `world+0x194`. The two addends are exact
+inverses modulo `2^64`, so the allocator's encode and `OwnerCreateBody`'s decode
+round-trip; and the empty-slot sentinel is not a separate constant -- it is
+exactly *the encoding of a null world pointer*, which is why "entry ==
+sentinel" reads as "slot free". It has four `E8` callers: the node initialiser
+(two of them), `0x1407670e0`, and the Domino context initialiser
+`0x142cde350`.
+
+Note what the allocator does **not** do: it never looks for an existing world
+by key, so each call is a new world. Sharing therefore has to come from the
+caller, and one caller shows how: `0x142cde350` (the Domino context
+initialiser, two `E8` callers `0x142cdf8e0`/`0x142cdf930`) writes its world slot
+at `ctx+0x58` and, when it is given a parent context, **copies the parent's slot
+instead of allocating** and links itself into the parent's child list at
+`+0x140`. So a nested context inherits its parent's world; a node's own
+initialiser is the top of such a chain and allocates.
+
+So: the id the builder uses is the slot the node itself created a body in
+(`record+0x31fc`) and registered its geometry in. The per-model body is a
+sibling of the node's own static body, in the node's world.
+
+### Verdict
+
+| question | answer | evidence |
+|---|---|---|
+| is the `u16` at `+0x31f8` a world slot? | **yes** | `OwnerCreateBody` indexes `0x1442a0bc0` with it and rejects `>= 0x3fff`; `FUN_142cc3c80` writes it there |
+| is it a body id? | no | a body id is the handle's low `u32`, produced *from* the slot; the id is used before any body exists |
+| is it an entity id? | no | it is a table index into `0x1442a0bc0`, the table check 7 documents as the world handle table |
+| is the world the character sweeps reached the same way? | **yes, same table and same decode** | check 7's accessors compute `(*(u64*)(0x1442a0bc0 + slot*8) + K2) ^ K1`; `OwnerCreateBody` computes the identical expression from the `u16` |
+| does the per-model body land in the character's world? | **open, in one place** | the component's handle `[+0x88]` uses the same packing (`slot << 0x30`, `[component+0x88]` tested against `0xffff_0000_ffff_ffff` at `0x14201ae9f`..`0x14201aecc`), so the bodies are *addressable* by the sweep's decode; whether the character's own handle names the same slot is a runtime value this turn did not read |
+
+### The attachment gate, read to the field
+
+The gate is a chain of four checks, all runtime node state:
+
+| # | address | step |
+|---|---|---|
+| 1 | `0x14202d0e1` | `[node+0x454]` bit `0x200` -- decides whether the node has a `+0x620` record at all, i.e. whether `0x14202f800` can ever return a non-`0xffff` id |
+| 2 | `0x142024fb4`/`0x142024fbb` | the component's pending node (`+0x490`) is promoted into its current node (`+0x250`) |
+| 3 | `0x142024fee`, `0x142024ff2`, `0x142024ffb` | the node's `u16` at `+0x1c`: **bit `0x40` set or bit `0x20` clear is a refusal** (so the gate is `0x20` set and `0x40` clear) |
+| 4 | `0x142025004`, `0x142025013` | the node's model object `[node+0xe8]` and its `+0x84` bit `0x80` |
+
+plus the builder's own two: the second argument's byte `+0x242` bit 7 must be
+clear (leaf `0x141ffe7b0`, exactly `(byte >> 7 ^ 1) & 1`), and the model
+`[node+0xe8] -> +0x28` (leaf `0x141b3d1c0`) must be non-null.
+
+**None of these four is model-asset data.** The model asset contributes only
+the holder list the builder then walks; the deciding bits are the node's own
+flags (`+0x1c`, and `+0x454` whose bit `0x200` `0x14202c660` copies from the node
+creation record's dword at `+0x10`, at `0x14202c6e4`) and the node's model
+object. A placed model node therefore satisfies steps 2-4 as soon as it has a
+model object; step 1 is the one that can fail, and it is decided by the node's
+creation record, not by the `MSTU`.
+
+### The component's class: what the table is, and what is not read
+
+Read facts, all current-image:
+
+- `0x142f7d320` is in `.rdata` (`0x142f2d000`..`0x143845fff`). Its `-8` word is
+  `4`, not a locator, and **no 8-byte pointer to it exists anywhere in the
+  image** (an 8-byte scan of the whole image returns **0** hits) -- every
+  reference is rip-relative (`dev/rip_refs.py 0x142f7d320`). So no RTTI and no
+  self-pointer, as check 9 said.
+- Of those references, **six are code under a `.pdata` root** and they are all
+  tiny: `0x1405418b0`, `0x140541ae0`, `0x1405813d0`, `0x141b29b20`,
+  `0x140581630` (sizes `0x38`, `0x58`, `0x68`, `0x78`, `0xd8` -- each stores the
+  table at `[this]` and, flagged, frees that size) and the constructor
+  `0x141c58170` (a `0x38`-byte object with the table at `[this]`).
+- Of the 171 references inside the `0x142f00000..0x142f2ffff` range, 162 are in
+  regions with **no `.pdata` entry**: tiny `.text` initialiser stubs
+  (`0x142f017e0`, `0x142f16ca0`.., `0x142f2a5f0`..), each of which copies the
+  *same* table address into a **global of its own** (the other 9 are inside
+  ordinary `.pdata`-covered functions, e.g. `0x142f16d90`, `0x142f2a730`). That is the signature of
+  vtable folding: many classes whose vtable content is identical collapse onto
+  one address, so this table cannot name one class -- it is a shared base
+  interface.
+- The component the builder receives is **not** the object holding that table:
+  every interface slot runs with `this` twenty bytes *past* the object the
+  non-virtual workers get. Three independent field pairs prove it: the slot
+  reads `[this+0x230]`, `[this+0x400]`, `[this+0x470]` where the worker
+  `FUN_142024d30` reads `[object+0x250]`, `[object+0x420]`, `[object+0x490]`,
+  and the slot passes `this - 0x20` to that worker (`0x142019916`). The body
+  handle is `[this+0x68]` in the slot and `[object+0x88]` in the builder -- the
+  same field, 0x20 apart.
+- The component's node-binding entry is **`FUN_142017010`** (516 bytes): it
+  refuses when a pending node (`[object+0x490]`) is already set, detaches when
+  its node argument is null (`0x142021920`, `0x14201ea50`), and otherwise
+  resolves the node through `0x141b34010`, calls `0x141b3c6d0(node, arg3, 1,
+  [object+0xa8c])`, and on success stores the callback pair at `+0x568`/`+0x570`
+  and calls `0x142022420(object, node, 0)`. It also reads the flags qword at
+  `[object+0x420]` and the two words it hands to the stack context at `+0x280`
+  and `+0x288`. It has **twelve `E8` callers** (`0x140a29960`, `0x140a2d120`,
+  `0x142016f10`, `0x142017c60`, `0x142019880`, `0x14201cf40` twice,
+  `0x142020a90`, `0x142035010`, `0x142070ab0`, `0x1420ea390`), so it is a shared
+  entry, not one component type's private method. `0x142016f10` is the
+  "re-attach only when the node's owner changed" wrapper: it compares the
+  caller's id with the id decoded from the node's encoded pointer at `+0x118`.
+
+**What is not read, and is the exact missing read for "which nodes receive the
+component":** the site that *allocates* this component for a node. It is not
+`RegisterComponentTypeDescriptor` (`0x1421cd360`): none of the ~7,956
+registrations' hook arguments is in the `0x1420xxxx` module, and none installs
+`0x142f7d320` (the registrations that do mention component sizes -- `0xa98`,
+`0xaf0`, `0xc70`, `0xd98`, `0xda8`, `0xdc8`, `0x1010`, `0x1150` -- all pass a
+`.rdata`/`.text` hook set that the component's own slots do not match). The
+lookup that pairs a node with this component therefore happens through a table
+this turn did not open: the one that gives `0x142017010` its arguments. Until it
+is read, "how many of the range's 550 placeables get a component" stays open,
+and with it the number of bodies.
+
+### The range, against the gate
+
+| gate | decided by | does the range decide it from asset data? |
+|---|---|---|
+| `0x200` in `[node+0x454]` (record exists) | the node creation record's dword at `+0x10` (its third dword), copied by `0x14202c6e4` | **no** -- it is per-node runtime state, not in the `MSTU` |
+| `+0x1c` bit `0x20` set, `0x40` clear | the scene-graph flags word, written by the link/insert helpers (`0x141b25205`, `0x141b256f8` and the other 16-bit stores at `+0x1c`) | **no** |
+| `[node+0xe8] != 0` and its `+0x28` model | the node's loaded model object | yes, in the weak sense: a placed model node has one |
+| `[second+0x242]` bit 7 clear | the entity record behind the node | **no** |
+
+So no install-data test can prove that the range's props pass. What *can* be
+said, and is said by check 9's numbers, is that if a placed node passes, the
+two worlds and the body are already there: the node created its `+0x620`
+record and its own body from the same slot, and every one of the 272 mesh
+holders becomes a shape on a second body in that same world.
+
 ## What this leaves
 
 | line | state |
@@ -1030,20 +1234,28 @@ placeables get the component (see below).
 | a per-instance body builder | **read: `0x14201ae60..0x14201c887`**, four `E8` callers (state-sync functions of the collision component), teardown `0x14201e790`; it walks the model's holders and emits one `ShapeAddToBody` shape each (check 9) |
 | which holders become shapes on this map | **all 272 mesh holders**: mask all ones, filter byte and shape mode at the class default `0`; 161 of the 229 models (check 9) |
 | the two "siblings" | not copies: `0x1420c63b0` and `0x1420ca550` are attachment-driven shape builders over a `0x38`-byte record table (check 9) |
-| the component's owner class | open: the interface table `0x142f7d320` has no RTTI and no pointer to itself, so which nodes get a component is unread (check 9) |
+| the owner id the builder uses | **read: a Domino world slot** in the table at `0x1442a0bc0`, the same table and decode the sweep's handles use; produced by the allocator `0x142cc3c80` and stored at `[node+0x620]+0x31f8` by the node initialiser `0x14202c660` (check 10) |
+| the node's own body and the per-model body | both from `OwnerCreateBody` on that one slot: `+0x31fc` (node) and `[component+0x88]` (per-model), so they share a world (check 10) |
+| whether the character's world is that world | open in one place: the component's handle uses the same `slot << 0x30` packing, but the slot inside the character's own handle was not read (check 10) |
+| the component's owner class | open: `0x142f7d320` is a **folded base-interface vtable** (5 tiny deleters of sizes `0x38`..`0xd8` plus ~165 static-initialiser stubs that copy it into per-type globals), and the component's virtuals run with `this` 0x20 bytes past the object the builder receives; the *allocation* site is not `RegisterComponentTypeDescriptor` and is unread (check 10) |
+| the attachment gate | **read field by field**: node `+0x454` bit `0x200` (record exists), node `+0x1c` bit `0x20` set / `0x40` clear, node `+0xe8` model object and its `+0x28` model, entity `+0x242` bit 7 clear; all four are runtime node/entity state, none is model-asset data (check 10) |
 | the descriptor's bounds/filter fields | documented per offset, not converted: their sources (holder parameters, component state, entity transform) were not followed field by field (check 9) |
 | the scene-side mesh query | separate and query-only (checks 4, 6) |
 | the character's world | the Domino world, swept through encoded handles (check 7) |
 
 Ordered next reads (the per-model route):
 
-1. **Who gives a map node a collision component.** The builder and its four
-   callers are read; the missing link is the site that allocates the component
-   (whose update is the base-interface slot `0x142f7d688`/`0x142f7d678` of the
-   table at `0x142f7d320`) for a static placeable's node. The component's own
-   conditions are the lead: the node's `+0x1c` bits `0x20`/`0x40`, the byte
-   `+0x242` bit 7, and the owner id path `+0x620 -> +0x31f8`.
-2. **The descriptor's remaining fields.** The parameter instance at
+1. **The site that allocates the component and pairs it with a node.** Check 10
+   rules out the class-descriptor registrations and reads the attach entry
+   (`0x142017010`) and the component's field map, so the missing link is
+   narrowed to one table: whatever hands `0x142017010` its eight arguments (it
+   has twelve `E8` callers, two of them inside `0x14201cf40`). Until that is
+   read, the number of bodies on this map is unstated.
+2. **The slot inside the character's own handle.** The per-model bodies are in
+   the node's world; the sweep decodes `slot = handle >> 0x30` from the handle
+   in `[controller+0x1ad8]`'s struct (`+0x08`/`+0x10`). Reading who creates
+   that handle and with which slot closes the last link between the two.
+3. **The descriptor's remaining fields.** The parameter instance at
    `[holder+0x18]` (`0x4EFF450F`) supplies the filter words and radii the
    descriptor carries at `+0x24`..`+0x4c`, and the entity's transform supplies
    the quads at `+0x00`/`+0x10`; each write is at a known address (see check 9's
@@ -1082,3 +1294,12 @@ Ordered next reads (the per-model route):
 | the range's holders, against that filter | `model_body_real::the_range_models_holder_plan`: 279 holders, 272 mesh, mask all ones on all 279, filter byte and shape mode not carried (default `0`), shape histogram `{Mesh: 272, None: 7}`, 161 models with a shape, model `0x0d0000000000078c` pinned to one mesh shape |
 | the two "siblings" are different functions | check 9: `0x1420c63b0` -> fragments to `0x1420c8784`, `0x1420ca550` -> fragments to `0x1420ccdeb`; both index a `0x38`-byte record table and switch on a type code, neither walks `+0x140` |
 | the unpack and the shape record, dword for dword | `mesh_shape::tests::the_shape_record_is_mesh_shape_fill_dword_for_dword`, `the_array_header_offset_is_the_tag_test`, `a_zero_scale_is_an_infinity_lane`, `the_field_offsets_are_the_unpackers` |
+| the owner id the builder uses is a world slot | check 10: `0x14201af0d` -> `0x14202f800`; `0x14201b560`/`0x14201b571` -> `OwnerCreateBody` with that id, which indexes `0x1442a0bc0` and rejects `>= 0x3fff` |
+| the node creates its own body in that slot | check 10: `0x14202d1d1`, `0x14202d1e8` (allocator), `0x14202d268`/`0x14202d26f` (`OwnerCreateBody`), `0x14202d27b` (store at `+0x31fc`) |
+| the record exists only for nodes with `+0x454` bit `0x200` | check 10: `0x14202d0e1`; the flags dword is copied from the node creation record earlier in the same function |
+| the node gate is `+0x1c` bit `0x20` set and `0x40` clear | check 10: `0x142024fee`/`0x142024ff2`/`0x142024ffb` |
+| the component's table is a folded base interface | check 10: `dev/rip_refs.py 0x142f7d320` -> 6 code sites (sizes `0x38`/`0x58`/`0x68`/`0x78`/`0xd8` plus the ctor `0x141c58170`) and 162 stubs (0 `.pdata`) copying it into globals; 0 eight-byte pointers |
+| the component's virtuals run 0x20 bytes into the object | check 10: `0x142019916` passes `this - 0x20`; `[this+0x230]`/`[this+0x400]`/`[this+0x470]` correspond to `[object+0x250]`/`[object+0x420]`/`[object+0x490]` in `FUN_142024d30` |
+| the world-slot codec round-trips, and the empty slot is a null world | `domino_world::tests::{the_two_addends_are_inverses_modulo_2_pow_64, the_world_pointer_round_trips_bit_exactly, the_empty_slot_is_the_encoding_of_a_null_world}` |
+| the body handle packs slot/generation/index and the invalid one is `0xffff_0000_ffff_ffff` | `domino_world::tests::{the_body_handle_is_slot_then_generation_then_index, the_invalid_body_handle_is_ffff_0000_ffff_ffff, the_slot_bound_is_strictly_below_0x3fff, the_body_pool_is_0x1c0_per_index}` |
+| the range's props against the gate | **not tested**: the four gate bits are runtime node/entity state, not asset data (check 10's table) |

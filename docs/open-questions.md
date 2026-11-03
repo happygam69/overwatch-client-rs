@@ -1165,6 +1165,34 @@ the descriptor's bounds/filter/`+0x5c..+0x62` sources (documented, not
 converted). No runtime body count has been observed — everything above is the
 plan from the install's bytes plus the read filter.
 
+**Round 7 (2026-11-02): the owner id is a Domino world slot.** `0x14202f800`
+(no-`.pdata` leaf) returns the `u16` at `[[node+0x620]+0x31f8]`;
+`OwnerCreateBody` (`0x142cc3d90`) rejects `>= 0x3fff` and the empty slot, decodes
+`(*(u64*)(0x1442a0bc0 + id*8) + 0xb3269b88d44d5fb2) ^ 0x77600ba5adcc265c`, and
+allocates in `[world+0x288]` at stride `0x1c0`. That is exactly the sweep's
+handle decode (check 7). The world allocator `0x142cc3c80` stores the inverse,
+and the two constant sums are 0 mod 2^64, so the empty slot is `encode(0)` —
+`ow_tank::domino_world` (7 tests). A node allocates **two worlds** per
+`0x14202c660` (`+0x31f8`/`+0x31fa`) and creates its own static body from
+`+0x31f8` at `0x14202d268` (handle at `+0x31fc`), so per-model bodies are
+siblings of the node's own body in the node's world.
+
+**The attachment gate, read field by field:** `[node+0x454]` bit `0x200` (copied
+from the node creation record's `+0x10`; without it the node has no `+0x620`
+record, hence no id), pending node `+0x490` promoted to `+0x250`, node `u16` at
+`+0x1c` with bit `0x20` set and bit `0x40` clear, `[node+0xe8]` model object with
+`+0x84` bit `0x80`, `[second+0x242]` bit 7 clear, and model `+0x28` non-null.
+**None of these is model-asset data**, so whether the range's placed props pass
+is the unread node-creation record — not a data test. That is stated, not faked.
+
+**Open (one place):** which class allocates the component and pairs it with a
+node — its interface table `0x142f7d320` is COMDAT-folded (shared base, no RTTI,
+no self-pointer; the interface `this` is 0x20 past the worker object), and the
+node-binding entry `FUN_142017010` (12 `E8` callers) takes eight arguments from
+an unread table. Also: whether the character's own handle
+(`[controller+0x1ad8]`) names the same world slot. Descriptor bounds/filter
+fields remain documented, not converted.
+
 ---
 
 ## 7. Domino schema and integration in the current image

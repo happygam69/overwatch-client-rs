@@ -3,6 +3,23 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the per-model body's owner is a Domino world slot
+
+- `0x14202f800` returns `[[node+0x620]+0x31f8]` (a `u16`); `OwnerCreateBody`
+  decodes it through `0x1442a0bc0` and the same addends/XOR as the character
+  sweep, rejecting `>= 0x3fff`. The world allocator's inverse makes the empty
+  slot exactly `encode(0)`; `ow_tank::domino_world` (7 tests) pins both.
+- `0x14202c660` allocates two worlds per node (`+0x31f8`/`+0x31fa`) and creates
+  the node's own static body from `+0x31f8` at `0x14202d268`; per-model bodies
+  are siblings of it in the node's world.
+- The attachment gate is read field by field (`+0x454` bit `0x200`, `+0x1c`
+  bits `0x20`/`0x40`, model `+0x84` bit `0x80`, `+0x242` bit 7) and is **runtime**
+  data, so whether the range's props pass is not decidable from assets; that is
+  stated as not tested, not faked.
+- Open: which class allocates the component (interface table `0x142f7d320` is a
+  COMDAT-folded shared base) and whether the character's own handle names the
+  same world slot.
+
 ## 2026-11-02 - collision is built per model instance, and it is live
 
 - The per-model body builder is **`0x14201ae60..0x14201c887`** (a six-entry

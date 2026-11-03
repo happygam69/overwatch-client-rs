@@ -98,10 +98,22 @@ missing is **data, not code** — and the two producers are both blocked:
   install test `model_body_real`): for the range, 163 of 229 models carry a
   holder list, 279 holders, 272 mesh blocks, and **all 272 mesh holders become
   type-3 mesh shapes** (mask all ones, filter byte and shape mode at the class
-  default 0). **Open:** which nodes receive the component (its interface table
-  `0x142f7d320` has no RTTI or self-pointer), whether the range's static props
-  receive it, and whether that owner is the world `RunCharacterControllerSweep`
-  uses; the descriptor's bounds/filter fields are documented but not converted.
+  default 0). The owner id is **settled as a Domino world slot**: `0x14202f800`
+  returns the `u16` at `[[node+0x620]+0x31f8]`, `OwnerCreateBody` decodes it
+  through the same table/addends/XOR as the sweep (`0x1442a0bc0`, bound
+  `0x3fff`), and the encoding's inverted constant makes the empty slot exactly
+  `encode(0)` (verified: the addends sum to 0 mod 2^64; `ow_tank::domino_world`,
+  7 tests). A node allocates **two worlds** (`0x14202c660`, `+0x31f8`/`+0x31fa`)
+  and creates its own static body from `+0x31f8` at `0x14202d268`, so a per-model
+  body is a sibling of the node's own body in the node's world.
+  **Open:** which class allocates the component (its interface table `0x142f7d320`
+  is a COMDAT-folded shared base: no RTTI, no pointer to itself, and both the
+  interface `this` and the worker object are 0x20 apart), whether a placed node
+  passes the attachment gate (`[node+0x454]` bit `0x200` from the node creation
+  record, node `u16 +0x1c` bits `0x20` set / `0x40` clear, model object `+0x84`
+  bit `0x80`, `+0x242` bit 7 clear), and whether the character's own handle names
+  the same world slot. The descriptor's bounds/filter fields are documented but
+  not converted.
   The chunk's own consumer is not RVA-dispatch reachable (277 tables, 0 hits).
   The type-`0x00A` absence affects only the other brush source, not this route.
 

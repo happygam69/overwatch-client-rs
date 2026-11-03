@@ -27,6 +27,7 @@ pub mod classreg;
 pub mod clip;
 pub mod cloth;
 pub mod collision;
+pub mod domino_world;
 pub mod effect;
 pub mod entity;
 pub mod fieldnames;
