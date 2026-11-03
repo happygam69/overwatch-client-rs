@@ -46,9 +46,18 @@ def load_image() -> bytes:
 
 
 def hits(code: bytes, opcode: int, want: int) -> list[int]:
-    """Offsets of `mov r/m, r` / `mov r, r/m` (32- or 64-bit) with disp32 == want."""
+    """Offsets of `mov r/m, r` / `mov r, r/m` with a displacement equal to `want`.
+
+    A displacement below `0x80` assembles as a sign-extended **disp8** (mod = 1),
+    not disp32, so both encodings must be scanned: reading only mod = 2 reports
+    zero stores for every small offset such as `+0x48`. RIP-relative (mod = 0,
+    rm = 5) and SIB-only forms are not register+disp and are not matched.
+    Immediate stores (`mov [mem], imm`) use a different opcode and are not
+    scanned, so this is a targeted lookup, not a complete census.
+    """
     out = []
     n = len(code)
+    fits_disp8 = -0x80 <= want <= 0x7F
     # 64-bit forms carry REX.W; 32-bit forms (`mov [rdi+0x114], eax`) do not, and
     # the counters in these structures are 32-bit, so both must be scanned.
     for prefix in tuple(bytes((r,)) for r in REX) + (b"",):
@@ -59,12 +68,15 @@ def hits(code: bytes, opcode: int, want: int) -> list[int]:
             if at < 0:
                 break
             modrm = code[at + len(prefix) + 1]
-            if modrm >> 6 == 2:  # mod = disp32
-                disp_at = at + len(prefix) + 3 if modrm & 7 == 4 else at + len(prefix) + 2
-                if disp_at + 4 <= n:
-                    disp = int.from_bytes(code[disp_at : disp_at + 4], "little", signed=True)
-                    if disp == want:
-                        out.append(at)
+            mod = modrm >> 6
+            # The displacement follows modrm (+ SIB when rm = 4) in both forms.
+            disp_at = at + len(prefix) + 3 if modrm & 7 == 4 else at + len(prefix) + 2
+            if mod == 1 and fits_disp8 and disp_at + 1 <= n:
+                if int.from_bytes(code[disp_at : disp_at + 1], "little", signed=True) == want:
+                    out.append(at)
+            elif mod == 2 and disp_at + 4 <= n:
+                if int.from_bytes(code[disp_at : disp_at + 4], "little", signed=True) == want:
+                    out.append(at)
             at += 1
     return out
 

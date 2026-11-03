@@ -16,7 +16,11 @@
 
 pub mod assoc;
 pub mod blendtree;
+pub mod brush;
+pub mod brush_convert;
+pub mod brush_mesh;
 pub mod bundle;
+pub mod chunkkind;
 pub mod chunks;
 pub mod classes;
 pub mod classreg;

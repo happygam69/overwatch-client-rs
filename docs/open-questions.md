@@ -798,8 +798,160 @@ primitive side — `0x142cec9e0` / `0x142ced620` / `0x142ced990` / `0x142ceca00`
 None of those four is read yet, and the 17-array container's consumer stays an
 open stage per the hard rule.
 
-**Next anchor.** `formats/character-controller.md` ("Collision"),
-`formats/maps.md`.
+**Round 3: the cell consumer (2026-11-02, census corrected).** The first version
+of this paragraph said the component's class was "streamed, never queried" and
+that the decoder was open "by absence". That conclusion is **withdrawn**: it
+rested on Ghidra's caller metadata, which is incomplete for this image
+(`ghidra-project.md`: `.pdata` entries chain and fragment, and undefined
+regions hide call sites). Ghidra reported 3 callers for `ShapeAddToBody`
+(`0x142cb3940`) where a verified `E8 rel32` scan finds **27** sites in 13
+functions, and the "two functions read `+0x10`/`+0x58`/`+0x68` and call both
+builders" claim was simply wrong (`0x14208d010`/`0x142090e00` call neither;
+`0x14208d109`/`0x1420919b7` hold those sites and their `+0x58`/`+0x68`
+operands are `f32` radii, not 16-byte array headers).
+
+What the corrected census *does* establish: for `ShapeAddToBody`,
+`OwnerCreateBody`, `ShapeAddToOwner`, `ShapeEntryFromDescriptor` and
+`MeshShapeFill` the union of Ghidra's callers and the verified scan is 28
+producing functions (27/17/1/2/5 sites), and **none of them calls
+`StuLoadSubAssets`, none loads a qword from `+0x60` (the chunk work record's
+payload field), and none reads the component's `{pointer, mode}` headers** —
+the only qword read at `+0x68` is `ShapeEntryFromDescriptor`'s own descriptor
+field. The whole-copy route is checked too: image-wide there is exactly one
+`memcpy(…, 0x78)` among 8 923 `memcpy`/`memmove` call sites
+(`0x142402824` in `FUN_142401de0`) and it copies a diagnostic string fragment.
+Table and evidence: `formats/maps.md`, "The cell path's consumer: open". The
+byte-level fact that stands is narrow: the `STUD` magic `0x53545544` is
+mentioned only by the loader `StuLoadSubAssets` (`0x1421d26d0`) and the writer
+`FUN_1421d2ab0`.
+
+So the decoder is **open**: a reader that builds no shape through those five
+handles, or one reached through a route this census does not enumerate, is not
+excluded. The three anchors named here were then read (2026-11-02): `0x1420c63b0`
+consumes a `0x38`-stride node/transform record array at `[owner+0xd0]` plus a
+`0x20`-stride transform-handle array at `[owner+0xe0]`; `0x140c2813f` fills its
+mesh from a **brush collider** (`ColliderMeshEmit`); `0x142078562` computes a
+box from a **stored mesh source's bounds** (`0x142cae600`) into a `0x58`-stride
+record; `0x1420a02f6` is a **mesh-source assembler** over the owner's
+descriptor container at `+0x140`/`+0x148`, indexing `0x60`- and `0x40`-stride
+arrays; and `0x142cdf9f2` appends `0x40`-byte entries to the **Domino owner's
+body vector** and calls the handle setter `0x142cb4f20`. None of the five
+touches a chunk payload or a `0x9199BF6B` field, and **none is reachable**: no
+`E8`/`E9`, no immediate, no 8-byte pointer, and no obfuscated-pointer encoding
+of any of their addresses exists in the image — their only references are the
+`.pdata`-copy and code-range tables that every function start has
+(`ShapeAddToBody` carries one of those too, beside its 27 call sites). So the
+chunk path is neither opened nor closed by them; the single next reader is the
+**producer of the owner's mesh-descriptor container at `+0x140`/`+0x148`**
+(`formats/maps.md`, "The three next readers").
+
+**Round 4: the brush route, and the chunk labels (2026-11-02).** The second
+producer is now read from the node down and implemented where the reads allow:
+
+* `GeometryBuild` (`0x14213c440`) resolves the node's model
+  (`geometry+0x80` → `[node+0x38]` → `[+0x40]` → `[+0x48]` = `C`, the model's
+  collision descriptor) and builds the brush **at runtime** from `C`'s instance
+  points; the four "leaf builders" are not a loader: `0x142cec9e0` header init,
+  `0x142ceca00` mesh-struct init, `0x142ced620` the ring builder (1/400 units,
+  mask `{1,1,0,0}`, `roundf`), `0x142ced990` the edge list, `0x142ced510` the
+  vertex decoder.
+* Records read and implemented in `ow_tank::brush` (11 units): brush `0x20`,
+  vertex `0x20` `{i64 x, i64 y, i64 divisor, u32 index}` with
+  `position = (x/divisor) * 0.0025`, node `0x28`, ring walk `+0x04`, next ring
+  `+0x10`. Every arithmetic expectation is the client's own output:
+  `dev/brush_vertex_oracle.py` executes `0x142ced510` and `0x142ced620` under
+  the emulator (bump-allocator stub at the hook word `0x1442a0158`) and the
+  tests pin those bits.
+* `BrushTreeToMesh` (`0x142cf23c0`) is read to its per-node **six-op**
+  classification; the op bodies and the triangle emission are **open**, so no
+  brush→mesh conversion is implemented. `MeshToColliderFaces` (`0x142cf2010`)
+  is read and already implemented (`ow_sim::collider::shell`).
+* **The install has no brush asset.** The content manifests this install opens
+  carry **0** records of GUID type `0x00A` (1,425,794 records, 177 types;
+  1,514,352 with `WinPrism_` forced), while `0x00C`/`0x00D` are populated;
+  300 model assets' chunk tags are `MDLC/MRNM/MSTU/MESD/mskl/CLTH`, no brush
+  container. Pinned by `crates/ow-tank/tests/brush_real.rs`. So the format is
+  read but no instance of it is reachable from this install yet: `C`'s class
+  and the `+0x98`/`+0xa0` inline-singleton-vs-array encoding are the next read,
+  together with whether type-`0x00A` assets are synthesised.
+
+**The chunk labels are read now, and they were inverted (2026-11-02).** The
+kind table `0x1439aa320` and its name decoder `0x1404c19b0` were read (length =
+low 24 bits of the dword at `name-4`, key = eight bytes at `name-0xC`, byte `i`
+XORed with `key[i & 7]`; all 36 names decode, and the eight placeable names the
+project already knew come out exactly). The answer:
+
+| kind | slot | name |
+|---|---|---|
+| `0x11` | `0x1D` | `MAP_CHUNK_COLLISION` |
+| `0x12` | `0x1E` | `MAP_CHUNK_PATHING` |
+| `0x10` | `0x21` | `teMAP_CHUNK_ADDITIVE_COLLISION` |
+| `0x23` | `0x22` | `teMAP_CHUNK_ADDITIVE_PATHING` |
+
+The per-slot dispatch agrees: the two collision kinds are the two sent to
+`FUN_142e492a0` (slots `0x1D`/`0x21`), the two pathing kinds are the two sent
+to `StuLoadSubAssets` + `MapChunkCellBytesFixup` (`0x1E`/`0x22`). So the
+220-cell `STU_9199BF6B` container this project spent two sessions on is the
+**pathing** chunk, which explains why the 28-function producer census found no
+reader for it: a client-side pathing consumer need not exist. The container and
+fixup reads stand; only the label was wrong.
+
+The **collision** chunk is `0x0DD0001100000688` (21,858,688 bytes). Its
+container is read and implemented (`ow-tank::chunkkind`, 7 tests):
+header `count_a` at `+0x08` (36) and `count_b` at `+0x0C` (1), array A
+`0x58`-stride at `+0x20` (`0x14D3810`), array B `0x38`-stride at `+0x28`
+(`0x14D8948`), the in-place fixup `FUN_142e492a0` (header null-preserving,
+element qwords unconditional), and a per-sector tiling over four runs
+(`12 B × c0`, `1 B × c1`, `16 B × c1`, `4 B × c2`, counts at
+`+0x2C`/`+0x30`/`+0x34`) that holds for all 36 sectors.
+
+**The collision consumer is the open link, and it is now specific: who fills
+the Domino shape-entry pool at `[record+0x2b8]`.** The dispatch only fixes the
+payload up, the handoff `FUN_141fe37a0` stores it at `work+0x60`, the fixup is
+called only from `FinishMapChunkAsset`, and no function in the producer census
+sees a sector array. One earlier claim needs correcting: `BuildBvh`
+(`0x142ccb1b0`) is **not** callerless — a verified `E8` scan finds five call
+sites in three functions (`0x142cca7d9`, `0x142ccb2db`, `0x142ccbc1c`), so the
+collider builder is reachable and its callers are candidates.
+
+Full detail: `formats/chunk-kinds.md`, `formats/maps.md` ("Which chunk kind is
+which: read", "The pathing container's consumer: open") and
+`formats/brush-collision.md`.
+
+**Round 5: the shape pools are enumerated (2026-11-02).** The world record's
+pool table is read (`DmWorldConstruct 0x142cbeb70`: eight records at
+`+0x288 + 0x18*i`, `{ptr, used, cap, high, free}`; shape entries are index 2 →
+`+0x2b8`, element `0xc0`). A verified store census (119,802 decoded function
+groups, with the `-1` free-head sentinel as the discriminator) finds the only
+writers are construct, clear and reset; the pool **contents** can only be
+created through `ShapeAddToBody`/`ShapeAddToOwner` → `ShapeEntryFromDescriptor`.
+Every caller of those that appends collision material is a brush-mesh producer
+(`0x142136010` one caller `GeometryBuild`; `0x1421360a0` two, both brush;
+`BrushTreeToMesh`'s four callers are the four appenders). So the collision
+chunk is **not** the Domino shape source; the only loophole is an inline
+appender that no decoded store shows. `BuildBvh`'s three callers are split
+wrappers over the collider-face array and all unreachable; "a sector reader must
+end in a BVH" is false.
+
+With the chunk excluded, the live producer is the **brush**, and its
+tree→mesh walk is now read and implemented: the hull stage, the status tree
+(insert fixup, erase + rebalance, both rotations), the six ops, the ear
+predicate from the `SHUFPS` immediates, the clipping tail and the face writer
+are in `ow_tank::brush_mesh` / `brush_convert` (24 tests). The client's own
+code was run end to end under the emulator and **three of four** meshes
+reproduce bit for bit; the five-point arrow diverges because the client's ear
+list is empty after the tag pass and it takes the last-three fan, while the
+port tags three ears — a `< 0` vs `<= 0` on a collinear reflex tip, isolated
+and **open**. Faults are refused, never approximated: a clockwise ring and a
+two-node ring (both at `0x142cf265f`), the two-ring allocation at
+`0x142cf0b6b`, and the `+0x58 == 0` variant.
+
+`C`'s instance encoding is read (`+0xa0 == 1` ⇒ `{points, count}`, otherwise
+`{count, points}`); **its class is open**, and the producer census narrowed to
+five `+0x186` sites, one of which (`0x14208edf6..0x14209087f`) builds `C`'s
+collision-parameter block. Next reads: the arrow's tag-test strictness; who
+fills `C+0x98` of that object; then the client wiring. `formats/brush-mesh.md`
+carries the detail.
 
 ---
 

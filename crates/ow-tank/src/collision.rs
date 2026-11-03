@@ -1,4 +1,10 @@
-//! The collision chunk's cell container and the client's runtime cell fixup.
+//! The **pathing** chunk's cell container and the client's runtime cell fixup.
+//!
+//! The name is historical: when this module was written the 220-cell container
+//! was believed to be the collision chunk. The kind table and its name decoder
+//! (read 2026-11-02, `docs/formats/chunk-kinds.md`) show kind `0x12`
+//! `MAP_CHUNK_PATHING`; the collision chunk is kind `0x11` and is read in
+//! `ow_tank::chunkkind`.
 //!
 //! The map's kind-`0x12` chunk carries one `STU_9199BF6B` component instance
 //! (class hash `0x9199BF6B`, size `0x78`) whose fourth field at `+0x68` is
@@ -21,9 +27,17 @@
 //! loader converts the file's entries before this pass runs. The differential
 //! unit `fn/MapChunkCellBytesFixup` pins the non-allocating paths.
 //!
+//! The same instance's other two array-bearing fields are read by [`tables`]:
+//! the nested array inside the field at `+0x08` and the array field at
+//! `+0x58`. The three arrays plus the cell table tile the blob with no gap,
+//! and each element stride follows from that tiling by exact division, so no
+//! stride is assumed. What the elements *mean* is not read, and the record
+//! conversion is not in this module.
+//!
 //! This is the ingest's container stage. It does **not** turn cells into
-//! collision shapes: the cell-to-shape decoder is still open
-//! (`docs/open-questions.md` item 6).
+//! collision shapes: the cell-to-shape decoder has no reader in the image
+//! (`docs/formats/maps.md`, "The cell path's consumer is not in the image"),
+//! so it stays open (`docs/open-questions.md` item 6).
 
 use std::fmt;
 
@@ -61,6 +75,9 @@ pub enum Error {
     FirstArrayTooLow { cell: usize, value: u64 },
     /// The cells do not tile the block list (a gap or an overlap).
     NotTiled { cell: usize },
+    /// A v1 array's elements do not divide its span exactly, so the tiling
+    /// that gives the element stride does not hold.
+    ArrayNotTiled { field: usize, count: u32, span: u64 },
 }
 
 impl fmt::Display for Error {
@@ -89,6 +106,10 @@ impl fmt::Display for Error {
                 )
             }
             Error::NotTiled { cell } => write!(f, "cell {cell} does not tile the block list"),
+            Error::ArrayNotTiled { field, count, span } => write!(
+                f,
+                "the array at field {field:#x} does not tile: {count} elements over {span:#x} bytes"
+            ),
         }
     }
 }
@@ -149,12 +170,13 @@ pub struct Cells<'a> {
     pub cells: Vec<Cell<'a>>,
 }
 
-/// Read the collision chunk payload's single component and its cells.
+/// Locate the payload's single `STUD` blob and its component instance.
 ///
-/// The payload's own container header supplies the first blob's RVA; the blob's
-/// v1 record table supplies the instance offset; the component's `+0x68` field
-/// supplies the cell header. Every offset is relative to the blob start.
-pub fn parse(payload: &[u8]) -> Result<Cells<'_>, Error> {
+/// Returns the blob's offset in the payload, the blob itself and the
+/// instance's offset inside the blob. The checks are the client's: the v1
+/// magic, exactly one record, a positive record offset, and the component's
+/// class hash.
+fn locate(payload: &[u8]) -> Result<(usize, &[u8], usize), Error> {
     if payload.len() < 0x20 {
         return Err(Error::Truncated("the chunk's container header"));
     }
@@ -186,6 +208,16 @@ pub fn parse(payload: &[u8]) -> Result<Cells<'_>, Error> {
     if class != COMPONENT_CLASS {
         return Err(Error::WrongClass(class));
     }
+    Ok((blob_rva, blob, instance))
+}
+
+/// Read the collision chunk payload's single component and its cells.
+///
+/// The payload's own container header supplies the first blob's RVA; the blob's
+/// v1 record table supplies the instance offset; the component's `+0x68` field
+/// supplies the cell header. Every offset is relative to the blob start.
+pub fn parse(payload: &[u8]) -> Result<Cells<'_>, Error> {
+    let (blob_rva, blob, instance) = locate(payload)?;
 
     // `m_cellBytes` is a v1 array field: a container-relative offset to a
     // `{u32 count; u32 pad; u32 data_offset}` header.
@@ -310,10 +342,163 @@ pub fn parse(payload: &[u8]) -> Result<Cells<'_>, Error> {
     Ok(Cells {
         blob_offset: blob_rva,
         instance,
-        class,
+        class: COMPONENT_CLASS,
         count,
         data_offset,
         cells,
+    })
+}
+
+/// The offset of the array field inside the 40-byte field at `+0x08`.
+///
+/// The reference registry names the field at `+0x08` (hash `0x81DEFC98`, 40
+/// bytes inline); the loader converts the pointer it holds at `+0x10` and the
+/// component's destructor (`0x140f8f310`, `CollisionChunkComponentDtor`)
+/// releases exactly that sub-object, so `+0x10` is where the nested array
+/// lives.
+pub const NESTED_FIELD_OFFSET: usize = 0x10;
+/// The array field at `+0x58` (reference hash `0x9DBA1F4E`).
+pub const ARRAY_FIELD_OFFSET: usize = 0x58;
+
+/// One `{u32 count; u32 pad; u32 data_off}` v1 array header reached from a
+/// component field, with its element stride.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArrayHeader {
+    /// The field's offset inside the component instance.
+    pub field: usize,
+    /// The header's container-relative offset.
+    pub header_offset: u64,
+    /// The element count.
+    pub count: u32,
+    /// The first element's container-relative offset.
+    pub data_offset: u64,
+    /// The element stride. **Derived**, not read: the array runs from
+    /// [`ArrayHeader::data_offset`] to the next structure's header, and the
+    /// stride is that span divided by the count. A span that does not divide
+    /// exactly is rejected ([`Error::ArrayNotTiled`]), so this value is never
+    /// guessed.
+    pub stride: u64,
+}
+
+impl ArrayHeader {
+    /// One past the last element.
+    pub fn end(&self) -> u64 {
+        self.data_offset + u64::from(self.count) * self.stride
+    }
+}
+
+/// The collision component's three array-bearing fields.
+///
+/// The arrays, in payload order, tile the blob with no gap: the nested array,
+/// then the field at `+0x58`, then the cell table, then the first cell. The
+/// practice range's payload places them at `0x98`, `0x2358` and `0x2428`, with
+/// element strides `0x28`, `0x20` and `0x10`.
+///
+/// What the elements mean is **not** read: no client code reads any of these
+/// arrays (`docs/formats/maps.md`), so this is the container only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tables {
+    /// The first `STUD` blob's offset in the payload.
+    pub blob_offset: usize,
+    /// The component instance's offset inside the blob.
+    pub instance: usize,
+    /// The array nested in the 40-byte field at `+0x08`.
+    pub nested: ArrayHeader,
+    /// The array field at `+0x58`.
+    pub array: ArrayHeader,
+    /// The `m_cellBytes` array field at `+0x68`.
+    pub cell_bytes: ArrayHeader,
+}
+
+fn read_header(blob: &[u8], at: u64) -> Result<(u32, u64), Error> {
+    let at = usize::try_from(at).map_err(|_| Error::OutOfRange {
+        cell: 0,
+        what: "an array header",
+        value: at,
+    })?;
+    let count = rd_u32(blob, at)?;
+    let data_offset = rd_u32(blob, at + 8)? as u64;
+    if data_offset > blob.len() as u64 {
+        return Err(Error::OutOfRange {
+            cell: 0,
+            what: "an array's data offset",
+            value: data_offset,
+        });
+    }
+    Ok((count, data_offset))
+}
+
+/// Derive one array's header and stride from the tiling.
+fn tiled(
+    blob: &[u8],
+    field: usize,
+    header_offset: u64,
+    next_start: u64,
+) -> Result<ArrayHeader, Error> {
+    let (count, data_offset) = read_header(blob, header_offset)?;
+    if data_offset > next_start {
+        return Err(Error::OutOfRange {
+            cell: 0,
+            what: "an array's data offset",
+            value: data_offset,
+        });
+    }
+    let span = next_start - data_offset;
+    let stride = if count == 0 {
+        0
+    } else {
+        if span % u64::from(count) != 0 {
+            return Err(Error::ArrayNotTiled { field, count, span });
+        }
+        span / u64::from(count)
+    };
+    Ok(ArrayHeader {
+        field,
+        header_offset,
+        count,
+        data_offset,
+        stride,
+    })
+}
+
+/// Read the component's three array fields and derive their element strides
+/// from the exact tiling of the blob.
+///
+/// The stride derivation is the only claim this function makes beyond the
+/// header form: each array's data must end exactly where the next structure
+/// begins. That is checked, and a span that does not divide by the count is an
+/// error rather than a rounded value. Nothing here is a read expression from
+/// the client's code: the header form is shared with the verified `m_cellBytes`
+/// field and the tiling is observed in the payload.
+pub fn tables(payload: &[u8]) -> Result<Tables, Error> {
+    let (blob_offset, blob, instance) = locate(payload)?;
+    let header = |field: usize| -> Result<u64, Error> { rd_u64(blob, instance + field) };
+    let nested_header = header(NESTED_FIELD_OFFSET)?;
+    let array_header = header(ARRAY_FIELD_OFFSET)?;
+    let cell_header = header(CELL_FIELD_OFFSET)?;
+
+    // The cell entries are `{u64 cell_off; u64 0}`; the first entry is the
+    // first cell, which is where the cell array ends.
+    let (_, cell_data) = read_header(blob, cell_header)?;
+    let first_cell = rd_u64(
+        blob,
+        usize::try_from(cell_data).map_err(|_| Error::OutOfRange {
+            cell: 0,
+            what: "the cell data offset",
+            value: cell_data,
+        })?,
+    )?;
+
+    // Each array must end exactly where the next structure's header begins.
+    let nested = tiled(blob, NESTED_FIELD_OFFSET, nested_header, array_header)?;
+    let array = tiled(blob, ARRAY_FIELD_OFFSET, array_header, cell_header)?;
+    let cell_bytes = tiled(blob, CELL_FIELD_OFFSET, cell_header, first_cell)?;
+    Ok(Tables {
+        blob_offset,
+        instance,
+        nested,
+        array,
+        cell_bytes,
     })
 }
 
@@ -667,6 +852,99 @@ mod tests {
         assert_eq!(
             fixup_cell_bytes(&mut mem, header),
             Err(FixupError::OutOfBounds(BASE + 0x1008))
+        );
+    }
+
+    /// A payload whose three arrays tile the blob: the nested array at `0x98`
+    /// with two `0x28` elements, the `+0x58` array at `0x160` with two `0x20`
+    /// elements, the cell table at `0x1B0` with three `0x10` elements, and the
+    /// first cell at `0x1F0`.
+    fn synthetic_tables_payload() -> Vec<u8> {
+        const BLOB: usize = 0x20;
+        let mut p = vec![0u8; BLOB + 0x200];
+        p[0..8].copy_from_slice(&(BLOB as u64).to_le_bytes());
+        let blob = &mut p[BLOB..];
+        blob[0..4].copy_from_slice(&ow_stu::MAGIC_V1);
+        blob[4..8].copy_from_slice(&1u32.to_le_bytes());
+        blob[8..12].copy_from_slice(&0x20i32.to_le_bytes());
+        let inst = 0x20;
+        blob[inst..inst + 4].copy_from_slice(&COMPONENT_CLASS.to_le_bytes());
+        // Each field holds the container-relative offset of its header.
+        for (field, header) in [
+            (NESTED_FIELD_OFFSET, 0x100u64),
+            (ARRAY_FIELD_OFFSET, 0x160),
+            (CELL_FIELD_OFFSET, 0x1B0),
+        ] {
+            blob[inst + field..inst + field + 8].copy_from_slice(&header.to_le_bytes());
+        }
+        for (header, count, data) in [
+            (0x100usize, 2u32, 0x110u32),
+            (0x160, 2, 0x170),
+            (0x1B0, 3, 0x1C0),
+        ] {
+            blob[header..header + 4].copy_from_slice(&count.to_le_bytes());
+            blob[header + 8..header + 12].copy_from_slice(&data.to_le_bytes());
+        }
+        // The cell table's first entry is the first cell's offset.
+        blob[0x1C0..0x1C8].copy_from_slice(&0x1F0u64.to_le_bytes());
+        p
+    }
+
+    #[test]
+    fn tables_derive_their_strides_from_the_tiling() {
+        let payload = synthetic_tables_payload();
+        let t = tables(&payload).expect("the synthetic tables tile");
+        assert_eq!(t.blob_offset, 0x20);
+        assert_eq!(t.instance, 0x20);
+        assert_eq!(
+            t.nested,
+            ArrayHeader {
+                field: NESTED_FIELD_OFFSET,
+                header_offset: 0x100,
+                count: 2,
+                data_offset: 0x110,
+                stride: 0x28,
+            }
+        );
+        assert_eq!(
+            t.array,
+            ArrayHeader {
+                field: ARRAY_FIELD_OFFSET,
+                header_offset: 0x160,
+                count: 2,
+                data_offset: 0x170,
+                stride: 0x20,
+            }
+        );
+        assert_eq!(
+            t.cell_bytes,
+            ArrayHeader {
+                field: CELL_FIELD_OFFSET,
+                header_offset: 0x1B0,
+                count: 3,
+                data_offset: 0x1C0,
+                stride: 0x10,
+            }
+        );
+        assert_eq!(t.nested.end(), 0x160);
+        assert_eq!(t.array.end(), 0x1B0);
+        assert_eq!(t.cell_bytes.end(), 0x1F0, "the first cell");
+    }
+
+    /// A span that does not divide by the count is refused: the tiling is the
+    /// only thing that gives the stride, so there is nothing to fall back on.
+    #[test]
+    fn tables_refuse_a_span_that_does_not_divide() {
+        let mut payload = synthetic_tables_payload();
+        // Three elements over the same `0x50` span: 0x50 / 3 is not integral.
+        payload[0x20 + 0x100..0x20 + 0x104].copy_from_slice(&3u32.to_le_bytes());
+        assert_eq!(
+            tables(&payload),
+            Err(Error::ArrayNotTiled {
+                field: NESTED_FIELD_OFFSET,
+                count: 3,
+                span: 0x50,
+            })
         );
     }
 }

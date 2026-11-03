@@ -65,8 +65,8 @@ at
 (`config+0x20 * 4` bytes). Then it writes each pool's **free chain**: for the
 bodies, `body[i] + 0x00 = i + 1` for `i < count-1` and `-1` at the last
 (`0x142cbed50..0x142cbed85`), with the same shape for the other seven.
-`0x142cc054f` is the destructor: it frees each pointer and resets
-`{0, 0, 0, -1}`.
+The destructor's group starts at `0x142cc04f0` (`0x142cc054f` is inside it):
+it frees each pointer and resets `{0, 0, 0, -1}`.
 
 **The fixture record**, stride `0xc0` (`index*3 << 6`):
 

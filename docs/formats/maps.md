@@ -712,14 +712,20 @@ for one map GUID; a proximity list is not a substitute.
 
 ## Collision
 
-The map ships collision chunks (`MAP_CHUNK_COLLISION` kind `0x12`,
-`teMAP_CHUNK_ADDITIVE_COLLISION`). The client draws the visual mesh only;
-there is no character collision implementation.
+The map ships collision chunks kind `0x11` (`MAP_CHUNK_COLLISION`) and kind
+`0x10` (`teMAP_CHUNK_ADDITIVE_COLLISION`); pathing is kind `0x12`
+(`MAP_CHUNK_PATHING`) and `0x23` (additive). That mapping is now **read** from
+the client's own kind table and its name decoder — full evidence in
+`formats/chunk-kinds.md`. Consequently the 220-cell container recorded below is
+the **pathing** chunk; until 2026-11-02 this file called it the collision chunk,
+and that label is corrected in place here but not rewritten throughout, so read
+"collision chunk" in the older paragraphs as "pathing chunk". The client draws
+the visual mesh only; there is no character collision implementation.
 
-### The collision chunk payload (2026-11-01)
+### The pathing chunk's container: 220 cells (2026-11-01; kind corrected 2026-11-02)
 
-The practice range's collision chunk `0x0DD0001200000688` is **8,792,256**
-bytes (`0x8628C0`) and is the base map's `+0x1C0` reference. Read as data, it
+The practice range's pathing chunk `0x0DD0001200000688` (kind `0x12`, the
+base map's `+0x1C0` reference) is **8,792,256** bytes (`0x8628C0`). Read as data, it
 is a self-describing container, not a flat mesh:
 
 ```text
@@ -964,6 +970,18 @@ So `+0x108` is `{data, cap @ +0x110, count @ +0x114}` and `+0x118` is
 `{data, cap @ +0x120, count @ +0x124}` — the counts sit **inside** the header,
 not at `+0x100`/`+0x110` as the earlier note guessed.
 
+**Correction (2026-11-02).** The step-4 text below is superseded: the ingest
+appends **one `0x100`-byte entry** to `geometry+0x118` through `0x1421360a0`
+(the `0x100` appender; `0x14213a510` calls it at `0x14213aadc`), and fills that
+entry through `+0xf0` (stores at `+0xa0`, `+0xb0`, `+0xd0`, `+0xf0`). The
+`0x60`-byte entries belong to `GeometryBuild`: `0x142136010`, the `0x60`
+appender, has exactly one caller, `0x14213c924`. So "one `0x60` entry per
+snapshot record" and `MeshToColliderFaces(entry+0x20, …)` are withdrawn; the
+entry's own fill offsets past the stores above are **open** (the old `+0x20`
+mesh-source offset is not re-read). The `0x100` appender has **two** callers,
+this ingest and `0x14213acf0` (`0x14213b00c`), both brush. Detail:
+`formats/shape-ingest.md`.
+
 `AppendCollisionEntryFromBrushSource` (`0x14213a510`, 2011 bytes) is the brush
 ingest, read end to end. Given a source index it:
 
@@ -1017,7 +1035,7 @@ attack:
    helper `FUN_1421360a0` (19 bytes) grows `capacity += capacity>>1` (minimum 2)
    with a `capacity << 8` allocation, copies `count << 8` bytes, and returns
    `count * 0x100 + base`;
-3. that helper has **exactly one caller**, `AppendCollisionEntryFromBrushSource`.
+3. that helper has **two** callers, both brush source ingests: `AppendCollisionEntryFromBrushSource` (`0x14213aadc`) and `0x14213acf0` (`0x14213b00c`); corrected 2026-11-02.
 
 So the geometry object only ever receives brush material: nothing on the cell
 path appends either vector, and the `0x100`-byte record the brush ingest fills
@@ -1027,6 +1045,23 @@ measurement that no cell array is a `0x60`-stride view, **the chunk's cells do
 not feed this node class at all** — they must be built by a different one. That
 is the next anchor: the node class that owns the chunk component the fixup
 writes (`sub+0x68` for slot `0x1e`, `sub+0x08` for slot `0x22`).
+
+**The shape path has no chunk input (2026-11-02).** The Domino world's shape
+entries (`[record+0x2b8]`, element `0xc0`) and the five per-type pools
+(`+0x2d0..+0x330`) can only be created through `ShapeAddToBody` or
+`ShapeAddToOwner`; both route through `ShapeEntryFromDescriptor`, whose two
+callers are the two add paths. Every caller of either add path that appends
+collision material is a brush-mesh producer: `0x142136010` (the `0x60` array)
+has one caller, `GeometryBuild`; `0x1421360a0` (the `0x100` array) has two,
+both brush ingests; and `BrushTreeToMesh` (`0x142cf23c0`) has exactly four
+callers — the four brush appenders. A verified store census of the pool fields
+finds their only writer besides construct/clear/reset is those add paths
+(`formats/shape-ingest.md`, 119,802 decoded function groups, the `-1` free-head
+sentinel as the discriminator). The collision chunk (kind `0x11`) is therefore
+**not** the Domino shape source, and the remaining way it could be is an inline
+appender that grows one of `geometry+0x114`/`+0x124` without calling either
+helper — which no decoded store shows but which a displacement scan cannot
+exclude.
 
 **Ghidra was hiding this function behind false `noreturn`s (2026-11-02).**
 `0x14213a510` was stored as a 167-byte function; its real body is 2011 bytes.
@@ -1137,9 +1172,10 @@ So the cell container the verified fixup rewrites is **the chunk's STU
 sub-asset plus a per-slot header** — `0x68` bytes for slot `0x1e`, `0x08` for
 slot `0x22`. Which of the two is `MAP_CHUNK_COLLISION` and which is
 `teMAP_CHUNK_ADDITIVE_COLLISION` needs the kind table; they are otherwise
-identical. The neighbouring slots are other systems and are not collision:
-`0x1f`/`0x1d` → `FUN_142e492a0`/`FUN_142e493e0`, `0x21`/`0x23` →
-`FUN_142e49270`, `0x1e`-style header fixup also appears for `0x1e` only; slots
+identical. The neighbouring slots are: `0x1d` and `0x21` both call `FUN_142e492a0` (the
+two collision kinds), `0x1f` calls `FUN_142e493e0` (soundarea) and `0x23` calls
+`FUN_142e49270` (streaming) — corrected 2026-11-02, see "Which chunk kind is
+which" and `formats/chunk-kinds.md`. `0x1e`-style header fixup also appears for `0x1e` only; slots
 `7`/`0xf` do their own inline relinking (0x40-stride records with a 0x10
 array, 0x58-stride with 0x20), and slot `8` is the GUID-keyed STU container.
 
@@ -1157,7 +1193,7 @@ both fail, so neither is worth re-trying:
 
 - *the geometry object's vectors*: the `0x60` entry count (`+0x114`) has only
   three writers image-wide and the `0x100`-element vector's append helper
-  (`0x1421360a0`) has exactly one caller, the brush ingest — that class is
+  (`0x1421360a0`) has two callers, both brush ingests — that class is
   brush-only;
 - *`FUN_1420c63b0`* (10 500 bytes, four `ShapeAddToBody` sites, the obvious
   "world ingest"): it has **no code caller** and no plain pointer to it
@@ -1266,6 +1302,279 @@ fill that mesh source from the cell's quantized vertices (`arr13`/`arr14`) and
 its `0xFF`-separated index runs (`arr3`/`arr11`/`arr12`) **without** calling
 `BrushTreeToMesh`. `dev/probe_node_types.py --ingest` lists types whose build
 touches a collider producer as a starting filter.
+
+### The pathing container's consumer: **open** (2026-11-02, census corrected)
+
+This is the **pathing** container, not the collision one (`formats/chunk-kinds.md`);
+"cell path" is the historical name. Nothing below identifies it as collision, and
+the census result — no shape producer reads it — is what a server-side pathing
+artifact should look like.
+
+**Retraction.** The first version of this section said "no client code turns
+the cells into shapes in this image" and "the payload is never re-parsed". Both
+claims are **withdrawn**. They rested on Ghidra's caller/callee metadata, which
+this project's own notes say is incomplete: `ghidra-project.md` records that
+`.pdata` entries chain and fragment and that whole regions are undefined, so a
+function's caller list is not a census. Two concrete corrections:
+
+* `ShapeAddToBody` (`0x142cb3940`): Ghidra reported 3 callers; a verified
+  `E8 rel32` scan finds **27** call sites in **13** functions, every site
+  decoded at an instruction boundary. Ghidra's three are a subset.
+* The claim "exactly two functions read `+0x10`/`+0x58`/`+0x68` off one base
+  and call `OwnerCreateBody` plus `ShapeAddToBody`" was **wrong**:
+  `0x14208d010` and `0x142090e00` call neither builder (their callees are
+  `0x142015510`, `0x142083d50` and `__chkstk`). The functions that do hold
+  those sites are `0x14208d109` and `0x1420919b7`, and their `+0x58`/`+0x68`
+  operands are `f32` radius/height fields of the mover settings and unrelated
+  8-byte pointer fields — **not** the component's 16-byte `{pointer, mode}`
+  array headers.
+
+The state is **open**. What follows is a census and a list of attempts, not a
+proof that the reader is absent.
+
+**The corrected shape-producer census (2026-11-02).** Union of Ghidra's caller
+list and a verified direct scan for the four add/build handles plus
+`MeshShapeFill`, then one row per producing function. Every site was decoded;
+one site (`0x140ca6478`) is real only under a local-window decode because the
+mover module's obfuscated stretches desync a decode from the function's begin,
+and it is kept. `dev/data/read/census.py` reproduces the whole thing
+(`python dev/data/read/census.py 0x142cb3940 0x142cc3d90 0x142cd4ef0
+0x142cb7f10 0x142cae540`).
+
+| target | E8 sites | Ghidra caller funcs | union functions |
+|---|---:|---:|---:|
+| `ShapeAddToBody` `0x142cb3940` | 27 | 3 | 13 |
+| `OwnerCreateBody` `0x142cc3d90` | 17 | 5 | 15 |
+| `ShapeAddToOwner` `0x142cd4ef0` | 1 | 1 | 1 |
+| `ShapeEntryFromDescriptor` `0x142cb7f10` | 2 | 1 | 2 |
+| `MeshShapeFill` `0x142cae540` | 5 | 2 | 5 |
+
+28 distinct producing functions, each classified by what it builds from (the
+52 verified sites are grouped; a site appears twice where one function calls
+two of the handles):
+
+| function | builder sites | builds from | sees a chunk payload? |
+|---|---|---|---|
+| `0x140ca4f1c`, `0x140ca649e` (one `ShapeAddToBody` each) and `0x140ca6227` (one `OwnerCreateBody`) | 3 | mover-body parts: `0x140ca4f1c` reads `[rbx+0x1a68]` (the mover's own body) and `0x140ca649e`'s descriptor is built on the stack; `0x140ca6227`'s site is only reachable by a local-window decode because the module's obfuscated stretch desyncs a decode from the fragment begin | no: no loader call, no `[reg+0x60]` read |
+| `0x14201b1cd` | 3 + 2 | per-object bodies and shapes from a transform built out of `[r14+0xd0]`, `[r14+0xf0]`, `[r14+0x298]` via `0x141ffab90` | no: the `0x800` mask appears, but no `[reg+0x60]` load |
+| `0x14202c660` | 1 | the scene: `OwnerCreateBody` for the domino world at geometry `+0x31f8` (read earlier) | no |
+| `0x1420652d7` | 1 | resolves an object through the pointer-decode `0x142e47a30`, then adds a shape and walks the result's faces with `0x142cd7200`/`0x142cd7b20` | no: the decoded object is a domino-side record, not a chunk payload |
+| `0x142065184`, `0x1420686b1`, `0x14206877c`, `0x14208d109`, `0x1420917f5`, `0x1420919b7`, `0x1420cade1` | 19 sites in total | the mover/prop per-part builders: radii and heights read as `f32` from `[rdi+0x58]`, `[rdi+0x60]`, `[rdi+0x64]`, `[rdi+0x68]`, plus a stack descriptor; `0x14206877c` makes eight shapes from its arguments and calls nothing | no: no loader call, and the `+0x58`/`+0x68` operands are scalars, not 16-byte array headers |
+| `0x142cf35a0` | 1 `ShapeAddToOwner` + 1 `OwnerCreateBody` | the character controller's own capsule, from the controller's config | no |
+| `0x142cdf9f2` | 1 | a domino body filled from a `0x40`-stride record array (`count << 6` bytes copied from `[rsi+0x18]`), body id from `word[rsi+0x58]` | no |
+| `0x142cb7f10` (`ShapeEntryFromDescriptor`), `0x142cb0a73`, `0x142cd4350` | 3 | the generic descriptor → `0xc0` shape entry plus the per-type record; the qword reads at `+0x68` are the **Domino descriptor's** per-type data | no: different struct, no loader call |
+| `0x140c2813f`, `0x142078562`, `0x1420a02f6`, `0x14210bac0` | 4 `MeshShapeFill` | mesh shapes: `0x140c2813f` from a collider (`ColliderMeshEmit`), `0x142078562` fills `0x58`-stride mesh records whose source is at `+0x20`, `0x1420a02f6` builds a mesh from three `0x60`-stride `{pointer, count}` pairs through `0x141b53b70`, `0x14210bac0` scales the filled vertices | no: no loader call |
+| `0x142134ba2`, `0x14213528a`, `0x14213ca9f`, `0x14213d0d9`, `0x14213d5b9` | 8 | the geometry object: candidates A and B, `GeometryBuild` (`0x14213c440`), `GeometryFinalize` (`0x14213d0b0`) and the pool-B record creator | no: brush/pool-sourced, read in earlier sessions |
+| `0x1420c63b0` | 5 | a 10 500-byte world ingest with four `ShapeAddToBody` sites and one `OwnerCreateBody`; no code caller and no plain pointer (its data xrefs are internal switch tables). Scanned over its full Ghidra extent (`0x2904` bytes) it reads qwords at `+0x10` but **not** at `+0x58`/`+0x68`, so it is not reading a component header | no header read; input unread past the entry |
+
+**What the census shows, and what it does not.** No producing function calls
+`StuLoadSubAssets`; none loads a qword from `+0x60` (the chunk work record's
+payload field); only `0x142cb7f10` loads a qword at `+0x68`, and that is the
+domino descriptor. So no shape producer can see a collision-chunk payload, and
+the component's `{pointer, mode}` headers are read by none of them. That does
+not close the question — a consumer could exist that builds no shape through
+these five handles, or reach the component through a route this census does not
+enumerate.
+
+**The whole-copy route was checked and is empty.** A consumer could copy the
+`0x78`-byte instance and read the copy elsewhere, which an offset scan would
+miss. Two spellings were measured image-wide:
+
+* **`memcpy`.** 8 923 `memcpy`/`memmove` call sites; exactly **one** passes
+  `0x78` as the size — `0x142402824` in `FUN_142401de0` — and it copies a
+  hard-coded diagnostic string fragment (`, which is not defined. The
+  innermost scope is searched first…`), not a component.
+* **Inline 16-byte moves.** 15 runs of six or more consecutive `xmm` loads off
+  one base; every one covers `0x70` or `0x80` bytes, none `0x78`. A `0x78`-byte
+  inline block copy does not occur.
+
+Even a copy would not hide a consumer: a copy preserves the field offsets, so
+reading the cells from a copy still loads a qword at `+0x68` of the copied
+structure, which the producer census above tests for.
+
+**Byte-level facts that stand** (independent of Ghidra metadata): the `STUD`
+magic `0x53545544` occurs three times in the image — twice inside
+`StuLoadSubAssets` (`0x1421d26d0`, which compares it and names it in its error
+string) and once in the STU writer `FUN_1421d2ab0` (reached only from
+`0x1421c30b0`), which emits it. So the loader and the writer are the only
+functions that mention the magic; no third function re-reads a blob header.
+
+**Why the chunk is still a plausible source.** The consumer target is read: the
+scene ctor `0x14202c660` builds a `0x3210`-byte geometry at `scene+0x620`
+(`GeometryBaseCtor` `0x14209a8f0`: 128 slots of `0x60` at `+0x60`), creates two
+domino worlds (`0x142cc3c80`) at `+0x31f8`/`+0x31fa`, a body at `+0x31fc`, and
+registers the geometry with the world (`0x14209ae30`, which stores it at
+`world+0x160` via `0x142cc4a90`). Nothing read so far fills those worlds from
+the collision chunk, but nothing proves they cannot be filled from it either.
+
+### The three next readers: Domino-side, and unreachable (2026-11-02)
+
+The three producers named as the next anchors were read. None of them touches a
+collision-chunk payload or a `0x9199BF6B` field; all three work on the **Domino
+owner's** vectors. Each was also tested for an invocation route, because a
+producer with no `E8` caller can still be reached through a pointer table.
+
+**Anchor 1 — `0x1420c63b0` (10 500 bytes).** Signature
+`(owner, u32 index, char, callback, out, out)`.
+* What it reads: `[owner+0xd0]` + `index * 0x38` — a **`0x38`-byte record
+  array** whose `+0x28` is a count that must be non-zero and whose `+0x34` is a
+  skip byte; `[owner+0xc0]` (records whose `+0x3e` u16 is compared with the
+  index and whose `+0x38` u16 selects a transform), `[owner+0xe0]` (a
+  `0x20`-stride array of 64-bit transform handles, `-1` meaning the identity
+  table `0x143391530`), `[owner+0xc8]` (a node count), and the object at
+  `[[owner+0x90]+0x250]` resolved through the pointer-decode
+  (`0x142001f80`, `[[..+0x8b0]]+0x18`). It writes float/index data into the two
+  caller records (`param_6+0x10/0x20/0x30/0x40`) and finishes with one
+  `OwnerCreateBody` and four `ShapeAddToBody`.
+* So it is a **node/transform-driven mesh builder** over a `0x38`-stride record
+  array — the primitive/brush shape family, not the cell container.
+* How it is reached: **nothing reaches it.** No `E8` call (its only one is its
+  own recursion at `0x1420c8db5`), no `E9` tail jump, no immediate in code, no
+  8-byte pointer anywhere, and no obfuscated-pointer encoding of the address
+  (`add 0x1e2421a4798a328 / ror 0x22 / xor 0xe1379e3cb308170d / ror 0x2b`) in
+  the image either. The three dword-RVA hits (`0x14378243c`, `0x1437824dc`,
+  `0x14469c0c4`) sit in self-contained tables whose neighbours are code ranges
+  of the same function and which no code reads.
+
+**Anchor 2 — the three `MeshShapeFill` producers.**
+* `0x140c2813f`: writes the mesh source at `[record+0x58]` with
+  `ColliderMeshEmit` (`0x142ccc120`) from a collider, then fills a shape with
+  it. Geometry comes from the **brush collider** (`MeshToColliderFaces` ->
+  `ColliderFaceAppend` -> `ColliderMeshEmit`), which is the brush route.
+* `0x142078562`: computes four `vec4`s from a `vec3` at `[r15-8]` (an
+  axis-aligned box plus its transform) into a **`0x58`-stride record** at
+  `+0x10/0x20/0x30/0x40`, then calls `MeshShapeFill` with `record + 0x20`. The
+  source arrays are the record's own, built here; the geometry is a **computed
+  box**, not stored data.
+* `0x1420a02f6`: a **mesh-source assembler**. `[r8+0x140]`/`[r8+0x148]` is an
+  inline-or-heap container of pointers; the selected pointer is a descriptor
+  with a type byte `+0x2a == 1`, a mode at `+0x20` (0..3) and data pointers at
+  `+8/+0x10/+0x18`. Per mode it unpacks `{pointer, count}` pairs with
+  `0x141b53b70` (`[pair+8]`/`[pair+0x18]`, inline when the tag word is 1) or
+  `0x141b53af0`, and indexes a second descriptor's arrays at **`0x60` stride**
+  (`[r14+0x20] + [r14+0x34] * 0x60`, mode 0) or **`0x40` stride**
+  (`[r14+8] + [r14+0x28] * 0x40`, mode 3). This is the consumer of the
+  three-array mesh-source form the ingest contract describes — the *end* a
+  chunk decoder would have to feed — but its descriptors come from the owner's
+  `+0x140` container, not from a chunk, and it is unreachable (below).
+
+**Anchor 3 — `0x142cdf9f2` (0x131 bytes).** A **Domino body-list appender**:
+`rsi` is a vector holder `{data +0x18, capacity +0x20, count +0x24}`; it grows
+the vector (`capacity += capacity>>1`, minimum 2, `0x142cadee0` with a `0x10`
+allocator tag) and copies `count << 6` bytes, so the element is **`0x40`
+bytes**; it then takes slot `count` and writes `+0x20` = 0, `+0x24`/`+0x28` =
+two floats from the caller's transform record (`[rdx+0x20]`, `[rdx+0x40]`),
+`+0x2c` = `0xffff`, `+0x2e` = `0xff`, `+0x30` = a `u16`, `+0x34` = the body
+from `OwnerCreateBody(word[rsi+0x58], ...)`, `+0x3c` = 0, then calls
+`0x142cb4f20(body, byte[rsi+0x160] + 1)`, the handle-table setter for
+`0x1442a0bc0`. The `0x40`-byte records are **produced by this function itself**
+— it appends them to the owner's vector; nothing in it reads a chunk.
+Reachability: no caller, no pointer, no encoded pointer; its only references
+are the same `.pdata`-copy and code-range tables as above.
+
+**Why a "data reference" here is not an invocation route.** Every function start
+in this image carries at least one DATA reference in the `0x1445xxxx`-`0x1447xxxx`
+region (sampled: 8 of 8 random function starts), and `ShapeAddToBody` itself has
+one (`0x14473d0d4`) beside its 27 call sites — so those references are the
+image's `.pdata`/range copies, not callbacks. The extra references on the
+functions above are the same family: code-range pairs whose tables nothing
+reads (0 code xrefs to the table addresses) and which chain into each other.
+`dev/data/read/refs.py` prints all six spellings for a given address
+(8-byte pointer, 4-byte RVA, both obfuscated forms), and
+`docs/ghidra-project.md` documents why Ghidra's caller metadata cannot be used
+alone.
+
+**What remains.** The chunk path is neither opened nor closed by these reads:
+the three next readers are Domino/brush-side and unreachable, so they cannot be
+the cell consumer for a live path, and they say nothing about a consumer that
+does not exist yet. The single next reader is the **producer of the owner's
+mesh-descriptor container at `+0x140`/`+0x148`** (whoever fills it with the
+`+0x2a == 1` descriptors that `0x1420a02f6` consumes): that is the last object
+between a stored mesh source and a shape. One narrowing measurement: in the
+collision/domino module (`0x14200000`..`0x142d0000`) **no store** to `+0x140`
+or `+0x148` exists at all (a decoded scan of every `.pdata` function in that
+range, register or immediate source), so the container is filled by a
+constructor or loader outside that module — the next search starts there.
+
+### Which chunk kind is which: **read** (2026-11-02)
+
+The mapping is settled from the client's own bytes, twice over:
+
+* the kind table `0x1439aa320` (`0x24` entries, stride `0x20`, kind at `+8`,
+  name pointer at `+0x18`) and the name decoder `0x1404c19b0` — per name, the
+  length is the low 24 bits of the dword at `name-4`, the key is the eight bytes
+  at `name-0xC`, and byte `i` XORs with `key[i & 7]`. All 36 names decode, and
+  the eight placeable names this project had already established from the
+  install come out exactly, which is the check that the decode is right;
+* the per-slot dispatch in `FinishMapChunkAsset` (`0x141ff54e0`): the two kinds
+  the table names collision are exactly the two sent to `FUN_142e492a0`
+  (slots `0x1D`/`0x21`), and the two named pathing are exactly the two sent to
+  `StuLoadSubAssets` + `MapChunkCellBytesFixup` (slots `0x1E`/`0x22`).
+
+| kind | slot | name |
+|---|---|---|
+| `0x11` | `0x1D` | `MAP_CHUNK_COLLISION` |
+| `0x12` | `0x1E` | `MAP_CHUNK_PATHING` |
+| `0x10` | `0x21` | `teMAP_CHUNK_ADDITIVE_COLLISION` |
+| `0x23` | `0x22` | `teMAP_CHUNK_ADDITIVE_PATHING` |
+
+So the practice range's `0x0DD0001100000688` (21.8 MB) is collision and
+`0x0DD0001200000688` (8.79 MB) is pathing. The collision container, its sector
+array and its fixup are read in `formats/chunk-kinds.md` and implemented in
+`ow_tank::chunkkind` (7 tests, install-pinned).
+
+**The collision consumer is still open, and that is the blocker now.** The
+dispatch only fixes the payload up; `FUN_141fe37a0` stores it at `work+0x60`;
+`FUN_142e492a0` is called only from `FinishMapChunkAsset`; no producer in the
+28-function census can see a sector array; and nothing reads the two strides
+(`0x58`, `0x38`) together with the counts at `+0x08`/`+0x0C`. The missing read is
+the one both routes name: **who fills the Domino shape-entry pool at
+`[record+0x2b8]`**. One correction to the earlier text: `BuildBvh`
+(`0x142ccb1b0`) is **not** callerless — a verified `E8 rel32` scan finds five
+call sites in three functions (`0x142cca7d9`, `0x142ccb2db`, `0x142ccbc1c`), so
+the collider builder is reachable and its callers are candidates.
+
+### The pathing component's three arrays tile the blob (2026-11-02)
+
+The pathing chunk's instance is a container, and its three array-bearing fields
+tile the blob with no gap. All offsets are container-relative (the blob starts at payload
+`+0x20`), and each header is the same `{u32 count; u32 pad; u32 data_off}` v1
+header as the verified `m_cellBytes` field:
+
+```text
++0x98   {222, pad, 0xA8}     222 x 0x28  -> 0x2358   nested in the field at +0x08
++0x2358 {6,   pad, 0x2368}     6 x 0x20  -> 0x2428   the field at +0x58
++0x2428 {220, pad, 0x2438}   220 x 0x10  -> 0x31F8   m_cellBytes, the cells
+```
+
+The strides are **derived, not read**: each array runs from its data offset to
+the next structure's header and the stride is that span divided by the count
+(`0x22B0/222 = 0x28`, `0xC0/6 = 0x20`, `0xDC0/220 = 0x10`). A span that does
+not divide exactly is refused rather than rounded
+(`ow_tank::collision::tables`, `Error::ArrayNotTiled`).
+
+The element contents were **observed, not interpreted**, and nothing here names
+a field:
+
+* the six `0x20`-byte elements each hold eight zero bytes, `07 00 00 00`,
+  `00 00 00 00`, then sixteen bytes whose first three lanes read as plausible
+  coordinates and whose fourth lane is zero;
+* the `0x28`-byte elements hold two 8-byte hashes, a `u32` that increases by
+  one or two between neighbours, four zero bytes, a `u64` that is the same in
+  all 222 (`0x0208BF0D9A50FD55`), and an 8-byte value that equals a cell's
+  block size;
+* 220 of the 222 elements carry the cells' block sizes in cell order, with one
+  extra element before the correspondence shifts: elements `0..=121` match
+  cells `0..=121`, elements `122` and `133` carry the same value (`0xA30`, a
+  size another cell also has) and are extras, and after them the shift is two
+  (`element 221` matches `cell 219`). The meaning of the extras is unread.
+
+**Evidence class:** data read from the install plus a tiling proof; there is no
+read expression for the element meaning or for the stride constant, and
+`ow_tank::collision::tables` documents exactly that. The install test
+`collision_cells_real::the_collision_component_holds_three_tiled_arrays` pins
+the three headers, the tiling chain, the strides and the raw bytes of the first
+element of each array.
 
 ## Verification
 

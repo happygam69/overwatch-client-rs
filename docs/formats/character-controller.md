@@ -1880,7 +1880,10 @@ the 17 qwords at `+0x00..+0x80` from relative to absolute, the collision-chunk
 component (`0x140f8e000`..`0x140f94000`, class hash `0x9199bf6b`) never touches
 `+0x68`, and no cell/sector producer reads the container. The sweep's triangle
 records therefore come from brush trees carried by models; the chunk decoder is
-**open** and unlocated (see `docs/open-questions.md` item 6).
+**open** and unlocated (see `docs/open-questions.md` item 6). The corrected
+28-function census of every shape producer, and the reason the first version of
+this claim overstated its evidence (Ghidra's caller metadata is incomplete for
+this image), are in `maps.md`, "The cell path's consumer: open".
 
 **The cell** (`GEO+0x108`, stride 0x60): `+0x00/+0x10` two `vec4` copied from
 the mesh record, `+0x20` the 0x30-byte type-3 mesh source (vertex base at

@@ -133,7 +133,8 @@ and "velocity publish" (the function's name).
 | type-1 capsule (`0x142ccd7b0`, 0x78a) | verified | `fn/CollisionCapsule`; the support-point path (`0x142cc9460`) is open |
 | narrowphases `0x142cd3c80` (0x3f0), `0x142caed10` (0x1a thunk), `0x142cd0ae0` (0xc00) | **open** | inventoried, two-path shape known |
 | hit policy (`0x14202c580` -> `0x14202bc90`) | **read** | contract `(hit, packed, ctx)` -> 1/2/3; world gate, `0x1420af950` layer/exclusion filter, decoded geometry-key dedupe, 0x50-byte record fill for mode 1, classifier `hit[0]` for mode >= 2; only the map-data tables it reads are missing (item 6 ingest) |
-| geometry ingest (map chunks → descriptors) | **half read** | chunk → cells is read and verified (slots `0x1e`/`0x22`, `fn/MapChunkCellBytesFixup`, 220 cells); **cells → shape records is open** (`formats/maps.md`) |
+| geometry ingest (map chunks → descriptors) | **collision container read; its consumer open** | kinds are read: `0x11` = `MAP_CHUNK_COLLISION` (container read in `ow_tank::chunkkind`, 7 tests) and `0x12` = `MAP_CHUNK_PATHING` (the 220-cell container, read/verified as a container, consumer not found — expected for pathing); the collision **consumer** is the open link: who fills the Domino shape-entry pool at `[record+0x2b8]` |
+| brush route (node type 2 → descriptor → brush → mesh) | **read and implemented; one fixture divergence** | `ow_tank::brush` + `brush_mesh` + `brush_convert` (24 tests, client-emulated): hull stage, status tree, six ops, ear predicate, clipping, face writer; 3 of 4 pinned meshes bit-exact, the five-point arrow open on a collinear tag test; `C`'s encoding read, class open; type-`0x00A` affects only the other brush source |
 | shape pools: alloc / entry build / add | read | `DmWorldConstruct` (`0x142cbeb70`), `ShapePoolAlloc` (`0x142cb00c0`), `ShapeEntryFromDescriptor` (`0x142cb7f10`), `ShapeAddToBody` (`0x142cb3940`), `ShapeAddToOwner` (`0x142cd4ef0`) |
 | wish spring (`0x140cc0dc0`) | verified | `fn/MoverWishSpring` |
 | state transform (`0x140ca5c50`) | verified | `fn/MoverStateVector` (leaf path) |
@@ -225,13 +226,67 @@ velocity the two client call sites compute, bit-for-bit.
 Needs a body record (`ow-sim::body`) and a world (item 5). Nothing here is a
 read; it is assembly, so it lands last.
 
-**5. Cells → shapes (the open read).** Two halves, and the first is done:
-`ow-tank::collision` parses the 220 cells and `fn/MapChunkCellBytesFixup`
-proves the pointer fixup. What is missing is the converter that turns a cell
-into the `0x60`-byte face records the narrowphases consume: quantized vertices
-from `arr13`/`arr14`, index runs from `arr3`/`arr11`/`arr12`, face stride
-`0x60`, normal `+0xc0`, count `+0xf6`, `0x30`-byte vertices from `+0x18`. Its
-unit will be `fn/MapChunkToShapes`; until it exists, `WorldView` is synthetic.
+**5. Cells → shapes: OPEN (2026-11-02; first census corrected).** Three of the
+four parts are done: `ow-tank::collision` parses the 220 cells,
+`fn/MapChunkCellBytesFixup` proves the pointer fixup, and the component's three
+array fields are decoded structurally (`ow_tank::collision::tables`: the arrays
+at container `0x98`/`0x2358`/`0x2428` tile the blob with no gap, so their
+`0x28`/`0x20`/`0x10` strides follow from the tiling by exact division). The
+fourth is **open**: no client code that reads a cell has been found, but the
+first version of this item overstated that as "the reader is not in this
+image". That claim rested on Ghidra's caller metadata, which is incomplete for
+this image (chained/fragmented `.pdata`, undefined regions), and it is
+withdrawn — Ghidra reported 3 callers for `ShapeAddToBody` where a verified
+`E8` scan finds 27 sites in 13 functions. The corrected census of all 28 shape
+producers is in `formats/maps.md`, "The cell path's consumer: open"; none of
+them calls `StuLoadSubAssets`, none reads the chunk work record's payload at
+`+0x60`, and none reads the component's `{pointer, mode}` headers. So there is
+still no `fn/MapChunkToShapes` to write and `WorldView` stays synthetic, but
+the stage is **open**, not excluded. Closing the movement blocker needs either
+the reader found (next anchors: `0x1420c63b0`'s input, the three
+`MeshShapeFill` sites `0x140c2813f`/`0x142078562`/`0x1420a02f6`, and the
+domino-side body filler `0x142cdf9f2`) or a plan decision to build the
+collision the query walks from the model brush trees (the node-type-2 path,
+whose leaf builders `0x142cec9e0`/`0x142ced620`/`0x142ced990`/`0x142ceca00`
+are unread). All three anchors were then read: they are Domino/brush-side (a
+`0x38`-stride node array, a brush collider, a stored mesh source's bounds, the
+owner's `+0x140` mesh-descriptor container, the owner's `0x40`-byte body
+vector) and **none is reachable from any code in the image** — no call, no
+tail jump, no immediate, no pointer, no encoded pointer. The one next reader is
+the producer of that `+0x140` container (`formats/maps.md`, "The three next
+readers").
+
+**5a. The brush route: read where it matters, blocked on data (2026-11-02).**
+The second producer is no longer a plan: `GeometryBuild` (`0x14213c440`)
+resolves the node's model (`geometry+0x80` → `[node+0x38]` → `[+0x40]` →
+`[+0x48]` = `C`, the collision descriptor) and builds the brush at runtime;
+the record formats, the vertex decode (`0x142ced510`) and the ring builder
+(`0x142ced620`) are read and implemented in `ow_tank::brush` (11 units, every
+expectation pinned to the client's bytes by `dev/brush_vertex_oracle.py`).
+`MeshToColliderFaces` (`0x142cf2010`) is read and already implemented. Three
+things keep it from producing a world: the six op bodies and the emission in
+`BrushTreeToMesh` (`0x142cf23c0`) are unread; `C`'s class and its
+`+0x98`/`+0xa0` inline-singleton-vs-array encoding are unread; and the install
+opens **0** assets of the GUID type the brush driver requires (`0x00A`, 0 of
+1,425,794 records), so no brush instance is reachable from this install.
+Full detail: `formats/brush-collision.md`.
+
+**5b. Which chunk is collision: READ, and it was inverted (2026-11-02).**
+Kind `0x11` is `MAP_CHUNK_COLLISION` (the 21.8 MB `0x0DD0001100000688`), kind
+`0x12` is `MAP_CHUNK_PATHING` (the 220-cell container this project had been
+calling the collision chunk), `0x10` additive collision and `0x23` additive
+pathing — from the kind table `0x1439aa320` plus the name decoder `0x1404c19b0`
+(all 36 names decode; the eight known placeable names come out exactly), and
+corroborated by the per-slot dispatch. The collision container is read and
+implemented (`ow_tank::chunkkind`, 7 tests): counts 36/1, array A `0x58`-stride
+at `0x14D3810`, array B `0x38`-stride at `0x14D8948`, the in-place fixup
+`FUN_142e492a0`, and the four-run tiling that holds for all 36 sectors. **The
+consumer is not the shape pool**: a store census of the world's pools shows
+their contents are created only through the shape-add paths, and every caller
+that appends collision material is a brush producer (`formats/shape-ingest.md`).
+The remaining loophole is an inline appender no decoded store shows. `BuildBvh`
+(`0x142ccb1b0`) has five call sites, but they are split wrappers over the
+collider-face array and all unreachable.
 
 **6. Verify.** `cargo xtask verify --fast` gates everything above except the
 install reads; the full `cargo xtask verify` runs `collision_cells_real`. The

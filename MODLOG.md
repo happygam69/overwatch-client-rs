@@ -3,6 +3,151 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the brush -> mesh walk read and implemented
+
+- The status tree (insert fixup, erase + rebalance, both rotations, the
+  three-way insert key) read from the instruction stream: the comparator is
+  `FUN_142ced380` behind the `0x142ced450` thunk (y descending, x ascending,
+  128-bit rationals); `0x142cecb10` is a no-`.pdata` leaf decoded linearly; the
+  insert fixup's colour registers were inverted by the decompiler and are now
+  right.
+- The ear predicate read from the `SHUFPS` immediates; the clipping tail's
+  three repair cases and the last-three fan read; the erase's four cases read.
+- `ow_tank::brush_convert` lands ops 0-5, the emission and the face writer;
+  `dev/brush_mesh_oracle.py` runs `0x142cf23c0` end to end. Three of the four
+  pinned meshes reproduce bit for bit; the five-point arrow diverges and is
+  recorded open (client ear list empty after the tag pass, port tags three
+  ears — a `< 0` vs `<= 0` on a collinear reflex tip).
+- Faults refused, not approximated: clockwise ring, two-node ring, two-ring
+  allocation, the `+0x58 == 0` variant.
+- 24 brush tests; gate green.
+
+## 2026-11-02 - the shape pools enumerated; the chunk is not the shape source
+
+- World pool table read (`DmWorldConstruct 0x142cbeb70`: eight records at
+  `+0x288 + 0x18*i`; shape entries index 2 -> `+0x2b8`, element `0xc0`), with
+  the constructor, clear and destructor (`0x142cc04f0`) as the only field
+  writers (verified store census, 119,802 function groups, `-1` free-head
+  sentinel as the discriminator).
+- Pool contents can only be created through `ShapeAddToBody`/`ShapeAddToOwner`
+  -> `ShapeEntryFromDescriptor`; every caller that appends collision material
+  is a brush-mesh producer, and `BrushTreeToMesh`'s four callers are the four
+  brush appenders. The collision chunk is therefore not the shape source; only
+  an inline appender to `geometry+0x114`/`+0x124` remains possible.
+- Corrections folded in: the brush ingest appends a `0x100` entry to
+  `geometry+0x118` (not a `0x60` one), the `0x100` appender has two callers,
+  `ShapeAddToBody` sites are 12 groups (not 13), the destructor group starts at
+  `0x142cc04f0`, and `BuildBvh`'s callers are split wrappers, all unreachable.
+- New doc: `docs/formats/shape-ingest.md`.
+
+## 2026-11-02 - the chunk kinds are read: 0x11 collision, 0x12 pathing
+
+- Kind table `0x1439aa320` plus its name decoder `0x1404c19b0` read (length =
+  low 24 bits of the dword at `name-4`, key = eight bytes at `name-0xC`, byte
+  `i` XORed with `key[i & 7]`). All 36 names decode; the eight placeable names
+  the project already had come out exactly.
+- Result: kind `0x11` = `MAP_CHUNK_COLLISION`, `0x12` = `MAP_CHUNK_PATHING`,
+  `0x10` additive collision, `0x23` additive pathing. The per-slot dispatch in
+  `FinishMapChunkAsset` agrees. So the 220-cell `STU_9199BF6B` container is the
+  **pathing** chunk; the earlier label was inverted.
+- Collision chunk `0x0DD0001100000688` (21,858,688 B) container read and
+  implemented (`ow-tank::chunkkind`, 7 tests): counts 36/1, `0x58`/`0x38`
+  arrays, `FUN_142e492a0` fixup, four-run per-sector tiling pinned for all 36.
+- The collision consumer is still unread: who fills the Domino shape-entry
+  pool at `[record+0x2b8]`. Correction: `BuildBvh` has five call sites in three
+  functions, so it is not callerless.
+- New doc: `docs/formats/chunk-kinds.md`.
+
+## 2026-11-02 - the brush route read and implemented; the chunk labels are unread
+
+- Node type 2's build chain read: `GeometryBuild` (`0x14213c440`) resolves the
+  model's collision descriptor `C` and builds the brush at runtime; the four
+  "leaf builders" are a header init, a mesh-struct init, the ring builder
+  (`0x142ced620`) and the edge list, with `0x142ced510` decoding vertices.
+- `ow_tank::brush` lands the record formats, the vertex decode and the ring
+  builder (11 units). Every arithmetic expectation is the client's own output:
+  `dev/brush_vertex_oracle.py` runs `0x142ced510` and `0x142ced620` under the
+  emulator (allocator-hook stub) and the tests pin those bits.
+- Measured: **no** GUID-type-`0x00A` asset in either manifest this install
+  opens (0 of 1,425,794 records; 0 of 1,514,352 with `WinPrism_` forced), and
+  300 model assets carry no brush container. Pinned by `brush_real.rs`.
+- The chunk-kind ↔ name mapping is **not read**: the `0x1439aa320` name strings
+  are obfuscated and undecoded, so "kind `0x12` = collision" is an assumption.
+  The kind-`0x11` chunk (21.8 MB) is geometry-shaped (RVA arrays into float
+  triples), the kind-`0x12` chunk (8.79 MB) is the 220-cell container.
+- New doc: `docs/formats/brush-collision.md`.
+
+## 2026-11-02 - the three follow-up readers: Domino-side, unreachable
+
+- Read the three anchors named after the corrected census. `0x1420c63b0`: a
+  `0x38`-stride node/transform record array at `[owner+0xd0]`, a `0x20`-stride
+  transform-handle array at `[owner+0xe0]`, output into the caller's records,
+  ends in `OwnerCreateBody` + four `ShapeAddToBody`. `0x140c2813f`: mesh source
+  from a brush collider (`ColliderMeshEmit`). `0x142078562`: a box computed
+  from a stored mesh source's bounds into a `0x58`-stride record.
+  `0x1420a02f6`: a mesh-source assembler over the owner's `+0x140`/`+0x148`
+  descriptor container (`0x60`/`0x40`-stride arrays, pair unpack
+  `0x141b53b70`). `0x142cdf9f2`: appends `0x40`-byte entries to the Domino
+  owner's body vector and calls the handle setter `0x142cb4f20`.
+- Reachability read for all five: no `E8` (but `0x1420c63b0`'s own recursion),
+  no `E9`, no immediate, no 8-byte pointer, no obfuscated-pointer encoding. The
+  dword-RVA hits are the image's `.pdata`-copy/code-range tables — every
+  function start carries one, `ShapeAddToBody` included — so they are not
+  invocation routes.
+- Result: the chunk path is neither opened nor closed by these; the single next
+  reader is the producer of the owner's mesh-descriptor container at
+  `+0x140`/`+0x148`. Details in `docs/formats/maps.md`, "The three next
+  readers: Domino-side, and unreachable". New probe `dev/data/read/refs.py`
+  (reachability in six spellings).
+
+## 2026-11-02 - the collision cell census, corrected
+
+- The earlier entry here ("the cell path has no reader in the image") was
+  **wrong** and is retracted. It rested on Ghidra's caller metadata, which this
+  project already documents as incomplete. Measured: Ghidra reports 3 callers
+  for `ShapeAddToBody` (`0x142cb3940`) where a verified `E8` scan finds 27
+  sites in 13 functions, and `0x14208d010`/`0x142090e00` do not call any shape
+  builder (their callees are `0x142015510`, `0x142083d50`, `__chkstk`).
+- New census tooling in `dev/data/read/`: `census.py` (union of Ghidra callers
+  and a verified direct scan, with per-site decode verification and `.pdata`
+  function mapping) and `profile.py`/`digest.py` (per-function reads, calls and
+  builder windows).
+- Corrected census: 27 + 17 + 1 + 2 + 5 verified sites over the five add/build
+  handles, 28 distinct producing functions, each classified; none calls
+  `StuLoadSubAssets`, none loads the chunk work record's payload at `+0x60`,
+  none reads the component's `{pointer, mode}` headers. Whole-copy route
+  checked: one `memcpy(…, 0x78)` in the image (`0x142402824`), a diagnostic
+  string fragment.
+- The state is therefore **open**, not "absent". The container work from the
+  previous entry (three tiled arrays, `ow_tank::collision::tables`, unit and
+  install tests) is unaffected and stands.
+
+## 2026-11-02 - the collision cell path has no reader in the image (RETRACTED)
+
+**Withdrawn in full.** The two bullets below drew a conclusion from Ghidra's
+caller metadata; the correction entry above supersedes them. Kept only so the
+record shows what was claimed and why it failed.
+
+- Read the consumer end of the collision chunk and found none:
+  `FinishMapChunkAsset` (`0x141ff54e0`) hands the payload to the chunk work
+  record through `FUN_141fe37a0` (`work+0x60`), `StuLoadSubAssets`
+  (`0x1421d26d0`) returns the first sub-record's instance (hence `+0x68` for
+  slot `0x1e` and `+0x08` for slot `0x22`), the component descriptor
+  `0x143c3f060` is referenced only by registry plumbing, its vtable
+  `0x14314acc8` holds type stubs plus the destructor `0x140f8f310`, and the
+  `STUD` magic is compared in exactly one function image-wide, the loader.
+- Searched twice image-wide for a reader (one base reading `+0x10`/`+0x58`/
+  `+0x68`; a `0x60` element stride): no hit in a map, mover, geometry or
+  collision module. [Retracted: the searches stand as attempts, the conclusion
+  "open by absence" does not.]
+- Replaced the guesswork on the component's shape with a proof: the three
+  array fields tile the blob with no gap (`0x98` 222 x `0x28`; `0x2358`
+  6 x `0x20`; `0x2428` 220 x `0x10` to the first cell `0x31F8`), so the
+  strides follow by exact division. `ow_tank::collision::tables`, two unit
+  tests, and an install test on the practice payload pin it.
+- `ow-tank-look --hex` gained `--at`, so a deep payload offset can be dumped
+  without a throwaway program.
+
 ## 2026-11-02 - the writer's composition, read
 
 - `0x140cb86c0` read end to end: the seed/speed endpoint pair (`A = point +

@@ -115,3 +115,111 @@ fn the_practice_range_collision_chunk_parses_as_220_cells() {
         "the second blob's stored RVA"
     );
 }
+
+/// The component's three array fields tile the blob exactly, so each element
+/// stride follows from the tiling. Values are the practice payload's; the cell
+/// table is the field `MapChunkCellBytesFixup` rewrites.
+///
+/// The elements themselves are pinned as raw bytes only: no client code reads
+/// them (`docs/formats/maps.md`), so no field of a record is named here.
+#[test]
+fn the_collision_component_holds_three_tiled_arrays() {
+    let Some(data) = open() else {
+        return;
+    };
+    let bytes = data
+        .open_asset(PRACTICE_COLLISION)
+        .expect("the practice range's collision chunk opens");
+    let tables = collision::tables(&bytes).expect("the component's arrays tile");
+    assert_eq!(tables.blob_offset, 0x20, "the first STUD blob");
+    assert_eq!(tables.instance, 0x20, "the one v1 instance");
+
+    eprintln!(
+        "nested {:#x}: {} x {:#x} at {:#x}; +0x58 {:#x}: {} x {:#x} at {:#x};          cells {:#x}: {} x {:#x} at {:#x}",
+        tables.nested.header_offset,
+        tables.nested.count,
+        tables.nested.stride,
+        tables.nested.data_offset,
+        tables.array.header_offset,
+        tables.array.count,
+        tables.array.stride,
+        tables.array.data_offset,
+        tables.cell_bytes.header_offset,
+        tables.cell_bytes.count,
+        tables.cell_bytes.stride,
+        tables.cell_bytes.data_offset
+    );
+
+    // The nested array inside the field at +0x08.
+    assert_eq!(tables.nested.field, collision::NESTED_FIELD_OFFSET);
+    assert_eq!(tables.nested.header_offset, 0x98);
+    assert_eq!(tables.nested.count, 222);
+    assert_eq!(tables.nested.data_offset, 0xA8);
+    assert_eq!(tables.nested.stride, 0x28);
+
+    // The array field at +0x58.
+    assert_eq!(tables.array.field, collision::ARRAY_FIELD_OFFSET);
+    assert_eq!(tables.array.header_offset, 0x2358);
+    assert_eq!(tables.array.count, 6);
+    assert_eq!(tables.array.data_offset, 0x2368);
+    assert_eq!(tables.array.stride, 0x20);
+
+    // `m_cellBytes` at +0x68 and its 220 block-list entries.
+    assert_eq!(tables.cell_bytes.field, collision::CELL_FIELD_OFFSET);
+    assert_eq!(tables.cell_bytes.header_offset, 0x2428);
+    assert_eq!(tables.cell_bytes.count, 220);
+    assert_eq!(tables.cell_bytes.data_offset, 0x2438);
+    assert_eq!(tables.cell_bytes.stride, 0x10);
+
+    // The tiling: each array ends exactly where the next structure starts, and
+    // the cell table ends exactly where the first cell begins.
+    assert_eq!(tables.nested.end(), tables.array.header_offset);
+    assert_eq!(tables.array.end(), tables.cell_bytes.header_offset);
+    assert_eq!(tables.cell_bytes.end(), 0x31F8, "the first cell");
+
+    let cells = collision::parse(&bytes).expect("the collision payload parses");
+    assert_eq!(tables.cell_bytes.end(), cells.cells[0].cell_offset);
+
+    // Raw bytes only: the first element of each array, and the second word of
+    // every +0x58 element - pinned so a format change cannot pass unnoticed.
+    let at = |offset: u64| (tables.blob_offset as u64 + offset) as usize;
+    let nested = &bytes[at(tables.nested.data_offset)..at(tables.nested.data_offset) + 0x28];
+    assert_eq!(
+        nested
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+        "18116095c99e5e9003d87f7e0000000052a133a8891dd8a855fd509a0dbf0802f867000000000000"
+    );
+    // The last qword of that element repeats the first cell's block size, which
+    // is a measured coincidence of this payload and nothing more.
+    assert_eq!(
+        u64::from_le_bytes(nested[0x20..0x28].try_into().unwrap()),
+        cells.cells[0].block_size
+    );
+
+    for k in 0..6u64 {
+        let rec = &bytes[at(tables.array.data_offset + k * tables.array.stride)
+            ..at(tables.array.data_offset + k * tables.array.stride) + 0x20];
+        assert_eq!(
+            u64::from_le_bytes(rec[0..8].try_into().unwrap()),
+            0,
+            "element {k} first qword"
+        );
+        assert_eq!(
+            u32::from_le_bytes(rec[8..12].try_into().unwrap()),
+            7,
+            "element {k} second dword"
+        );
+        assert_eq!(
+            u32::from_le_bytes(rec[12..16].try_into().unwrap()),
+            0,
+            "element {k} third dword"
+        );
+    }
+    let first = &bytes[at(tables.array.data_offset)..at(tables.array.data_offset) + 0x20];
+    assert_eq!(
+        first.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        "000000000000000007000000000000008ae88d42b4ce60c0c004554200000000"
+    );
+}

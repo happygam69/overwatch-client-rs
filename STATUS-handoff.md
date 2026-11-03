@@ -31,20 +31,43 @@ client-side mode→variation selector (see "Open").
 
 The client is a **viewer**. It makes no movement, combat or camera-behaviour
 claim. `ow-sim` holds the verified movement, Domino body and camera-basis
-arithmetic, the read per-frame velocity law (`ow-sim::frame`) and, since
-2026-11-02, the type-3 mesh narrowphase the collision query needs; the wish
-producer, the velocity→position stage and the collision cell decoder are still
-open, so no frame can be stepped yet.
+arithmetic, the read per-frame velocity law (`ow-sim::frame`), the fan's
+composition and the type-3 mesh narrowphase. No frame can be stepped yet, and
+the reason is now singular: **the collision world the query walks is never
+filled**, because neither producer of its shapes is reachable end to end.
 
-The **collision answer** is now read end to end apart from one stage: the fan's
-candidate evaluator, the handle dispatcher `0x142cc45a0`, the query driver
-`0x142cbd510` and the narrowphase `0x142cc1610` are read, and the last one
-fixes the contract the policy sees — `callback(&hit, packedShapeDescriptor,
-answerRecord)`, rotated by the thunk `0x14202c580` into `(hit, packed,
-record)`. The remaining stage is the policy body `0x14202bc90`, whose prologue
-is obfuscated; without it the answer to "is this wish blocked" is unknown, so
-the wish producer stays open and `ow-sim::fan` keeps taking its evaluation as
-an argument.
+The **collision answer** is read end to end: the fan's candidate evaluator
+`0x1420328c0`, the handle dispatcher `0x142cc45a0`, the query driver
+`0x142cbd510`, the narrowphase `0x142cc1610` and the hit policy `0x14202bc90`
+are read (the policy's `ADD`/`ROR` chain is a pointer decode, not a jump) and
+implemented (`ow-sim::policy`, `ow-sim::fan`, `ow_sim::collide`). What is
+missing is **data, not code** — and the two producers are both blocked:
+
+* the map's cell chunk (`0x0DD0001200000688`, 8.79 MB, 220 cells) is loaded and
+  pointer-fixed, but a 28-function census of every shape producer finds **no
+  reader that can see its payload**; the remaining Domino-side consumers are
+  unreachable by every address spelling checked;
+* the brush route (node type 2 → model collision descriptor → brush → mesh) is
+  read and implemented end to end — `ow_tank::brush`, `brush_mesh` and
+  `brush_convert` (24 tests, client-emulated meshes pinned). Three of the four
+  fixture meshes reproduce bit for bit; the five-point arrow diverges on one
+  collinear case that is isolated and **open**. `C`'s instance encoding is
+  read; its class is not. The type-`0x00A` absence affects only the other brush
+  source, not this route.
+
+The chunk labels are **read now, and they were inverted**: kind `0x11` is
+`MAP_CHUNK_COLLISION`, kind `0x12` is `MAP_CHUNK_PATHING` (the 220-cell
+container), kind `0x10` additive collision, `0x23` additive pathing — from the
+kind table `0x1439aa320` and the name decoder `0x1404c19b0`, and corroborated
+by the per-slot dispatch. The collision chunk (`0x0DD0001100000688`, 21.8 MB)
+is read and implemented (`ow-tank::chunkkind`, 7 tests: header counts 36/1,
+array A `0x58`-stride, array B `0x38`-stride, the `FUN_142e492a0` fixup and the
+per-sector tiling). **Its consumer is not the Domino shape pool**: a verified store census of the
+world's pools (`formats/shape-ingest.md`) shows their contents can only be
+created through the shape-add paths, and every caller that appends collision
+material is a brush producer. The chunk route is therefore closed *for the
+shape query* except for an inline appender no decoded store shows. `formats/chunk-kinds.md` has the
+detail and the next anchors (`docs/open-questions.md` item 6, round 4).
 
 ## Exact today
 
@@ -356,6 +379,53 @@ an argument.
   in code Ghidra never defined, and `GeometryFinalize`/`OwnerCreateBody` have no
   code references at all, so the decoder has to be read as raw disassembly from
   those three call sites rather than reached by walking callers.
+- **The cell reader is OPEN, and the first census was wrong (2026-11-02,
+  corrected).** The earlier wording here ("no reader in this image", "open by
+  absence") is **withdrawn**: it rested on Ghidra's caller metadata, which this
+  project's notes already call incomplete (chained/fragmented `.pdata`,
+  undefined regions). Ghidra reported 3 callers for `ShapeAddToBody`
+  (`0x142cb3940`); a verified `E8 rel32` scan finds **27** sites in 13
+  functions. The claim that only `0x14208d010`/`0x142090e00` read
+  `+0x10`/`+0x58`/`+0x68` and call both builders was also wrong — they call
+  neither; the functions holding those sites are `0x14208d109` and
+  `0x1420919b7`, and their `+0x58`/`+0x68` operands are `f32` radii of the
+  mover settings. What stands is a corrected census: for `ShapeAddToBody`
+  (27 sites), `OwnerCreateBody` (17), `ShapeAddToOwner` (1),
+  `ShapeEntryFromDescriptor` (2) and `MeshShapeFill` (5) the union of Ghidra's
+  callers and the verified scan is 28 producing functions, and **none calls
+  `StuLoadSubAssets`, none reads the chunk work record's payload at `+0x60`,
+  and none reads the component's `{pointer, mode}` headers**; the only qword
+  read at `+0x68` is `ShapeEntryFromDescriptor`'s own domino descriptor. The
+  whole-copy route is empty too: one `memcpy(…, 0x78)` in the whole image
+  (`0x142402824` in `FUN_142401de0`, copying a diagnostic string fragment)
+  among 8 923 `memcpy`/`memmove` call sites. The container work stands and is
+  unchanged: the three array fields tile the blob with no gap (`0x98` 222 x
+  `0x28`; `0x2358` 6 x `0x20`; `0x2428` 220 x `0x10` ending at the first cell
+  `0x31F8`), strides by exact division — `ow_tank::collision::tables`, two unit
+  tests and `collision_cells_real::the_collision_component_holds_three_tiled_arrays`.
+  Details and the per-function table: `docs/formats/maps.md`, "The cell path's
+  consumer: open".
+- **The three follow-up producers are Domino/brush-side and unreachable
+  (2026-11-02).** `0x1420c63b0` consumes a `0x38`-stride node/transform record
+  array at `[owner+0xd0]` with a `0x20`-stride transform-handle array at
+  `[owner+0xe0]`, writes its mesh into the caller's records and ends in one
+  `OwnerCreateBody` + four `ShapeAddToBody`; `0x140c2813f` builds its mesh from
+  a **brush collider** (`ColliderMeshEmit` `0x142ccc120`); `0x142078562`
+  computes a box from a **stored mesh source's bounds** (`0x142cae600`) into a
+  `0x58`-stride record; `0x1420a02f6` is a **mesh-source assembler** over the
+  owner's descriptor container at `+0x140`/`+0x148` (mode `+0x20`, `0x60`- and
+  `0x40`-stride arrays, pair unpack `0x141b53b70`/`0x141b53af0`); and
+  `0x142cdf9f2` appends `0x40`-byte entries to the **Domino owner's body
+  vector** (`OwnerCreateBody(word[owner+0x58], ...)` + `0x142cb4f20`). None
+  reads a chunk payload or a `0x9199BF6B` field, and none has an invocation
+  route: no `E8` (except `0x1420c63b0`'s own recursion), no `E9`, no immediate,
+  no 8-byte pointer, no obfuscated-pointer encoding. Their only references are
+  the image's `.pdata`-copy and code-range tables, which every function start
+  carries (`ShapeAddToBody` has one beside its 27 call sites). So the chunk path
+  is **neither opened nor closed**; the single next reader is the producer of
+  the owner's **mesh-descriptor container at `+0x140`/`+0x148`**. Write-up:
+  `docs/formats/maps.md`, "The three next readers: Domino-side, and
+  unreachable".
 - **The geometry object side is now read end to end (2026-11-02).** The writer
   of the 0x60 cell entries and the 0x100 sector entries is the driver
   `0x14213bbc0` (vtable slot `+0x78`), which walks pool A (`GEO+0xb0`, stride

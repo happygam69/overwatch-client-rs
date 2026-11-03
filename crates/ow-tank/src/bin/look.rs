@@ -96,6 +96,12 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         };
         let limit: usize = flag("--len").and_then(|v| v.parse().ok()).unwrap_or(0x100);
+        // `--at` starts the dump at a byte offset, for a payload whose field of
+        // interest sits deep inside a container (the collision chunk's sector
+        // and cell tables).
+        let at: usize = flag("--at")
+            .and_then(|v| usize::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
         let bytes = match data.open_asset(guid) {
             Ok(b) => b,
             Err(e) => {
@@ -108,6 +114,7 @@ fn main() -> std::process::ExitCode {
             ow_tank::guid::type_of(guid),
             bytes.len()
         );
+        let bytes = &bytes[at.min(bytes.len())..];
         for (i, chunk) in bytes.chunks(16).take(limit.max(16) / 16).enumerate() {
             let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
             let mut kinds = Vec::new();
@@ -120,12 +127,17 @@ fn main() -> std::process::ExitCode {
                 if t != 1 && t != 0x801 && t != 0x201 {
                     kinds.push(format!(
                         "+{:#x}: type 0x{t:03x} idx {}",
-                        i + j,
+                        at + i * 16 + j,
                         ow_tank::guid::index_of(v)
                     ));
                 }
             }
-            println!("  {:#06x}  {}   {}", i, hex.join(" "), kinds.join(", "));
+            println!(
+                "  {:#06x}  {}   {}",
+                at + i * 16,
+                hex.join(" "),
+                kinds.join(", ")
+            );
         }
         return std::process::ExitCode::SUCCESS;
     }

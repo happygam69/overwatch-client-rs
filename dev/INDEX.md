@@ -9,6 +9,9 @@ helpers are listed here so nothing on disk is unaccounted for.
 |---|---|---|
 | `anim_chain_args.py` | Collect the animation-chain function list (main module) for headless. | 79 |
 | `audit_image.py` | Audit the ground-truth image's function bookkeeping: `.pdata` facts, bridge counts and the name table. | 253 |
+| `brush_mesh_oracle.py` | Oracle for stage 1 of the brush tree -> mesh conversion. | 450 |
+| `brush_vertex_oracle.py` | Oracle for the brush's vertex decode, and a probe of the brush builder. | 227 |
+| `chunk11_probe.py` | Read windows of a chunk asset through `ow-tank-look --hex` and decode them. | 105 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
 | `clip_fp.py` | Byte-level orientation probes for the first-person clip family 0x00020400. | 100 |
 | `clip_fp_lanes.py` | Column-consistency scanner over the FP-family clip value area. | 55 |
@@ -21,13 +24,19 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `data/gen_body.py` | (no header) | 25 |
 | `data/read/bvhprobe.py` | Dump the client's BVH builder output for one fixture case. | 59 |
 | `data/read/callers.py` | Find direct callers of an image address by scanning for `E8 rel32` bytes. | 68 |
+| `data/read/census.py` | Shape-producer census: union of Ghidra's caller functions and a verified scan. | 279 |
 | `data/read/covhunt.py` | Report the mesh sweep's uncovered conditional branches for the fixture cases. | 42 |
 | `data/read/d.py` | Disassemble an exe-address range from the offline image. | 66 |
+| `data/read/digest.py` | Per-function digest for the shape-producer census list. | 114 |
+| `data/read/dump.py` | Dump a Ghidra function's decompiled code to dev/data/read/out/. | 50 |
 | `data/read/g.py` | Bridge query via curl: g.py <path> <json-body> [out-file] [field] | 53 |
 | `data/read/geodis.py` | (no header) | 15 |
 | `data/read/meshdebug.py` | Compare the mesh walk case by case: the oracle at 0x142caed30 against the | 104 |
 | `data/read/meshprobe.py` | Trace the oracle's per-triangle calls for one mesh fixture case. | 69 |
+| `data/read/profile.py` | Profile the shape-producer census functions, and hunt 0x78-byte struct copies. | 188 |
 | `data/read/r2.py` | Scratch helpers (gitignored): pdata function map + byte scans over the offline image. | 44 |
+| `data/read/refs.py` | Find every way an address is referenced in the flat image. | 77 |
+| `data/read/scan58.py` | Find functions that read [reg+0x10], [reg+0x58] and [reg+0x68] from one base. | 57 |
 | `data/read/scan_disp.py` | (no header) | 30 |
 | `data/read/scan_geom.py` | (no header) | 20 |
 | `data/read/scan_imm.py` | (no header) | 29 |
@@ -36,6 +45,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `data/read/scanreg.py` | (no header) | 15 |
 | `data/read/scansep.py` | Byte-scan for `cmp r16, 0xff` forms, the 0xFF separator test in an index run. | 40 |
 | `data/read/tritrace.py` | Dump the oracle's executed instruction addresses for a triangle case. | 36 |
+| `data/read/vt.py` | Dump a vtable/qword table from the offline image. | 17 |
 | `data/read/xref.py` | (no header) | 35 |
 | `data/read/xrefs.py` | (no header) | 22 |
 | `data/refs.py` | (no header) | 13 |
@@ -51,7 +61,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `deviation_check.py` | Check that the legacy deviations and the code agree. | 92 |
 | `field_index.py` | Field-access index over the complete client image. | 417 |
 | `find_anim_decoder.py` | Find code that reads the animation clip header, by the loads it must make. | 107 |
-| `find_field_writes.py` | Find the code that reads or writes one struct-field offset. | 112 |
+| `find_field_writes.py` | Find the code that reads or writes one struct-field offset. | 124 |
 | `find_tables.py` | Find large arrays of code pointers (jump/dispatch tables) in the module image. | 79 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
 | `frame_check.py` | Check cited addresses and function-name entries against the one address frame. | 317 |
@@ -67,6 +77,8 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `patch_clean_pe.py` | Build a clean analysis PE: the install's headers plus the recovered .text. | 96 |
 | `pdata_lookup.py` | Lookup .pdata function ranges containing given rvas. | 65 |
 | `pe_layout.py` | Classify an address in the install's PE: raw-backed, zero-fill (BSS), or unmapped. | 125 |
+| `pool_lea_args.py` | Which function collects a given object offset and hands it to a helper. | 61 |
+| `pool_scan.py` | Verified store/load census for the Domino world's pool-table fields. | 384 |
 | `probe_cellbytes.py` | Diagnostic: settle MapChunkCellBytesFixup's array/record indirection. | 137 |
 | `probe_evaluator.py` | Trace one call of an obfuscated function, to map its executed blocks. | 171 |
 | `probe_node_types.py` | Recover the node-type registry table from the image. | 170 |
