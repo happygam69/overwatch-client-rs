@@ -814,7 +814,7 @@ pub fn tree_to_mesh_variant(brush: &Brush, variant: i32) -> Result<Mesh, Error> 
                 ctx.tree_erase(p);
             }
             2 => {
-                let q = ctx.hull[hull as usize].next;
+                let q = ctx.hull[hull as usize].prev;
                 if q < 0 {
                     return Err(Error::MalformedRing { start: 0 });
                 }
@@ -855,7 +855,7 @@ pub fn tree_to_mesh_variant(brush: &Brush, variant: i32) -> Result<Mesh, Error> 
             }
             _ => {
                 // op 5: `FUN_142cf01b0` (0x142cf01b0)
-                let q = ctx.hull[hull as usize].next;
+                let q = ctx.hull[hull as usize].prev;
                 if q < 0 {
                     return Err(Error::MalformedRing { start: 0 });
                 }
@@ -1355,6 +1355,30 @@ mod tests {
                 [3, 8, 5, 5, 2, -1],
             ]
         );
+    }
+
+    /// The five-point arrow: one op-5 splice cuts the ring into a four-hull
+    /// chain plus a stub, so the emission's tag pass sees four hulls and the
+    /// three faces come out of the last-three fan. Pinned against the oracle.
+    #[test]
+    fn the_arrow_mesh_matches_the_client() {
+        let m = tree_to_mesh(&brush(&[
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 2.0],
+            [1.0, 1.0],
+            [0.0, 2.0],
+        ]))
+        .expect("converted");
+        assert_eq!(
+            m.triangles,
+            vec![
+                [3, 6, 0, -1, 1, 3],
+                [3, 2, 1, -1, 2, -1],
+                [0, 0, 3, -1, 4, -1]
+            ]
+        );
+        assert_eq!(m.vertices.len(), 5);
     }
 
     /// A clockwise ring: the sweep's first vertex in order is an op 3, the

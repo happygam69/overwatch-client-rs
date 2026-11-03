@@ -6,8 +6,8 @@ This file records what was read of it: the **hull stage**, the **status tree**
 the **six op bodies**, the **emission** (ear predicate, clipping tail, face
 writer) and the **model descriptor `C`** whose instance points the whole route
 starts from (encoding read, class open). The hull stage and the whole
-conversion are implemented; three of the four pinned meshes reproduce bit for
-bit and the fourth diverges on one collinear case, recorded below.
+conversion are implemented, and **all four** pinned meshes reproduce bit for bit
+against the client's own code run under the emulator.
 
 It is the continuation of `formats/brush-collision.md`, which stops at the
 per-node op classification. Every number below is a current-image address
@@ -18,35 +18,38 @@ output bytes pinned; **install** = measured on the operator's installation.
 
 ## Status in one line
 
-The conversion is **read and implemented**, with one known divergence. The
-hull stage (`ow_tank::brush_mesh::hull_stage`), the status tree, the six ops
-and the emission are in `ow_tank::brush_convert`; the client's own code was run
-under the emulator end to end (`dev/brush_mesh_oracle.py`) and three of its four
-meshes reproduce bit for bit, half-edge marks included:
+The conversion is **read and implemented**. The hull stage
+(`ow_tank::brush_mesh::hull_stage`), the status tree, the six ops and the emission
+are in `ow_tank::brush_convert`; the client's own code was run under the emulator
+end to end (`dev/brush_mesh_oracle.py`) and **all four** of its meshes reproduce
+bit for bit, half-edge marks included:
 
 | brush | client output | port |
 |---|---|---|
 | square ccw | `(3,−1,0,−1,1,3)`, `(3,2,1,−1,2,−1)` | exact |
 | triangle ccw | `(2,−1,0,−1,1,−1)` | exact |
 | five-point L | four faces, two clips, interlocking marks | exact |
-| five-point arrow | `(3,6,0,−1,1,3)`, `(3,2,1,−1,2,−1)`, `(0,0,3,−1,4,−1)` | **diverges** |
+| five-point arrow | `(3,6,0,−1,1,3)`, `(3,2,1,−1,2,−1)`, `(0,0,3,−1,4,−1)` | exact |
 
-The arrow's divergence is isolated: the client's ear list is empty after the tag
-pass and it takes the last-three fan, while the port tags three ears and clips
-them; the hull stage, the order and the ops agree (an emulator probe shows
-ops `0,0,5,2,1` on hulls `4,2,3,0,1` on both). One of the tag tests, or the
-append order, still differs on a ring whose reflex tip is collinear with
-another triangle's edge — a `< 0` vs `<= 0` separates them. **Open, not
-asserted.**
+The arrow needed one correction rather than a divergence: ops 1, 2 and 5 all read
+the **`+0x28`** link, and an earlier pass had ops 2 and 5 on `+0x30`. That is
+invisible until an op splices; on the arrow the client's op 2 does, cutting the
+ring into a four-hull chain plus a stub, so its tag pass sees four hulls and the
+faces come out of the last-three fan. Corrected, all four meshes match. The
+settling evidence and the emulator probe are under "The six ops".
 
 Three inputs fault and are refused as `Error`, never a mesh: a clockwise ring
 and a two-node ring (both at `0x142cf265f`), a two-ring brush at
 `0x142cf0b6b` (the allocation `nodes−2+2·rings` books more slots than the
 chains fill), and the `+0x58 == 0` emission variant is not implemented.
 
-`C`'s instance encoding is read; **`C`'s class is not**, and the store census
-narrowed its producer to five `+0x186` sites, one of which
-(`0x14208edf6..0x14209087f`) builds `C`'s collision-parameter block.
+`C`'s instance encoding is read; **`C`'s class is not**. The store census was run
+with `disp8` as well as `disp32`, and it reaches a wall rather than an answer: no
+function in the image stores both `+0x186` and `+0x98`, and the one candidate
+that writes the parameter-block field set (`0x14208edf6`) has **no static
+reference anywhere** — no call, no tail jump, no pointer. A displacement is not a
+type, so the next anchor is the producer of `[instance+0x48]`, not another
+census.
 
 ## The context the whole walk shares (decompiled)
 
@@ -188,10 +191,21 @@ the clipping below).
 |---|---|---|
 | 0 | `case 0` of `0x142cf23c0` | insert the current hull into the status tree (`FUN_142cf07d0`, an intrusive red-black insert that compares the hulls by geometry) and set its closure `+0x40` to **itself**. No allocation, no splice. This is the "start" vertex: the node begins an edge that runs to its right. |
 | 1 | `case 1` | `C = h.prev.closure`; if that closure's workspace vertex has op 5, do the splice with `C`; then **erase `h.prev`** — the hull saved *before* the splice — from the status tree (`FUN_142cf0cc0`). The closure is not re-set. |
-| 2 | `case 2` | `C = h.next.closure`; if its vertex has op 5, splice; then **erase `h.next` from the tree, insert `h`**, and set `h.closure = h`. |
+| 2 | `case 2` | `C = h.prev.closure`; if its vertex has op 5, splice; then **erase `h.prev` from the tree, insert `h`**, and set `h.closure = h`. |
 | 3 | `case 3` | find `T = lookup(workspace vertex)` in the tree (`FUN_142cefd70`, a plain binary search down `+0x00`/`+0x08`/`+0x10`); `C = T.closure`; if its vertex has op 5, splice and set `T.closure = A`; **otherwise `T.closure = h`**. No insert, no erase. |
 | 4 | `case 4` | save `h`, find `T = lookup(vertex)`, `C = T.closure`; do the splice (unconditionally — this case has no op-5 test); set `T.closure = A`; then **insert `h`** into the tree and set `h.closure = h`. |
-| 5 | `FUN_142cf01b0` (`0x142cf01b0`) | `C = h.next.closure`; if its vertex has op 5, splice with that closure; **erase `h.next`** from the tree; then `T = lookup(vertex)` again, `C' = T.closure`; if `C'`'s vertex has op 5 splice a **second** pair and set `T.closure = A'`, otherwise `T.closure = h`. The only body that allocates **four** hulls. |
+| 5 | `FUN_142cf01b0` (`0x142cf01b0`) | `C = h.prev.closure`; if its vertex has op 5, splice with that closure; **erase `h.prev`** from the tree; then `T = lookup(vertex)` again, `C' = T.closure`; if `C'`'s vertex has op 5 splice a **second** pair and set `T.closure = A'`, otherwise `T.closure = h`. The only body that allocates **four** hulls. |
+
+**Correction (measured, this round).** Ops 1, 2 and 5 all read the **`+0x28`**
+link, not `+0x30`. An earlier pass of this file had ops 2 and 5 on `+0x30`,
+which is invisible on any brush whose ops never splice and wrong on one that
+does: it made the arrow's op 2 erase `h.next` where the client erases `h.prev`,
+so the status tree kept a different node, the op-5 lookup answered a different
+hull, no closure ever pointed at an op-5 vertex, and the splice never fired. The
+emulator settles it: hooking the calls shows `erase(hull2)` from op 5 on hull3
+(`hull3.prev`) and `erase(hull4)` from op 2 on hull0 (`hull0.prev`), and the
+resulting ring is `0 → 1 → 2 → 6 → 0` with the twin pair `5/6` — exactly what the
+corrected link produces and what the arrow's four-hull tag pass implies.
 
 Read carefully:
 
@@ -368,12 +382,10 @@ running hull, splices a twin pair whose vertices are that hull's and its
 closures pointing at the last slot. `+0x34 === 3` (or an empty ear list) is what
 selects it.
 
-**One honest gap.** That is the whole emission as read, and it reproduces three
-of the four pinned meshes exactly — but the five-point arrow still differs (see
-"The whole conversion"). Its client output is a pure last-three fan from one
-vertex, while this implementation's ear pass finds ears on that ring, so one of
-the three tag tests or the append order still differs for that shape. The
-divergence is pinned in the checks table rather than papered over.
+That is the whole emission as read, and it reproduces **all four** pinned meshes
+exactly, including the arrow's last-three fan — which only comes out right once
+ops 2 and 5 read `h.prev` (above) and the op-2 splice cuts that ring to four
+hulls.
 
 `FUN_142cf0ae0` is plain scalar code and **is** read. It writes the mesh the
 collider gets:
@@ -420,6 +432,166 @@ Two facts about the triangle list that the questions asked for:
 **Final triangle order**: faces are appended in the order the emission books
 them — the groups in group order, and inside a group the ears in the order they
 were collected, then the final three. There is no sort of the faces.
+
+## The whole conversion, pinned by the emulator
+
+`dev/brush_mesh_oracle.py` now runs **both** stages. `mesh()` calls
+`0x142cf23c0` itself and returns the mesh struct
+(`{vertices, u32 count, pad, triangles, u32 count}`) plus every vertex's four
+`u32` bit patterns and every triangle's six `i32`. The fixture is generated by a
+Python copy of `0x142ced620` (`build_brush`, with `roundf` as two `f32` steps and
+the same ordering pass), so the node records are ones the client's own builder
+would write — including multi-ring brushes, which the hand-written hull-stage
+cases cannot exercise.
+
+The pinned results (evidence class: **emulated** — the client's own code):
+
+| brush | nodes | vertices | triangles |
+|---|---:|---:|---:|
+| square, ccw | 4 | 4 | 2 |
+| triangle, ccw | 3 | 3 | 1 |
+| five-point L (one reflex corner) | 6 | 6 | 4 |
+| five-point arrow (one reflex tip) | 5 | 5 | 3 |
+
+A sixth fixture, a square with a triangular hole, does **not** produce a mesh —
+see the faults below — so the multi-ring path is pinned by the hull stage's
+two-ring test only.
+
+The square's faces are `(3, −1, 0, −1, 1, 3)` and `(3, 2, 1, −1, 2, −1)` — the
+six columns being vertex index and adjacent half-edge index, `−1` for an open
+edge — and the ear-clipping cases come out with the marks interlocking
+(`(5, 2, 1, −1, 2, 10)`, `(3, 8, 5, 5, 2, −1)`), which is what the `mark`
+definition above predicts. Nothing in the code consumes these numbers yet; they
+are the target the implementation will be diffed against.
+
+### Three inputs that make the client fault (emulated, measured)
+
+All three are real client behaviour caught by the emulator, and all three matter
+to anyone who feeds a brush through:
+
+- a **clockwise** ring. A clockwise triangle and a clockwise square both make
+  `0x142cf23c0` read address `0x40` and fault, at `0x142cf265f` — immediately
+after the op-3 lookup returns **0**. `FUN_142cefd70` returns the tree root
+unchanged when the tree is empty, and a clockwise ring's first vertex in sweep
+order is an op 3 (the sweep's "merge" class) rather than an insert. So the sweep
+assumes one orientation: counter-clockwise.
+- a **two-node ring**. The emission's `h.next.next == h.prev` test is meant for a
+  three-node chain; with two nodes the walk reads past it and faults the same
+  way.
+- a **second ring**, with this fixture's ring order: it faults at `0x142cf0b6b`,
+  inside the mesh writer, reading a **null face slot**. The allocation is
+  `nodeCount − 2 + 2·rings = 7` triangles, but the two chains triangulate
+  independently to `2 + 1 = 3`, so four face slots are never booked and the
+  writer dereferences the first of them. The face count formula only holds once
+the ops have **bridged** the hole into the outer ring, and this input's op
+  sequence does not. Whether a differently ordered two-ring brush bridges (and
+therefore whether this is the client's own bug or a fixture the client would
+  never see) is **open** — it needs a ring order taken from a real brush, which
+  is the `C` read below.
+
+So a caller must not assume "any ring triangulates". An implementation must
+reproduce these faults or refuse the input — it must not emit a mesh the client
+never would.
+
+## The model descriptor `C` (decompiled: encoding read; class open)
+
+`GeometryBuild` (`0x14213c440`) reaches the brush's input through three loads
+with no indirection of their own:
+
+```text
+geometry+0x80            the scene node
+  [node+0x38]            the node's object
+    [+0x40]              the object's model instance
+      [+0x48]            C
+```
+
+and then, **read exactly**:
+
+- `n = C+0xa0`. Load `p = [C+0x98]`, a pointer to a **two-word** record;
+- if `n == 1` the two words are **`{points, count}`**; otherwise they are
+  **`{count, points}`** — in both cases the *count* is a `u32` in the low half of
+  its word and the *points* word is a pointer;
+- the guard before use is "count ≠ 0", read from the same word either way
+  (`C+0x98` + 8 as an `i32` when `n == 1`, `C+0x98` + 0 as an `i32` otherwise);
+- the points are handed to `FUN_142ced620` (`0x142ced620`, the ring builder
+  `ow_tank::brush::build_from_instances` implements) with the count and a
+  two-lane scale of `s, s` where `s = [geometry+0x88]+0xe0`, **clamped up to
+  `1.0`** when it is below `1.0`.
+
+So the encoding question in `formats/brush-collision.md` is settled *as a rule*:
+`C+0x98` points at a two-word descriptor and `C+0xa0 == 1` selects
+pointer-then-count; any other value selects count-then-pointer. What is **not**
+settled is:
+
+1. **which of the two this install's models use** — `C+0xa0`'s value is written
+   by whatever builds `C`, and that writer is not read;
+2. **what class `C` is.** `C` carries a reference block at `+0x24`/`+0x28`
+   resolved by `0x141b5cfb0`, a value copied to `geometry+0x90` from `+0xf0`, the
+   collision parameters `GeometryCopyParams` (`0x142132cf0`) copies
+   (`+0xc0` a rotation, floats at `+0x110 … +0x16c` with that function's clamps,
+   two descriptor words at `+0x178`/`+0x186` through `0x141b53c40`, and the two
+   bytes at `+0x194`/`+0x195`), and the instance descriptor above — a
+   consistent picture of a **runtime object**, not a chunk. No vtable for it is
+   reached from the read: `GeometryBuild` never loads a vtable from `C`, and the
+   image has **no RTTI** (no `.?AV` class-name strings), so the class cannot be
+   named from type information either.
+
+**Where this read stops, exactly.** The producer of `[instance+0x48]` was not
+read, so: (a) `C`'s class is unknown; (b) the value of `C+0xa0` is unknown; and
+(c) therefore no real brush can be decoded from the install yet. The same
+function also contains one access that cannot be followed statically at all:
+the node's fallback transform is read through a **decrypted pointer** — the word
+at `[geometry+0x80]+0x8` is folded with a two-step rotate/xor and a constant and
+then dereferenced — so a branch of `GeometryBuild` reads memory whose address
+comes from data. That access is used only when the node's scale is below `1.0`
+and does not block the brush itself, but it means `GeometryBuild` is not
+readable "purely", and any later attempt to decode `C` must handle it.
+
+**The store census was run again, with `disp8`, and it reaches a wall.**
+Evidence class: **measured**.
+
+1. The repo's `dev/find_field_writes.py` now scans `disp8` as well as `disp32`
+   (it only matched `disp32` before, and every displacement below `0x80` is
+   assembled as `disp8`, which is why it used to report **zero** stores for
+   `+0x48`). With both forms scanned and the sites grouped by containing
+   `.pdata` function, over the whole `.text`:
+
+   | field | stores | | field | stores |
+   |---|---:|---|---|---:|
+   | `+0x98` | 5 789 | | `+0x178` | 931 |
+   | `+0xa0` | 4 866 | | `+0x186` | **5** |
+   | `+0xc0` | 3 367 | | `+0x194` | 136 |
+   | `+0xf0` | 2 392 | | `+0x195` | **1** |
+   | `+0x110` | 1 993 | | | |
+
+2. Intersecting by containing function: `{+0x98, +0xc0, +0xf0, +0x110}` leaves
+   **180** functions; `{+0x98, +0xa0, +0x194, +0xc0, +0xf0}` leaves **13**;
+   `{+0x98, +0xa0, +0x194, +0xc0, +0x110, +0x186}` leaves **0**; and
+   `{+0x98, +0x194, +0x195}` leaves **0**. So **no function in the image stores
+   both `+0x186` and `+0x98`** — the two halves of `C`'s layout are never filled
+   by one writer.
+3. The single `+0x195` store is at `0x142915c1f`, in `0x142915b60`, whose object
+   is a different layout (`+0x168 … +0x214`): a coincidence of displacement, not
+   `C`.
+4. The five `+0x186` sites are `0x14081a99c`, `0x142090594`, `0x140dd307a`,
+   `0x14194b68c`, `0x140a1572b`. The second one's function
+   (`0x14208edf6 … 0x14209087f`) does write a near-perfect match for the field
+   set `GeometryCopyParams` reads (`+0xc0`, `+0xf0`, `+0x110`, `+0x11c`, `+0x120`,
+   `+0x130`, `+0x13c`, `+0x140`, `+0x14c`, `+0x150`, `+0x160`, `+0x170`, `+0x174`,
+   `+0x17c`, `+0x186`) — but it does **not** write `+0x98`/`+0xa0`, and it has
+   **no static reference at all**: a real `.pdata` range, no Ghidra function, and
+   an image-wide scan finds no `E8` call, no `E9` tail jump and no 8-byte pointer
+   to it anywhere.
+
+So the previous round's claim that this function "builds `C`'s
+collision-parameter block" is **downgraded**: it writes that field set, and
+nothing shows it is reachable, so it cannot be confirmed as `C`'s writer. That is
+where the displacement route stops, and the reason is structural: **a
+displacement is not a type.** Several classes share offsets, which is exactly why
+the tighter intersections collapse to zero while the loose ones stay in the
+hundreds. The next anchor is the *producer of `[instance+0x48]`*, read backwards
+from `GeometryBuild`'s chain (`[node+0x38] → [+0x40] → [+0x48]`), not another
+census over offsets.
 
 ## The whole conversion, pinned by the emulator
 
@@ -589,23 +761,32 @@ The measured status, brush by brush:
 | square, ccw | 4 | 2 faces, `(3,−1,0,−1,1,3)`, `(3,2,1,−1,2,−1)` | **identical**, vertices and marks |
 | triangle, ccw | 3 | 1 face, `(2,−1,0,−1,1,−1)` | **identical** |
 | five-point L | 6 | 4 faces, `(5,−1,0,−1,1,3)`, `(5,2,1,−1,2,10)`, `(3,−1,4,−1,5,9)`, `(3,8,5,5,2,−1)` | **identical** |
-| five-point arrow | 5 | 3 faces, `(3,6,0,−1,1,3)`, `(3,2,1,−1,2,−1)`, `(0,0,3,−1,4,−1)` | **differs**: `(4,−1,0,−1,1,3)`, `(4,2,1,−1,2,6)`, `(4,5,2,−1,3,−1)` |
+| five-point arrow | 5 | 3 faces, `(3,6,0,−1,1,3)`, `(3,2,1,−1,2,−1)`, `(0,0,3,−1,4,−1)` | **identical** |
 
 The L is the strong case: it has a reflex corner, it clips two ears, it exercises
 both re-tests and the ear-list repair, and its four faces' half-edge marks
 interlock (`2`, `10`, `9`) exactly as the client's do. The square pins the
 three-node chain path and the two-colour split of the faces.
 
-The arrow's divergence is narrow and stated: the client's three faces are a
-**last-three fan** from one vertex, which means its ear list was empty after the
-first pass, while this implementation tags three of that ring's five vertices as
-ears and clips them. The hull stage and the op dispatch are *not* the difference —
-the emulator probe confirms the client dispatches ops `0,0,5,2,1` on hulls
-`4,2,3,0,1`, which is exactly what `hull_stage` produces — so what remains is one
-of the three tag tests, or the order the ears are appended in, on a ring with a
-reflex corner that lies *on* another triangle's edge (the arrow's tip is
-collinear with the hypotenuse of the corner triangle, so a `< 0` against `<= 0`
-would separate them).
+**The arrow, and what it cost.** The arrow was the last divergence, and it was
+not the tag strictness it looked like: it was the `+0x28`/`+0x30` link misreading
+corrected above. On the arrow the client's op 2 *splices* — its `h.prev.closure`
+is the op-5 hull, which only becomes true once op 5 has re-closed that hull onto
+itself — the ring becomes a four-hull chain (`0→1→2→6→0`) plus the stub
+(`3→4→5→3`) with twins `5/6`, the tag pass therefore sees four hulls, and the
+three faces come from the last-three fan. With `h.next` the splice never fires,
+the pass tags five hulls, three of them ears, and the mesh is the wrong one the
+earlier pass produced.
+
+It was settled by hooking the client's own call sites — `0x142cf0900` insert,
+`0x142cf0cc0` erase, `0x142cefd70` lookup — and reading their arguments, then
+dumping the post-op hull array at the end of the tag pass. The arguments show
+`erase(hull2)` from op 5 on hull3 (`hull3.prev`) and `erase(hull4)` from op 2 on
+hull0 (`hull0.prev`); the dump shows `hull0.prev = 6` whose vertex is `3`, which
+is why the first tag iteration's `u = cur − prev` is `(−1,−1)` and its reflex
+term is `2.0` where a five-hull ring would give `4.0`. The tag values themselves
+were also read (`8` on four hulls, untouched on the fifth), which is what
+disproved the collinearity hypothesis.
 
 ### The refusals
 
@@ -633,7 +814,7 @@ as a mesh the client would not emit:
 | the square mesh, bit for bit | `brush_convert::tests::the_square_mesh_matches_the_client` |
 | the triangle mesh (three-node chain) | `the_triangle_mesh_matches_the_client` |
 | the L mesh (reflex corner, two clips, both re-tests, interlocking marks) | `the_ell_mesh_matches_the_client` |
-| the arrow mesh | **does not match** — measured, documented above, deliberately not asserted |
+| the arrow mesh (op-5 re-close, op-2 splice, four-hull chain, last-three fan) | `brush_convert::tests::the_arrow_mesh_matches_the_client` |
 | a clockwise ring and a two-node ring are refused | `a_clockwise_ring_is_refused`, `a_two_node_ring_is_refused` |
 | the unimplemented variant is refused | `the_other_variant_is_not_implemented` |
 | the sweep ordering predicate, the side tests, the ear predicate, the erase | read from the flat map (evidence class **assembly**); exercised end to end by the three matching meshes |
@@ -641,18 +822,28 @@ as a mesh the client would not emit:
 
 ## What is open
 
-1. **The five-point arrow's emission.** Three of four pinned meshes match
-   bit-exactly; the arrow does not. The difference is inside `FUN_142ceeee0`'s
-   tag pass or the ear append order for a ring whose reflex corner lies collinear
-   with another triangle's edge. The next probe is the emulator's tag values
-   (they live in the workspace vertices' `+0x28` after the pass), compared against
-   `ear_tag`'s three tests one at a time.
-2. **`C`'s class and the value of `C+0xa0`.** The census narrowed the parameter
-   writer to `0x14208edf6` (`…0x14208edf6..0x14209087f`), which stores `+0xc0`,
-   `+0xf0`, `+0x110…+0x16c`, `+0x178`-adjacent and `+0x186` off one base but does
-   **not** store `+0x98`/`+0xa0`. The next read is who fills `+0x98` of the object
-   that function fills. The image has no RTTI, so the class must come from the
-   producer, not from a name.
+1. **`C`'s class and the value of `C+0xa0`, and why a displacement census cannot
+   reach them.** The census has now been run with `disp8` as well as `disp32`
+   over the whole `.text` (the repo tool was extended this round). Counts:
+   `+0x98` 5 789 stores, `+0xa0` 4 866, `+0xc0` 3 367, `+0xf0` 2 392, `+0x110`
+   1 993, `+0x194` 136, `+0x178` 931, `+0x186` **5**, `+0x195` **1**. Requiring
+   every one of `{+0x98, +0xc0, +0xf0, +0x110}` leaves **180** functions;
+   `{+0x98, +0xa0, +0x194, +0xc0, +0xf0}` leaves **13**;
+   `{+0x98, +0xa0, +0x194, +0xc0, +0x110, +0x186}` leaves **0**, and
+   `{+0x98, +0x194, +0x195}` leaves **0**. So **no function in the image stores
+   both `+0x186` and `+0x98`**, and the one `+0x195` store (`0x142915c1f`) is in
+   `0x142915b60`, whose object is a different layout entirely (`+0x168…+0x214`).
+2. **`0x14208edf6` has no static reference at all.** It has a real `.pdata` range
+   (`0x14208edf6..0x14209087f`) and no Ghidra function, and an image-wide scan
+   finds **no `E8` call**, **no `E9` tail jump** and **no 8-byte pointer** to it
+   anywhere. Its field set matches `C`'s parameter block, but nothing can be shown
+   to reach it, so "it builds `C`" cannot be confirmed from references and the
+   identification is downgraded to "a writer of that field set". That is where the
+   displacement route stops: **a displacement is not a type** — two classes share
+   offsets, which is exactly why the combined filters collapse to zero. The next
+   anchor must be the *producer of `[instance+0x48]`* read backwards from
+   `GeometryBuild`'s chain (`[node+0x38] → [+0x40] → [+0x48]`), not another
+   census.
 3. **Whether a two-ring brush can bridge.** The hole fixture faults in the face
    writer; whether a real brush's op sequence bridges instead is unknown until a
    real brush is decoded (item 2).

@@ -49,11 +49,14 @@ missing is **data, not code** — and the two producers are both blocked:
   unreachable by every address spelling checked;
 * the brush route (node type 2 → model collision descriptor → brush → mesh) is
   read and implemented end to end — `ow_tank::brush`, `brush_mesh` and
-  `brush_convert` (24 tests, client-emulated meshes pinned). Three of the four
-  fixture meshes reproduce bit for bit; the five-point arrow diverges on one
-  collinear case that is isolated and **open**. `C`'s instance encoding is
-  read; its class is not. The type-`0x00A` absence affects only the other brush
-  source, not this route.
+  `brush_convert` (25 tests, client-emulated meshes pinned). **All four**
+  fixture meshes now reproduce bit for bit; the arrow's divergence was two
+  wrong link reads (ops 2/5 use `+0x28`, not `+0x30`), found by single-stepping
+  the client. `C`'s instance encoding is read; **its class is not**, and the
+  census gives a structural negative (no function stores both `+0x186` and
+  `+0x98`), so the next anchor is the producer of `[instance+0x48]` read
+  backwards from `GeometryBuild`'s chain. The type-`0x00A` absence affects only
+  the other brush source, not this route.
 
 The chunk labels are **read now, and they were inverted**: kind `0x11` is
 `MAP_CHUNK_COLLISION`, kind `0x12` is `MAP_CHUNK_PATHING` (the 220-cell

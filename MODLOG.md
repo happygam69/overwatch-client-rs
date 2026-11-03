@@ -3,6 +3,20 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-02 - the brush -> mesh conversion is bit-exact on all four fixtures
+
+- The five-point arrow's divergence was not the tag test: ops 1, 2 and 5 all
+  read the `+0x28` link and the port had 2 and 5 on `+0x30`. Single-stepping the
+  client's tag pass and hooking the tree calls located it; the fix is two lines
+  and the arrow is now asserted against the client's own faces. All four pinned
+  meshes match, vertices and half-edge marks included (25 brush tests).
+- `C`'s class: the disp8-aware census is a structural negative. No function
+  stores both `+0x186` and `+0x98`, and `0x14208edf6` (a near-perfect
+  `GeometryCopyParams` field-set writer) has no static reference at all, so its
+  "builds C" reading is downgraded. A displacement is not a type; the next
+  anchor is the producer of `[instance+0x48]` read backwards from
+  `GeometryBuild`'s chain.
+
 ## 2026-11-02 - the brush -> mesh walk read and implemented
 
 - The status tree (insert fixup, erase + rebalance, both rotations, the

@@ -938,21 +938,28 @@ With the chunk excluded, the live producer is the **brush**, and its
 tree→mesh walk is now read and implemented: the hull stage, the status tree
 (insert fixup, erase + rebalance, both rotations), the six ops, the ear
 predicate from the `SHUFPS` immediates, the clipping tail and the face writer
-are in `ow_tank::brush_mesh` / `brush_convert` (24 tests). The client's own
-code was run end to end under the emulator and **three of four** meshes
-reproduce bit for bit; the five-point arrow diverges because the client's ear
-list is empty after the tag pass and it takes the last-three fan, while the
-port tags three ears — a `< 0` vs `<= 0` on a collinear reflex tip, isolated
-and **open**. Faults are refused, never approximated: a clockwise ring and a
-two-node ring (both at `0x142cf265f`), the two-ring allocation at
-`0x142cf0b6b`, and the `+0x58 == 0` variant.
+are in `ow_tank::brush_mesh` / `brush_convert` (25 tests). The client's own
+code was run end to end under the emulator and **all four** pinned meshes
+reproduce bit for bit, half-edge marks included. The arrow's divergence was
+one misread link, not a tag strictness: ops 1, **2** and 5 all read the `+0x28`
+link, and the port had 2 and 5 on `+0x30` — invisible until an op splices,
+which the arrow's op 2 does. Found by single-stepping the client's tag pass and
+hooking the tree calls; the collinearity hypothesis was wrong. Faults are
+refused, never approximated: a clockwise ring and a two-node ring (both at
+`0x142cf265f`), the two-ring allocation at `0x142cf0b6b`, and the `+0x58 == 0`
+variant.
 
 `C`'s instance encoding is read (`+0xa0 == 1` ⇒ `{points, count}`, otherwise
-`{count, points}`); **its class is open**, and the producer census narrowed to
-five `+0x186` sites, one of which (`0x14208edf6..0x14209087f`) builds `C`'s
-collision-parameter block. Next reads: the arrow's tag-test strictness; who
-fills `C+0x98` of that object; then the client wiring. `formats/brush-mesh.md`
-carries the detail.
+`{count, points}`); **its class is open**, and the census now gives a
+structural negative rather than a lead: with disp8 scanned, **no function in
+the image stores both `+0x186` and `+0x98`**, and the function that writes a
+near-perfect match for `GeometryCopyParams`' field set
+(`0x14208edf6..0x14209087f`) has **no static reference at all** — no call, no
+tail jump, no pointer — so its "builds `C`" reading is downgraded. The lesson
+is recorded in `formats/brush-mesh.md`: a displacement is not a type. The next
+anchor is the **producer of `[instance+0x48]`**, read backwards from
+`GeometryBuild`'s chain (`[node+0x38] → [+0x40] → [+0x48]`), not another
+census.
 
 ---
 
