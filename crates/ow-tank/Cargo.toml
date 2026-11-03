@@ -17,3 +17,7 @@ ow-casc.workspace = true
 ow-stu.workspace = true
 glam.workspace = true
 
+[dev-dependencies]
+# The layout tests cross-check their strides against the read narrowphase.
+ow-sim.workspace = true
+

@@ -43,6 +43,7 @@ pub mod mapguid;
 pub mod mapresolve;
 pub mod material;
 pub mod mesh_shape;
+pub mod mesh_world;
 pub mod model;
 pub mod model_body;
 pub mod model_collision;

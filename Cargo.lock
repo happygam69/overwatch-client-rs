@@ -1339,6 +1339,7 @@ dependencies = [
  "flate2",
  "glam",
  "ow-casc",
+ "ow-sim",
  "ow-stu",
  "sha1",
 ]

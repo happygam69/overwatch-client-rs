@@ -2151,6 +2151,157 @@ registration was identified for it, and why `node+0x110` is preferred over
 on this map no test could pin them. (4) The **id remap**'s intent (which wrapper
 should win) is unread.
 
+## Check 16 -- the mesh world, assembled, and a swept query through it
+
+`ow_tank::mesh_world`, `crates/ow-tank/tests/mesh_world_real.rs` (install) and
+the code reads below. This check turns the per-model collision from a set of
+descriptors into an addressable world: the three arrays of every selected holder
+laid out in one byte buffer behind guest addresses, one shape record per holder
+addressing its own arrays, and the type-3 narrowphase walking it.
+
+### The layout the walk reads (assembly, `0x142caed30`)
+
+| constant | value | what the function does with it |
+|---|---|---|
+| record `+0x00` | scale quad | multiplies the accepted contact point (`param_1[0..3]`) |
+| record `+0x10` | `1/scale` quad | multiplies the query's expansion (`param_3 + 0x50`) before the triangle test |
+| record `+0x20` | BVH root pointer | the walk's first stack entry; a null there returns `0x142caed30` immediately |
+| record `+0x28` | vertex array pointer | a corner is `pointer + i32 * 0x10` |
+| record `+0x30` | triangle array pointer | a record is `pointer + i32 * 0x20` |
+| node stride | **`0x20`** | the adjacent child is `node + 0x20`, the second is `node + *(i32*)(node + 0x18) * 0x20` |
+| node `+0x00` | box low corner, four lanes | read as one quad |
+| node `+0x0c` | box high corner, four lanes | read as one quad; its lane 3 is the same dword as the child field |
+| node `+0x18` | `i32` child / leaf triangle base | serves as both the box's fourth high lane and the child index |
+| node `+0x1c` | `u16` layer mask | `& query_mask`; zero skips the node |
+| node `+0x1e` | `u8` split axis | selects which child is pushed first |
+| node `+0x1f` | `u8` leaf triangle count | zero means internal |
+| triangle stride | **`0x20`** | three `i32` corners at `+0x00`/`+0x04`/`+0x08`, two `u16` ids at `+0x18`/`+0x1a`, `u16` mask at `+0x1c` |
+| vertex stride | **`0x10`** | one `Vec3A` |
+
+The entries above are operations, not bytes. Two facts confirm the strides from
+the data as well as from the code: on model `0x0d0000000000078c` the block's
+`nodeCount` is `9` against `288` node bytes (`288 / 9 = 0x20`), and its
+`0x38B71436` word is `12` against `384` triangle bytes (`384 / 12 = 0x20`);
+across the range's **272** mesh blocks that word times `0x20` equals the triangle
+array's byte length on **272 of 272**.
+
+### The query block, and which query the read path accepts
+
+`0x142caed30` reads `P0` at `+0x00`, `P1` at `+0x10`, the motion budget at
+`+0x20`, the support-point pointer at `+0x30`, the support-point count at
+`+0x38`, the rotation quaternion at `+0x40`, the expansion base at `+0x50`, the
+`u16` layer mask at `+0x70` and a byte at `+0x72`. The dispatcher `0x142cc45a0`
+copies the descriptor into a stack block that runs from the start quad through
+the byte at `+0x72`, `0x73` bytes; the tests hand the narrowphase a `0x78`-byte
+block so every four-lane read stays inside it.
+
+`MeshTriangleTest` (`0x142cce430`) takes its read triangle path only when **the
+support-point count is exactly `0`** and **every lane of the scaled expansion is
+at most `0.005`**. Every other state builds a stack descriptor from the query
+and calls `0x142cc9460`, which is **unread**. So:
+
+- a **capsule** query (support points, and a radius far above `0.005`) never
+  reaches the read triangle test: it takes `0x142cc9460`, and the contact it
+  produces cannot be stated from the read set;
+- `ow_sim::collide::mesh_sweep` returns a **miss** when the count is above zero,
+  while `0x142caed30` in that case builds the support-point hull (centre,
+  half-extent and a `+0.02` inflation) and **continues** the walk. That early
+  return is a stand-in for the unread slow path and can report a miss where the
+  client reports a hit; it is recorded here rather than patched, and `ow-sim` is
+  otherwise untouched.
+
+The tests therefore drive the swept-**point** query: count `0`, expansion base
+`0`, the identity rotation. That is also the only state in which `sweep_bounds`
+(`0x142cd5540`) short-circuits and returns its own three inputs, so the block the
+narrowphase reads is exactly what that function produces.
+
+### What is assembled
+
+`MeshWorld::new(base)` collects shapes; `push` appends one shape's nodes, points
+and triangles back to back with **no padding** and stores their guest addresses,
+and `record(index, scale)` fills `MeshShapeFill`'s `0x4c` bytes from those
+addresses through `mesh_shape::shape_record`. The base is the assembler's choice:
+the client's pointers are heap allocations and are not recoverable from an asset,
+and every read is a subtraction from the base.
+
+On the practice range
+(`mesh_world_real::the_ranges_mesh_shapes_assemble_into_one_world`):
+
+| measurement | result |
+|---|---|
+| model assets the range names | 229 |
+| models with a selected mesh shape | **161** |
+| holders walked | 279 |
+| shapes assembled, one per selected holder | **272** |
+| buffer | **4,797,872 bytes** |
+| blocks where `0x38B71436 * 0x20` is the triangle array's byte length | 272 of 272 |
+| distinct node layer masks / triangle layer masks | the same 20 values, `0x3a`..`0x1fff` |
+
+The filter is the body builder's, reused from `model_body`: the mode byte `+0x2a`
+is `0`, the embedded mesh at `+0x08` exists, and the holder's mask passes (all
+279 are all ones). Every selected holder's shape mode is `0`, so one type-3 mesh
+shape each.
+
+Each record addresses its own arrays: for all 272, the record's `+0x20`, `+0x28`
+and `+0x30` lanes equal that shape's slots, and reading the bytes back from those
+addresses gives the asset's arrays byte for byte.
+
+### The sweep
+
+`mesh_world_real::the_pinned_model_mesh_sweeps_to_an_exact_hit` -- model
+`0x0d0000000000078c`, one 9-node / 8-point / 12-triangle block, unit scale, the
+shape's own frame:
+
+| query | value |
+|---|---|
+| start / end | `(0.9950001, 6.01, 0.9950001)` -> `(0.9950001, -2.01, 0.9950001)` |
+| expansion / count / mask | `0` / `0` / `0xffff` |
+| walk | 4 internal nodes, 1 leaf |
+| hit point | `(0.9950001, 4.0, 0.9950001, 0.0)` |
+| hit normal | `(0, 1, 0, 0)` |
+| hit fraction | `0x3e8051b8` on all four lanes |
+| triangle / ids | `7` / `[0x8000, 0]` |
+
+The start and end come from the shape's own root-node box (`-0.01 .. 4.01`)
+expanded by the test's two units; the point `(x, z)` is a quarter of the way into
+the box so the line does not run along a box diagonal. The mesh's top face is
+the plane `y = 4` of the point array, and the sweep meets it after
+`2.01 / 8.02 = 0.2506234645843506` of its length.
+
+`the_ranges_mesh_shapes_assemble_into_one_world` sweeps every shape with **one**
+line, the union of all 272 root boxes (`-28.35, -14.51, -14.01` to
+`32.21, 100.01, 52.51`), and reports the nearest of the hits:
+
+| measurement | result |
+|---|---|
+| shapes that produced a hit | 3 of 272 |
+| nearest hit: shape | 49, in the test's assembly order (models by GUID, then holders in array order) |
+| nearest hit: model | `0x0d000000000010f5` |
+| contact point | `(-13.212505, 100.0, 2.619999, 0.0)` |
+| normal / fraction | `(0, 1, 0, 0)` / `0x3c8aedfa` |
+| triangle / ids | `14` / `[0x8000, 0]` |
+
+### What is open here, exactly
+
+1. **The capsule (support-point) narrowphase.** `0x142cc9460`, and the
+   `0x142caed30` hull path that leads to it. A real capsule-vs-mesh contact
+   cannot be stated until it is read, and `mesh_sweep`'s count-above-zero miss is
+   a stand-in, not the client's answer.
+2. **The scene's placement transform.** The model meshes are in their own local
+   frames; the chain from a placeable's parsed translation/rotation/scale to the
+   shape's world transform runs through `OwnerCreateBody`'s `0x30`-byte config and
+   the body's transform, and was not read operation for operation. Every shape in
+   the range test is therefore unplaced, and the sweep reports a surface in that
+   local frame, not a map location.
+3. **The query's layer mask and the query's start.** In the client both are
+   runtime values (the mover's or shape's collision layer, and the queried
+   position); the test asks for every layer and derives its line from the
+   assembled boxes.
+4. **The client's broadphase order.** Which shape a single client query reaches
+   first is decided by the owner's four buckets and sphere cull
+   (`FUN_1421088e0`), which is not read here; the "nearest of the hits" above is
+   the test's own rule over 272 independent narrowphase calls.
+
 ## What this leaves
 
 | line | state |
@@ -2176,6 +2327,10 @@ should win) is unread.
 | how a node's class is selected | **read: a `u16` node type id** in the 144-entry registry at `0x144188170`; type `2` -> `NodeType2Factory` `0x142029f00`, which registers the class as a reflected type of kind `0x14`, size `0x910` (check 13) |
 | does component kind `0x14` identify anything? | **no**: 160 of the 283 `RegisterTypeWithSize` sites pass `0x14`, with sizes `0x18`..`0x31868`; the collision component is identified by its size `0xad0`, whose only registration site is `0x14200bbb1` (check 13) |
 | the record's flag word (`+0x10`, bit `0x200`) | **open**: the dispatch form is `call [WorldBase_vtable+0x40]`; checks 13 and 14 count every encoding of it (492 + 31 memory/tail, 109 register-indirect) and none of the sites read carries a creation record |
+| the mesh record's node / triangle / vertex layout | **read (check 16)**: `0x142caed30` gives node stride `0x20` (adjacent child `+0x20`, second child `i32` at `+0x18` times `0x20`), triangle stride `0x20`, vertex stride `0x10`, node box `+0x00`/`+0x0c`, mask `+0x1c`, axis `+0x1e`, leaf count `+0x1f`; the block's own `nodeCount` and `0x38B71436` word agree on 272 of 272 |
+| the range's collision as one addressable world | **assembled and swept (check 16)**: 272 shapes from 161 models in one 4,797,872-byte buffer, every record addressing its own arrays; the pinned block's sweep hits `(0.9950001, 4.0, 0.9950001)` at fraction `0x3e8051b8`, triangle `7` |
+| the capsule (support-point) narrowphase | **open**: `0x142cc9460`, reached whenever the support-point count is non-zero or the scaled expansion exceeds `0.005` (`0x142cce430`); `mesh_sweep` returns a miss there today, which is a stand-in and not the client's answer |
+| the scene's placement transform | **open**: a model mesh is assembled in its own local frame; the placeable transform to shape/boss transform chain was not read, so no range sweep names a map location |
 
 Ordered next reads (the per-model route):
 
@@ -2289,3 +2444,10 @@ Ordered next reads (the per-model route):
 | the mode byte is a declared holder field, not a code store | check 15: field `0x89AABA94` at `+0x2a`, registered by `0x141510382` (`0x1415103ac`); the other six fields' installers are `0x141510438`, `0x141510631`, `0x141510805` |
 | the range gives the assembler no input | `model_shape_source_real::the_range_takes_no_holder_into_the_shape_source` (install): 229 models, 279 holders, 0 carrying the mode byte, 272 with a mesh, plan `(0,0,0,0)`, counterfactual `(272,0,0,0)` |
 | the context's arrays have a consumer | **not tested / open**: the only reads of `[component+0xc8]` in the component's module are the build and teardown sites (check 15) |
+| the mesh layout is the walk's, not a guess | check 16: `0x142caed30` (node stride `0x20`, triangle stride `0x20`, vertex stride `0x10`, node/triangle field offsets) and the block's own words (`288 / 9`, and `0x38B71436 * 0x20` = the triangle bytes on 272 of 272 blocks) |
+| `mesh_world::tests::*` | the strides against `ow_sim::collide`'s constants, the append order and guest addresses, the record's pointer lanes, the query block's fields, the compile-time field-in-record checks, the array-length refusals |
+| the pinned block's sweep, bit-exact | `mesh_world_real::the_pinned_model_mesh_sweeps_to_an_exact_hit`: point `(0.9950001, 4.0, 0.9950001, 0)`, normal `(0,1,0,0)`, fraction `0x3e8051b8` x4, triangle `7`, ids `[0x8000, 0]`, 4 internal nodes, 1 leaf |
+| the range's 272 shapes in one world | `mesh_world_real::the_ranges_mesh_shapes_assemble_into_one_world`: 229 models, 161 with a shape, 279 holders, 272 shapes, 4,797,872 bytes, every record addresses its own arrays, first shape round-trips byte for byte |
+| the range's first hit, by model identity | same test: 3 of 272 shapes hit by one line through the unplaced assembly; nearest is shape 49, model `0x0d000000000010f5`, point `(-13.212505, 100.0, 2.619999, 0)`, fraction `0x3c8aedfa`, triangle `14` |
+| a capsule against the mesh | **not tested / open**: the support-point path is `0x142cc9460` and `mesh_sweep` returns a miss for a non-zero count where the client walks (check 16) |
+| a placed mesh in map coordinates | **not tested / open**: the placement transform chain is unread, so every assembled shape stays in its own local frame (check 16) |

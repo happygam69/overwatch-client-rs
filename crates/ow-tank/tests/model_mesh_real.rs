@@ -218,7 +218,7 @@ fn the_range_models_prebuilt_mesh_and_its_shape_record() {
     assert_eq!(block.node_count, 9, "nodeCount");
     assert_eq!(block.nodes_len, 288, "node array bytes (9 x 32)");
     assert_eq!(block.points.len(), 8, "points");
-    assert_eq!(block.indices.len(), 384, "triangle array bytes (24 x 16)");
+    assert_eq!(block.indices.len(), 384, "triangle array bytes (12 x 32)");
     assert_eq!(block.field_3c, 12);
     assert_eq!(block.height, 5);
     assert_eq!(block.field_44_bits, 0x42c0_0000, "96.0f");
