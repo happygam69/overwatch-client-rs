@@ -7,10 +7,11 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
 - `ShapeNarrowphase` `0x142cc1610` is implemented as
   `ow_sim::collide::shape_narrowphase` and verified as `fn/ShapeNarrowphase`:
-  224 cases, every channel, branch coverage 100% over the wrapper's own
-  `0x204` bytes (2/2 reachable of 7 sites, 5 single-edge sites declared),
+  264 cases, every channel, branch coverage 100% over the wrapper's own
+  `0x204` bytes (3/3 reachable of 7 sites, 4 single-edge sites declared),
   11/12 mutants killed. The wrapper is now the fourth verified link in the
-  query chain, between the BVH walk and the hit policy.
+  query chain, between the BVH walk and the hit policy, and the corpus covers
+  all three implemented primitives - sphere, capsule and the type-3 mesh walk.
 - The dispatch label `0x142cb8d60` is a real entry point inside
   `ShapeWorldTransform`'s extent, not a separate function: the wrapper calls
   it with **five** arguments, the fifth being the query block. Its table is
@@ -23,11 +24,20 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
   wrapper publishes only the hit record's `+0x20` quad, after calling the hit
   callback. The sink status word distinguishes `0` filtered from `2` missed,
   which is why a filtered shape still builds and pushes a record.
+- The "which field holds the type-3 mesh world" question is **answered and
+  closed**: there is no single world pointer. The element is
+  `{scale[4] at +0x00, 1/scale[4] at +0x10, root at +0x20, vertices at +0x28,
+  triangles at +0x30}`, the three pointers are absolute, and the world is
+  therefore the address space they live in. Composing the arm needed no extra
+  field, only a `MeshWorld` whose base is the arena. The `+0x48` an earlier note
+  guessed at is inside the element's unused tail. A second, separate field does
+  matter and was missing from every fixture: `block+0x70` is a `u16` mask that
+  every triangle's own `+0x1c` mask is tested against, so a zero block mask
+  makes every triangle unusable.
 - `formats/shape-narrowphase.md` holds the record layout, the two entry-driven
   id overwrites (`+0x34` skipped for types 3 and 4) and the list of what the
-  unit does **not** cover: the sink push, the callback's return path, types 2
-  and 4+, and the type-3 mesh world derivation - the last of which is the one
-  link between the verified pieces and the practice range.
+  unit does **not** cover: the sink push, the callback's return path, and types
+  2 and 4+, whose primitives are unread.
 
 ## 2026-11-07 - the shape world transform is verified against the client's bytes
 

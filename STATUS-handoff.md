@@ -894,18 +894,20 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
    always return the destination's NaN for two-NaN `ADDPS`/`SUBPS`; the
    hardware answer is pinned by a Rust test. The narrowphase wrapper
    `0x142cc1610` is **implemented and verified** as
-   `ow_sim::collide::shape_narrowphase` / `fn/ShapeNarrowphase` (224 cases,
-   every channel, branch coverage 100%, 11/12 mutants; `formats/shape-narrowphase.md`).
+   `ow_sim::collide::shape_narrowphase` / `fn/ShapeNarrowphase` (264 cases,
+   every channel, coverage 3/3 reachable of 7 sites, 11/12 mutants;
+   `formats/shape-narrowphase.md`).
    Its dispatch label `0x142cb8d60` is a real entry point inside the transform's
    extent and takes a **fifth** argument, the query block; the per-type pool
    base and stride are `0`/`+0x2d0`/`0x20`, `1`/`+0x2e8`/`0x30`,
    `2`/`+0x300`/`0x50`, `3`/`+0x318`/`0x50` (`MeshSweepEntry` `0x142caed10` ->
    `0x142caed30`) and everything else, negative types included, `+0x330`/`0x50`.
-   Composition is still one field short: which field of the `0x50`-byte type-3
-   element holds the mesh world pointer is **unread** (`MeshSweepEntry`'s own
-   comment names the element's `+0x48`, which is the next thing to compose and
-   diff), so the type-3 arm of `shape_narrowphase` calls the verified
-   `mesh_sweep` but is not itself proven. Still open
+   The type-3 composition question is **closed**: there is no single mesh-world
+   pointer. The `0x50`-byte element is `{scale[4], 1/scale[4], root at `+0x20`,
+   vertices at `+0x28`, triangles at `+0x30`}` with absolute pointers, so the
+   world is the address space they live in, and the corpus now drives type-3
+   cases (6 hits). `block+0x70` is the `u16` mask each triangle's `+0x1c` is
+   tested against. Still open
    here: the serialised mapping from the `STUModelComponentInstanceData` stream
    to that triple (class `0x936A1A00` is not in the reference class list) and
    the geometry variant table for negative ids. The **Rust four-pass driver

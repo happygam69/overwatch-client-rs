@@ -33,35 +33,39 @@
   "returns": "void",
   "argFactory": "collision_narrowphase_fixture",
   "options": {
-    "iterations": 160,
+    "iterations": 200,
     "coverageThreshold": 80,
     "mutationCount": 12,
     "mutationKillRate": 0.7,
     "seed": 771102,
     "coverageWindow": 516,
     "allowedImageReads": [
-      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f",
-      "0x7ff7c87e5f40-0x7ff7c87e5f4f",
-      "0x7ff7c7e30818-0x7ff7c7e30827",
-      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
-      "0x7ff7c7c9aae4-0x7ff7c7c9aaf3",
-      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff",
-      "0x7ff7c7cc62f0-0x7ff7c7cc62ff",
-      "0x7ff7c80b1030-0x7ff7c80b103f",
-      "0x7ff7c830cd70-0x7ff7c830cd7f",
-      "0x7ff7c830cd80-0x7ff7c830cd8f",
-      "0x7ff7c7d8ad20-0x7ff7c7d8ad2f"
+      "0x7ff7c7c9aae4-0x7ff7c7c9ab23",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9ab2f",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17df",
+      "0x7ff7c7ca44e0-0x7ff7c7ca451f",
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a3f",
+      "0x7ff7c7cacd50-0x7ff7c7cacd8f",
+      "0x7ff7c7cc62f0-0x7ff7c7cc632f",
+      "0x7ff7c7d8ad20-0x7ff7c7d8ad5f",
+      "0x7ff7c7dc4b40-0x7ff7c7dc4b7f",
+      "0x7ff7c7dc4bf0-0x7ff7c7dc4c2f",
+      "0x7ff7c7e30818-0x7ff7c7e30857",
+      "0x7ff7c7e3e0c0-0x7ff7c7e3e0ff",
+      "0x7ff7c80b1030-0x7ff7c80b106f",
+      "0x7ff7c81baba0-0x7ff7c81babdf",
+      "0x7ff7c830c2c0-0x7ff7c830c2ff",
+      "0x7ff7c830ccb0-0x7ff7c830ccef",
+      "0x7ff7c830ccf0-0x7ff7c830cd3f",
+      "0x7ff7c830cd70-0x7ff7c830cdaf",
+      "0x7ff7c830cd80-0x7ff7c830cdbf",
+      "0x7ff7c87e5f40-0x7ff7c87e5f7f"
     ],
     "unreachableBranches": [
       {
         "site": "0x7ff7c79e1678",
         "edge": "0x7ff7c79e167e",
         "why": "The sink check on the filter-rejected path. This unit's fixture leaves ctx[0x20] null in every case, so the guard jumps and the push is never taken; the push itself (0x142cc1450) is verified by no unit yet, so a non-null sink would compare bytes this unit does not implement."
-      },
-      {
-        "site": "0x7ff7c79e16fc",
-        "edge": "0x7ff7c79e1718",
-        "why": "The `type == 3` arm of the id overwrite. The corpus is restricted to type 0 (sphere) and type 1 (capsule), the two per-type primitives that are verified; type 3 needs the mesh world the element's pointers describe, which this fixture does not build."
       },
       {
         "site": "0x7ff7c79e1700",

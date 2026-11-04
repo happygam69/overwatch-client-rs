@@ -582,14 +582,16 @@ query block), which the earlier note's four-argument reading missed. What a
 real candidate still needs is
 (a) the collision geometry the query walks (`record+0x2b8` entries and the
 per-type pools at `+0x2d0..+0x330`), which is the map's collision chunks,
-(b) the hit policy's live collision world (`0x14202c580` -> `0x14202bc90`), and
-(c) **which field of the `0x50`-byte type-3 element holds the mesh world
-pointer** — the verified `mesh_sweep` unit takes the world from its fixture
-(`base: 0x50`), not from the record, so the type-3 path cannot be composed 1:1
-until that field is read. `MeshSweepEntry` `0x142caed10` names the element's
-`+0x48` as the mesh world, which is the next thing to compose and diff. Types 2
-(`0x142cd3c80`) and 4+ (`0x142cd0ae0`) are also unread; the practice range is
-entirely type 3, so those two do not block it. Without those,
+(b) the hit policy's live collision world (`0x14202c580` -> `0x14202bc90`).
+The type-3 composition question is **closed**: there is no single mesh-world
+pointer. The `0x50`-byte element is `{scale[4] at +0x00, 1/scale[4] at `+0x10`,
+root at `+0x20`, vertices at `+0x28`, triangles at `+0x30`}` with absolute
+pointers, so the world is the address space they live in, and the arm is now
+exercised by `fn/ShapeNarrowphase`'s corpus (6 type-3 hits). `block+0x70` is the
+`u16` mask each triangle's `+0x1c` is tested against, which every earlier
+fixture left zero. Types 2 (`0x142cd3c80`) and 4+ (`0x142cd0ae0`) are still
+unread; the practice range is entirely type 3, so those two do not block it.
+Without those,
 a candidate cannot be scored: the fan reads a record only the live hit policy
 fills. So the next anchor is the chunk ingest in `formats/maps.md`, coupled
 with the primitive bodies.

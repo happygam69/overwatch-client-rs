@@ -1063,7 +1063,13 @@ fn collision_narrowphase_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>),
             poses,
             filter,
             pools,
-            mesh: None,
+            // The type-3 elements name their BVH, vertices and triangles by
+            // absolute address, and the fixture places all three inside the
+            // blob, so the world is the blob addressed from the arena base.
+            mesh: Some(ow_sim::collide::MeshWorld {
+                base: ARENA,
+                bytes: &blob,
+            }),
         };
         let mut quad = [0.0f32; 4];
         ow_sim::collide::shape_narrowphase(&world, &block, shape, &mut quad);

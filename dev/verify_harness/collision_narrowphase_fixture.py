@@ -20,6 +20,8 @@ arena address:
     +0xaa0 type-2 pool  two 0x50-byte records (unread primitive)
     +0xb00 type-3 pool  two 0x50-byte records (mesh; needs a mesh world)
     +0xba0 type-4 pool  two 0x50-byte records (unread primitive)
+    +0xd00 mesh world   the BVH nodes, vertices and triangles a type-3 element
+                      points at
 
 The corpus stays on types **0 and 1** — the two per-type primitives that are
 verified — because the emulator would run the unread ones and there is nothing
@@ -38,6 +40,7 @@ import struct
 from typing import List
 
 from emu_oracle import ARENA_BASE, ArgSpec
+from mesh_fixture import standard_world
 
 BLOB_OFF = 0x0000
 OUT_OFF = 0x2000
@@ -50,7 +53,11 @@ OWNERS_AT = 0x580
 POSES_AT = 0x620
 POOLS_AT = [0xA00, 0xA40, 0xAA0, 0xB00, 0xBA0]
 POOL_STRIDES = [0x20, 0x30, 0x50, 0x50, 0x50]
-BLOB_LEN = 0xCC0
+MESH_AT = 0xD00
+MESH_NODES = 0x000
+MESH_VERTICES = 0x100
+MESH_TRIANGLES = 0x180
+BLOB_LEN = 0x1000
 
 ENTRY_STRIDE = 0xC0
 ENTRY_COUNT = 2
@@ -81,8 +88,24 @@ def _block(start, end, motion, expansion, flag) -> bytes:
     block[0x20:0x30] = _quad([motion, motion, motion, motion])
     struct.pack_into("<i", block, 0x38, 0)
     block[0x50:0x60] = _quad([expansion, expansion, expansion, expansion])
+    # The triangle/leaf mask the mesh walk tests against.
+    struct.pack_into("<H", block, 0x70, MASK_ALL)
     block[0x72] = flag
     return bytes(block)
+
+
+MASK_ALL = 0x0001
+
+
+def _mesh_world() -> bytes:
+    """The mesh unit's own standard world: two quads under an internal root,
+    laid out as nodes at +0x00, vertices at +0x100 and triangles at +0x180.
+
+    Reused rather than rebuilt so the BVH the wrapper walks here is the one
+    `fn/MeshSweep` was verified against; quad B sits at x = 5..6 and is out of
+    every segment's way, so it only exercises the walk's second child.
+    """
+    return standard_world()
 
 
 # `ShapeQueryFilter(ctx+8, entry+0x98)` reads `a[0]`/`a[1]`/`a[2]` as three
@@ -154,10 +177,13 @@ QUATS = [
 ]
 
 
+KINDS = (0, 1, 3)
+
+
 def _cases():
     cases = []
     for shape in (0, 1):
-        for kind in (0, 1):
+        for kind in (0, 1, 3):
             for pool_index in (0, 1):
                 for attach in (0, 1):
                     for filter in FILTERS:
@@ -255,10 +281,22 @@ def make_args(i: int) -> List[ArgSpec]:
                 blob[at : at + 0x10] = _quad((p0[0], p0[1], p0[2], 0.0))
                 blob[at + 0x10 : at + 0x20] = _quad((p1[0], p1[1], p1[2], 0.0))
                 struct.pack_into("<f", blob, at + 0x20, radius)
+            elif slot == 3:
+                # The type-3 element is `{scale[4], 1/scale[4], root,
+                # vertices, triangles}` with the three pointers absolute; the
+                # world they name is the blob's own mesh region.
+                blob[at : at + 0x10] = _quad((1.0, 1.0, 1.0, 1.0))
+                blob[at + 0x10 : at + 0x20] = _quad((1.0, 1.0, 1.0, 1.0))
+                struct.pack_into("<Q", blob, at + 0x20, _at(MESH_AT + MESH_NODES))
+                struct.pack_into("<Q", blob, at + 0x28, _at(MESH_AT + MESH_VERTICES))
+                struct.pack_into("<Q", blob, at + 0x30, _at(MESH_AT + MESH_TRIANGLES))
             else:
                 # Unread primitives: keep the bytes non-zero and distinct so a
                 # mis-selected pool is detectable, never executed.
                 struct.pack_into("<f", blob, at, float(element + 1))
+
+    # The mesh world the type-3 elements point at.
+    blob[MESH_AT : MESH_AT + 0x200] = _mesh_world()
 
     start, end, motion, expansion, flag = segment
     return [

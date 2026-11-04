@@ -67,9 +67,28 @@ The type byte is compared as `0, 1, 2, 3` in that order and the last arm
 catches everything else, so a negative type and type `4` share the
 `record+0x330` pool.
 
-`MeshSweepEntry` `0x142caed10` is 26 bytes and does nothing but forward: the
-type-3 pool element is the shape entry the mesh walk expects, with the mesh
-world pointer at the element's `+0x48`.
+`MeshSweepEntry` `0x142caed10` is 26 bytes and does nothing but forward, so the
+type-3 pool element is the record the mesh walk expects. That element is
+`0x50` bytes and there is **no single "mesh world" pointer** in it:
+
+| element offset | meaning |
+|---|---|
+| `+0x00` | the scale, four lanes |
+| `+0x10` | `1/scale`, four lanes |
+| `+0x20` | the BVH root node |
+| `+0x28` | the vertex array |
+| `+0x30` | the triangle array |
+
+The three pointers are **absolute addresses**, so the world the walk runs in
+is simply the address space they live in. Composing the type-3 arm therefore
+needs no extra field: `mesh_sweep` is handed the element and a world whose base
+is the arena and whose bytes are the blob, and every pointer resolves. The
+`+0x48` that an earlier note guessed at is inside the element's unused tail.
+
+One more field the mesh arm depends on is in the **query block**, not the
+element: `block+0x70` is a `u16` mask that every triangle's own mask at its
+`+0x1c` is tested against. A zero block mask makes every triangle unusable, so
+a fixture that leaves the block's tail zero sees a walk that never hits.
 
 ## The hit record
 
@@ -119,25 +138,24 @@ returning early.
 ## What is verified, and what is not
 
 `ow_sim::collide::shape_narrowphase` follows the above operation for operation
-and is verified as `fn/ShapeNarrowphase`: 224 cases, every channel, branch
-coverage 100% over the wrapper's own `0x204` bytes (2/2 reachable of 7 sites,
-with 5 single-edge sites declared), and 11 of 12 mutants killed.
+and is verified as `fn/ShapeNarrowphase`: 264 cases, every channel, branch
+coverage 100% over the wrapper's own `0x204` bytes (3/3 reachable of 7 sites,
+with 4 single-edge sites declared), and 11 of 12 mutants killed. The corpus
+covers all three primitives that are implemented — sphere, capsule and the
+type-3 mesh walk — so the practice range's own type is exercised through the
+wrapper.
 
 The unit drives the wrapper directly, with a world assembled from one arena
 blob and the sink left null, so:
 
 - **Not verified: the sink push** `0x142cc1450` and the sink record's layout.
-  It is the reason three of the five declared dead edges are dead.
+  It is the reason all four declared dead edges are dead.
 - **Not verified: the hit callback's return path**, beyond the fact that it is
   called with those three arguments in that order. The unit uses a `ret` byte
   in the arena as the callback.
 - **Not verified: types 2 and 4+.** Both primitives are unread, so the Rust
-  reports `Narrowphase::UnreadType` for them rather than guessing.
-- **Not verified: the type-3 mesh world derivation.** The Rust calls the
-  verified `mesh_sweep`, but which element field holds the mesh world (the
-  `+0x48` the `MeshSweepEntry` note names) has not been composed and diffed.
-  The practice range is entirely type 3, so this is the one link between the
-  verified pieces and a real candidate.
+  reports `Narrowphase::UnreadType` for them rather than guessing. Type 4 is
+the remaining declared dead edge at `0x142cc1700`.
 
 ## The lesson the fixture taught
 

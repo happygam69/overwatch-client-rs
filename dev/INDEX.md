@@ -142,7 +142,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/cmf_key_154504_fixture.py` | Deterministic inputs for the `fn/CmfKey154504` unit. | 60 |
 | `verify_harness/collision_capsule_fixture.py` | Inputs for the `collision_capsule` unit (`0x142ccd7b0`, type 1). | 237 |
 | `verify_harness/collision_filter_fixture.py` | Inputs for the `collision_filter` unit (`0x142cbb350`). | 74 |
-| `verify_harness/collision_narrowphase_fixture.py` | Inputs for the `collision_narrowphase` unit (`0x142cc1610`). | 270 |
+| `verify_harness/collision_narrowphase_fixture.py` | Inputs for the `collision_narrowphase` unit (`0x142cc1610`). | 308 |
 | `verify_harness/collision_sphere_fixture.py` | Inputs for the `collision_sphere` unit (`0x142ccdf40`, type 0). | 235 |
 | `verify_harness/collision_sweep_bounds_fixture.py` | Inputs for the `collision_sweep_bounds` unit (`0x142cd5540`). | 128 |
 | `verify_harness/collision_transform_fixture.py` | Inputs for the `collision_transform` unit (`0x142cb8b80`). | 155 |
