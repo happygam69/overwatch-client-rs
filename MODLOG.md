@@ -3,6 +3,24 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-07 - the fan's mesh-face refinement is read, and it is not a draw
+
+- `0x140cc2290` has one caller, `MoverWishWriter` `0x140cb86c0`, and it writes
+  the query back: the normal at `query+0x10..0x1f` and a `u16` at `query+0x3e`.
+  Its gate is `query+0x28 != -1` and `0x142cba720(query+0x28) == 3`, so the
+  shape ring only runs for a **type-3 mesh** shape - the same type the practice
+  range's static collision is made of.
+- The triangle outline, the two facing colours and the 0.1-long normal ray are
+  a visualiser gated on the byte at `0x143c03a3d`. The refinement runs outside
+  that gate: closest point on the triangle (`0x142cc5bc0`), keep the candidate
+  within the running best `+1.19e-5`, and re-test the normal against the
+  query's basis row unless bit 0 of the sub-shape `u16` is set.
+- Open on this function, recorded in `open-questions.md` 1a: `0x142cb44c0`'s
+  candidate list, `0x142cae760`'s triangle-record layout, `0x142cc5bc0`'s
+  closest-point routine and the point transform `0x142cb4a30`. Ghidra's stored
+  extent for `0x140cc2290` is 125 bytes while the body runs past
+  `0x140cc2c18`, so the body must be repaired before those reads are trusted.
+
 ## 2026-11-07 - the collision query driver is verified against the client's bytes
 
 - `CollisionQueryDriver` `0x142cbd510` is implemented as
