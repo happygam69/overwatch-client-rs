@@ -1744,8 +1744,11 @@ list-shaped seam, and `CandidateSolver`'s one-candidate interface is the right
 shape rather than a limitation. What it does not explain is *why* the composer
 fills the list at all - either the ring is vestigial in this build, or some
 other caller of `0x14203dae0` reads `desc+0x28`. That question is now cheap to
-settle: port the ring, watch whether `+0x498` is ever non-zero, and grep for
-other callers of the dispatcher.
+settle: port the ring, watch whether `+0x498` is ever non-zero, and read the
+two descriptor producers still unexamined. The dispatcher has exactly two
+callers - `0x1420328c0` (the thunk the composer uses) and `0x142032e80` - and
+`CollisionHandleDispatch` has exactly one, `0x142032690`. If the list is live
+anywhere, it is live in one of those.
 
 This also retires two earlier readings, both taken from the linear `.pdata`
 corpus: that `0x142cc45a0` was a "driver that re-flattens into a sweep-options
