@@ -2393,6 +2393,30 @@ three slab axes, the triangle's normal, and the three triangle edges crossed
 with the box's own axes, each with a `0.005` tolerance. It returns
 `(movmskps & 7) == 0`, so the `w` lanes never vote.
 
+`0x142cc5bc0` (1229 bytes) is Ericson's `ClosestPtPointTriangle` - the
+Voronoi-region form, not the seven-branch `if` form. `param_1` is three vertex
+quads at a `0x10` stride, `param_2` the query point's three floats. It forms
+`a = v0 - p`, `b = v1 - p`, `c = v2 - p` and then
+
+```text
+d1 = dot(ab, a)   d2 = dot(ab, b)   d3 = dot(ac, a)
+d4 = dot(ac, c)   d5 = dot(bc, b)   d6 = dot(bc, c)
+va, vb, vc       = the three Voronoi numerators, from the face normal
+```
+
+and selects the region with `d1 < 0 && d3 < 0` (vertex A), `d2 > 0 && d5 > 0`
+(B), `d6 > 0 && d4 > 0` (C), `va <= 0` (edge BC), `vb <= 0` (CA), `vc <= 0`
+(AB), otherwise the interior. The weight is a `DIVPS` by the region's
+denominator, then blended by `CMPLTPS` against the constants at `0x142f7aaf0`
+and `0x143391030` (a degenerate-denominator guard), and the three vertex quads
+are `MULPS`-ed by it and summed.
+
+Ghidra prints the function as `void` and drops the last blocks, so the tail had
+to be read from the instruction stream: `ADDPS XMM0, XMM3` at `0x142cc6049`,
+then the register restore and `MOV RSP, R11` at `0x142cc6089`, so **the answer
+is returned in `XMM0` as a float4**. The `w` lane is carried through the whole
+computation untouched, which is why every region test is `movmskps & 7`.
+
 Per candidate id, in container order: a 0x50-byte record is zeroed and
 `-1`-filled, then `0x142cae760(object, &record, id)` fills it. A `0x8000` bit in
 the record's `+0x2a` `u16` means the id selects a sub-shape, which
@@ -2426,7 +2450,6 @@ Still open, and each is a single-function read:
 | address | what it answers |
 |---|---|
 | `0x142cae760` | the triangle record's `0x50`-byte layout |
-| `0x142cc5bc0` | the closest-point-on-triangle routine |
 | `0x142cb4a30` | the point transform (and whether it is the 4x4 of `0x140cb5510`) |
 | `0x142cba720`, `0x142cba2a0`, `0x142cba680` | the shape handle's type, handle and query object |
 | `0x142cb49a0`, `0x142cb48a0` | the geometry slot and the query quaternion |

@@ -83,6 +83,18 @@ missing is **data, not code** — and the two producers are both blocked:
   pointer-fixed, but a 28-function census of every shape producer finds **no
   reader that can see its payload**; the remaining Domino-side consumers are
   unreachable by every address spelling checked;
+The **fan's mesh-face refinement** is read too, and it is the one place where a
+candidate direction is actually tested against geometry: `FUN_140cc2290`
+(one caller, `MoverWishWriter` `0x140cb86c0`) is a sphere-vs-mesh
+nearest-triangle query with the radius as `param_3`, an initial acceptance of
+`3r²`, a box-BVH gather `0x142caea70` whose accept is a box-vs-triangle SAT
+(`0x142cd58a0`), and Ericson's closest-point `0x142cc5bc0` as the distance.
+Two signatures there were false: the refinement returns a `bool` and
+`0x142cc5bc0` returns its point in `XMM0`, both printed as `void`. The
+remaining reads are the triangle record `0x142cae760`, the point transform
+`0x142cb4a30` and the handle accessors; the geometry is in
+`docs/formats/character-controller.md`. **Not implemented, not tested.**
+
 * the brush route (node type 2 → model collision descriptor → brush → mesh) is
   read and implemented end to end — `ow_tank::brush`, `brush_mesh` and
   `brush_convert` (25 tests, client-emulated meshes pinned). **All four**

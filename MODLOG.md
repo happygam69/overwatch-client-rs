@@ -3,6 +3,25 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-07 - the mesh gather, its accept, and the closest point are read
+
+- The refinement's candidate gather is `0x142caea70`, a **box-BVH walk**, not a
+  sphere query: the 8-float box is scaled into the object's local space by the
+  quad at `+0x10`, then nodes are rejected by a layer mask at `+0x1c` and a
+  point-in-box test on xyz, and the leaves hand back **triangle indices** in a
+  container of floats. Its accept, `0x142cd58a0`, is a box-vs-triangle
+  separating-axis test with a `0.005` tolerance.
+- `0x142cb44c0` was documented as "the candidate list". It is not: it is
+  `ResolveBodyLocalPoint`, a handle decode that returns a body-local point, and
+  it pins the handle to `(u16 table) << 0x30 | (u16 sub) << 0x20 | u32 id` over
+  the table at `0x1442a0bc0`, with a `0x1c0` body stride.
+- `0x142cc5bc0` is Ericson's `ClosestPtPointTriangle` in Voronoi-region form
+  and returns its answer in `XMM0`; Ghidra's `void` and its dropped tail were
+  the second false signature in this area. Read from the instruction stream,
+  not the decompile.
+- Still open: the triangle record (`0x142cae760`), the point transform
+  (`0x142cb4a30`) and the handle accessors.
+
 ## 2026-11-07 - the stack-cookie check was truncating the whole image
 
 - `0x1426c3d40` is `__security_check_cookie` and it **returns**: 30 bytes, the
