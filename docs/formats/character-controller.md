@@ -1186,6 +1186,54 @@ operands, so nothing is constant-folded: a folded probe answers `0x7fc00000`
 for `inf * 0` and is wrong). Non-finite corpus values are therefore NaN only,
 and only in the quaternion.
 
+**The narrowphase wrapper `0x142cc1610` is read.** It is `void` and takes
+`(ctx, &out_quad, block, shape_index)`:
+
+* `ctx[0]` is the world record, `ctx+0x08` the layer filter's arguments,
+  `ctx+0x10` the hit callback, `ctx+0x18` that callback's context, and
+  `ctx+0x20` the sink (`0` = none, which skips the push entirely).
+* `entry = [record+0x2b8] + shape_index*0xc0`; then `ShapeWorldTransform(entry,
+  &xform, record)` and `ShapeQueryFilter(ctx+0x08, entry+0x98)`.
+* filter false -> the sink record's status dword is `0` and `&out_quad` is
+  **not** written.
+* filter true -> a **`0x40`-byte hit record** is built on the frame:
+  `+0x00..+0x20` zeroed, `+0x30 = -1`, `+0x34 = 0`, `+0x38 = 0xffff` (u16),
+  `+0x3a = 0`, `+0x3c = 0`; then `0x142cb8d60(entry, record, xform, &record)`.
+* the dispatch's return `0` -> sink status `2`; non-zero -> the callback runs,
+  `*out_quad` becomes the record's **`+0x20` quad**, `+0x34` is overwritten
+  with `entry[0xaa]` **unless the type byte is 3 or 4**, `+0x38` with
+  `entry[0xae]` (u16), and the sink status is `1`.
+
+**The type dispatch `0x142cb8d60` is a six-way tail jump**, not a function
+body (there is no `.pdata` entry at that address; it is `0x92` bytes of
+`MOVSX`/`CMP`/`JMP` ending at `0x142cb8df2`). The type byte is **signed**
+`entry[0x20]` and the pool index is `entry[0x24]`:
+
+| type | primitive | pool base | stride |
+|---|---|---|---|
+| `0` | `0x142ccdf40` sphere | `[record+0x2d0]` | `0x20` |
+| `1` | `0x142ccd7b0` capsule | `[record+0x2e8]` | `0x30` |
+| `2` | `0x142cd3c80` (**unread**) | `[record+0x300]` | `0x50` |
+| `3` | `0x142caed10` mesh | `[record+0x318]` | `0x50` |
+| other | `0x142cd0ae0` (**unread**) | `[record+0x330]` | `0x50` |
+
+The register mapping the jump leaves in place is `RCX` = the pool element,
+`RDX` = the hit record, `R8` = the **block**, `R9` = the xform. `R8` is
+`0x142cc1610`'s own third argument, forwarded through its shadow-space slot
+`[RSP+0x20]`; the callee reads it back as `[RSP+0x28]`. So every primitive has
+the shape `(element, out, block, xform)`.
+
+**Composition is not yet possible, and the reason is a signature mismatch, not
+a missing read.** `mesh_sweep`'s Rust form is `(record, world, block, xform)`:
+its second parameter is the mesh world and it *returns* the hit, whereas the
+client's second parameter is the `0x40`-byte output the primitive writes. The
+verified unit bridges this in its probe (`world = { base: 0x50, bytes:
+&element[0x50..] }`), which means the fixture, not the client, supplies the
+world's address. The narrowphase must supply it from the record itself, and
+**which field of the `0x50`-byte type-3 element holds the world pointer is not
+read**. Until it is, the type-3 path cannot be composed 1:1 and
+`shape_narrowphase` is not implemented.
+
 **The two attachment paths are read, and they are what select the branch.**
 
 * `ShapeAddToBody` `0x142cb3940` decodes the handle (`generation<<48 |

@@ -15,6 +15,14 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
   channel `void` and compares the output pointee: the position quad at `+0x00`
   and the quaternion at `+0x10` — which is exactly the `xform` the narrowphase
   primitives take, so the transform and the sweep now meet at one layout.
+- The narrowphase wrapper `0x142cc1610` and its six-way type dispatch
+  `0x142cb8d60` are read: the pool base and stride per type (`+0x2d0`/`0x20`,
+  `+0x2e8`/`0x30`, `+0x300`/`0x50`, `+0x318`/`0x50`, `+0x330`/`0x50`), the
+  `(element, out, block, xform)` register mapping, the `0x40`-byte hit record,
+  the `0`/`2`/`1` sink statuses, and the two `entry[0xaa]`/`entry[0xae]`
+  overwrites. The type-3 mesh path (the whole practice range) is one field
+  short of composable: **which element field holds the mesh world pointer is
+  unread**, so `shape_narrowphase` is documented as open rather than guessed.
 - **Two emulator NaN fidelities are recorded, not worked around silently.** The
   verify harness's unicorn answers an invalid operation (`inf * 0`, which the
   composed branch's `(origin - pivot) * 0` term reaches) with `0x7fc00000`

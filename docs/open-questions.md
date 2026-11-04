@@ -572,10 +572,19 @@ primitives are inventoried with their sizes and their two-path shape
 (`formats/character-controller.md`), and the shape world transform
 `0x142cb8b80` is read **and verified** as `fn/ShapeWorldTransform`
 (`ow_sim::collide::shape_world_transform`: 328 cases, every channel, coverage
-100%, 9/9 mutants). What a real candidate still needs is (a) the collision
-geometry the query walks (`record+0x2b8` entries and the per-type pools at
-`+0x2d0..+0x330`), which is the map's collision chunks, and (b) the hit
-policy's live collision world (`0x14202c580` -> `0x14202bc90`). Without those,
+100%, 9/9 mutants). The narrowphase wrapper `0x142cc1610` and its six-way type
+dispatch `0x142cb8d60` are now read too (pool bases, strides, the
+`(element, out, block, xform)` argument mapping and the `0x40`-byte hit record
+are in `formats/character-controller.md`). What a real candidate still needs is
+(a) the collision geometry the query walks (`record+0x2b8` entries and the
+per-type pools at `+0x2d0..+0x330`), which is the map's collision chunks,
+(b) the hit policy's live collision world (`0x14202c580` -> `0x14202bc90`), and
+(c) **which field of the `0x50`-byte type-3 element holds the mesh world
+pointer** — the verified `mesh_sweep` unit takes the world from its fixture
+(`base: 0x50`), not from the record, so the type-3 path cannot be composed 1:1
+until that field is read. Types 2 (`0x142cd3c80`) and 4+ (`0x142cd0ae0`) are
+also unread; the practice range is entirely type 3, so those two do not block
+it. Without those,
 a candidate cannot be scored: the fan reads a record only the live hit policy
 fills. So the next anchor is the chunk ingest in `formats/maps.md`, coupled
 with the primitive bodies.
