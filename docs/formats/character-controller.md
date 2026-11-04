@@ -1701,38 +1701,60 @@ settled order is set out here with the gate that selects each stage:
     0xffff0000ffffffff`, `+0x40 = 0`, zeros the quads and leaves `*index`
     untouched.
 
-### The batch ring's candidate list: what is proven, and what is not (2026-11-07)
+### The batch ring's candidate list: closed as a negative, read with flow-based decompilation (2026-11-07)
 
-Steps 7, 9 and 10 are read; only step 8's *consumer* is not. What is proven:
+Steps 7, 9 and 10 are read; only step 8's *consumer* was not. It is now settled,
+and the answer is that **there is no consumer on the query path**. The chain,
+read from the Ghidra decompiler rather than the linear corpus listing:
 
-- the block carries a **ptr/count pair** at `+0x490`/`+0x498` and the ring fills
-  it with `n` quads plus one zero quad;
-- the evaluator the composer calls, `0x1420328c0`, is a thunk that builds a
-  stack descriptor and forwards to the dispatcher `0x14203dae0`;
-- the dispatcher's own `.pdata` entry (`0x14203dae0..0x14203df66`) is a
-  prologue stub - the function continues to `0x14203e0d6` - and it flattens the
-  block into a stack copy before dispatching;
-- the driver `0x142cc45a0` has the same shape (a 0x3e-byte root entry covering
-  four `.pdata` entries, `0x142cc45a0..0x142cc47c5`, read as one function) and
-  re-flattens into a sweep-options struct that carries a ptr/count pair onward
-  into the sweep driver `0x142cbd510`.
+```text
+0x140cb86c0  composer            one call per stage
+0x1420328c0  evaluator thunk     builds the descriptor, forwards
+0x14203dae0  dispatcher          flattens the block into `desc`, calls out
+0x142cc45a0  CollisionHandleDispatch  handle -> domino, re-flattens, calls out
+0x142cbd510  CollisionQueryDriver     four passes over the domino's island list
+0x142cc1610  ShapeNarrowphase         one shape entry per leaf
+0x14202bc90  CandidateHitPolicy       the answer, reached through 0x14202c580
+```
 
-What is **not** proven, and why it must stay open: the offset that proves the
-carry-through was found by grepping `dev/data/corpus/asm/`, and that corpus is
-a **linear** sweep over a `.pdata` range, not a flow-based decode. The
-`014203dae0_FUN_14203dae0.asm` listing desyncs at `0x14203db2f` - the bytes
-there decode as `rcr byte ptr [rax+0x7f], 0x1c` followed by `jle`, which is a
-jump table read as code - so any operand a grep finds after that point is not
-attributable to a function, and any operand it *misses* proves nothing either.
-The 350-entry `.pdata` run over `0x14203db00..0x142054500` is exactly the kind
-of table-rich region where this happens.
+The list's journey is one line at each hop and it ends unused:
 
-So the honest statement is: **the list is carried through two block flattens to
-the sweep driver `0x142cbd510`, but that was read from a desynced listing and
-must be re-established with Ghidra's flow-based decode before the batch ring
-can be implemented.** Until then `+0x490`'s consumer stays unread, and the
-one-candidate-at-a-time `CandidateSolver` seam is a known limitation rather than
-a design choice.
+| stage | pointer | count |
+|---|---|---|
+| composer's block0 | `+0x490` | `+0x498` |
+| dispatcher `0x14203dae0` | `desc+0x28` | `desc+0x30` |
+| `0x142cc45a0` | query `+0x30` | query `+0x38` |
+| `0x142cbd510` | **not read** | **not read** |
+
+`CollisionQueryDriver` reads the query block's `+0x00`/`+0x08`/`+0x10`/`+0x18`
+(the two quads), `+0x20` (the expansion, splatted into three lanes), `+0x40`/
+`+0x48` (the support points), and `+0x50`, `+0x54`, `+0x58`, `+0x5c`, `+0x60`,
+`+0x64`, `+0x68`, `+0x6c`, `+0x70`, `+0x74`, `+0x78`, `+0x7c` (the per-pass
+masks and quads). It never touches `+0x30` or `+0x38`. What it walks instead is
+the domino's own list, reached at `domino+0x1b0+0x44`: islands of 0x28 bytes,
+`lVar18 = 4` passes with `param_4 >>= 1` and `piVar17 += 10` dwords between them,
+each island's shape list at `[island-0x14]` with 0x40-byte nodes carrying a min
+corner at `+0x00`, a max corner at `+0x10`, a shape index at `+0x20` and a child
+index at `+0x2c` (`-1` = leaf, otherwise `CollisionWorklistPush` on a 256-slot
+stack seeded with the island's root index).
+
+So the ring's quads are **written and carried but never read** on this path.
+That is a stronger result than "unread": it means the port needs no
+list-shaped seam, and `CandidateSolver`'s one-candidate interface is the right
+shape rather than a limitation. What it does not explain is *why* the composer
+fills the list at all - either the ring is vestigial in this build, or some
+other caller of `0x14203dae0` reads `desc+0x28`. That question is now cheap to
+settle: port the ring, watch whether `+0x498` is ever non-zero, and grep for
+other callers of the dispatcher.
+
+This also retires two earlier readings, both taken from the linear `.pdata`
+corpus: that `0x142cc45a0` was a "driver that re-flattens into a sweep-options
+struct with the list at `+0x80`/`+0x88`", and that `0x14203dae0`'s body ran to
+`0x14203e0d6`. Ghidra gives `0x14203dae0` a body of `0x14203dae0..0x14203df65`
+with an overlapping-instruction warning at `0x14203db29` and a jump table at
+`0x14202c580` - which is exactly what desynced the linear sweep. **Any
+conclusion that came from grepping `dev/data/corpus/asm/` in a jump-table-rich
+region is suspect and must be confirmed with the decompiler.**
 
 ### The batch tail is closed
 

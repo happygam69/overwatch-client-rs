@@ -236,31 +236,35 @@ pins the quirk. *The incremental ring* is read to its loop body, including its
 hand-rolled rotation `A' = A*sin + B*cos`, `B' = B*sin - A*cos`, the point
 update `record0+0x00 - offset`, and the `out+0x42 = (flags >> 2) & 1` write the
 stage map had missed. The shape pass's corner geometry is read and ported
-(`corner_pair`, `shape_probes`); only its loop's `m10`/`m11`/`m12` and its
-accept tail remain.
+(`corner_pair`, `shape_probes`), and its three splats are identified - `xmm11`
+the seed endpoint, `xmm10` the floored seed, `xmm12` the speed - so no operand
+is left unidentified there; only its loop is not yet written in Rust.
 
-**The batch ring's candidate list is the next interface question.** The batch
-flavour fills the query block's `+0x490` (pointer) and `+0x498` (count) with
-`n` quads plus a zero terminator, `+0x480` with a `0.015` splat, `+0x49c` with
-`1.0` and `+0x4a4` with `0`, then makes **one** evaluator call - where the
-shape pass and the incremental ring make one call per candidate. The obvious
-place to look for the list's consumer is `0x14203dae0` (the evaluator body) or
-`0x142cc45a0` (the handle dispatcher that flattens the block into the driver's
-`0x78` struct). Neither references those offsets in its linear sweep:
-grepping `dev/data/corpus/asm/014203dae0_FUN_14203dae0.asm` and
-`dev/data/corpus/asm/0142cc45a0_FUN_142cc45a0.asm` for `0x450`, `0x460`,
-`0x480`, `0x490`, `0x498`, `0x49c`, `0x4a4` finds no displacement at all, so
-the copy is either pointer-based (a loop over the block) or sits in the
-obfuscated region. A wider sweep of every corpus listing does find readers of
-`+0x490`/`+0x498`: `0x142cc1c80` keeps a growable `i32` vector there
-(ptr/count/capacity at `+0x490`/`+0x498`/`+0x49c`, with the capacity doubling
-by halves and node dedupe stamps at `[node+0x08]` and `[node+0x4c]`), which is
-a **broadphase node accumulator**, not the block's list - the block's `+0x49c`
-is `1.0f`, so it cannot be that capacity. The consumer therefore remains
-unread, and that has to change before the batch ring can be written: the
-multi-candidate answer is what `kind <= 1` then routes to the snap, and a
-one-candidate-at-a-time `CandidateSolver` cannot express it. The trait needs a
-list-shaped method, not a second loop.
+**The batch ring's candidate list is closed as a negative (2026-11-07).** The
+batch flavour fills the query block's `+0x490` (pointer) and `+0x498` (count)
+with `n` quads plus a zero terminator, `+0x480` with a `0.015` splat, `+0x49c`
+with `1.0` and `+0x4a4` with `0`, then makes **one** evaluator call - where the
+shape pass and the incremental ring make one call per candidate. Read with the
+Ghidra decompiler instead of the linear corpus sweep, the pair travels
+block `+0x490`/`+0x498` -> `desc+0x28`/`+0x30` (`0x14203dae0`) -> query
+`+0x30`/`+0x38` (`0x142cc45a0`) and is **never read**: `0x142cbd510`
+(`CollisionQueryDriver`) reads the query block's `+0x00..+0x18`, `+0x20`,
+`+0x40`, `+0x48`, `+0x50..+0x7c` and walks the domino's own island list at
+`domino+0x1b0+0x44` - 0x28-byte islands, `lVar18 = 4` passes with
+`param_4 >>= 1` and `piVar17 += 10` dwords, 0x40-byte nodes with a min corner
+at `+0x00`, a max corner at `+0x10`, a shape index at `+0x20` and a child index
+at `+0x2c` (`-1` = leaf, otherwise `CollisionWorklistPush` on a 256-slot
+stack).
+
+So there is **no list-shaped seam to add**, and `CandidateSolver`'s
+one-candidate interface is the client's own shape. The ledger's earlier
+"consumer unread" line came from grepping a linear `.pdata` corpus listing
+that desyncs on the jump table at `0x14202c580`; that listing is not a
+flow-based decode, so greps over it prove neither presence nor absence in
+table-rich regions. The one question left is why the composer fills the list
+at all - cheap to settle once the ring is ported: watch whether `+0x498` is
+ever non-zero, and check for other callers of `0x14203dae0` that read
+`desc+0x28`.
 
 ## 1. The mover's input→velocity control law
 

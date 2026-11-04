@@ -1005,6 +1005,16 @@ pub fn solve(
 /// acceptance rules and the per-candidate refinement are **not** here yet —
 /// the refinement block is the fan's remaining open read (see
 /// `docs/open-questions.md`), so this trait is the whole of what item 2 landed.
+///
+/// **One candidate in is correct, and that is now proven** (2026-11-07): the
+/// block's `+0x490`/`+0x498` pointer and count are carried through the
+/// dispatcher `0x14203dae0` (to the descriptor's `+0x28`/`+0x30`) and
+/// `0x142cc45a0` (to the query block's `+0x30`/`+0x38`) and **never read**: the
+/// query driver `0x142cbd510` walks the domino's own island list at
+/// `domino+0x1b0+0x44` instead, four passes of 0x28-byte islands with
+/// 0x40-byte nodes and a worklist stack. So no list-shaped method is needed
+/// here, and adding one would invent an interface the client does not have.
+/// Details: `docs/formats/character-controller.md`.
 pub trait CandidateSolver {
     /// `a` = sweep start, `b` = sweep end.
     fn evaluate(&mut self, a: [f32; 4], b: [f32; 4]) -> Option<SweepHit>;

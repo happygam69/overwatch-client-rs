@@ -1002,19 +1002,17 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
    (3) the incremental ring - **read**, including its hand-rolled pair rotation
    (`A' = A*sin + B*cos`, `B' = B*sin - A*cos`) and the point update
    `record0+0x00 - offset`; the current `solve` already matches it; (4) the
-   batch ring, which still needs a **list-shaped** seam: it makes one evaluator
-   call over `block+0x490` (pointer) / `+0x498` (count). The consumer is traced
-   but **not proven**: `0x1420328c0` is a thunk to the dispatcher `0x14203dae0`
-   (whose `.pdata` entry is a stomped prologue; the body runs to
-   `0x14203e0d6`), and `0x142cc45a0` re-flattens into a sweep-options struct
-   that carries a ptr/count pair into `0x142cbd510`. That was read by grepping
-   `dev/data/corpus/asm/`, which is a **linear** sweep - the listing desyncs at
-   `0x14203db2f` on a jump table - so it must be re-established with Ghidra's
-   flow-based decode before the ring is written. The nearest reader found is
-   `0x142cc1c80`, a growable `i32` node accumulator with ptr/count/cap at
-   `+0x490`/`+0x498`/`+0x49c` and dedupe stamps at `[node+0x08]`/`[node+0x4c]`,
-   but the block's `+0x49c` is `1.0f`, so the block's list is a different
-   layout;
+   batch ring, **closed**: read with the Ghidra decompiler, the block's
+   `+0x490`/`+0x498` ptr/count are carried to `desc+0x28`/`+0x30`
+   (`0x14203dae0`) and then to query `+0x30`/`+0x38` (`0x142cc45a0`) and are
+   **never read** - `0x142cbd510` walks the domino's own islands at
+   `domino+0x1b0+0x44` in four passes and ignores both offsets. So no
+   list-shaped seam is needed and `CandidateSolver` is the right shape. The
+   ledger's earlier "consumer unread" line was based on a linear `.pdata`
+   corpus listing that desyncs on the jump table at `0x14202c580`; that corpus
+   is not a flow-based decode and greps over it prove nothing in table-rich
+   regions. One question remains and is cheap: why the composer fills the list
+   (watch whether `+0x498` is ever non-zero once the ring is ported);
    (5) the pentagon and the snap behind `kind <= 1` - **closed**: the dispatch
    is `ow_sim::fan::batch_tail` (`0x142cba720` returns the kind, `0x140cb9864`
    snaps it at `1`), and both sub-passes were already ported

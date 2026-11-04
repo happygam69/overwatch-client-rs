@@ -96,20 +96,25 @@ in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
   comparison is a NaN reject and the real gate is `record0+0x04 > 3.3068924`;
   the accept tail recomputes the point as
   `s + hsum(((xmm11 - point)*dir - s)*dir) * dir`. Not ported as a loop yet.
-- The batch ring's list consumer is **still unread**, and now for a sharper
-  reason. The chain is traced (evaluator `0x1420328c0` is a thunk to the
-  dispatcher `0x14203dae0`; the driver `0x142cc45a0` re-flattens into a
-  sweep-options struct and passes a ptr/count pair to `0x142cbd510`), but the
-  operand that proves it came from grepping `dev/data/corpus/asm/`, which is a
-  **linear `.pdata` sweep, not a flow-based decode**: the
-  `014203dae0_FUN_14203dae0.asm` listing desyncs at `0x14203db2f` (a jump table
-  read as `rcr byte ptr [rax+0x7f], 0x1c`). So neither an operand found there
-  nor one missed there proves anything, and the carry-through has to be
-  re-established with Ghidra before the batch ring is written. A sweep of every
-  corpus listing did turn up `0x142cc1c80` as a growable `i32` vector at
-  `+0x490`/`+0x498`/`+0x49c`, but that is a **broadphase node accumulator**
-  (dedupe stamps at `[node+0x08]`/`[node+0x4c]`); the block's `+0x49c` is
-  `1.0f`, so it is not that vector.
+- **The batch ring's candidate list is closed as a negative, with Ghidra.** The
+  chain is `0x140cb86c0` → `0x1420328c0` (thunk) → `0x14203dae0` (dispatcher) →
+  `0x142cc45a0` (`CollisionHandleDispatch`) → `0x142cbd510`
+  (`CollisionQueryDriver`) → `0x142cc1610` (`ShapeNarrowphase`) →
+  `0x14202bc90` (`CandidateHitPolicy`). The ptr/count pair travels
+  block `+0x490`/`+0x498` → `desc+0x28`/`+0x30` → query `+0x30`/`+0x38` and is
+  **never read**: the query driver walks the domino's own islands at
+  `domino+0x1b0+0x44` (0x28-byte islands, 0x40-byte nodes, four passes behind a
+  256-slot worklist) and ignores both offsets. So the port needs **no
+  list-shaped seam** and `CandidateSolver`'s one-candidate shape is right; why
+  the composer fills the list at all is the only thing left, and it is cheap
+  (watch whether `+0x498` is ever non-zero once the ring is ported).
+- **Tooling lesson, worth more than the finding:** `dev/corpus.py` writes a
+  **linear `.pdata` sweep**, not a flow-based decode, so a jump-table-rich
+  function desyncs and greps over it prove neither presence nor absence. Both
+  of this session's wrong readings of `0x142cc45a0` came from that. Use the
+  Ghidra decompiler for any function with `jmp` tables; the corpus listing is
+  only trustworthy where it decodes to a coherent instruction stream end to
+  end.
 - **The batch tail is closed** (blocker 5): `0x142cba720(record0+0x28)` picks
   the snap for kinds `<= 1` and the pentagon above that (`0x140cb9864`), now
   `ow_sim::fan::batch_tail` / `BatchTail` / `BATCH_TAIL_SNAP_MAX_KIND` with a
