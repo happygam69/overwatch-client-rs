@@ -132,7 +132,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/bvh_fixture.py` | Inputs for the BVH builder unit (`0x142ccb1b0`). | 144 |
 | `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 249 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 829 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 831 |
 | `verify_harness/cdn_index_footer_fixture.py` | Deterministic inputs for the `fn/CdnIndexFooterParse` unit. | 178 |
 | `verify_harness/cell_bytes_fixture.py` | Inputs for the `cell_bytes_fixup` unit (`0x141ff51a0`). | 115 |
 | `verify_harness/character_position_fixture.py` | Inputs for the `fn/CharacterPosition` unit. | 36 |
@@ -142,6 +142,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/cmf_key_154504_fixture.py` | Deterministic inputs for the `fn/CmfKey154504` unit. | 60 |
 | `verify_harness/collision_capsule_fixture.py` | Inputs for the `collision_capsule` unit (`0x142ccd7b0`, type 1). | 237 |
 | `verify_harness/collision_filter_fixture.py` | Inputs for the `collision_filter` unit (`0x142cbb350`). | 74 |
+| `verify_harness/collision_narrowphase_fixture.py` | Inputs for the `collision_narrowphase` unit (`0x142cc1610`). | 270 |
 | `verify_harness/collision_sphere_fixture.py` | Inputs for the `collision_sphere` unit (`0x142ccdf40`, type 0). | 235 |
 | `verify_harness/collision_sweep_bounds_fixture.py` | Inputs for the `collision_sweep_bounds` unit (`0x142cd5540`). | 128 |
 | `verify_harness/collision_transform_fixture.py` | Inputs for the `collision_transform` unit (`0x142cb8b80`). | 155 |

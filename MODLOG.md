@@ -3,6 +3,32 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-07 - the shape narrowphase is verified against the client's bytes
+
+- `ShapeNarrowphase` `0x142cc1610` is implemented as
+  `ow_sim::collide::shape_narrowphase` and verified as `fn/ShapeNarrowphase`:
+  224 cases, every channel, branch coverage 100% over the wrapper's own
+  `0x204` bytes (2/2 reachable of 7 sites, 5 single-edge sites declared),
+  11/12 mutants killed. The wrapper is now the fourth verified link in the
+  query chain, between the BVH walk and the hit policy.
+- The dispatch label `0x142cb8d60` is a real entry point inside
+  `ShapeWorldTransform`'s extent, not a separate function: the wrapper calls
+  it with **five** arguments, the fifth being the query block. Its table is
+  `0`/`+0x2d0`/`0x20` -> sphere, `1`/`+0x2e8`/`0x30` -> capsule,
+  `2`/`+0x300`/`0x50`, `3`/`+0x318`/`0x50` -> `MeshSweepEntry` `0x142caed10`
+  (which forwards to `0x142caed30`), and every other value, **including
+  negative types**, `+0x330`/`0x50` -> `0x142cd0ae0`.
+- Two frame facts were read, not assumed: the filter's first eight bytes are
+  **inline at `context+8`** (the leaf is handed `context+8` itself), and the
+  wrapper publishes only the hit record's `+0x20` quad, after calling the hit
+  callback. The sink status word distinguishes `0` filtered from `2` missed,
+  which is why a filtered shape still builds and pushes a record.
+- `formats/shape-narrowphase.md` holds the record layout, the two entry-driven
+  id overwrites (`+0x34` skipped for types 3 and 4) and the list of what the
+  unit does **not** cover: the sink push, the callback's return path, types 2
+  and 4+, and the type-3 mesh world derivation - the last of which is the one
+  link between the verified pieces and the practice range.
+
 ## 2026-11-07 - the shape world transform is verified against the client's bytes
 
 - `ShapeWorldTransform` `0x142cb8b80` is implemented as

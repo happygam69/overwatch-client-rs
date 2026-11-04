@@ -1,0 +1,97 @@
+{
+  "id": "fn/ShapeNarrowphase",
+  "title": "tier-2 shipped code: transform, filter and dispatch one leaf shape against 0x142cc1610",
+  "address": {
+    "v2b": "0x7ff7c79e1610"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_narrowphase",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "world",
+      "kind": "ptr",
+      "ptr_len": 2816
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 120
+    },
+    {
+      "name": "shape",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "collision_narrowphase_fixture",
+  "options": {
+    "iterations": 160,
+    "coverageThreshold": 80,
+    "mutationCount": 12,
+    "mutationKillRate": 0.7,
+    "seed": 771102,
+    "coverageWindow": 516,
+    "allowedImageReads": [
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f",
+      "0x7ff7c87e5f40-0x7ff7c87e5f4f",
+      "0x7ff7c7e30818-0x7ff7c7e30827",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7c9aae4-0x7ff7c7c9aaf3",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff",
+      "0x7ff7c7cc62f0-0x7ff7c7cc62ff",
+      "0x7ff7c80b1030-0x7ff7c80b103f",
+      "0x7ff7c830cd70-0x7ff7c830cd7f",
+      "0x7ff7c830cd80-0x7ff7c830cd8f",
+      "0x7ff7c7d8ad20-0x7ff7c7d8ad2f"
+    ],
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c79e1678",
+        "edge": "0x7ff7c79e167e",
+        "why": "The sink check on the filter-rejected path. This unit's fixture leaves ctx[0x20] null in every case, so the guard jumps and the push is never taken; the push itself (0x142cc1450) is verified by no unit yet, so a non-null sink would compare bytes this unit does not implement."
+      },
+      {
+        "site": "0x7ff7c79e16fc",
+        "edge": "0x7ff7c79e1718",
+        "why": "The `type == 3` arm of the id overwrite. The corpus is restricted to type 0 (sphere) and type 1 (capsule), the two per-type primitives that are verified; type 3 needs the mesh world the element's pointers describe, which this fixture does not build."
+      },
+      {
+        "site": "0x7ff7c79e1700",
+        "edge": "0x7ff7c79e1718",
+        "why": "The `type == 4` arm of the id overwrite, for the same reason: type 4 dispatches to 0x142cd0ae0, which is unread."
+      },
+      {
+        "site": "0x7ff7c79e1747",
+        "edge": "0x7ff7c79e1749",
+        "why": "The sink check on the hit path. Null sink in every case, so the guard jumps and the push is never taken."
+      },
+      {
+        "site": "0x7ff7c79e17a4",
+        "edge": "0x7ff7c79e17a6",
+        "why": "The sink check on the no-hit path. Null sink in every case, so the guard jumps and the push is never taken."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (shape_narrowphase), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_narrowphase entry.",
+    "The leaf is void and writes only its second argument, the hit quad, which is the record's +0x20 quad - so that quad is the compared channel. The sink (ctx[0x20]) is null, so the wrapper skips its push and the 0x40-byte hit record stays on its own frame.",
+    "Everything the leaf reaches through pointers lives in one arena blob: the record, the filter arguments, the entry array, both transform pools and all five per-type pools. Every pointer inside it is an absolute arena address and the probe translates it back by ARENA_BASE.",
+    "The corpus stays on type 0 (sphere) and type 1 (capsule) - the two per-type primitives that are verified - and walks the shape index, the pool index, both transform branches, the filter's three outcomes and hits against misses. Types 2 and 4+ are unread, so the emulator would run code there is nothing to compare against.",
+    "The callback slot points at 0x140c9f110 (the leaf that returns a zero quad) so the indirect call is a real call; with a null sink its return is discarded by the wrapper.",
+    "The 0x7ff7c7e30818 and 0x7ff7c80b1030 reads are the two copies of the squared-length epsilon the sphere and capsule paths use.",
+    "The 0x7ff7c87e5f40 read is the stack cookie (0x143ac5f40): the leaf has a frame cookie and ends with __security_check_cookie."
+  ],
+  "acknowledgedGaps": [
+    "The type-3 mesh path is implemented in the same function but is not exercised here: mesh_sweep needs a MeshWorld, which the narrowphase must derive from the element's own absolute pointers at +0x20/+0x28/+0x30, and the fixture that would prove that path is not built yet.",
+    "Types 2 (0x142cd3c80) and 4+ (0x142cd0ae0) are unread, so the Rust reports Narrowphase::UnreadType for them instead of guessing. The practice range is entirely type 3.",
+    "The sink push (FUN_142cc1450) and the hit callback are outside this unit: the wrapper's observable output is the hit quad, and the sink is null so nothing is pushed."
+  ]
+}

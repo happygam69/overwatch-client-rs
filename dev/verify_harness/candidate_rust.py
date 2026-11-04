@@ -115,6 +115,7 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "triangle_degenerate": ["crates/ow-sim/src/collide.rs"],
     "collision_capsule": ["crates/ow-sim/src/collide.rs"],
     "mesh_sweep": ["crates/ow-sim/src/collide.rs"],
+    "collision_narrowphase": ["crates/ow-sim/src/collide.rs"],
     "build_bvh": ["crates/ow-sim/src/collider.rs"],
     "mover_state_vector": [
         "crates/ow-sim/src/movement.rs",
@@ -182,6 +183,7 @@ ENTRY_MUTATION: Dict[str, str] = {
     "triangle_degenerate": "triangle_degenerate",
     "collision_capsule": "capsule_sweep",
     "mesh_sweep": "mesh_sweep",
+    "collision_narrowphase": "shape_narrowphase",
     "build_bvh": "build_node",
     "mover_state_vector": "forward_transform",
     "mover_wish_spring": "wish_spring",

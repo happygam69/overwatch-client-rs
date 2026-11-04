@@ -893,12 +893,19 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
    operation with `0x7fc00000` where x86 gives `0xffc00000`, and it does not
    always return the destination's NaN for two-NaN `ADDPS`/`SUBPS`; the
    hardware answer is pinned by a Rust test. The narrowphase wrapper
-   `0x142cc1610` and its six-way dispatch `0x142cb8d60` are now **read**
-   (per-type pool base and stride, the `(element, out, block, xform)` register
-   mapping, the `0x40`-byte hit record, the `0`/`2`/`1` sink statuses, the two
-   `entry[0xaa]`/`entry[0xae]` overwrites), and composition is one field short:
-   which field of the `0x50`-byte type-3 element holds the mesh world pointer is
-   **unread**, so `shape_narrowphase` is open rather than guessed. Still open
+   `0x142cc1610` is **implemented and verified** as
+   `ow_sim::collide::shape_narrowphase` / `fn/ShapeNarrowphase` (224 cases,
+   every channel, branch coverage 100%, 11/12 mutants; `formats/shape-narrowphase.md`).
+   Its dispatch label `0x142cb8d60` is a real entry point inside the transform's
+   extent and takes a **fifth** argument, the query block; the per-type pool
+   base and stride are `0`/`+0x2d0`/`0x20`, `1`/`+0x2e8`/`0x30`,
+   `2`/`+0x300`/`0x50`, `3`/`+0x318`/`0x50` (`MeshSweepEntry` `0x142caed10` ->
+   `0x142caed30`) and everything else, negative types included, `+0x330`/`0x50`.
+   Composition is still one field short: which field of the `0x50`-byte type-3
+   element holds the mesh world pointer is **unread** (`MeshSweepEntry`'s own
+   comment names the element's `+0x48`, which is the next thing to compose and
+   diff), so the type-3 arm of `shape_narrowphase` calls the verified
+   `mesh_sweep` but is not itself proven. Still open
    here: the serialised mapping from the `STUModelComponentInstanceData` stream
    to that triple (class `0x936A1A00` is not in the reference class list) and
    the geometry variant table for negative ids. The **Rust four-pass driver

@@ -1546,6 +1546,150 @@ fn compose_pose(pose: &[u8]) -> [Quad; 2] {
     [sub_lane(origin, swept), normal]
 }
 
+/// What `0x142cc1610` concluded for one shape.
+///
+/// The client writes the same three codes as the sink record's status dword:
+/// `0` when the layer filter rejects the shape, `2` when the per-type
+/// primitive finds no hit, and `1` when it hits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Narrowphase {
+    /// The layer filter said no. `out` is untouched.
+    Filtered,
+    /// The primitive found no hit. `out` is untouched.
+    Rejected,
+    /// The primitive hit. `out` holds the hit record's `+0x20` quad.
+    Hit,
+    /// The type byte names a primitive that has not been read (`2` and `4+`).
+    UnreadType(i8),
+}
+
+/// The world `0x142cc1610` reaches: the record, the entry array at
+/// `[record+0x2b8]`, the two transform pools, the layer filter's arguments,
+/// the five per-type pools at `+0x2d0`/`+0x2e8`/`+0x300`/`+0x318`/`+0x330`,
+/// and the memory the type-3 element's pointers live in.
+pub struct NarrowphaseWorld<'a> {
+    pub record: &'a [u8],
+    pub entries: &'a [u8],
+    pub owners: &'a [u8],
+    pub poses: &'a [u8],
+    pub filter: &'a [u8],
+    pub pools: [&'a [u8]; 5],
+    pub mesh: Option<MeshWorld<'a>>,
+}
+
+/// `0x142cc1610`: transform one shape entry, filter it, dispatch it on its type
+/// byte, and hand back the hit quad.
+///
+/// The wrapper builds a `0x40`-byte hit record on its frame — `+0x00..+0x20`
+/// zeroed, `+0x30 = -1`, `+0x34 = 0`, `+0x38 = 0xffff`, `+0x3a = 0`,
+/// `+0x3c = 0` — passes it as the primitive's second argument, and then
+/// publishes only its **`+0x20`** quad. Two fields are rewritten afterwards
+/// from the entry: `+0x34` from `entry[0xaa]` **unless the type byte is 3 or
+/// 4**, and `+0x38` from `entry[0xae]` unconditionally.
+///
+/// The primitive's arguments are `(element, out, block, xform)`: the element is
+/// `pool[index]` with `index = entry[0x24]`, the out is that hit record, the
+/// block is this function's third argument, and the xform is the frame just
+/// built. Each of the verified primitives takes a subset of those in Rust form,
+/// so the record is assembled here instead of being written in place.
+///
+/// The client does not bounds-check the shape index or the pool index; neither
+/// is a state it can be in, so an out-of-range index reports
+/// [`Narrowphase::Rejected`] rather than reading past the fixture, which is the
+/// same convention `mesh_sweep` uses for a pointer outside its blob.
+pub fn shape_narrowphase(
+    world: &NarrowphaseWorld,
+    block: &[u8],
+    shape: i32,
+    out: &mut Quad,
+) -> Narrowphase {
+    let base = shape as usize * 0xc0;
+    let Some(entry) = world.entries.get(base..base + 0xc0) else {
+        return Narrowphase::Rejected;
+    };
+    let frame = shape_world_transform(entry, world.record, world.owners, world.poses);
+    if !shape_filter(world.filter, &entry[0x98..]) {
+        return Narrowphase::Filtered;
+    }
+
+    let mut record = [0u8; 0x40];
+    record[0x30..0x34].copy_from_slice(&(-1i32).to_le_bytes());
+    record[0x38..0x3a].copy_from_slice(&0xffffu16.to_le_bytes());
+
+    let mut xform = [0u8; 0x20];
+    for (index, quad) in frame.iter().enumerate() {
+        for (lane, value) in quad.iter().enumerate() {
+            let at = index * 0x10 + lane * 4;
+            xform[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+    }
+
+    let kind = entry[0x20] as i8;
+    let index = i32_at(entry, 0x24);
+    let element = |slot: usize, stride: usize| -> Option<&[u8]> {
+        let at = index as usize * stride;
+        world.pools[slot].get(at..at + stride)
+    };
+
+    let hit = match kind {
+        0 => match element(0, 0x20).and_then(|e| sphere_sweep(e, block, &xform)) {
+            Some(quads) => {
+                for (slot, quad) in quads.iter().enumerate() {
+                    record[slot * 0x10..slot * 0x10 + 0x10].copy_from_slice(&quad_bytes(*quad));
+                }
+                true
+            }
+            None => false,
+        },
+        1 => match element(1, 0x30).and_then(|e| capsule_sweep(e, block, &xform)) {
+            Some(quads) => {
+                for (slot, quad) in quads.iter().enumerate() {
+                    record[slot * 0x10..slot * 0x10 + 0x10].copy_from_slice(&quad_bytes(*quad));
+                }
+                true
+            }
+            None => false,
+        },
+        3 => {
+            let (Some(mesh), Some(e)) = (world.mesh.as_ref(), element(3, 0x50)) else {
+                return Narrowphase::Rejected;
+            };
+            match mesh_sweep(e, mesh, block, &xform).hit {
+                Some(hit) => {
+                    record[0x00..0x10].copy_from_slice(&quad_bytes(hit.point));
+                    record[0x10..0x20].copy_from_slice(&quad_bytes(hit.normal));
+                    record[0x20..0x30].copy_from_slice(&quad_bytes(hit.fraction));
+                    record[0x30..0x34].copy_from_slice(&hit.triangle.to_le_bytes());
+                    record[0x34..0x36].copy_from_slice(&hit.ids[0].to_le_bytes());
+                    record[0x36..0x38].copy_from_slice(&hit.ids[1].to_le_bytes());
+                    record[0x38..0x3a].copy_from_slice(&0xffffu16.to_le_bytes());
+                    true
+                }
+                None => false,
+            }
+        }
+        other => return Narrowphase::UnreadType(other),
+    };
+    if !hit {
+        return Narrowphase::Rejected;
+    }
+    // `0x142cc1610`'s two id overwrites, applied after the primitive ran.
+    if kind != 3 && kind != 4 {
+        record[0x34..0x38].copy_from_slice(&entry[0xaa..0xae]);
+    }
+    record[0x38..0x3a].copy_from_slice(&entry[0xae..0xb0]);
+    *out = quad_at(&record, 0x20);
+    Narrowphase::Hit
+}
+
+fn quad_bytes(quad: Quad) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    for (lane, value) in quad.iter().enumerate() {
+        out[lane * 4..lane * 4 + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
 /// The parallel-sweep epsilon inside the capsule's analytic path
 /// (`0x1435ecd80`).
 #[inline]

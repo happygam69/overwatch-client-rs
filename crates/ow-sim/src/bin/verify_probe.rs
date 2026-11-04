@@ -1006,6 +1006,73 @@ fn collision_transform_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), S
     Ok(("-".to_string(), vec![entry, out, record, owners, poses]))
 }
 
+/// `0x142cc1610`: transform one shape entry, filter it, dispatch it on its type
+/// byte. `arg0` is one blob holding the query context and, chained behind it,
+/// the world record, the filter arguments, the entry array, the two transform
+/// pools and the five per-type pools. Every pointer inside the blob is an
+/// absolute arena address, so the entry translates it back into an offset the
+/// way `ARENA_BASE` fixes it. `arg3` is the shape index.
+fn collision_narrowphase_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    const ARENA: u64 = 0x2_0000_0000;
+    const ENTRY_COUNT: usize = 2;
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let blob = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg0 must be the world blob".into()),
+    };
+    let mut out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x20 => b,
+        _ => return Err("arg1 must be the 0x20-byte hit quad".into()),
+    };
+    let block = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x78 => b,
+        _ => return Err("arg2 must be the query block".into()),
+    };
+    let shape = match it.next() {
+        Some(Arg::U64(v)) => v as i32,
+        _ => return Err("arg3 must be the shape index".into()),
+    };
+    let read_u64 = |bytes: &[u8], at: usize| -> u64 {
+        u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+    };
+    let quad = {
+        let slice = |address: u64, len: usize| -> Option<&[u8]> {
+            let at = address.wrapping_sub(ARENA) as usize;
+            blob.get(at..at + len)
+        };
+        let record = slice(read_u64(&blob, 0x00), 0x340).ok_or("record pointer")?;
+        let filter = blob.get(0x08..0x10).ok_or("filter bytes")?;
+        let entries =
+            slice(read_u64(record, 0x2b8), 0xc0 * ENTRY_COUNT).ok_or("entries pointer")?;
+        let owners = slice(read_u64(record, 0x2a0), 0x50 * ENTRY_COUNT).ok_or("owners")?;
+        let poses = slice(read_u64(record, 0x288), 0x1c0 * ENTRY_COUNT).ok_or("poses")?;
+        let bases = [0x2d0usize, 0x2e8, 0x300, 0x318, 0x330];
+        let strides = [0x20usize, 0x30, 0x50, 0x50, 0x50];
+        let mut pools: [&[u8]; 5] = [&[], &[], &[], &[], &[]];
+        for slot in 0..5 {
+            pools[slot] = slice(read_u64(record, bases[slot]), strides[slot] * ENTRY_COUNT)
+                .ok_or("pool pointer")?;
+        }
+        let world = ow_sim::collide::NarrowphaseWorld {
+            record,
+            entries,
+            owners,
+            poses,
+            filter,
+            pools,
+            mesh: None,
+        };
+        let mut quad = [0.0f32; 4];
+        ow_sim::collide::shape_narrowphase(&world, &block, shape, &mut quad);
+        quad
+    };
+    out[0x00..0x10].copy_from_slice(&quad_bytes(quad));
+    Ok(("-".to_string(), vec![blob, out, block]))
+}
+
 /// `0x142cd56e0`: the collider's "is this triangle unusable" test. Three vec4
 /// corners, no pointee written; the compared channel is the whole return
 /// register (a `MOVMSKPS` mask on the non-finite exit, else 1 or 0).
@@ -1513,6 +1580,7 @@ fn handle_call(
         "collision_sphere" => collision_sphere_entry(args),
         "collision_filter" => collision_filter_entry(args),
         "collision_transform" => collision_transform_entry(args),
+        "collision_narrowphase" => collision_narrowphase_entry(args),
         "triangle_degenerate" => triangle_degenerate_entry(args),
         "collision_capsule" => collision_capsule_entry(args),
 
