@@ -3,6 +3,22 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-07 - the stack-cookie check was truncating the whole image
+
+- `0x1426c3d40` is `__security_check_cookie` and it **returns**: 30 bytes, the
+  match path is a plain `return`, and only the mismatch reaches
+  `__raise_securityfailure`. Ghidra had it flagged non-returning, so every
+  function whose epilogue follows the call was stored as ending at the call.
+  `docs/ghidra-project.md` had even named it as a *genuine* non-returning
+  helper, which is the sentence that kept the flag alive.
+- The flag is now cleared. `FUN_140cc2290` went from a stored 125 bytes to
+  `0x140cc2290..0x140ce0ad0` (6183 bytes) with a clean dry run: 544
+  instructions before and after, zero delta. Any function stored short whose
+  body ends in `CALL 0x1426c3d40` should be re-repaired; the recipe is in
+  `ghidra-project.md`.
+- The refinement's read is in `formats/character-controller.md`, and the
+  movement plan's stage table now carries it as a row.
+
 ## 2026-11-07 - the fan's mesh-face refinement is read, and it is not a draw
 
 - `0x140cc2290` has one caller, `MoverWishWriter` `0x140cb86c0`, and it writes

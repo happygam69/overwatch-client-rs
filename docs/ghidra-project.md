@@ -153,8 +153,39 @@ set_function_no_return(<callee_address>, false)   # repeat for each row
 clear_flow_and_repair(start=..., end=..., dry_run=false)
 ```
 
-A genuinely non-returning helper (the stack-cookie check `0x1426c3d40`, a
-fail-fast) never appears in that list, because nothing continues after it.
+A genuinely non-returning helper (a fail-fast) never appears in that list,
+because nothing continues after it.
+
+## The stack-cookie check is not non-returning (2026-11-07)
+
+The sentence above used to name `0x1426c3d40` as an example of a genuine
+non-returning helper. That was **wrong**, and it was the single most expensive
+wrong flag in the project: `0x1426c3d40` is `__security_check_cookie` and it is
+called at the end of almost every function in the image.
+
+Its body (`0x1426c3d40..0x1426c3d5d`, 30 bytes) returns when the value in `RCX`
+equals `_DAT_143ac5f40` and its high word is zero, and only the mismatch path
+reaches `__raise_securityfailure`. So it returns, and a function whose epilogue
+follows the call was stored as ending at the call.
+
+`FUN_140cc2290` is the case that exposed it: stored as 125 bytes, refused by
+the dry run with
+
+```text
+Repair would delete defined continuation after no-return call(s):
+  [{call_address=140cc2c22, callee_address=1426c3d40, next_address=140cc2c27}]
+```
+
+Clearing the flag (`set_function_no_return(0x1426c3d40, false)`) and then
+repairing the seed gave a body of `0x140cc2290..0x140ce0ad0` - 6183 bytes, with
+the epilogue, the cookie check and the `RET` present and the return value
+readable. The dry run before and after the repair reported 544 instructions in
+the seed and a zero delta, so nothing was lost.
+
+The flag is now cleared project-wide. Any function stored short whose body ends
+with a `CALL 0x1426c3d40` should be re-repaired with the recipe above; the
+clearing is what makes the dry-run report meaningful again, because before it
+the report named this call for every function it was pointed at.
 
 ## Zeros: the `.data` zero-fill tail (BSS)
 

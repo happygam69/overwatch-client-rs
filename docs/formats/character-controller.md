@@ -2308,6 +2308,81 @@ direct instruction probe on the image confirmed them:
 unit tests pin them. They change the ramp's both-NaN lane: the first source
 (the scale) wins, not the direction lane.
 
+## The fan's mesh-face refinement (2026-11-07)
+
+`FUN_140cc2290` has one caller, `MoverWishWriter` `0x140cb86c0`, and it is the
+last input behind `ow-sim::fan`'s `CandidateSolver` seam. It is **not a debug
+draw**: it writes the query back and returns a `bool` in `EAX`
+(`MOVZX EAX, R14B` at `0x140cc2c08`, `XOR AL, AL` on the other path), which is
+why Ghidra's `void` must not be trusted here.
+
+Its body is `0x140cc2290..0x140ce0ad0` (6183 bytes) **after the repair
+described in `docs/ghidra-project.md`** - the stored extent was 125 bytes
+because the cookie check was flagged non-returning. A bad-disassembly spot at
+`0x140ce0863`/`0x140ce0866` (two instructions overlap) still truncates the far
+end of the decompile, so the blocks past `0x140ce0800` are not read yet.
+
+Arguments: `(owner, query, float, u16, threshold)`. The `float` and the `u16`
+are not used on the visible path.
+
+Gate. `query+0x28` must not be the 8-byte sentinel `(-1, -1, 0, ...)` and
+`0x142cba720(query+0x28)` must answer `3`, so **the ring only runs for a type-3
+mesh shape** - the type the practice range's static collision is made of.
+
+World and query frame.
+
+```text
+world   = 0x142cba2a0(query+0x28)
+slot    = 0x142cb49a0(world)            // [slot] is a pointer, zero = no geometry
+target  = decode([slot]+8)              // the same hash/obfuscation chain as the
+                                        // state transform: WriteIndexConstants,
+                                        // DecodeKeyInPlace, [0x143b79598]+0x198,
+                                        // [0x1438480f3]
+resolver= [target+0x250]                // the sub-shape resolver, may be null
+quat    = 0x142cb48a0(world)            // four floats, the query's orientation
+basis   = 2*row + (0, 1, 0)             // the facing row built from that quat
+ids     = 0x142cb44c0(world, &query)    // candidate ids: an inline 0x200-byte
+                                        // array plus a count, freed through
+                                        // 0x142cadf00 (the same container the
+                                        // query driver's worklist uses)
+```
+
+Per candidate id, in array order: a 0x50-byte record is zeroed and `-1`-filled,
+then `0x142cae760(world, &record, id)` fills it. A `0x8000` bit in the record's
+`+0x2a` `u16` means the id selects a sub-shape, which
+`FUN_141b3c890(resolver, out, id & 0x7fff)` resolves; the resolved `u16` is what
+the acceptance writes back.
+
+What runs unconditionally is the refinement, under `record.flags & 0x18`:
+
+1. `0x142cc5bc0(&record, &query_point)` gives the closest point on the
+triangle; its squared distance is compared against the running best with an
+epsilon of `1.1920929e-05` whose **sign flips with the previous acceptance**
+(`bVar1 ? best - e : best + e`).
+2. Inside that, the acceptance is cleared, and unless bit 0 of the resolved
+`u16` is set the triangle normal is recomputed, normalised, and tested with
+`threshold < dot(normal, basis)`.
+3. On acceptance the normal is written to `query+0x10..0x1f` and the resolved
+`u16` to `query+0x3e`; the closest-point distance becomes the new best.
+
+The visualiser is a separate block gated on the byte at `0x143c03a3d` and on
+`(*(*owner + 0xb0))(owner) != 0`: it draws the three edges through
+`0x142cb4a30` (the point transform), picks one of two colour pairs
+`(1.0, 0.3)` by `resolved & 1` and `record.flags & 0x18`, and draws a
+`0.1`-long normal ray from the triangle's centroid. It is **not** part of the
+result.
+
+Still open, and each is a single-function read:
+
+| address | what it answers |
+|---|---|
+| `0x142cb44c0` | what a candidate id is and where the list comes from |
+| `0x142cae760` | the triangle record's `0x50`-byte layout |
+| `0x142cc5bc0` | the closest-point-on-triangle routine |
+| `0x142cb4a30` | the point transform (and whether it is the 4x4 of `0x140cb5510`) |
+| `0x142cba720`, `0x142cba2a0` | the shape-handle type query and the world decode |
+| `0x142cb49a0`, `0x142cb48a0` | the geometry slot and the query quaternion |
+
 ## Verification
 
 The twenty-seven read movement units are differential, not fitted:

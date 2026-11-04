@@ -114,35 +114,19 @@ not the loop but two inputs: pass 0's `MoverWishQueryCached`, and the shape-ring
 branch behind the global toggle (`0x141ae3eb0`'s corner/extent pair,
 `0x140cc2290`'s mesh-face refinement). Those are the next anchors.
 
-**The mesh-face refinement is read (2026-11-07): `0x140cc2290` is not a draw.**
-It has one caller, `MoverWishWriter` `0x140cb86c0`, and it writes the query
-back. Its gate is `query+0x28 != -1` and `0x142cba720(query+0x28) == 3`, so the
-ring only runs for a **type-3 mesh** shape. It resolves the geometry object
-through the same decode chain as the state transform
-(`WriteIndexConstants`, the `[0x143b79598]+0x198` and `[0x1438480f3]` anti-tamper
-reads, `DecodeKeyInPlace`), then takes `[geometry+0x250]` as the sub-shape
-resolver; the query's orientation comes from `0x142cb48a0` and the candidate
-ids from `0x142cb44c0` (array plus count, on the same inline-`0x100` container
-that the query driver's worklist uses, released through `0x142cadf00`).
-
-Per candidate `0x142cae760(world, &record, id)` fills a triangle record; a
-`0x8000` bit in its `+0x2a` u16 selects a sub-shape through
-`FUN_141b3c890([geometry+0x250], out, id & 0x7fff)`. The visualiser that draws
-the triangle outline, the two facing colours and the 0.1-long normal ray is
-gated on the byte at `0x143c03a3d` and is **not** the refinement. The
-refinement runs regardless, under `record.flags & 0x18`: it takes the closest
-point on the triangle to the query point (`0x142cc5bc0`), keeps the candidate
-whose distance squared is within the running best `+1.19e-5` (the sign of that
-epsilon flips with the previous acceptance), and, unless bit 0 of the sub-shape
-`u16` is set, re-tests the triangle normal against the query's basis row with
-the `param_5` threshold. An accepted candidate writes the normal to
-`query+0x10..0x1f` and the `u16` to `query+0x3e`.
-
-Still open on this function: `0x142cb44c0`'s candidate list (what a candidate id
-is), `0x142cae760`'s triangle-record layout, `0x142cc5bc0`'s closest-point
-routine, and the point transform `0x142cb4a30`. Ghidra's stored extent for
-`0x140cc2290` is 125 bytes while the body runs past `0x140cc2c18`, so the body
-must be repaired before those reads are trusted.
+**The mesh-face refinement is read (2026-11-07).** `0x140cc2290` is the last
+input behind the `CandidateSolver` seam, and it is not a draw: it writes the
+query's normal to `query+0x10..0x1f` and a `u16` to `query+0x3e`, and it
+returns a `bool`. The ring only runs for a type-3 mesh shape
+(`0x142cba720(query+0x28) == 3`). The read, the argument and the gates are in
+`formats/character-controller.md`; the Ghidra body had to be repaired first
+(the cookie check `0x1426c3d40` was wrongly flagged non-returning - see
+`ghidra-project.md`), and a two-instruction overlap at `0x140ce0863` still
+truncates the far end of that decompile. Six single-function reads are the
+next anchors: `0x142cb44c0` (the candidate list), `0x142cae760` (the triangle
+record), `0x142cc5bc0` (closest point), `0x142cb4a30` (the point transform),
+and the handle/world pair `0x142cba720`/`0x142cba2a0` plus
+`0x142cb49a0`/`0x142cb48a0`.
 
 **Fixed 2026-11-06: the ring's comparison operand.** `solve` projected the
 query point, which is the same for all `n` steps, so the ring kept its first
