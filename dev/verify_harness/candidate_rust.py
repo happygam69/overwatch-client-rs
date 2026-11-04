@@ -116,6 +116,7 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "collision_capsule": ["crates/ow-sim/src/collide.rs"],
     "mesh_sweep": ["crates/ow-sim/src/collide.rs"],
     "collision_narrowphase": ["crates/ow-sim/src/collide.rs"],
+    "query_driver": ["crates/ow-sim/src/collide.rs"],
     "build_bvh": ["crates/ow-sim/src/collider.rs"],
     "mover_state_vector": [
         "crates/ow-sim/src/movement.rs",

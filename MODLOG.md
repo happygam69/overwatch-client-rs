@@ -3,6 +3,34 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-07 - the collision query driver is verified against the client's bytes
+
+- `CollisionQueryDriver` `0x142cbd510` is implemented as
+  `ow_sim::collide::query_driver` and verified as `fn/QueryDriver`: 208 cases,
+  every channel, branch coverage 100% over the function's `0x36d` bytes (10/10
+  reachable branches of 11 sites, 1 declared dead edge), 11/12 mutants killed.
+  The driver is now the fifth verified link in the query chain, between the
+  narrowphase and the fan that asks for the sweep.
+- The corpus had to grow before it could prove the walk: a diagonal segment
+  plus a corner-placed leaf drives the moving-box test (`0x142cbd749`) on both
+  edges, and a 120-level chain tree exercises a deep walk. Both rejection
+  sites, the `1`-ends-the-pass branch and the `2`-folds branch now run on both
+  edges.
+- The worklist's growth path is **unreachable under emulation**, not skipped:
+  past the inline `0x100` entries the push reallocs through the global
+  allocator object at `0x144188200`, which is zero in the offline image, so
+  the free's branch site carries a declared dead edge with that reason. The
+  realloc's copy and the free are recorded as an open gap.
+- Two harness defects were found and fixed, both of which had been silently
+  weakening the unit. A long-lived emulator instance carries state between
+  calls - after about ninety calls every pass stops folding - so
+  `freshOraclePerCase` is now set and each case runs on its own instance. The
+  coverage tracker could not see those fresh instances (it hooked only the
+  first oracle), so `BranchTracker.attach` now shares one edge set across
+  every oracle a unit builds. And the unit generated zero mutants because
+  `query_driver` was missing from `ENTRY_SOURCES`; it now points at
+  `crates/ow-sim/src/collide.rs`.
+
 ## 2026-11-07 - the shape narrowphase is verified against the client's bytes
 
 - `ShapeNarrowphase` `0x142cc1610` is implemented as

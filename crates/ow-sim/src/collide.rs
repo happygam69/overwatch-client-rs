@@ -431,7 +431,11 @@ pub fn query_driver(
         // straight from the block - the block's own `+0x00`/`+0x10` are that
         // call's inputs, and its `+0x50` is only the narrowphase's expansion.
         let (swept_start, swept_end, swept_expansion) = sweep_bounds(block, points);
-        let mut geometry = pass_geometry(swept_start, swept_end, motion);
+        // `0x142cbd643`: the reach is scaled by `fold_cmp` (`[RBP-0x40]`, the
+        // operand the previous pass returned), not by the block's motion. The
+        // two agree on the first pass because `fold_cmp` is seeded from
+        // `fold_min`, which starts as the motion.
+        let mut geometry = pass_geometry(swept_start, swept_end, fold_cmp);
         let root = pass_roots[pass];
         if root == -1 {
             continue;

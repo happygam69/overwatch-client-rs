@@ -896,7 +896,15 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
    `0x142cc1610` is **implemented and verified** as
    `ow_sim::collide::shape_narrowphase` / `fn/ShapeNarrowphase` (264 cases,
    every channel, coverage 3/3 reachable of 7 sites, 11/12 mutants;
-   `formats/shape-narrowphase.md`).
+   `formats/shape-narrowphase.md`). The BVH walk that feeds it, the query
+   driver `0x142cbd510`, is **implemented and verified** as
+   `ow_sim::collide::query_driver` / `fn/QueryDriver` (208 cases, every
+   channel, coverage 10/10 reachable of 11 sites with one declared dead edge,
+   11/12 mutants). Its one open path is the worklist's growth: past the inline
+   `0x100` entries the push reallocs through the global allocator object at
+   `0x144188200`, which is zero in the offline image, so the realloc's copy and
+   the free stay unproven while the push and pop order are pinned by the
+   passes that stay inside the buffer.
    Its dispatch label `0x142cb8d60` is a real entry point inside the transform's
    extent and takes a **fifth** argument, the query block; the per-type pool
    base and stride are `0`/`+0x2d0`/`0x20`, `1`/`+0x2e8`/`0x30`,

@@ -149,7 +149,16 @@ class BranchTracker:
         # branch site -> set of next-executed addresses (the observed edges)
         self.edges: Dict[int, Set[int]] = {c: set() for c in self.conds}
         self._prev: Optional[int] = None
-        self._hook = oracle.uc.hook_add(UC_HOOK_CODE, self._on_insn)
+        self._hooks: List[Tuple[EmuOracle, int]] = []
+        self.attach(oracle)
+
+    def attach(self, oracle: EmuOracle) -> None:
+        """Install the same recorder on another oracle instance.
+
+        A unit that builds a fresh oracle per case (to keep a client-side
+        accumulator from leaking between cases) still measures one edge set:
+        the runs are independent, the coverage is not."""
+        self._hooks.append((oracle, oracle.uc.hook_add(UC_HOOK_CODE, self._on_insn)))
 
     def _on_insn(self, uu, addr, size, ud):
         prev = self._prev
@@ -224,10 +233,12 @@ class BranchTracker:
         )
 
     def close(self) -> None:
-        try:
-            self.oracle.uc.hook_del(self._hook)
-        except Exception:
-            pass
+        for oracle, hook in self._hooks:
+            try:
+                oracle.uc.hook_del(hook)
+            except Exception:
+                pass
+        self._hooks.clear()
 
 
 def measure_branch_coverage(

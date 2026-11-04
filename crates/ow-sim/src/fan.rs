@@ -663,6 +663,83 @@ pub fn project_back(cand: [f32; 4], dir: [f32; 4], dir_w: f32) -> ([f32; 4], f32
     )
 }
 
+/// The pass-3 snap's divide guard, `0x142f7aad8`.
+///
+pub const SNAP_DIVIDE_FLOOR: f32 = f32::from_bits(0x38fa_0000);
+
+/// `RCPSS` as the harness oracle emulates it: a precise f32 reciprocal.
+///
+/// The host CPU's hardware `rcpss` is a 12-bit approximation with different
+/// bits, so the Unicorn oracle and this function agree only on the precise
+/// form - the same convention `crate::camera` uses for `rsqrtps`.
+#[inline]
+fn rcpss_unicorn(x: f32) -> f32 {
+    std::hint::black_box(1.0f32 / std::hint::black_box(x))
+}
+
+/// Pass 3, the back-transform snap (`0x140cb98fa..0x140cb99b9`).
+///
+/// Once a hit has been accepted, the writer re-seats the accepted direction's
+/// **`y` lane** on the plane through the direction itself whose normal is that
+/// same direction, and takes that crossing's `y`. The plane is therefore
+/// `dot(p - out, n) = 0` with `n = out`, which is why the numerator is
+/// `dot(start - out, n)` and the denominator is `-dot(n, end - start)`:
+///
+/// ```text
+/// delta = end - start
+/// s     = -dot(n, delta)               ; n = out, the accepted direction
+/// if s < 1.1920929e-7 skip             ; FLT_EPSILON, a divide guard
+/// t0    = dot(start, n) - dot(out, n)  ; two separate sums, then a subtract
+/// r     = RCPSS(s)
+/// t     = (2*r - r*r*s) * t0           ; one Newton step, 2.0 from 0x1431107f0
+/// if t < 0 or t > 1.0 skip
+/// out[1] = (start + t*delta)[1]
+/// ```
+///
+/// A sweep from `y = 5` to `y = -5` with `out = n = (0,1,0,0)` crosses the
+/// plane `y = 1` at `t = 0.4`, so the direction's `y` becomes `1`.
+///
+/// Only lane 1 is written; the other three pass through untouched. `None`
+/// means the snap was skipped and the direction is unchanged.
+pub fn back_snap(
+    out: [f32; 4],
+    normal: [f32; 4],
+    start: [f32; 4],
+    end: [f32; 4],
+) -> Option<[f32; 4]> {
+    let mut delta = [0.0f32; 4];
+    for i in 0..4 {
+        delta[i] = end[i] - start[i];
+    }
+    // `s = -dot(n, delta)`, accumulated y, x, z and then negated by the
+    // `0x80000000` splat at `0x142f817a0`.
+    let dy = sse_mul(normal[1], delta[1]);
+    let dx = sse_add(dy, sse_mul(normal[0], delta[0]));
+    let s = -sse_add(dx, sse_mul(normal[2], delta[2]));
+    if s < SNAP_DIVIDE_FLOOR {
+        return None;
+    }
+    let on_start = dot_yxz(start, normal);
+    let on_out = dot_yxz(out, normal);
+    let t0 = sse_add(on_start, -on_out);
+    let r = rcpss_unicorn(s);
+    let t = sse_mul(sse_add(sse_mul(2.0, r), -sse_mul(sse_mul(r, r), s)), t0);
+    if t < 0.0 || t > 1.0 {
+        return None;
+    }
+    let mut snapped = out;
+    snapped[1] = sse_add(start[1], sse_mul(t, delta[1]));
+    Some(snapped)
+}
+
+/// `(y*ny + x*nx) + z*nz` - the client's horizontal-add association.
+#[inline]
+fn dot_yxz(a: [f32; 4], b: [f32; 4]) -> f32 {
+    let y = sse_mul(a[1], b[1]);
+    let x = sse_add(y, sse_mul(a[0], b[0]));
+    sse_add(x, sse_mul(a[2], b[2]))
+}
+
 /// The reflection write's two bytes: `out+0x41 |= (word >> 16) & 1` and
 /// `out+0x42 = (word >> 18) & 1`.
 ///
@@ -759,7 +836,10 @@ pub fn solve(
                 reflection.0 |= flag_a;
                 reflection.1 = flag_b;
                 let accepts = accepts_ring(facing(ctx.dir, hit.normal), threshold, !flag_a);
-                let proj = projection(ctx.point, ctx.dir);
+                // The comparison is the *candidate's* projection on the mover
+                // direction; projecting `ctx.point` would make it
+                // loop-invariant and hand the ring to its first facing hit.
+                let proj = projection(a, ctx.dir);
                 if accepts && proj < best_proj {
                     best_proj = proj;
                     best = Some(hit);
@@ -1191,6 +1271,36 @@ mod composition_tests {
         }
     }
 
+    /// The ring pass's candidates in its own order: `seed_end` plus the rotated
+    /// offset, none of them evaluated.
+    fn ring_candidates(point: [f32; 4], seed: f32, count: usize, radius: f32) -> Vec<[f32; 4]> {
+        let (seed_end, _) = endpoints(point, DIR, 0.0, seed, 0.0);
+        ring_offsets([1.0, 0.0], count)
+            .into_iter()
+            .map(|pair| {
+                let off = ring_offset(pair, radius);
+                [
+                    sse_add(seed_end[0], off[0]),
+                    sse_add(seed_end[1], off[1]),
+                    sse_add(seed_end[2], off[2]),
+                    sse_add(seed_end[3], off[3]),
+                ]
+            })
+            .collect()
+    }
+
+    /// The candidate the ring's strictly-smaller projection rule keeps.
+    fn closest(candidates: &[[f32; 4]]) -> [f32; 4] {
+        *candidates
+            .iter()
+            .min_by(|x, y| {
+                projection(**x, DIR)
+                    .partial_cmp(&projection(**y, DIR))
+                    .expect("no NaN")
+            })
+            .expect("at least one candidate")
+    }
+
     #[test]
     fn the_two_endpoints_carry_different_scalars() {
         let point = [1.0, 2.0, 3.0, 4.0];
@@ -1250,6 +1360,48 @@ mod composition_tests {
     }
 
     #[test]
+    fn the_back_snap_seats_y_where_the_sweep_crosses_the_direction_plane() {
+        // n = out = (0,1,0,0), so the plane is y = 1. The sweep runs from
+        // y = 5 to y = -5, crossing y = 1 at t = 0.4.
+        let out = [0.0, 1.0, 0.0, 0.0];
+        let start = [0.0, 5.0, 0.0, 0.0];
+        let end = [0.0, -5.0, 0.0, 0.0];
+        let snapped = back_snap(out, out, start, end).expect("t = 0.4 is inside the sweep");
+        // The Newton step runs on a *precise* reciprocal (the Unicorn
+        // convention), so it overshoots 1/s slightly and the seated y is a few
+        // ulp off 1. The client's hardware `rcpss` is 12-bit, so the exact bits
+        // of this lane are only pinned by the emulator.
+        assert_eq!(snapped, [0.0, 1.0000002, 0.0, 0.0]);
+        // Only lane 1 moves: an off-axis direction keeps its other lanes. The
+        // plane is `dot(p, n) = dot(out, n)`, so `out = (0.25, 1, -0.75, 0.5)`
+        // with `n = out` seats y at `dot(out, out) = 1.625` - the sweep's x and
+        // z are zero, so only `n.y * y` contributes.
+        let out = [0.25, 1.0, -0.75, 0.5];
+        let snapped = back_snap(out, out, start, end).expect("still inside the sweep");
+        assert_eq!([snapped[0], snapped[2], snapped[3]], [0.25, -0.75, 0.5]);
+        assert_eq!(snapped[1], 1.6250002);
+    }
+
+    #[test]
+    fn the_back_snap_skips_below_the_divide_floor_and_outside_the_sweep() {
+        let out = [0.0, 1.0, 0.0, 0.0];
+        // s = -dot(n, delta) = 10 * n.y; a horizontal sweep gives s = 0.
+        let start = [0.0, 5.0, 0.0, 0.0];
+        let end = [10.0, 5.0, 0.0, 0.0];
+        assert_eq!(back_snap(out, out, start, end), None);
+        // t < 0: the sweep starts below the plane and moves further down.
+        let start = [0.0, -5.0, 0.0, 0.0];
+        let end = [0.0, -15.0, 0.0, 0.0];
+        assert_eq!(back_snap(out, out, start, end), None);
+        // t > 1: the sweep crosses the plane before it starts.
+        let start = [0.0, 5.0, 0.0, 0.0];
+        let end = [0.0, 4.0, 0.0, 0.0];
+        assert_eq!(back_snap(out, out, start, end), None);
+        // The floor itself is 1.1920929e-7, and the test is strict.
+        assert_eq!(SNAP_DIVIDE_FLOOR, f32::from_bits(0x38fa_0000));
+    }
+
+    #[test]
     fn the_gate_stops_the_producer_before_any_probe() {
         struct Panic;
         impl CandidateSolver for Panic {
@@ -1288,6 +1440,36 @@ mod composition_tests {
     }
 
     #[test]
+    fn the_ring_keeps_the_closest_candidate_not_the_first() {
+        // seed 0.5 on a 2.0 radius puts the smallest |projection| on the
+        // second candidate; the first is the farthest of the four.
+        let ctx = SolveContext {
+            point: [0.0; 4],
+            dir: DIR,
+            dir_w: 0.0,
+            seed: 0.5,
+            speed: 0.5,
+            ring: ring_sweep(4, 2.0, 1.0),
+        };
+        let sweep = ring_sweep(4, 2.0, 1.0).unwrap();
+        let mut solver = Fixed(Some(SweepHit {
+            score: 0.25,
+            normal: DIR,
+            word: 0,
+        }));
+        let solved = solve(&body_with(30.0, true), &ctx, &mut solver).expect("a hit");
+
+        let candidates = ring_candidates([0.0; 4], 0.5, 4, sweep.radius);
+        let closest = closest(&candidates);
+        assert!(
+            projection(closest, DIR) < projection(candidates[0], DIR),
+            "the fixture must not make the first candidate the closest"
+        );
+        let (want, _) = project_back(closest, DIR, 0.0);
+        assert_eq!(solved.direction, want);
+    }
+
+    #[test]
     fn an_aligned_ring_hit_flows_through_refine_and_the_back_transform() {
         let ctx = SolveContext {
             point: [0.0, 0.0, 10.0, 0.0],
@@ -1303,17 +1485,17 @@ mod composition_tests {
             word: 0,
         }));
         let solved = solve(&body_with(30.0, true), &ctx, &mut solver).expect("a hit");
-        // the ring's first candidate is the unrotated pair, so the endpoint is
-        // point + seed*dir + ring_offset([1,0], radius)
+        // The ring keeps the candidate with the smallest |projection| on the
+        // mover direction; with seed 0.5 on a 1.0 radius that is the third one
+        // (cos = -1, z = point_z + 0.5 - 1.0).
         let sweep = ring_sweep(4, 1.0, 1.0).unwrap();
-        let off = ring_offset([1.0, 0.0], sweep.radius);
-        let cand = [
-            0.0 + off[0],
-            0.0 + off[1],
-            10.0 + 0.5 + off[2],
-            0.0 + off[3],
-        ];
-        let (want, _) = project_back(cand, DIR, 0.0);
+        let closest = closest(&ring_candidates(
+            [0.0, 0.0, 10.0, 0.0],
+            0.5,
+            4,
+            sweep.radius,
+        ));
+        let (want, _) = project_back(closest, DIR, 0.0);
         assert_eq!(solved.direction, want);
         assert_eq!(solved.normal, DIR);
         assert!(solved.refined, "the refine's first candidate always wins");

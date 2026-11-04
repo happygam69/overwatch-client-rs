@@ -99,6 +99,11 @@ _KNOWN_ARG_KEYS = {"name", "kind", "ptr_len"}
 _KNOWN_OPTION_KEYS = {
     "iterations", "coverageThreshold", "mutationCount", "mutationKillRate",
     "seed", "allowedImageReads", "unreachableBranches", "mutationCallTimeout",
+    # Rebuild the emulator for every corpus case. A callee that leaves state
+    # behind (an allocator the arena reset does not restore, say) then cannot
+    # make one case's answer depend on the previous one. Slower, and only for
+    # units that need it.
+    "freshOraclePerCase",
     # A unit-declared exact function extent, for leaf functions the image's
     # .pdata does not describe. Without it the sweep uses the 0x2000 ceiling
     # and would disassemble trailing jump/dispatch tables as code.
@@ -507,6 +512,7 @@ def run_unit(
     mutation_count = int(opts.get("mutationCount", 12))
     kill_gate = float(opts.get("mutationKillRate", 0.8))
     seed = int(opts.get("seed", 4241))
+    fresh_oracle = bool(opts.get("freshOraclePerCase", False))
     cov_window = opts.get("coverageWindow")
     if cov_window is not None:
         cov_window = int(cov_window)
@@ -740,9 +746,21 @@ def run_unit(
         try:
             for idx, args in enumerate(cases):
                 tracker.begin_call()
-                o = _oracle_call_cached(
-                    oracle, unit.address_v2b, args, unit.ret_kind, cache, unit.start_regs
-                )
+                if fresh_oracle:
+                    call_oracle = EmuOracle(unit.image, base=unit.base)
+                    if unit.state is not None:
+                        call_oracle.set_state(unit.state.base, unit.state.data)
+                    tracker.attach(call_oracle)
+                    o = call_oracle.call(
+                        unit.address_v2b,
+                        args,
+                        ret_kind=unit.ret_kind,
+                        start_regs=unit.start_regs or {},
+                    )
+                else:
+                    o = _oracle_call_cached(
+                        oracle, unit.address_v2b, args, unit.ret_kind, cache, unit.start_regs
+                    )
                 if not o.ok:
                     log(f"  FAIL: oracle fault at iteration {idx}: {o.fault}")
                     return entry("inconclusive", notes=[f"oracle fault at {idx}: {o.fault}"])

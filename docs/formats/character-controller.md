@@ -985,6 +985,22 @@ So `0x142cbd510` is a bounding-volume hierarchy walk over one island's shape
 list: the four passes sweep the character's local support points, the per-shape
 AABB and moving-box tests prune, and only leaves reach a narrowphase.
 
+**The driver is verified against the client's bytes** (`fn/QueryDriver`, 208
+cases, 100% branch coverage with one declared dead edge, 11/12 mutants
+killed). Two limits are recorded rather than hidden. The worklist's growth
+path is unreachable under emulation: past the inline `0x100` entries the push
+reallocs through the global allocator object at `0x144188200`, which is zero
+in the offline image, so branch site `0x142cbd7f3` carries a declared dead
+edge and the realloc's copy and the free stay unproven — the push order and
+the pop order are pinned by the passes that stay inside the inline buffer. The
+hit policy is a constant-returning stub, so the four verdicts `0`..`3` are
+supplied: the unit proves that the wrapper's answer selects continue,
+end-the-pass and fold, not what the real policy decides. The corpus also
+showed that a long-lived emulator instance carries state between calls (after
+about ninety calls every pass stops folding), so each case runs on a fresh
+instance; nothing in the client's own code accounts for that, it is an
+emulator artifact and it is why the unit pins `freshOraclePerCase`.
+
 **The narrowphase wrapper is read.** `0x142cc1610(D, &hit, B, id)`:
 `entry = [record + 0x2b8] + id*0xc0` with `record = [D+0x00]`;
 `0x142cb8b80(entry, &xform, record)` builds the entry's world quaternion (from

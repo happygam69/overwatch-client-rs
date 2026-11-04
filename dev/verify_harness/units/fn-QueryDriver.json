@@ -1,0 +1,95 @@
+{
+  "id": "fn/QueryDriver",
+  "title": "tier-2 shipped code: sweep an island's broadphase in four passes against 0x142cbd510",
+  "address": {
+    "v2b": "0x7ff7c79dd510"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "query_driver",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "island",
+      "kind": "ptr",
+      "ptr_len": 8192
+    },
+    {
+      "name": "context",
+      "kind": "ptr",
+      "ptr_len": 40
+    },
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 128
+    },
+    {
+      "name": "flags",
+      "kind": "u64"
+    }
+  ],
+  "returns": "vec4",
+  "argFactory": "query_driver_fixture",
+  "options": {
+    "iterations": 144,
+    "coverageThreshold": 80,
+    "mutationCount": 12,
+    "mutationKillRate": 0.7,
+    "seed": 1420510,
+    "coverageWindow": 877,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4-0x7ff7c7c9ab23",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9ab2f",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17df",
+      "0x7ff7c7ca44e0-0x7ff7c7ca451f",
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a3f",
+      "0x7ff7c7ca60e0-0x7ff7c7ca611f",
+      "0x7ff7c7cacd50-0x7ff7c7cacd8f",
+      "0x7ff7c7cc62f0-0x7ff7c7cc632f",
+      "0x7ff7c7d8ad20-0x7ff7c7d8ad5f",
+      "0x7ff7c7dc4b40-0x7ff7c7dc4b7f",
+      "0x7ff7c7dc4bf0-0x7ff7c7dc4c2f",
+      "0x7ff7c7e30818-0x7ff7c7e30857",
+      "0x7ff7c7e30d50-0x7ff7c7e30d8f",
+      "0x7ff7c7e3e0c0-0x7ff7c7e3e0ff",
+      "0x7ff7c80b1030-0x7ff7c80b106f",
+      "0x7ff7c81baba0-0x7ff7c81babdf",
+      "0x7ff7c830c2c0-0x7ff7c830c2ff",
+      "0x7ff7c830ca80-0x7ff7c830cb4f",
+      "0x7ff7c830ccb0-0x7ff7c830ccef",
+      "0x7ff7c830ccf0-0x7ff7c830cd3f",
+      "0x7ff7c830cd70-0x7ff7c830cdaf",
+      "0x7ff7c830cd80-0x7ff7c830cdbf",
+      "0x7ff7c830cfc0-0x7ff7c830d04f",
+      "0x7ff7c87e5f40-0x7ff7c87e5f7f"
+    ],
+    "freshOraclePerCase": true,
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c79dd7f3",
+        "edge": "0x7ff7c79dd7f5",
+        "why": "The other edge is the free of a worklist that grew past the inline 0x100 entries. Growth calls realloc at 0x141bb00e0, which dispatches through the global allocator object at 0x144188200; that pointer is zero in the offline image, so the growth path faults before it can be reached. The corpus keeps every pass under the inline capacity and the push order is pinned by the passes that stay inside it."
+      }
+    ]
+  },
+  "notes": [
+    "The client's signature is `(island, context, block, flags)`: `RCX` the island record, `RDX` the query context, `R8` the block, `R9B` the pass flag byte. The island's per-pass table starts at `+0x30` with a `0x28` stride: `+0x30 + 0x28*p` is pass `p`'s shape-entry array pointer and `+0x44 + 0x28*p` its root index, `-1` meaning the pass is skipped.",
+    "An entry is `0x40` bytes: `+0x00` min, `+0x10` max, `+0x20` the shape index a leaf hands to `0x142cc1610`, `+0x2c` the first child or `-1` for a leaf, and `+0x30` the second child. The walk pushes the root, and an internal node pushes `+0x2c` then `+0x30`, so the second child is visited first.",
+    "The driver's return is `XMM6`, the per-lane running minimum of every accepted hit's fraction quad, seeded with the block's motion quad. A hit is folded only when the wrapper's answer is `2`; an answer of `1` ends the pass's walk; anything else continues.",
+    "`fold_cmp` is re-seeded from `fold_min` at the top of every pass and becomes the hit itself once every lane improves, which is what makes the geometry box shrink between siblings. The block's `+0x00`/`+0x10` are `CollisionSweepBounds`'s inputs, not the driver's, and `+0x50` is only the narrowphase's expansion.",
+    "The fixture's hit policy stand-in is `mov eax, N; ret` in the arena, so the wrapper returns a constant the probe decodes rather than executes. The four verdicts 0..3 exercise the continue, the break and the fold. `ctx+0x20` (the sink) is null, so the wrapper's push never runs.",
+    "The corpus varies the pass flag byte, six root patterns (a full tree, all empty, leaves as roots, repeated roots, and a 120-level chain either alone or either side of a tree), the sphere and the capsule in both leaf slots, six pinned segments including a diagonal one, the support-point count 0..4, per-leaf bounds margins and a per-case leaf shift. The margins reject a node at the swept bound; the diagonal segment plus a corner shift passes that bound test and fails the exact one, so both rejection sites run on both edges.",
+    "Every case runs on a fresh emulator instance. The client's worklist growth goes through a realloc whose allocator object is zero in the offline image, and a long-lived instance carries state between calls (after about ninety calls every pass stops folding), so one call per instance is the only honest measurement."
+  ],
+  "acknowledgedGaps": [
+    "The worklist's `CollisionWorklistPush` (`0x142cadf00`'s sibling) and its free are not modelled: the probe uses a `Vec`, so the client's inline 0x100-entry buffer, its growth path and its heap free are outside the unit. The push ORDER is what the unit pins.",
+    "The hit callback is a constant-returning stub, so the unit proves that the wrapper's answer drives the fold, not what the real policy `0x14202bc90` answers. The sink push stays unexercised for the same reason.",
+    "Only the primitives that are read run: sphere, capsule and the type-3 mesh walk. A type-2 or type-4+ leaf would report `UnreadType` in the probe and execute an unread routine in the oracle, so the corpus never places one.",
+    "No type-3 leaf. Two reasons, both measured: the mesh walk's support-point hull path (taken whenever the block's `+0x38` count is positive) is not verified and diverges from the client, and a mesh leaf makes the emulator's own result depend on the preceding call (the same args answer `10.0` after one case and `0.3108` after another), so a corpus that placed one could not be pinned by this harness.",
+    "The wrapper's return value is not modelled: the probe maps `Narrowphase::Hit` to the fixture's constant verdict and every other outcome to `3` (the client's answer when the sink is null). So the unit proves that the driver folds on `2` and stops on `1`; it does not prove the wrapper's own return path, which `fn/ShapeNarrowphase` declared void.",
+    "The worklist's growth path is not exercised: past the inline 0x100 entries the client reallocs through the global allocator object at 0x144188200, which is zero in the offline image, so the path faults before it can be reached. The branch site 0x7ff7c79dd7f3 therefore carries a declared dead edge. The push order and the pop order are pinned by the passes that stay inside the inline buffer, and the probe's Vec is a growable stack, but the realloc's copy and the free stay unproven.",
+    "The hit callback is a constant-returning stub, so the four verdicts 0..3 are supplied rather than computed: the unit proves that the wrapper's answer selects continue, end-the-pass and fold, not what the real policy at 0x14202bc90 decides."
+  ]
+}

@@ -928,6 +928,90 @@ fields this function writes, with the arm that writes them:
 | `+0x68` | `f32` | the mesh scale: `maxss(scale, 0.01)` when uniform, `1.0` when baked | mesh |
 | `+0x70` | `u64` | the source: `&` the unpacked `0x30` record when uniform, `&` the baked copy otherwise | mesh |
 
+**The body's transform comes from the builder's second argument
+(2026-11-03).** `OwnerCreateBody` (`0x142cc3d90`) is called with a `0x30`-byte
+config at `rbp+0x20`, and the config's two quads are written from `xmm6` and
+`xmm11` (`0x14201b52e`/`0x14201b532`), which are the builder's second argument
+(`r14 = rdx`) read at `+0xd0` and `+0xf0` (`0x14201b21b`/`0x14201b223`) and
+rotated/translated through the matrix at `rbp+0x1b0`/`rbp+0x1c0`. So the shape's
+placement is **the second argument's transform**: `+0xd0` a quaternion, `+0xf0`
+a position. The same argument is read at `+0x250` (the scene node, already in
+the guards), `+0x298` (a count) and `+0x230` (a pointer); its class is still the
+open link, and with it whether it is the placed node's transform.
+
+**The node creation record's shape is read (2026-11-03).** The record the
+`WorldBase` slot-8 entry receives is consumed in `0x14202c660` as two
+fields only:
+
+| record offset | use |
+|---|---|
+| `+0x10` | a dword copied to `[node+0x454]` (`0x14202c6e4`) -- the gate word |
+| `+0x18` | a pointer, and it is the placement |
+
+The `+0x18` object is read at its `+0x10` and stored to `[node+0x630]`
+(`0x14202d1c2`/`0x14202d1c6`) -- so the node's placement transform is
+`[[record+0x18]+0x10]`. The same pointer is handed to the world allocator
+`0x142cc3c80` twice (`0x14202d1d1`, `0x14202d1e8`), which yields the two `u16`
+world slots at `[geometry+0x31f8]` and `[geometry+0x31fa]`. So the record is
+`{flags, world/transform descriptor}`, and the descriptor is the same kind of
+object the streaming path builds on the stack in `0x142090e00` from the owner's
+`+0x168..+0x180` fields. The record's **producer** is still unread, but its
+shape -- and the reason the gate and the placement are the same read -- is now
+known. The scene update `0x14208d010` (called from the streaming path) reads a
+transform block at `+0xd0`/`+0xe0`/`+0xf0` and the count at `+0x298` and builds
+the world matrix through `0x141ffab90`; that is the per-object propagation, not
+the node's own placement.
+
+**The class is the model component, by the data side (2026-11-03).** The map's
+entity placeables name their components by a small id, and the STU asset at
+each record's offset names the component's data class
+(`formats/maps.md`, "The entity component vocabulary is data"): id `2` is
+`STUModelComponentInstanceData` and appears on **475 of the range's 550 entity
+placeables** -- exactly the entities that carry a model. The 0x300 component is
+the one whose transform the collision builder hands to `OwnerCreateBody`
+(`[second+0xd0]`/`[second+0xf0]`), i.e. the component that carries the model and
+its placement, so the model component is its data-side identity. That is a
+hypothesis supported by the transform role and the count, not yet a read of the
+class-to-data link; the engine class's own name is still `Unknown`.
+
+**The class name is genuinely stripped.** The name the registrar stores decodes
+(the XOR-8 key at `0x143aa0130`, length at `0x143aa0138`, bytes at
+`0x143aa013c`) to `Unknown`. The reference checkout's type list has exactly two
+classes of size 768 (`0x2A8E9CEA` and `0x7F759FA9`), and both are animation and
+texture asset structs, not engine components; so the install's data does not
+name this class either. Identity is the type object
+(`0x143363238`)/constructor/size, which is what the docs use.
+
+**The second argument is a 0x300-byte scene component (2026-11-03).** The
+object the builder reads is constructed by `0x141ff90e0` (0x420 bytes), created
+by the factory `0x141ff90a0` (its slot-3 "size" leaf `0x141ff90d0` returns
+`0x300`), and registered at `0x141ff9851` as kind `0x14`, size `0x300`, with
+the name bytes at `0x143aa013c` (XOR key at `0x143aa0130`, length at
+`0x143aa0138`, decoded flag at `0x143aa013b`). Decoded, the name is
+**`Unknown`** -- the shipping client strips it, so the class is identified by
+its constructor/size, not a name. Its primary vtable is `0x1433632e0`, the
+secondary `[this+0x18]` is `0x143363320`.
+
+The constructor establishes every field the builder later reads:
+
+| offset | value at construction | the builder's use |
+|---|---|---|
+| `+0xd0` | identity quaternion | the body config's first quad |
+| `+0xf0` | zero position | the body config's second quad |
+| `+0x230` | 0 | read at `0x14201b3e2` |
+| `+0x242` | `2` (byte) | bit 7 is the `0x141ffe7b0` guard |
+| `+0x250` | 0, attached later | the scene node (`[+0x620]` geometry) |
+| `+0x298` | 0 | the builder tests it non-zero at `0x14201b213` |
+| `+0x2a0`/`+0x2a8` | 0 | a linked list, walked by the destructor path |
+| `+0x22a` | `or` with `0x200` | the object's own "registered" bit |
+
+It also registers **itself in the node's component list**: the list head is
+`[node+0x520]`, the count `[node+0x52c]` (with a refcount at `+0x528`), and the
+entry is `[node+0x520][count] = this` (`lock xadd` at `0x141ff945b`). So the
+placement of a per-model shape is the *component's own* world transform, which
+the scene graph writes at `+0xd0`/`+0xf0`; the remaining question is who writes
+it for a placed map entity, not the builder.
+
 **The mesh scale's two paths.** `0x14201c3eb` takes the entity's three scale
 components, forms `sx - sy` and `sy - sz`, and compares each absolute value with
 `0.01` using `comiss` + `jae`. If either is `0.01` or more (an infinity is; a NaN
@@ -1692,18 +1776,20 @@ still has **no static reference** (check 12), so the type is registered by a cop
 whose caller is not in the static call graph -- the same shape as
 `RegisterNodeType2` above, which is also unreferenced.
 
-**The instantiation mechanism, read; the trigger, not.** The reflected-type
-system's instantiate entry is `0x1407803f0` (`TypeDescriptorInstantiate`): it
-takes a descriptor and an encoded instance key, decodes the key with the
-project's rotate/add/XOR idiom, calls the key's first vtable entry when
-`[descriptor+0x28] & 0x10` is set, and then calls the descriptor's container
-entry at `+0x20` slot `0x58`. That is *how* a registered type becomes an object
-(the collision component's object would be produced by its type object
-`0x1433633c8` slot 1, `0x14200a5f0`, size `0xad0`). What this turn did **not**
-read is the *entity-side trigger*: the walk over an entity's component set that
-decides to instantiate this descriptor at all, and the type-id lookups `4`,
-`0x11`, `0x31` that `0x14201cf40` performs are read as arguments of the
-*attachment*, not as a component-set decision. So question 2's answer is:
+**The class's slot 2 is a release, not an instantiate (corrected in check 17).**
+`0x1407803f0` is the type object's slot 2: it decodes the instance handle,
+calls the instance's first vtable entry when `[descriptor+0x28] & 0x10` is set,
+and returns the memory through the allocation strategy at `[type-info+0x10]`
+(slot `0x58`, `0x141c5f420`, a per-block free-list return). The allocator is
+the same strategy's slot `0x50` (`0x141c5ef30`), reached by `0x141c4b270`,
+which `WorldBaseTypeAlloc` uses. So *how* a registered type becomes an object
+is slot 1 (alloc) followed by the object's own slot 8 with the record; the
+earlier "key that selects the geometry class" was the instance handle being
+freed. What this turn did **not** read is the *entity-side trigger*: the walk
+over an entity's component set that decides to instantiate this descriptor at
+all, and the type-id lookups `4`, `0x11`, `0x31` that `0x14201cf40` performs
+are read as arguments of the *attachment*, not as a component-set decision.
+So question 2's answer is:
 **the set is not evident in the data read, and the code that reads it is the
 unread entity/component driver of check 12's next read 1** -- with the
 correction that "kind `0x14`" is not the thing to look for; the type's
@@ -2484,6 +2570,240 @@ line, the union of all 272 root boxes (`-28.35, -14.51, -14.01` to
    (`FUN_1421088e0`), which is not read here; the "nearest of the hits" above is
    the test's own rule over 272 independent narrowphase calls.
 
+## Check 17 -- the class slot 2 is a release; the map-load entry; a cell-world path
+
+Three corrections and one new world-creation path. None of them decides the
+node gate. Two of them remove the reasons checks 12-14 gave for treating the
+gate's producer as unreachable.
+
+### 1. The type object's slot 2 is a release, not an instantiate
+
+Checks 12 and 13 and `formats/domino.md` read `0x1407803f0` (the class static
+descriptor's slot 2, `0x1433654a0 + 0x10`) as "instantiate by key". It is the
+**release** method.
+
+- The descriptor is a `0x30`-byte type object: vtable at `+0x00`, the kind byte
+  at `+0x08`, and a `0x20`-byte type-info at `+0x10`. `0x141c4aea0` (the
+  type-info constructor) zeroes `+0x00`, `+0x08`, `+0x10`, `+0x18` and stores a
+  dword at `+0x1c`.
+- `RegisterTypeWithSize` (`0x141c4b050`) stores an allocation strategy at
+  type-info `+0x10`, i.e. type-object `+0x20`. For kind `0x14` the strategy is
+  the `0x68`-byte object with vtable `0x14328c7b8`.
+- That strategy's slot `0x50` is the allocator (`0x141c5ef30`) and slot `0x58`
+  the deallocator (`0x141c5f420`). The two one-line helpers `0x141c4b270` and
+  `0x141c4b290` tail-jump to exactly those two slots. `0x141c5f420` returns the
+  block to a per-block free list: it decrements the block's live count and
+  links the block into the free head.
+- `0x1407803f0` calls the instance's first vtable entry and then slot `0x58`
+  with the instance handle. It frees; it does not create.
+- The class's creation is therefore slot 1 (`0x1420266d0`,
+  `WorldBaseTypeAlloc`) followed by the object's own slot 8 (`0x14202c660`)
+  with the record. The "key that selects the geometry class" is withdrawn: the
+  decoded word is the instance handle.
+
+### 2. The "obfuscated creation path" is the map-load entry, not node creation
+
+Check 14's row "the world-creation path is obfuscated" rested on
+`0x14055a0f0`'s continuation being a chained fragment. The function is not
+obfuscated there; it is **truncated by a false `noreturn`**.
+
+- `.pdata`: root `0x14055a0f0..0x14055a246` plus one chained entry
+  `0x14055a246..0x14055a491`, contiguous: one body. The project image's
+  function ends at the root entry because the call at `0x14055a158` to
+  `0x141bb8d40` is marked `noreturn`. That callee is a string/vector
+  assignment that returns, and the bytes after the call decode as valid
+  instructions (`dev/rd.py 0x14055a0f0 0x14055a250`).
+- What the body does: it decodes and registers the CVar whose name is
+  `debug.showMapLoadAfterMS` (description "Show map load status after some
+  number of milliseconds", default `0xea60`), initialises the node class table
+  (`0x141c57c40` then `0x141c57970`), calls `0x140554220` with the engine object
+  at `_DAT_143b7f410`, and, gated on a global object's `vtable+0x20`, calls
+  `0x140be1570` with a table entry selected by a byte.
+- **`0x140554220` is the engine object's subsystem constructor, not the map-load
+  orchestrator** (the earlier wording is corrected here). It allocates ~40
+  subsystems, stores them at engine-object byte offsets `0x220..0x448`,
+  registers each through `0x141c52d10` (subsystem array at `+0x188`, interface
+  map at `+0x198`, and the back-pointer `subsystem[1] = engine`), then attaches
+  the global subsystem singletons at `[engine+0x238..+0x410]` through
+  `0x140bc7590` (array at `+0x228`, count `+0x230`). Its one `E8` caller is the
+  map-load entry.
+- `0x140be1570` allocates a `0x910` `WorldBase` (`0x1420271d0`) and a `0x2ad0`
+  camera-view object (`0x14206bcb0`, whose first call is
+  `InitCameraViewParams`), links the child into the parent's `+0x610` vector and
+  `+0x278` back-pointer, and sets the camera animation owner (`0x14206d2c0`).
+- So the only `E8` caller of `WorldBaseCtor` is the map-load entry's
+  camera-view builder. Node instances are **not** built through
+  `WorldBaseCtor`: `WorldBaseTypeAlloc` has no `E8` caller and exactly one
+  8-byte pointer, the class descriptor's slot 1 at `0x1433654a8`
+  (`dev/callers.py 0x1420271d0 0x1420266d0`).
+- The preload path's state object is a `0xf8`-byte global at `_DAT_143b796a8`
+  (creator `0x14053aec0`, constructor `0x140544de0`, settings init
+  `0x140551d00`). It holds three GUID maps at `+0x88`/`+0x90`/`+0x98` (filled by
+  `0x14077c2e0`, selected by kind `0x75`/`0xc5`/`0x77`), a catalog sub-object at
+  `+0xb8`, a lock at `+0x28`, a total at `+0x68` and a done count at `+0x6c`.
+- The completion check is `0x141fe0580`: it increments `+0x6c`; when the count
+  reaches `+0x68` and the started byte at `+0x08` is zero, it sets that byte and
+  calls `[[service]+0x38](service)`. `MapPreloadAssets` (`0x14077b7d0`) and
+  `0x14077b5e0` are its two callers. That call is the "all preloads done, start
+  the level" point and the next anchor.
+- The service argument is `0x14054a010(context)`, which returns the decoded
+  pointer at `context+0x78`; the decode uses the anti-tamper qword at
+  `0x143b79598+0x2f`, so the pointer is not statically recoverable.
+- **The service class is identified.** Its vtable is `0x142f8d970` and its size
+  is `0xf8` (slot 0, the deleting destructor `0x14077afa0`, frees `0xf8` after
+  clearing the three maps). Slot `+0x38` is `0x141fe0f80`: it sets the loaded
+  byte at `+0x78` and clears the pending pointer at `+0x70`. So the
+  "all preloads done" callback only flips the service to loaded; the level start
+  is **polled** by whoever reads `service+0x78`. That poll is the next read.
+- Consequence: the "creation path runs through obfuscation" argument is
+  withdrawn, and `0x140554220` is not the anchor. The next anchor is the
+  preload service's `vtable+0x38`.
+
+### 3. A second world-creation path: the streaming owner
+
+`0x142090e00` is stored as a 186-byte `__chkstk` stub in the project image, but
+its `.pdata` group is **13 contiguous entries** sharing the chain root, span
+`0x142090e00..0x142094d34` (`0x3f34` bytes). Its caller and callee lists in the
+project are therefore empty (`dev/fn_extent.py 0x142090e00 --group`). Read from
+the image:
+
+- It builds a world description on the stack (`[rbp+0x4b0]`) from the owner's
+  `+0x168..+0x180` fields and the counted layer records at `+0x70` (count at
+  `+0xb4`, doubled into the description's `+0x40`), then calls
+  `0x142cdf8e0(desc)`; when the existing world at `[owner+0x40]` is non-null it
+  calls `0x142cdf930(existing, desc)` instead.
+- `0x142cdf8e0` allocates `0x170` bytes and calls
+  `0x142cde350(world, 0, desc)`; `0x142cdf930` is the same with the caller's
+  first argument as the parent. The two wrappers have exactly one `E8` caller
+  each, both in `0x142090e00`.
+- The new world is stored at owner `+0x40`; its `+0x58` `u16` is read
+  (`0x142cdfc40`); a body is created with `OwnerCreateBody` from a stack block
+  at `[rbp+0x6f0]` and stored at owner `+0x50`; `0x142cb4f20` decodes the body
+  handle and writes `0xff` to the world record's `+0x19b` byte.
+- Then it walks the model's holders with mode byte `+0x2a == 4` -- a **third**
+  holder consumer beside mode `0` (per-model body builder) and mode `1`
+  (assembler). On the range the filter takes nothing (279 holders, 0 carrying
+  the mode byte), so this path adds no shapes there.
+- Callers: `0x142096dd0` (from `0x142023cd0`, from `0x142017c60`) and
+  `0x142099c10` (from `0x1420830e0`, `0x142090b80`, `0x142090be0`).
+
+### What is left
+
+The node record's producer is still unread. Three constraints narrow it:
+
+1. the class slot 2 is a release, so the instantiation driver is the caller of
+   slot 1 and then slot 8;
+2. the driver obtains the class descriptor from the node-type table, and a
+   whole-image scan for `call [reg+reg*8]` finds 14 sites, none of them a
+   registrar call (the registrar is called through a register, not a table
+   operand);
+3. the next read is the **poller of `service+0x78`**: the all-preloads-done
+   callback is `0x141fe0f80` (service vtable `0x142f8d970` slot `+0x38`) and it
+   only sets the loaded byte at `+0x78` and clears `+0x70`; the level start is
+   the code that observes that byte. The service pointer is runtime-encoded
+   (`0x14054a010(context)`), so the poller has to be found from the consumer
+   side. This is the anchor, not a result.
+
+## Check 18 -- the node record read field by field, and the world description it names
+
+The decompiler reaches `0x14202c660`'s whole body (checks 13 and 17 had the
+class and the dispatch; this check reads *what the record contains*). It adds
+three facts and narrows the missing producer to one shape of writer.
+
+### The record, as the consumer reads it
+
+The second argument (`param_2`) is read at these offsets and nowhere else
+(byte offsets; the decompiler's qword indices times eight):
+
+| record offset | destination | meaning |
+|---|---|---|
+| `+0x00` | state record `+0x170` (inside the `0x20` block) | an 8-byte id (GUID or encoded asset reference) |
+| `+0x10` (dword) | `[node+0x454]` | the flags word |
+| `+0x18` (pointer) | `[node+0x630]` (16 bytes from its `+0x10`), then `0x142cc3c80` twice | the Domino world settings description |
+| `+0x28` | state record | copied verbatim |
+| `+0x30` | state record | copied verbatim |
+| `+0x38` | state record | copied verbatim |
+| `+0x40` | state record | copied verbatim |
+| `+0x48` | state record | copied verbatim |
+| `+0x50` | state record | decoded (`ror 0xf`, `+ 0x567717a397cf9636`, `^ 0xc5102744c98c2a74`) -- an asset reference |
+| `+0x60`..`+0x8f` | `node+0x878`..`+0x8a4` and the state record | three 16-byte values split into dwords; the extra dwords at `+0x74`, `+0x7c`, `+0x84`, `+0x8c` fill the odd lanes |
+| `+0x90` | state record, through `0x141c60250` | a copied block (the copy size is not read) |
+| `+0x90` is the last read | | the record is at least `0x90` bytes |
+
+The flags word is tested bit by bit in the same function: `0x20` (create the
+state record), `0x200` (create the geometry and the two worlds), `0x01`, `0x02`,
+`0x04`, `0x40`, `0x80`, `0x4000`, and `0x15` as a mask. So the flag word is not an
+opaque blob: each bit has a read site.
+
+### The state record: 0x300 bytes, created by flag 0x20
+
+When bit `0x20` is set the init allocates **`0x300`** bytes and calls
+`0x142026e20`, then stores the (encoded) pointer at `node+0x6a8`. The object has
+**no vtable**: the constructor stores no class table, only field defaults. Its
+defaults are readable in the constant set: `±FLT_MAX` bound pairs, `1.0`
+scales, `0.1`, `25.0`, `50.0`, `60.0`, `-10000.0`, and two `-1` sentinels. The
+node then writes the record's `+0x00` id at object `+0x170`, copies the record's
+`+0x28`..`+0x48` fields, copies the block at `+0x90`, and stores the decoded
+asset reference from `+0x50`.
+
+This is a **state** record, not the builder's scene component: it has no vtable
+and no `+0x250`/`+0xd0` transform, while the builder's second argument has both
+(`0x1433632e0`/`0x143363320`, `+0xd0` pose, `+0x250` node). The node's scene
+component arrives by a different route (the update `0x142003720` resolves the
+object's `+0x8` node handle through the scene and stores the node at `+0x250`).
+
+### The `+0x18` descriptor is a Domino world **settings** description
+
+Two independent readers agree on the layout, and neither reads map geometry
+from it:
+
+`DmWorldConstruct` (`0x142cbeb70`) reads a **count at each of `+0x20`, `+0x24`,
+`+0x28`, `+0x2c`, `+0x30`, `+0x34`, `+0x38`, `+0x3c`, `+0x40`, `+0x44`, `+0x4c`,
+`+0x50`, `+0x54`, `+0x58`, `+0x5c`, `+0x60`, `+0x68`, `+0x6c`, `+0x70`**, and
+uses each to presize a pool of element records with strides `0x1c0`, `0x50`,
+`0xc0`, `0x20`, `0x30`, `0x50`, `0x50`, `0x50`, `0x50`, `..., 0x110`, `0x120`,
+`0x1d0`, `0x2e0`, `0x310`, `0x180`, `0x200`, `0xaa0`. It also copies
+`+0x10..+0x1c` (the rotation's xyz) into `world+0x1a0`, reads the byte pair
+`+0x74`/`+0x75`, and uses `+0x6c` as a minimum pool size. So the descriptor is a
+**capacity/settings template**: it says how many elements of each kind the world
+starts with.
+
+`ConstructDominoWorld` (`0x142cde350`) reads the same object as: rotation xyz at
+`+0x10..+0x1c` with the fourth component at `+0xac` (negated and normalised),
+the layer count at `+0x20` (each layer `0x40` bytes), a pointer at `+0x88`
+(whose `+0x20` is a byte-array count), four floats at `+0x90..+0x9c` (the first
+clamped to `[0,1]`), two floats at `+0xa0`/`+0xa4`, bytes at `+0xa8`/`+0xb0`,
+pointers at `+0xc0`..`+0xf8`, and a child list (`+0x140` head, `+0x160`
+count/next). Its `+0x10` block is exactly what the node copies into
+`[node+0x630]`, and the two `0x142cc3c80` calls build two `0x4d0` worlds from
+this one description.
+
+The description is therefore the object the streaming path also builds on its
+stack in `0x142090e00` (check 17): a world template with layer counts, not the
+map's kind-`0x11` payload. A node's worlds start **empty of shapes**; every
+shape in them comes from a later `ShapeAddToBody` (the per-model builder and the
+attachment builders of checks 9 and 10).
+
+### The node's own body gets no shapes from the init
+
+When bit `0x200` is set the init allocates the `0x3210` geometry record, makes
+the two worlds, and calls `OwnerCreateBody` with a **constant stack
+descriptor**: zero point, zeros, identity/`1.0` values, `-1` sentinels, a byte
+pair `0x10101`, and no shape-source pointer. That matches a body record that
+exists before its shapes are added: the init adds none, and the per-model
+builder later adds its own bodies. So "the node creates a body" and "the world
+has shapes" are separate facts, and the second one is entirely the component
+builders' work.
+
+### What this changes
+
+| line | before | now |
+|---|---|---|
+| the record's contents | `{+0x10 flags, +0x18 descriptor}` | the full field map above, every read site with its bit |
+| the `+0x18` descriptor | "a world/transform descriptor" | a Domino **settings** description: pool counts at `+0x20`..`+0x70`, rotation, layer count, child list -- read by both `DmWorldConstruct` and `ConstructDominoWorld` |
+| the node's own body | "creates its own static body" | creates a body record with no shape source; the shapes are added later by the component builders |
+| the 0x300 object the node allocates | conflated with the builder's scene component | a **separate state record** (0x300, no vtable, `+0x170` id) created on flag `0x20`; the builder's scene component is the `0x141ff90e0` class with the `+0xd0`/`+0xf0` pose and the `+0x250` node |
+
 ## What this leaves
 
 | line | state |
@@ -2508,11 +2828,11 @@ line, the union of all 272 root boxes (`-28.35, -14.51, -14.01` to
 | what class the creation entry belongs to | **read: `WorldBase`**, `0x910` bytes, vtable `0x143367630`; `0x14202c660` is **slot 8** of it, not slot 32 of `0x143367570` (check 13) |
 | how a node's class is selected | **read: a `u16` node type id** in the 144-entry registry at `0x144188170`; type `2` -> `NodeType2Factory` `0x142029f00`, which registers the class as a reflected type of kind `0x14`, size `0x910` (check 13) |
 | does component kind `0x14` identify anything? | **no**: 160 of the 283 `RegisterTypeWithSize` sites pass `0x14`, with sizes `0x18`..`0x31868`; the collision component is identified by its size `0xad0`, whose only registration site is `0x14200bbb1` (check 13) |
-| the record's flag word (`+0x10`, bit `0x200`) | **open**: the dispatch form is `call [WorldBase_vtable+0x40]`; checks 13 and 14 count every encoding of it (492 + 31 memory/tail, 109 register-indirect) and none of the sites read carries a creation record |
+| the record's flag word (`+0x10`, bit `0x200`) | **open, narrowed (2026-11-03, check 18)**: the record map is read field by field (`+0x00` id, `+0x10` flags, `+0x18` Domino settings description, `+0x28`..`+0x90` state-record fields, `+0x50` decoded asset ref). `+0x18` is a **settings template** (pool counts, rotation, layer count, children) read by `DmWorldConstruct`/`ConstructDominoWorld`, not map geometry, and the node's own body is created with no shape source. The dispatch form is `call [WorldBase_vtable+0x40]`; checks 13 and 14 count every encoding (492 + 31 memory/tail, 109 register-indirect) and none of the sites read carries a creation record, so the record's **producer** is still the anchor -- now a writer that must supply a settings description, not a placement |
 | the mesh record's node / triangle / vertex layout | **read (check 16)**: `0x142caed30` gives node stride `0x20` (adjacent child `+0x20`, second child `i32` at `+0x18` times `0x20`), triangle stride `0x20`, vertex stride `0x10`, node box `+0x00`/`+0x0c`, mask `+0x1c`, axis `+0x1e`, leaf count `+0x1f`; the block's own `nodeCount` and `0x38B71436` word agree on 272 of 272 |
 | the range's collision as one addressable world | **assembled and swept (check 16)**: 272 shapes from 161 models in one 4,797,872-byte buffer, every record addressing its own arrays; the pinned block's sweep hits `(0.9950001, 4.0, 0.9950001)` at fraction `0x3e8051b8`, triangle `7` |
 | the capsule (support-point) narrowphase | **shipped and exact on every witness**: the hull branch of `0x142caed30` (`0x142caef15..0x142caf1a5`), the walk it feeds, the triangle test's slow path (`0x142cc9460`) and its three-vertex body (`0x142cc8d80`) are implemented and differenced against the client's bytes on 18 queries (`dev/mesh_support_diff.py`, 18 agreements, 0 failures) and on 17 captured plus 120 seeded descriptors (`dev/gjk_closest_diff.py`). **One branch stays open**: the four-vertex body `0x142cc7740`, reached only when a fourth support point puts the origin inside the tetrahedron (0 of the 18 queries, 7 of 120 seeded descriptors) |
-| the scene's placement transform | **open**: a model mesh is assembled in its own local frame; the placeable transform to shape/boss transform chain was not read, so no range sweep names a map location |
+| the scene's placement transform | **open, narrowed (2026-11-03, check 18)**: the builder's body config is the second argument's `+0xd0` (quaternion) and `+0xf0` (position) (`0x14201b21b`/`0x14201b223` -> `0x14201b52e`/`0x14201b532`). The argument is the 0x300-byte scene component `0x141ff90e0` (kind `0x14`, factory `0x141ff90a0`, name `Unknown`, vtables `0x1433632e0`/`0x143363320`), which attaches itself to `[node+0x520]`/`[node+0x52c]`; its update `0x142003720` resolves the node from the object's `+0x8` handle (same decode chain as the query) and writes `+0x140`..`+0x16c`, but the writer of `+0xd0`/`+0xf0` for a placed map entity is still unread, so no range sweep names a map location yet |
 
 Ordered next reads (the per-model route):
 
@@ -2537,20 +2857,22 @@ Ordered next reads (the per-model route):
    counted (492 memory-indirect, 31 tail-jump, 109 register-indirect, plus the
    single 8-byte slot and the single `.pdata` RVA), and none of the sites read
    passes a creation record -- but the count cannot say which site's receiver is a
-   `WorldBase` at run time. The creation path itself is obfuscated: the
-   constructor's only `E8` caller `0x140be1570` is called from `0x14055a346`, in
-   the chained fragment `0x14055a246..` rooted at `0x14055a0f0`. The next read is
-   therefore **that fragment chain**, not another call form: it is where a
-   world is created, so it is where the record is built.
-2. **The mover's per-frame rebuild.** `[mover+0x650]` and `0x142cbd190`
+   `WorldBase` at run time. **Check 17 corrects the follow-up:** the
+   constructor's only `E8` caller `0x140be1570` is the map-load entry's
+   camera-view builder, and node instances are built by the reflected type
+   allocator `0x1420266d0` (no `E8` caller, one 8-byte pointer). The next read is
+   therefore the **asset-preload service's `vtable+0x38`** (the all-preloads-done
+   callback reached from `MapPreloadAssets`); `0x140554220` is the engine
+   subsystem constructor and is not the anchor.
+3. **The mover's per-frame rebuild.** `[mover+0x650]` and `0x142cbd190`
    (`0x140ca6139`) are called right after the sweep's query record is created
    (check 11); they belong to the frame loop rather than to the collision build.
-3. **The descriptor's remaining fields.** The parameter instance at
+4. **The descriptor's remaining fields.** The parameter instance at
    `[holder+0x18]` (`0x4EFF450F`) supplies the filter words and radii the
    descriptor carries at `+0x24`..`+0x4c`, and the entity's transform supplies
    the quads at `+0x00`/`+0x10`; each write is at a known address (see check 9's
    table) but its source field was not followed.
-4. **The inertia block.** `0x14201c507`..`0x14201c817` turns the built shapes'
+5. **The inertia block.** `0x14201c507`..`0x14201c817` turns the built shapes'
    bounds into the body's centre of mass and inertia; the per-shape terms
    (`0x142cc41a0` family) are unread.
 
@@ -2617,7 +2939,7 @@ Ordered next reads (the per-model route):
 | the `+0x18` of the record is a Domino world description, not raw asset bytes | check 14: two independent readers -- `0x14202c660` (four dwords to `+0x630`..`+0x63c`, then two `0x142cc3c80` slot allocations) and `0x142cde350` (`+0x10`..`+0x1c` as a normalised quaternion, `+0x20` count, `+0x140` child head, `+0x160` child count) |
 | the record's first qword is a map GUID | check 14: the client's GUID type-id idiom on bits 48..59 plus one is compared against `2`, and only a match builds the `0xa0`-byte object at geometry `+0x404a` = `1` |
 | a node's gate word is never re-derived | check 14: `dev/disp_scan.py 0x454 --writes` -- 37 stores at that displacement, one dword store inside `0x14202c660` (`0x14202c6e4`), the rest other classes' `movss`/byte/comparison operands |
-| the world-creation path is obfuscated | check 14: the constructor's only `E8` caller `0x140be1570` builds a **child** world and is called from `0x14055a346`, in the `.pdata` chained fragment `0x14055a246..0x14055a491` rooted at `0x14055a0f0` |
+| the world-creation path is obfuscated | **withdrawn in check 17**: `0x14055a0f0` is the map-load/status entry (it registers `debug.showMapLoadAfterMS`), truncated in the project image by a false `noreturn` (`0x141bb8d40`), and its `0x140be1570` builds the map-load camera-view world; node instances are built by the type allocator, which has no `E8` caller |
 | `0x1420a02f6` is reachable | check 14: its `.pdata` entry has unwind flags `4` (`CHAININFO`) -- it is a fragment of `0x14209fc90`, and that root has one `E8` at `0x1420251f5` in `0x142024d30`; check 3's "unreachable" is withdrawn |
 | the range's placed props against the gate | **not tested** (unchanged from check 12's row): the gate bits are runtime state and the record's writer is still unread |
 | the assembler's context is a `0x50`-byte object, not a descriptor container | check 15: `Alloc(0x50, 0)` at `0x1420251d1`, constructor `0x14209ea30`, store at `0x1420251e8`, free with size `0x50` at `0x142025229`; `dev/callers.py 0x14209ea30` -> one `E8` (`0x1420251de`), `0x14209fc90` -> one `E8` (`0x1420251f5`) |
@@ -2639,3 +2961,13 @@ Ordered next reads (the per-model route):
 | the range's first hit, by model identity | same test: 3 of 272 shapes hit by one line through the unplaced assembly; nearest is shape 49, model `0x0d000000000010f5`, point `(-13.212505, 100.0, 2.619999, 0)`, fraction `0x3c8aedfa`, triangle `14` |
 | a capsule against the mesh | **the walk and the contact are the client's**: `mesh_sweep` builds the read hull, runs the client's walk and calls the read closest-point solver, and all 18 differenced queries agree byte for byte through the real `0x142caed30` (`dev/mesh_support_diff.py`: 0 failures, 0 open handoffs), including the seven that the triangle test accepts; the pinned translated contact (triangle `1`, ids `0x12`/`0x22`, point `(0.75, 0.9, 3.01)`, normal `(0, 0, 1)`, fraction `0x3df5c290`) is a unit test. The one state not compared is a four-vertex penetration simplex (`0x142cc7740`, open) |
 | a placed mesh in map coordinates | **not tested / open**: the placement transform chain is unread, so every assembled shape stays in its own local frame (check 16) |
+| the class static descriptor's slot 2 is a release, not an instantiate | check 17: the strategy at type-object `+0x20` (type-info `+0x10`) has slot `0x50` = alloc (`0x141c5ef30`, reached by `0x141c4b270`) and slot `0x58` = free-list return (`0x141c5f420`, reached by `0x141c4b290`); `0x1407803f0` calls the instance's first vtable entry then slot `0x58` with the instance handle |
+| the only `E8` caller of `WorldBaseCtor` is the map-load entry's camera-view builder | check 17: `dev/callers.py 0x1420271d0` -> one `E8` at `0x140be1591` in `0x140be1570`; `0x14055a0f0` registers the decoded CVar `debug.showMapLoadAfterMS`, calls `0x140554220`, then calls `0x140be1570` |
+| node instances are built by the reflected type allocator, not the constructor | check 17: `dev/callers.py 0x1420266d0` -> 0 `E8`, one `E9` inside itself, one 8-byte pointer at `0x1433654a8` |
+| a second (cell/streaming) world-creation path exists | check 17: `0x142090e00` is 13 contiguous `.pdata` entries (`0x142090e00..0x142094d34`, stored as a 186-byte stub) and calls `0x142cdf8e0`/`0x142cdf930` -> `0x142cde350` -> `0x142cc3c80`; the wrappers have exactly one `E8` caller each, both there |
+| the cell path's holder filter is mode `4` | check 17: `0x1420918f1` compares `[holder+0x2a]` with `4`; the range's 279 holders all default to `0`, so it takes none |
+| the record's field map | check 18: `+0x00`->state+0x170, `+0x10`->`[node+0x454]`, `+0x18`->`[node+0x630]` + two worlds, `+0x28`..`+0x48` copied, `+0x50` decoded (`ror 0xf`, add/xor), `+0x60`..`+0x8f`->`+0x878`..`+0x8a4`, `+0x90` copied by `0x141c60250`; flags bits `0x20`/`0x200`/`1`/`2`/`4`/`0x40`/`0x80`/`0x4000`/mask `0x15` |
+| the `+0x18` descriptor is a Domino settings template | check 18: `DmWorldConstruct` presizes one pool per count at `+0x20`..`+0x70` and copies `+0x10..+0x1c` to `world+0x1a0`; `ConstructDominoWorld` reads the same object's rotation (`+0x10`, w `+0xac`), layer count `+0x20`, pointer `+0x88`, floats `+0x90..+0xa4`, bytes `+0xa8`/`+0xb0`, pointers `+0xc0..+0xf8`, children `+0x140`/`+0x160` |
+| a node's worlds start with no shapes | check 18: the init's `OwnerCreateBody` descriptor is constant (no shape source); shapes are added later by the component builders (checks 9/10) |
+| the 0x300 state record is created by flag `0x20` | check 18: `Alloc(0x300)` + `0x142026e20` (no vtable), stored at `node+0x6a8`; the record's `+0x00` -> `+0x170`, `+0x28`..`+0x48` copied, `+0x50` decoded, `+0x90` copied by `0x141c60250` |
+| the builder's scene component is not the state record | check 18: state record has no vtable and no `+0x250`/`+0xd0`; the builder's argument has vtables `0x1433632e0`/`0x143363320`, pose `+0xd0`/`+0xf0`, node `+0x250`, and is resolved from the `+0x8` handle by `0x142003720` |

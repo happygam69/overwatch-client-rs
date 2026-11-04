@@ -1079,6 +1079,137 @@ fn collision_narrowphase_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>),
     Ok(("-".to_string(), vec![blob, out, block]))
 }
 
+/// `0x142cbd510`: the driver walks one island's broadphase in four passes and
+/// folds every accepted hit into the swept box.
+///
+/// `arg0` is one blob holding the query context, the island's per-pass table
+/// and the whole world; every pointer inside it is an absolute arena address,
+/// so the entry translates it back into an offset the way `ARENA_BASE` fixes
+/// it. `arg1` is the same context, `arg2` the query block plus its support
+/// points, `arg3` the pass flag byte. The hit policy's stand-in is
+/// `mov eax, N; ret` in the blob, so the verdict the wrapper returns on a hit
+/// is a constant the probe decodes instead of executing.
+fn query_driver_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    const ARENA: u64 = 0x2_0000_0000;
+    const ENTRY_COUNT: usize = 2;
+    const ISLAND_AT: usize = 0x000;
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let blob = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x2000 => b,
+        _ => return Err("arg0 must be the world blob".into()),
+    };
+    let ctx = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x28 => b,
+        _ => return Err("arg1 must be the query context".into()),
+    };
+    let block = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x80 => b,
+        _ => return Err("arg2 must be the query block".into()),
+    };
+    let flags = match it.next() {
+        Some(Arg::U64(v)) => v as u8,
+        _ => return Err("arg3 must be the pass flag byte".into()),
+    };
+    let read_u64 = |bytes: &[u8], at: usize| -> u64 {
+        u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+    };
+    let read_i32 = |bytes: &[u8], at: usize| -> i32 {
+        i32::from_le_bytes(bytes[at..at + 4].try_into().expect("four bytes"))
+    };
+    // The callback is `mov eax, verdict; ret`, so its immediate is the verdict
+    // the client's wrapper would return to the driver.
+    let callback = read_u64(&blob, 0x10).wrapping_sub(ARENA) as usize;
+    if blob.get(callback) != Some(&0xb8) {
+        return Err("the callback must be `mov eax, imm32; ret`".into());
+    }
+    let verdict = read_i32(&blob, callback + 1);
+    let mut roots = [0i32; 4];
+    for (pass, root) in roots.iter_mut().enumerate() {
+        *root = read_i32(&blob, ISLAND_AT + 0x44 + 0x28 * pass);
+    }
+    let quad = {
+        let slice = |address: u64, len: usize| -> Option<&[u8]> {
+            let at = address.wrapping_sub(ARENA) as usize;
+            blob.get(at..at + len)
+        };
+        let record = slice(read_u64(&blob, 0x00), 0x340).ok_or("record pointer")?;
+        let filter = blob.get(0x08..0x10).ok_or("filter bytes")?;
+        let entries =
+            slice(read_u64(record, 0x2b8), 0xc0 * ENTRY_COUNT).ok_or("entries pointer")?;
+        let owners = slice(read_u64(record, 0x2a0), 0x50 * ENTRY_COUNT).ok_or("owners")?;
+        let poses = slice(read_u64(record, 0x288), 0x1c0 * ENTRY_COUNT).ok_or("poses")?;
+        let bases = [0x2d0usize, 0x2e8, 0x300, 0x318, 0x330];
+        let strides = [0x20usize, 0x30, 0x50, 0x50, 0x50];
+        let mut pools: [&[u8]; 5] = [&[], &[], &[], &[], &[]];
+        for slot in 0..5 {
+            pools[slot] = slice(read_u64(record, bases[slot]), strides[slot] * ENTRY_COUNT)
+                .ok_or("pool pointer")?;
+        }
+        let world = ow_sim::collide::NarrowphaseWorld {
+            record,
+            entries,
+            owners,
+            poses,
+            filter,
+            pools,
+            mesh: Some(ow_sim::collide::MeshWorld {
+                base: ARENA,
+                bytes: &blob,
+            }),
+        };
+        // The block names its support points by absolute address, and the
+        // mesh walk reads them through the same world the shapes live in.
+        let points_at = read_u64(&block, 0x30).wrapping_sub(ARENA) as usize;
+        let count = read_i32(&block, 0x38).max(0) as usize;
+        let points = blob
+            .get(points_at..points_at + count * 0x10)
+            .ok_or("support points")?;
+        let mut query = DriverQuery {
+            blob: &blob,
+            world,
+            block: &block[..0x80],
+            verdict,
+        };
+        ow_sim::collide::query_driver(roots, &block[..0x80], points, flags, &mut query)
+    };
+    Ok((position_bits(quad), vec![blob, ctx, block]))
+}
+
+/// The world [`ow_sim::collide::query_driver`] walks, read out of one blob.
+struct DriverQuery<'a> {
+    blob: &'a [u8],
+    world: ow_sim::collide::NarrowphaseWorld<'a>,
+    block: &'a [u8],
+    verdict: i32,
+}
+
+impl ow_sim::collide::QueryWorld for DriverQuery<'_> {
+    fn entry(&self, pass: usize, index: i32) -> Option<&[u8]> {
+        const ISLAND_AT: usize = 0x000;
+        let at = ISLAND_AT + 0x30 + 0x28 * pass;
+        let base = u64::from_le_bytes(self.blob.get(at..at + 8)?.try_into().ok()?);
+        let index = usize::try_from(index).ok()?;
+        let off = (base.wrapping_sub(0x2_0000_0000) as usize).checked_add(index * 0x40)?;
+        self.blob.get(off..off + 0x40)
+    }
+
+    fn narrowphase(&mut self, _pass: usize, id: i32, hit: &mut [f32; 4]) -> i32 {
+        let mut quad = [0.0f32; 4];
+        let answer = ow_sim::collide::shape_narrowphase(&self.world, self.block, id, &mut quad);
+        *hit = quad;
+        // The wrapper `0x142cc1610` returns the hit callback's own value on a
+        // hit and `3` on every path that produced none, because the fixture's
+        // sink is null.
+        match answer {
+            ow_sim::collide::Narrowphase::Hit => self.verdict,
+            _ => 3,
+        }
+    }
+}
+
 /// `0x142cd56e0`: the collider's "is this triangle unusable" test. Three vec4
 /// corners, no pointee written; the compared channel is the whole return
 /// register (a `MOVMSKPS` mask on the non-finite exit, else 1 or 0).
@@ -1587,6 +1718,7 @@ fn handle_call(
         "collision_filter" => collision_filter_entry(args),
         "collision_transform" => collision_transform_entry(args),
         "collision_narrowphase" => collision_narrowphase_entry(args),
+        "query_driver" => query_driver_entry(args),
         "triangle_degenerate" => triangle_degenerate_entry(args),
         "collision_capsule" => collision_capsule_entry(args),
 

@@ -121,10 +121,11 @@ and "velocity publish" (the function's name).
 | usercmd writer (`0x140654730`) | read | fields and clamps in `formats/camera.md` |
 | command packer (`0x14068cf10` tail) | read + implemented | current record with the next record's yaw/pitch overlaid; `ow_sim::frame::pack_command`; the `0x140689930` driver is still open |
 | state-record pass (`0x140cb63c0`) | read | state id from `[state_object+0xbc]` (default 1), the `0x800000` skip, the fan call with `dt=0`, the service `+0x58/+0x60/+0x68` hooks |
-| fan seed, speed, radius, rotations, acceptance | read + implemented | `ow-sim::fan`, 17 tests |
+| fan seed, speed, radius, rotations, acceptance | read + implemented | `ow-sim::fan`, 19 tests |
+| fan pass 3, the back-transform snap | read + implemented, **not wired** | `ow-sim::fan::back_snap`: one snap of the accepted direction's `y` lane, `s = -dot(n, end-start)`, `t0 = dot(start,n) - dot(out,n)`, `t = (2r - r*r*s)*t0` with `r = RCPSS(s)`, `out.y = (start + t*delta).y`. Not a five-candidate loop - the five-quad loop with the `out_dir.y < 0` gate is the shape branch |
 | fan evaluator body (`0x14203dae0`) | read | result record + query struct layouts |
 | handle dispatcher (`0x142cc45a0`) | read | handle decode, the driver context, the 0xaa0-byte observation ring; the ring is gated on `request+0x71`, whose writer is not read |
-| collision query driver (`0x142cbd510`) | read | four passes, sweep AABB, the three per-entry masks, the worklist, the leaf call |
+| collision query driver (`0x142cbd510`) | read + implemented | four passes, sweep AABB, the three per-entry masks, the worklist, the leaf call; `ow-sim::collide::query_driver` behind a `QueryWorld` seam, 5 tests (order, prune, flag skip, the `1` answer, the fold). Two corrections from the instruction stream: the return is the folded **motion quad** (no hit counter), and the fold is **two** quads - `XMM6` the per-lane `minps` that is returned, `[rbp-0x40]` the comparison operand rewritten only on an all-lane hit |
 | sweep bounds (`0x142cd5540`) | verified | `fn/CollisionSweepBounds` |
 | narrowphase wrapper (`0x142cc1610`) | read | transform, layer filter, type dispatch, and the `callback(&hit, packed, record)` contract |
 | layer filter (`0x142cbb350`) | verified | `fn/CollisionShapeFilter` |
