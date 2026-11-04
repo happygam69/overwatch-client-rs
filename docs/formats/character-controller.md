@@ -2417,6 +2417,54 @@ then the register restore and `MOV RSP, R11` at `0x142cc6089`, so **the answer
 is returned in `XMM0` as a float4**. The `w` lane is carried through the whole
 computation untouched, which is why every region test is `movmskps & 7`.
 
+The gather's data model, read from `0x142cae760` (which is not a function entry
+in the image - it is a three-way inlined body, so it was read from the
+instruction stream):
+
+```text
+object[0x00] = a float4 scale quad, multiplied into every vertex
+object[0x28] = the vertex array, float4 at a 0x10 stride
+object[0x30] = the triangle array, 0x20 stride:
+  +0x00  i32  vertex index 0
+  +0x04  i32  vertex index 1
+  +0x08  i32  vertex index 2
+  +0x0c  i32  optional vertex 3, -1 when absent
+  +0x10  i32  optional vertex 4, -1 when absent
+  +0x14  i32  optional vertex 5, -1 when absent
+  +0x18  u16  flag, copied to record +0x80
+  +0x1a  u16  flag, copied to record +0x82
+  +0x1c  u16  flag, copied to record +0x84
+```
+
+A triangle index is fetched as `vertices[(i32)tri[k]] * object[0x00]` - the
+index is doubled and then scaled by 8, which is the `0x10` stride. The record
+`0x142cae760` fills is at least `0x86` bytes, not the `0x50` an earlier note
+claimed:
+
+```text
+record[0x00]  v0          record[0x30]  optional v3, or stale if tri[0x0c] == -1
+record[0x10]  v1          record[0x40]  optional v4
+record[0x20]  v2          record[0x50]  optional v5
+record[0x60]  tri[0x00]   record[0x78]  present bit for v3
+record[0x64]  tri[0x04]   record[0x79]  present bit for v4
+record[0x68]  tri[0x08]   record[0x7a]  present bit for v5
+record[0x6c]  tri[0x0c]   record[0x7c]  the triangle index itself
+record[0x70]  tri[0x10]   record[0x80]  tri[0x18]
+record[0x74]  tri[0x14]   record[0x82]  tri[0x1a]
+                          record[0x84]  tri[0x1c]
+```
+
+When an optional index is `-1` the vertex slot is **not** written, so it keeps
+whatever the caller's `-1` fill left there; only the present bit is cleared.
+That matters for bit-exactness: the caller zeroes and `-1`-fills the record
+first, so the absent slots read as `-1.0` floats. A third variant at
+`0x142cae910` swizzles `object[0x10]` with `SHUFPS ..., 0xc9` (a 90-degree lane
+rotation) before the same three vertices, so there is a second scale quad.
+
+The refinement's `0x8000` sub-shape test reads a `u16` that an earlier note
+placed at record `+0x2a`; no field is written there, so that offset is wrong and
+the real one is one of `+0x80`/`+0x82`/`+0x84`. **Not confirmed.**
+
 Per candidate id, in container order: a 0x50-byte record is zeroed and
 `-1`-filled, then `0x142cae760(object, &record, id)` fills it. A `0x8000` bit in
 the record's `+0x2a` `u16` means the id selects a sub-shape, which
@@ -2449,7 +2497,6 @@ Still open, and each is a single-function read:
 
 | address | what it answers |
 |---|---|
-| `0x142cae760` | the triangle record's `0x50`-byte layout |
 | `0x142cb4a30` | the point transform (and whether it is the 4x4 of `0x140cb5510`) |
 | `0x142cba720`, `0x142cba2a0`, `0x142cba680` | the shape handle's type, handle and query object |
 | `0x142cb49a0`, `0x142cb48a0` | the geometry slot and the query quaternion |
