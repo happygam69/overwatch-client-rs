@@ -122,11 +122,16 @@ returns a `bool`. The ring only runs for a type-3 mesh shape
 `formats/character-controller.md`; the Ghidra body had to be repaired first
 (the cookie check `0x1426c3d40` was wrongly flagged non-returning - see
 `ghidra-project.md`), and a two-instruction overlap at `0x140ce0863` still
-truncates the far end of that decompile. Six single-function reads are the
-next anchors: `0x142cb44c0` (the candidate list), `0x142cae760` (the triangle
-record), `0x142cc5bc0` (closest point), `0x142cb4a30` (the point transform),
-and the handle/world pair `0x142cba720`/`0x142cba2a0` plus
-`0x142cb49a0`/`0x142cb48a0`.
+truncates the far end of that decompile. The whole function is a sphere-vs-mesh nearest-triangle query: radius
+`param_3`, initial acceptance `3r²`, the gather `0x142caea70` into an inline
+`0x80`-entry container, and `0x142cb44c0` (named `ResolveBodyLocalPoint` in the
+project) turning the query point into the body's frame. The gather itself is
+read: `0x142caea70` is a box-BVH walk whose accept is `0x142cd58a0`, a
+box-vs-triangle separating-axis test with a `0.005` tolerance, and the ids it
+collects are triangle indices. Five single-function reads are the next anchors:
+`0x142cae760` (the triangle record), `0x142cc5bc0` (closest point),
+`0x142cb4a30` (the point transform), and the handle accessors
+`0x142cba720`/`0x142cba2a0`/`0x142cba680` plus `0x142cb49a0`/`0x142cb48a0`.
 
 **Fixed 2026-11-06: the ring's comparison operand.** `solve` projected the
 query point, which is the same for all `n` steps, so the ring kept its first

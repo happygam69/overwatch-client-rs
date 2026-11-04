@@ -2322,65 +2322,113 @@ because the cookie check was flagged non-returning. A bad-disassembly spot at
 `0x140ce0863`/`0x140ce0866` (two instructions overlap) still truncates the far
 end of the decompile, so the blocks past `0x140ce0800` are not read yet.
 
-Arguments: `(owner, query, float, u16, threshold)`. The `float` and the `u16`
-are not used on the visible path.
+Arguments: `(owner, query, radius, mask, threshold)`. The query record is
+`+0x00` a point (two quads), `+0x10` the normal it writes, `+0x28` the shape
+handle, `+0x3e` a `u16` it writes.
 
 Gate. `query+0x28` must not be the 8-byte sentinel `(-1, -1, 0, ...)` and
 `0x142cba720(query+0x28)` must answer `3`, so **the ring only runs for a type-3
 mesh shape** - the type the practice range's static collision is made of.
 
-World and query frame.
+The whole function is one **sphere-vs-mesh nearest-triangle query**:
 
 ```text
-world   = 0x142cba2a0(query+0x28)
-slot    = 0x142cb49a0(world)            // [slot] is a pointer, zero = no geometry
-target  = decode([slot]+8)              // the same hash/obfuscation chain as the
-                                        // state transform: WriteIndexConstants,
-                                        // DecodeKeyInPlace, [0x143b79598]+0x198,
-                                        // [0x1438480f3]
-resolver= [target+0x250]                // the sub-shape resolver, may be null
-quat    = 0x142cb48a0(world)            // four floats, the query's orientation
-basis   = 2*row + (0, 1, 0)             // the facing row built from that quat
-ids     = 0x142cb44c0(world, &query)    // candidate ids: an inline 0x200-byte
-                                        // array plus a count, freed through
-                                        // 0x142cadf00 (the same container the
-                                        // query driver's worklist uses)
+handle  = 0x142cba2a0(query+0x28)        // the shape's body handle
+local   = 0x142cb44c0(handle, query)     // the query point in the body's frame
+best    = radius * radius * 3.0          // the initial acceptance distance
+quat    = 0x142cb48a0(handle)            // the query's orientation
+basis   = 2*row + (0, 1, 0)              // the facing row built from that quat
+object  = 0x142cba680(query+0x28)
+ids     = 0x142caea70(object, inline, local - radius, mask)
+                                         // fills an inline 0x80-entry container
+                                         // (count at +0x04); freed through
+                                         // 0x142cadf00, the same container the
+                                         // query driver's worklist uses
 ```
 
-Per candidate id, in array order: a 0x50-byte record is zeroed and `-1`-filled,
-then `0x142cae760(world, &record, id)` fills it. A `0x8000` bit in the record's
-`+0x2a` `u16` means the id selects a sub-shape, which
+`0x142cb44c0` is `ResolveBodyLocalPoint(handle, point) -> [x, y, z]` and it is
+worth its own note because it pins the body record: `handle >> 0x30` must be
+below `0x3fff`, `(int)handle` must not be `-1`, the table is
+`[0x1442a0bc0] + slot*8` decoded with `^ 0xb3269b88d44d5fb2 ^ 0x77600ba5adcc265c`,
+`(int)handle` must be below `[record+0x294]` (the body count), the entry is
+`[record+0x288] + i*0x1c0` with `[entry+0x00] == i` and
+`(handle >> 0x20) & 0xffff == [entry+0x198]` (a version word), and the answer is
+`(point - entry[+0x10])` rotated by the quaternion at `entry+0x60`. So the
+`0x1c0` pose stride, the `+0x10` position and the `+0x60` quaternion are the
+same three the placeable transform reads.
+
+`0x142caea70` (`FUN_142caea70`, 101 bytes) is the gather itself, and it is a
+**point-in-mesh walk**, not a ray or a sphere test: the box it takes is 8 floats
+(min corner in `0..3`, max corner in `4..7`) and both corners are multiplied
+componentwise by the object's quad at `+0x10`, so that quad is a scale into the
+object's local space. Then:
+
+```text
+root = object[0x20]; if root == null -> nothing
+if (object[0x44] >= 0x80) -> nothing      // the 128-entry traversal stack
+stack[0] = root
+node:
+  if ((node[0x1c] u16 & mask) == 0)  -> skip
+  if (!(point inside node's box))    -> skip   // min +0x00, max +0x0c, xyz only
+  if (node[0x1f] byte == 0)          -> push node + (int)node[0x18] * 8, descend
+  else for i in 0 .. node[0x1f]:              // children at object[0x30] + i*0x20
+    tri = child; if ((tri[0x1c] u16 & mask) == 0) -> next
+    v0,v1,v2 = vertices[tri[0]], vertices[tri[1]], vertices[tri[2]]
+                                          // object[0x28], float4 each
+    if (0x142cd58a0(&point, &v0, &v1, &v2)) push (float)triangle_index
+```
+
+The container is `+0x200` data / `+0x208` capacity / `+0x20c` count, doubles its
+capacity, copies with `0x142efe2b0` and frees with `0x142cadf00`. It holds
+**floats that are triangle indices** - which is why the caller reads the count
+from the container's `+0x0c`, and why the practice range's static collision is a
+plain triangle soup behind a box BVH.
+
+`0x142cd58a0` (985 bytes) is the gather's accept: a **box-vs-triangle overlap**
+test, in separating-axis form. Its first argument is the same 8-float box the
+gather holds - `0..3` the min corner, `4..7` the max corner - which it splits
+into `centre = (max + min) * 0.5` and `half = (max - min) * 0.5`; the other three
+are the triangle's vertices, float4 each. The axes it tries, in order, are the
+three slab axes, the triangle's normal, and the three triangle edges crossed
+with the box's own axes, each with a `0.005` tolerance. It returns
+`(movmskps & 7) == 0`, so the `w` lanes never vote.
+
+Per candidate id, in container order: a 0x50-byte record is zeroed and
+`-1`-filled, then `0x142cae760(object, &record, id)` fills it. A `0x8000` bit in
+the record's `+0x2a` `u16` means the id selects a sub-shape, which
 `FUN_141b3c890(resolver, out, id & 0x7fff)` resolves; the resolved `u16` is what
-the acceptance writes back.
+the acceptance writes back. `resolver` is `[target+0x250]`, where `target` is
+the same hashed state object the state transform decodes
+(`WriteIndexConstants`, `DecodeKeyInPlace`, `[0x143b79598]+0x198`,
+`[0x1438480f3]`).
 
 What runs unconditionally is the refinement, under `record.flags & 0x18`:
 
-1. `0x142cc5bc0(&record, &query_point)` gives the closest point on the
-triangle; its squared distance is compared against the running best with an
-epsilon of `1.1920929e-05` whose **sign flips with the previous acceptance**
-(`bVar1 ? best - e : best + e`).
+1. `0x142cc5bc0(&record, &local)` gives the closest point on the triangle; its
+squared distance is compared against `best` with an epsilon of `1.1920929e-05`
+whose **sign flips with the previous acceptance** (`accepted ? best - e :
+best + e`).
 2. Inside that, the acceptance is cleared, and unless bit 0 of the resolved
 `u16` is set the triangle normal is recomputed, normalised, and tested with
 `threshold < dot(normal, basis)`.
 3. On acceptance the normal is written to `query+0x10..0x1f` and the resolved
-`u16` to `query+0x3e`; the closest-point distance becomes the new best.
+`u16` to `query+0x3e`, and the closest-point distance becomes the new `best`.
 
 The visualiser is a separate block gated on the byte at `0x143c03a3d` and on
-`(*(*owner + 0xb0))(owner) != 0`: it draws the three edges through
-`0x142cb4a30` (the point transform), picks one of two colour pairs
-`(1.0, 0.3)` by `resolved & 1` and `record.flags & 0x18`, and draws a
-`0.1`-long normal ray from the triangle's centroid. It is **not** part of the
-result.
+`(*(*owner + 0xb0))(owner) != 0`: it draws the `local +/- radius` segment
+(colour `(1.0, 0.5)`), the three triangle edges through `0x142cb4a30` (the
+point transform), one of two colour pairs `(1.0, 0.3)` chosen by `resolved & 1`
+and `record.flags & 0x18`, and a `0.1`-long normal ray from the centroid. It is
+**not** part of the result.
 
 Still open, and each is a single-function read:
 
 | address | what it answers |
 |---|---|
-| `0x142cb44c0` | what a candidate id is and where the list comes from |
 | `0x142cae760` | the triangle record's `0x50`-byte layout |
 | `0x142cc5bc0` | the closest-point-on-triangle routine |
 | `0x142cb4a30` | the point transform (and whether it is the 4x4 of `0x140cb5510`) |
-| `0x142cba720`, `0x142cba2a0` | the shape-handle type query and the world decode |
+| `0x142cba720`, `0x142cba2a0`, `0x142cba680` | the shape handle's type, handle and query object |
 | `0x142cb49a0`, `0x142cb48a0` | the geometry slot and the query quaternion |
 
 ## Verification
