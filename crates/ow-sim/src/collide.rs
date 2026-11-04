@@ -2616,20 +2616,339 @@ pub fn closest_point(input: &GjkInput<'_>, out: &mut GjkOutput) -> bool {
 
 /// `0x142cc7740`: reduce a 4-simplex to its nearest face, edge or vertex.
 ///
-/// **Open.** The body (`.pdata` `0x142cc7740..0x142cc8d72`, `0x1632` bytes) has
-/// the same shape as [`simplex3`] one dimension up: an orientation fix-up that
-/// swaps two vertices when the tetrahedron is negatively oriented, four vertex
-/// regions, six edge regions, four face regions - each with the same
-/// origin-relative dot tests and barycentric reciprocal the three-vertex body
-/// uses - and an interior case that spreads `1 / sum(lambda)` over all four
-/// vertices. Its three-term and four-term stack layout, its `lambda` slots and
-/// its copy order are not transcribed, so this branch returns the miss the
-/// triangle test reported before this change. It is reached only when the walk
-/// appends a fourth support point that puts the origin inside the tetrahedron,
-/// i.e. on penetration; the 17-case differential corpus calls it zero times.
-/// `docs/formats/static-collision.md` records it as the one open piece.
-pub fn simplex4(_out: &mut Quad, _s: &mut Simplex) -> bool {
-    false
+/// The body (`.pdata` `0x142cc7740..0x142cc8d72`, `0x1632` bytes) is
+/// [`simplex3`] one dimension up. `a`, `b`, `c`, `d` are the four `dw` points;
+/// the six edges are `ba`, `ca`, `da`, `cb`, `db`, `dc`; the twelve scalars are
+/// the signed dots the region tests compare (`nd*` are the sign-mask-negated
+/// forms) and the four face terms `n_*` are
+/// `rot3(rot3(u) * v - rot3(v) * u)` over the face's first two edges, the same
+/// expression [`simplex3`] calls `x`. Every region test needs all four lanes
+/// (`cmp eax, 0xf` in the client), so a NaN lane drops through.
+///
+/// The vertex and edge regions return the direction the walk negates; the face
+/// regions return the face term flipped so it points away from the origin, and
+/// the interior case returns zero after spreading `1 / sum(lambda)` over all
+/// four vertices. Returns false only when that interior lambda sum is
+/// non-positive, which leaves `count` as the caller wrote it.
+pub fn simplex4(out: &mut Quad, s: &mut Simplex) -> bool {
+    // Orientation fix-up (`0x142cc77f3`): a tetrahedron wound the wrong way
+    // gets its second and third vertices exchanged before anything is read.
+    let first = s.vertex[0].dw;
+    let edge_ba = sub_lane(s.vertex[1].dw, first);
+    let edge_ca = sub_lane(s.vertex[2].dw, first);
+    let orient = dot3(
+        rot3(sub_lane(
+            mul_lane(rot3(edge_ca), edge_ba),
+            mul_lane(rot3(edge_ba), edge_ca),
+        )),
+        sub_lane(first, s.vertex[3].dw),
+    );
+    if all_lanes(|lane| orient[lane] < 0.0) {
+        s.vertex.swap(1, 2);
+    }
+
+    let a = s.vertex[0].dw;
+    let b = s.vertex[1].dw;
+    let c = s.vertex[2].dw;
+    let d = s.vertex[3].dw;
+
+    let ba = sub_lane(b, a);
+    let ca = sub_lane(c, a);
+    let da = sub_lane(d, a);
+    let cb = sub_lane(c, b);
+    let db = sub_lane(d, b);
+    let dc = sub_lane(d, c);
+
+    let nd_ba_a = negate(dot3(ba, a));
+    let d_ba_b = dot3(ba, b);
+    let nd_ca_a = negate(dot3(ca, a));
+    let d_ca_c = dot3(ca, c);
+    let nd_da_a = negate(dot3(da, a));
+    let d_da_d = dot3(da, d);
+    let nd_cb_b = negate(dot3(cb, b));
+    let d_cb_c = dot3(cb, c);
+    let nd_db_b = negate(dot3(db, b));
+    let d_db_d = dot3(db, d);
+    let nd_dc_c = negate(dot3(dc, c));
+    let d_dc_d = dot3(dc, d);
+
+    // `rot_cross(u, v)` is the client's `rot3(rot3(u) * v - rot3(v) * u)`.
+    let rot_cross = |u: Quad, v: Quad| rot3(sub_lane(mul_lane(rot3(u), v), mul_lane(rot3(v), u)));
+
+    let n_bcd = rot_cross(cb, db);
+    let n_acd = rot_cross(da, ca);
+    // The `a`-`b`-`d` face stores `rot3(rot3(d - a) * (b - a) - rot3(b - a) * (d - a))`,
+    // i.e. the argument order opposite to the vector its own guard is written
+    // against; the guard below is therefore sign-flipped to match.
+    let n_abd = rot_cross(da, ba);
+    let n_abc = rot_cross(ca, ba);
+
+    let t_bc = dot3(rot_cross(b, c), n_bcd);
+    let t_cd = dot3(rot_cross(c, d), n_bcd);
+    let t_db = dot3(rot_cross(d, b), n_bcd);
+    let t_ad = dot3(rot_cross(a, d), n_acd);
+    let t_dc = dot3(rot_cross(d, c), n_acd);
+    let t_ca = dot3(rot_cross(c, a), n_acd);
+    let t_ab = dot3(rot_cross(a, b), rot_cross(ba, da));
+    let t_bd = dot3(rot_cross(b, d), rot_cross(ba, da));
+    let t_da = dot3(rot_cross(d, a), rot_cross(ba, da));
+    let t_ac = dot3(rot_cross(a, c), n_abc);
+    let t_cb = dot3(rot_cross(c, b), n_abc);
+    let t_ba = dot3(rot_cross(b, a), n_abc);
+
+    // The plane terms the four face regions test, in the client's add order.
+    let sum_bcd = add_lane(add_lane(c, b), d);
+    let sum_acd = add_lane(add_lane(c, a), d);
+    let sum_abd = add_lane(add_lane(d, a), b);
+    let sum_abc = add_lane(add_lane(b, a), c);
+    let plane_bcd = dot3(sum_bcd, n_bcd);
+    let plane_acd = dot3(sum_acd, n_acd);
+    let plane_abd = dot3(sum_abd, n_abd);
+    let plane_abc = dot3(sum_abc, n_abc);
+
+    // Vertex regions.
+    if all_lanes(|lane| nd_ba_a[lane] <= 0.0)
+        && all_lanes(|lane| nd_ca_a[lane] <= 0.0)
+        && all_lanes(|lane| nd_da_a[lane] <= 0.0)
+    {
+        s.vertex[0].bary = ONE;
+        s.count = 1;
+        *out = negate(a);
+        return true;
+    }
+    if all_lanes(|lane| d_ba_b[lane] <= 0.0)
+        && all_lanes(|lane| nd_cb_b[lane] <= 0.0)
+        && all_lanes(|lane| nd_db_b[lane] <= 0.0)
+    {
+        s.vertex[1].bary = ONE;
+        s.vertex[0] = s.vertex[1];
+        s.count = 1;
+        *out = negate(b);
+        return true;
+    }
+    if all_lanes(|lane| d_ca_c[lane] <= 0.0)
+        && all_lanes(|lane| d_cb_c[lane] <= 0.0)
+        && all_lanes(|lane| nd_dc_c[lane] <= 0.0)
+    {
+        s.vertex[2].bary = ONE;
+        s.vertex[0] = s.vertex[2];
+        s.count = 1;
+        *out = negate(c);
+        return true;
+    }
+    if all_lanes(|lane| d_da_d[lane] <= 0.0)
+        && all_lanes(|lane| d_db_d[lane] <= 0.0)
+        && all_lanes(|lane| d_dc_d[lane] <= 0.0)
+    {
+        s.vertex[3].bary = ONE;
+        s.vertex[0] = s.vertex[3];
+        s.count = 1;
+        *out = negate(d);
+        return true;
+    }
+
+    // Edge `a`-`b`: the surviving pair is (slot 0 = `a`, slot 1 = `b`).
+    if all_lanes(|lane| 0.0 < d_ba_b[lane])
+        && all_lanes(|lane| 0.0 < nd_ba_a[lane])
+        && all_lanes(|lane| dot3(rot_cross(b, a), rot_cross(ca, ba))[lane] <= 0.0)
+        && all_lanes(|lane| dot3(rot_cross(a, b), rot_cross(ba, da))[lane] <= 0.0)
+    {
+        let inv = per_lane_div(ONE, add_lane(nd_ba_a, d_ba_b));
+        s.count = 2;
+        s.vertex[1].bary = mul_lane(inv, nd_ba_a);
+        s.vertex[0].bary = mul_lane(inv, d_ba_b);
+        let sum = add_lane(b, a);
+        let rot_u = rot3(ba);
+        let t = rot3(sub_lane(mul_lane(sum, rot_u), mul_lane(rot3(sum), ba)));
+        *out = rot3(sub_lane(mul_lane(t, rot_u), mul_lane(rot3(t), ba)));
+        return true;
+    }
+
+    // Edge `a`-`c`: `c`'s record lands in slot 1.
+    if all_lanes(|lane| 0.0 < d_ca_c[lane])
+        && all_lanes(|lane| 0.0 < nd_ca_a[lane])
+        && all_lanes(|lane| dot3(rot_cross(a, c), rot_cross(ca, ba))[lane] <= 0.0)
+        && all_lanes(|lane| dot3(rot_cross(c, a), rot_cross(da, ca))[lane] <= 0.0)
+    {
+        let inv = per_lane_div(ONE, add_lane(nd_ca_a, d_ca_c));
+        s.count = 2;
+        s.vertex[2].bary = mul_lane(inv, nd_ca_a);
+        s.vertex[0].bary = mul_lane(inv, d_ca_c);
+        s.vertex[1] = s.vertex[2];
+        let sum = add_lane(c, a);
+        let rot_u = rot3(ca);
+        let t = rot3(sub_lane(mul_lane(sum, rot_u), mul_lane(rot3(sum), ca)));
+        *out = rot3(sub_lane(mul_lane(t, rot_u), mul_lane(rot3(t), ca)));
+        return true;
+    }
+
+    // Edge `a`-`d`: written as `rot_cross(u, rot_cross(u, sum))`.
+    if all_lanes(|lane| 0.0 < d_da_d[lane])
+        && all_lanes(|lane| 0.0 < nd_da_a[lane])
+        && all_lanes(|lane| dot3(rot_cross(a, d), rot_cross(da, ca))[lane] <= 0.0)
+        && all_lanes(|lane| dot3(rot_cross(d, a), rot_cross(ba, da))[lane] <= 0.0)
+    {
+        let inv = per_lane_div(ONE, add_lane(nd_da_a, d_da_d));
+        s.count = 2;
+        s.vertex[3].bary = mul_lane(inv, nd_da_a);
+        s.vertex[0].bary = mul_lane(inv, d_da_d);
+        s.vertex[1] = s.vertex[3];
+        *out = rot_cross(da, rot_cross(da, add_lane(d, a)));
+        return true;
+    }
+
+    // Edge `b`-`c`: `c`'s record lands in slot 0, so the pair reads (`c`, `b`).
+    if all_lanes(|lane| 0.0 < d_cb_c[lane])
+        && all_lanes(|lane| 0.0 < nd_cb_b[lane])
+        && all_lanes(|lane| dot3(rot_cross(c, b), rot_cross(ca, ba))[lane] <= 0.0)
+        && all_lanes(|lane| dot3(rot_cross(b, c), rot_cross(cb, db))[lane] <= 0.0)
+    {
+        let inv = per_lane_div(ONE, add_lane(nd_cb_b, d_cb_c));
+        s.count = 2;
+        s.vertex[2].bary = mul_lane(inv, nd_cb_b);
+        s.vertex[1].bary = mul_lane(inv, d_cb_c);
+        s.vertex[0] = s.vertex[2];
+        *out = rot_cross(cb, rot_cross(cb, add_lane(c, b)));
+        return true;
+    }
+
+    // Edge `b`-`d`: the same shape as `a`-`b`, with `d`'s record in slot 0.
+    if all_lanes(|lane| 0.0 < d_db_d[lane])
+        && all_lanes(|lane| 0.0 < nd_db_b[lane])
+        && all_lanes(|lane| dot3(rot_cross(b, d), rot_cross(ba, da))[lane] <= 0.0)
+        && all_lanes(|lane| dot3(rot_cross(d, b), rot_cross(cb, db))[lane] <= 0.0)
+    {
+        let inv = per_lane_div(ONE, add_lane(nd_db_b, d_db_d));
+        s.count = 2;
+        s.vertex[3].bary = mul_lane(inv, nd_db_b);
+        s.vertex[1].bary = mul_lane(inv, d_db_d);
+        s.vertex[0] = s.vertex[3];
+        let sum = add_lane(d, b);
+        let rot_u = rot3(db);
+        let t = rot3(sub_lane(mul_lane(sum, rot_u), mul_lane(rot3(sum), db)));
+        *out = rot3(sub_lane(mul_lane(t, rot_u), mul_lane(rot3(t), db)));
+        return true;
+    }
+
+    // Edge `c`-`d`: the pair reads (`c`, `d`), and the direction is built from
+    // the edge term `rot_cross(dc, d + c)` rather than a second rotation.
+    if all_lanes(|lane| 0.0 < d_dc_d[lane])
+        && all_lanes(|lane| 0.0 < nd_dc_c[lane])
+        && all_lanes(|lane| dot3(rot_cross(d, c), rot_cross(da, ca))[lane] <= 0.0)
+        && all_lanes(|lane| dot3(rot_cross(c, d), rot_cross(cb, db))[lane] <= 0.0)
+    {
+        let inv = per_lane_div(ONE, add_lane(nd_dc_c, d_dc_d));
+        s.count = 2;
+        s.vertex[3].bary = mul_lane(inv, nd_dc_c);
+        s.vertex[2].bary = mul_lane(inv, d_dc_d);
+        s.vertex[0] = s.vertex[2];
+        s.vertex[1] = s.vertex[3];
+        let term = rot_cross(dc, add_lane(d, c));
+        *out = rot3(sub_lane(mul_lane(term, rot3(dc)), mul_lane(rot3(term), dc)));
+        return true;
+    }
+
+    // Face `b`-`c`-`d` (the face opposite `a`): `d`'s record lands in slot 0.
+    if all_lanes(|lane| plane_bcd[lane] <= 0.0)
+        && all_lanes(|lane| 0.0 < t_cd[lane])
+        && all_lanes(|lane| 0.0 < t_bc[lane])
+        && all_lanes(|lane| 0.0 < t_db[lane])
+    {
+        let inv = per_lane_div(ONE, add_lane(add_lane(t_bc, t_cd), t_db));
+        s.count = 3;
+        s.vertex[3].bary = mul_lane(inv, t_bc);
+        s.vertex[1].bary = mul_lane(inv, t_cd);
+        s.vertex[2].bary = mul_lane(inv, t_db);
+        s.vertex[0] = s.vertex[3];
+        *out = if all_lanes(|lane| 0.0 < negate(plane_bcd)[lane]) {
+            n_bcd
+        } else {
+            negate(n_bcd)
+        };
+        return true;
+    }
+
+    // Face `a`-`c`-`d` (opposite `b`): `d`'s record lands in slot 1.
+    if all_lanes(|lane| plane_acd[lane] <= 0.0)
+        && all_lanes(|lane| 0.0 < t_dc[lane])
+        && all_lanes(|lane| 0.0 < t_ad[lane])
+        && all_lanes(|lane| 0.0 < t_ca[lane])
+    {
+        let inv = per_lane_div(ONE, add_lane(add_lane(t_ad, t_dc), t_ca));
+        s.count = 3;
+        s.vertex[0].bary = mul_lane(inv, t_dc);
+        s.vertex[2].bary = mul_lane(inv, t_ad);
+        s.vertex[3].bary = mul_lane(inv, t_ca);
+        s.vertex[1] = s.vertex[3];
+        *out = if all_lanes(|lane| 0.0 < negate(plane_acd)[lane]) {
+            n_acd
+        } else {
+            negate(n_acd)
+        };
+        return true;
+    }
+
+    // Face `a`-`b`-`d` (opposite `c`): `d`'s record lands in slot 2.
+    if all_lanes(|lane| 0.0 <= plane_abd[lane])
+        && all_lanes(|lane| 0.0 < t_bd[lane])
+        && all_lanes(|lane| 0.0 < t_ab[lane])
+        && all_lanes(|lane| 0.0 < t_da[lane])
+    {
+        let inv = per_lane_div(ONE, add_lane(add_lane(t_ab, t_bd), t_da));
+        s.count = 3;
+        s.vertex[3].bary = mul_lane(inv, t_ab);
+        s.vertex[0].bary = mul_lane(inv, t_bd);
+        s.vertex[2] = s.vertex[3];
+        s.vertex[1].bary = mul_lane(inv, t_da);
+        *out = if all_lanes(|lane| 0.0 < negate(plane_abd)[lane]) {
+            n_abd
+        } else {
+            negate(n_abd)
+        };
+        return true;
+    }
+
+    // Face `a`-`b`-`c` (opposite `d`): no record moves, and the client guards
+    // the interior case with a second copy of this face's plane test.
+    if all_lanes(|lane| plane_abc[lane] <= 0.0)
+        && all_lanes(|lane| 0.0 < t_cb[lane])
+        && all_lanes(|lane| 0.0 < t_ac[lane])
+        && all_lanes(|lane| 0.0 < t_ba[lane])
+    {
+        let inv = per_lane_div(ONE, add_lane(add_lane(t_ac, t_cb), t_ba));
+        s.count = 3;
+        s.vertex[0].bary = mul_lane(inv, t_cb);
+        s.vertex[1].bary = mul_lane(inv, t_ac);
+        s.vertex[2].bary = mul_lane(inv, t_ba);
+        if all_lanes(|lane| 0.0 < negate(plane_abc)[lane]) {
+            *out = n_abc;
+            return true;
+        }
+    }
+
+    // Interior: the origin is inside the tetrahedron, so every face's plane
+    // term becomes a lambda. `count` is only rewritten once the sum is known
+    // to be positive. `n_abd` points the other way from the vector that face's
+    // guard and its weight terms use, so its lambda is the sign-flipped term.
+    let lambda_acd = plane_acd;
+    let lambda_bcd = plane_bcd;
+    let lambda_abd = negate(plane_abd);
+    let lambda_abc = plane_abc;
+    let denominator = add_lane(
+        add_lane(add_lane(lambda_acd, lambda_bcd), lambda_abd),
+        lambda_abc,
+    );
+    if all_lanes(|lane| denominator[lane] <= 0.0) {
+        return false;
+    }
+    let inv = per_lane_div(ONE, denominator);
+    s.count = 4;
+    s.vertex[0].bary = mul_lane(inv, lambda_bcd);
+    s.vertex[1].bary = mul_lane(inv, lambda_acd);
+    s.vertex[2].bary = mul_lane(inv, lambda_abd);
+    s.vertex[3].bary = mul_lane(inv, lambda_abc);
+    *out = ZERO_QUAD;
+    true
 }
 
 /// The two-vertex reduction the walk performs inline (`0x142cc9b8b`).

@@ -31,6 +31,26 @@ left `ow-sim`, `ow-render`, `ow-scene`, `ow-client` and `ow-engine` unrun - and
 CI runs the full gate on `windows-latest`, because `ow-render` is
 `#![cfg(windows)]`. See `MODLOG.md` under 2026-11-06.
 
+## The image (audited 2026-11-04)
+
+The recovered bytes are exact; the analysis built on them has three measured
+defects with a repair list each. Full page: `docs/ghidra-image-audit.md`.
+
+- All 10 memory blocks hash-identical to `module_offline.bin`; `.pdata` intact
+  (201,246 entries, 0 broken unwind records, extents tile the code exactly).
+- 110 of 179 `noreturn` flags are provably wrong (the body contains `RET`):
+  11,552 call sites in 6,355 functions are hidden behind them. Repair first.
+- 25,184 functions stop at their real `.pdata` extent while the client's
+  `UNW_FLAG_CHAININFO` links the rest of the function (16.0 MB, 32% of
+  `.text`; 157 of 174 named functions). Read such a function only with that
+  in mind - the decompile is cut where the client says it continues.
+- 283 function objects sit on chained starts, 38 real starts have none.
+- `_RDATA` has no types, `.rdata` is 50.4% typed, only 4 functions have a
+  user-defined prototype.
+
+The order of repair and the exact proof for each step are section 8 of the
+audit page; nothing there needs the image recovered again.
+
 ## Current state
 
 **The engine layer has its first read crate.** `crates/ow-engine` models the
@@ -947,14 +967,59 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
    (b) pass 0's `MoverWishQueryCached` cache (`0.004` per lane — the test is
    `fan::memo_matches`, the cache is not); (c) the shape-ring branch behind the
    global `_DAT_1439b07b8`; (d) the mesh-face pass. 145 `ow-sim` units.
-   Pass 3 is now read exactly (`ow-sim::fan::back_snap`, 2 tests): one snap of
-   the accepted direction's `y` lane onto the plane through the direction with
-   the direction as its normal - **not** a five-candidate loop. It is not
-   called by `solve` yet: the pentagon loop (`0x140cb96c1`) precedes the
-   `2*pi/n` ring loop (`0x140cb9ae0`) in address order while the snap reads the
-   ring loop's endpoints, so the pass order inside `0x140cb86c0` is unsettled.
-   **Next:** the probe with the range's 272 assembled shapes (item 6), then
-   the `ow-client` wiring.
+   Pass 3 is read exactly (`ow-sim::fan::back_snap`, 2 tests): one snap of the
+   accepted direction's `y` lane onto the plane through the direction with the
+   direction as its normal - **not** a five-candidate loop - gated by
+   `s = -dot(n, end-start) < 1.1920928955e-4` and `0 <= t <= 1`.
+   **The stage order is closed (2026-11-07).** `0x140cb86c0` is one `.pdata`
+   entry with no chained fragments, and it branches instead of running a fixed
+   pass list: gate `byte[body+0x659]` → pass 0 → either the **shape pass**
+   (when a shape resolved and `byte[body+0x655]` is clear, five probes, never
+   reaches the pentagon) or the **ring**, whose flavour is chosen by
+   `byte[0x1439b07b8]` - set: one evaluator over `n` quads, then
+   `kind <= 1` → snap, else pentagon; clear: `n` single evaluations with no
+   pentagon and no snap. So the pentagon follows the batch ring (the old
+   "pentagon precedes the ring" reading was address order, not control flow),
+   the snap reads the batch ring's endpoints, and the incremental ring's later
+   stores cannot reach it. Map and gates:
+   `docs/formats/character-controller.md`, *The stage order inside
+   `0x140cb86c0`*; working note `dev/data/notes/fan_stage_map.md`. Two doc
+   errors were corrected on the way: the snap's floor is `0x38fa0000`, not
+   FLT_EPSILON, and `t0` is `hsum(n*start) - hsum(record+0x00, n)`, not
+   `dot(start - out_dir, n)`. `back_snap` already had both right.
+   **Next, in order:** (1) the shape pass `0x140cb8e4e` - **read**: the
+   corner builder `0x141ae3eb0`
+   (`min = centre - (half_x,0,half_x,0)`, `far = min + (half_x,half_y,half_x,0)`)
+   and the five probe quads are done and unit-tested as
+   `ow_sim::fan::corner_pair` / `shape_probes`; every register is identified
+   (`xmm11` = seed endpoint, `xmm10` = floored seed, `xmm12` = speed), so each
+   probe sweeps `quad[i] + (s±seed/speed)*dir`; only the loop itself is not yet
+   written in Rust; (2) pass 0
+   `0x140cc1870` - **closed 2026-11-07**: key + `0.004` memo
+   (`memo_matches`), block clone `0x140a01560`, two probes at layer masks `1`
+   and `0x0e`, min score where a **miss scores 1.0** (`ow_sim::fan::pass_zero`,
+   `PASS_ZERO_MASKS`), and the cache store skipped when `record+0x20 != 0`;
+   (3) the incremental ring - **read**, including its hand-rolled pair rotation
+   (`A' = A*sin + B*cos`, `B' = B*sin - A*cos`) and the point update
+   `record0+0x00 - offset`; the current `solve` already matches it; (4) the
+   batch ring, which still needs a **list-shaped** seam: it makes one evaluator
+   call over `block+0x490` (pointer) / `+0x498` (count). The consumer is traced
+   but **not proven**: `0x1420328c0` is a thunk to the dispatcher `0x14203dae0`
+   (whose `.pdata` entry is a stomped prologue; the body runs to
+   `0x14203e0d6`), and `0x142cc45a0` re-flattens into a sweep-options struct
+   that carries a ptr/count pair into `0x142cbd510`. That was read by grepping
+   `dev/data/corpus/asm/`, which is a **linear** sweep - the listing desyncs at
+   `0x14203db2f` on a jump table - so it must be re-established with Ghidra's
+   flow-based decode before the ring is written. The nearest reader found is
+   `0x142cc1c80`, a growable `i32` node accumulator with ptr/count/cap at
+   `+0x490`/`+0x498`/`+0x49c` and dedupe stamps at `[node+0x08]`/`[node+0x4c]`,
+   but the block's `+0x49c` is `1.0f`, so the block's list is a different
+   layout;
+   (5) the pentagon and the snap behind `kind <= 1` - **closed**: the dispatch
+   is `ow_sim::fan::batch_tail` (`0x142cba720` returns the kind, `0x140cb9864`
+   snaps it at `1`), and both sub-passes were already ported
+   (`refine_pentagon`, `back_snap`); what remains is only their position in
+   the composer, which the batch ring gates; then the `ow-client` wiring.
 
 0a. **The map blob holds the chunk payloads (2026-11-03).**
    `LoadMapAssetChunks` (`0x141ff5c80`) stores one handle per chunk in the map

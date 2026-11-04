@@ -9,6 +9,53 @@ read, it stays here and the gameplay feature stays unimplemented.
 
 ---
 
+## Before anything else: the image repair backlog (2026-11-04)
+
+**Status: the no-risk repairs are done in the live project (saved, from a
+restorable copy at `C:/Temp/ghidra_snapshot/owmod_clean.rep`). Numbers, evidence
+and the repair procedure are in
+[`ghidra-image-audit.md`](ghidra-image-audit.md), section 11.**
+
+Done. No `.pdata` extent, chain count or function count changed; the one thing
+that did move was the over-reach of three bodies (§11, same cause unresolved):
+
+- **110 of the 179 `noreturn` flags are cleared** - the flagged function's own
+  body contains a `RET`, so it returns on that path. They blinded 11,552 call
+  sites in 6,355 functions; the program now reports 69 flags and 28,412 call
+  sites. Restorable with `ClearFalseNoReturn.java restore`.
+- **The analyzers that caused it are off**: `Non-Returning Functions - Known`,
+  `PDB Universal` (no symbol file ships with the install) and `... Discovered.
+  Repair Flow Damage`.
+- **The function-creation paths are closed.** `RecoverPointerFunctions.java`
+  now creates a function only at a real `.pdata` start (measured: it would have
+  created up to 72,786, now 4), and `dev/gh_apply_names.py` renames only - it
+  was calling `disassemble_bytes` plus `create_function` when a rename failed,
+  which is how chain-start and mid-body "functions" appeared. The 38 real
+  starts that have no object are repaired by the same guarded script, not by
+  the analyzer.
+- **The 10 malformed `function-names.csv` rows are re-quoted** and four rows that
+  named a chained continuation now carry `container=<real start>`, which
+  `dev/frame_check.py` rule 4 re-verifies against the unwind records
+  (`docs/function-names.csv`, the front matter explains the column).
+- **Still open:** the merge of 25,184 chained fragments, the map repair (283
+  chain-start objects, 38 missing starts, 251 multi-range bodies), the 118,578
+  body/extent mismatches, data typing, prototypes, 47 shared names and the 79
+  RTTI names with no pointer. The merge is not "low risk": every body it
+  changes must be diffed, so it starts with `BodySnapshot.java`.
+- **Function-less code targets stay open** (33,684 of them, 382 with ten or more
+  references, worst 4,225): they have no `.pdata` entry, so a body would be an
+  inference. This is the same rule as the one that bit the project before -
+  more "functions" is not a better image.
+
+`ImageWorklist.java` prints all of these lists in one run.
+
+No gameplay read should be trusted from a function whose body stops at a
+chained continuation: the decompile is truncated at a boundary the client
+itself declares. That is why the merge is the next repair and not a cosmetic
+one.
+
+---
+
 ## 0. The engine object and its subsystem schedule
 
 **Status: the object, both constructors, its interface registry and the
@@ -147,26 +194,73 @@ the plane `dot(p - out_dir, n) = 0` with `n` the accepted direction itself:
 dot(out_dir, n)`, `t = (2r - r*r*s)*t0` with `r = RCPSS(s)` (one Newton step,
 `2.0` from `0x1431107f0`), skip unless `0 <= t <= 1`, then `out_dir.y = (start
 + t*delta).y`. Addresses `0x140cb98fa..0x140cb99b9`; the `0x80000000` splat at
-`0x142f817a0` is the negation and `0x142f7aad8` is FLT_EPSILON. The five-quad
-loop with `s = dot(scale, base - cand)` and the `out_dir.y < 0` gate is the
-**shape branch** (`_DAT_1439b07b8` set), whose quads come from
-`FUN_141ae3eb0`'s corner and extent, not from pass 3.
+`0x142f817a0` is the negation and `0x142f7aad8` is `1.1920928955e-4`
+(`0x38fa0000`), **not** FLT_EPSILON. `t0` is two hsums and a `SUBSS`:
+`hsum(n*start) - hsum(record+0x00, n)`, not `dot(start - out_dir, n)`. The
+five-quad loop with `s = dot(scale, base - cand)` and the
+`record+0x00.y > -FLT_MAX` test (not an `out_dir.y < 0` gate) is the **shape
+branch**, whose quads come from `FUN_141ae3eb0`'s corner and extent, not from
+pass 3.
 
-**Open, and the next read in `0x140cb86c0`: the stage order.** The function is
-1450 instructions and the doc's four-pass map is incomplete. In address order
-the stages are: an early block that seeds `[rbp+0x550]`/`[rbp+0x560]`
-(`0x140cb8c19`, `0x140cb906e`, `0x140cb92f3`), a loop that reads them at
-`0x140cb9518`, the pentagon loop (`0x140cb96c1`), the pass-3 snap
-(`0x140cb9884`), and the `2*pi/n` ring loop (`0x140cb9ae0`) which overwrites
-those two endpoints at `0x140cb9b5f`/`0x140cb9b66`. So the snap reads the
-endpoints written at `0x140cb92f3`, **not** the ring loop's, and the pentagon
-runs before the ring. `ow-sim::fan::back_snap` carries the snap but `solve`
-does not call it: wiring it needs the accepted candidate's real endpoints,
-which the current composition does not track.
+**Closed 2026-11-07: the stage order in `0x140cb86c0`.** The body is one
+`.pdata` entry (`0x140cb86c0..0x140cba02b`) with no chained fragments, so the
+composer is fully readable, and it branches rather than running a fixed pass
+list: the gate `byte[body+0x659]` → pass 0 → shape pass **(iff** a shape
+resolved and `byte[body+0x655]` is clear**)** → ring, which is either the
+batch flavour (`byte[0x1439b07b8] != 0`: one evaluator, then `kind <= 1` →
+snap, else pentagon) or the incremental flavour (that byte zero: `n` single
+evaluations, no pentagon and no snap). Nothing after pass 0 runs unless pass 0
+left a result, and the shape pass can never reach the pentagon. So the
+"pentagon before the ring" reading in the previous paragraph was an artefact
+of address order: the pentagon is only reachable *after* the batch ring, and
+the endpoints the snap reads (`0x140cb92f3`/`0x140cb92fa`) are the batch
+ring's, which is exactly why the incremental ring's later stores
+(`0x140cb9b5f`/`0x140cb9b66`) do not bother it. The authoritative map with
+every gate and address is *The stage order inside `0x140cb86c0`* in
+`docs/formats/character-controller.md`; the longer working note is
+`dev/data/notes/fan_stage_map.md`.
 
-**Still open in the composer:** pass 0's cache, the shape-ring branch
-(`_DAT_1439b07b8`), the mesh-face refinement `0x140cc2290` and the tagged-hit
-`MoverWishTransform` path.
+**Still open in the composer:** the shape pass's loop registers, the batch
+ring's candidate list, the mesh-face refinement `0x140cc2290` and the tagged-hit
+`MoverWishTransform` path. `ow-sim::fan::back_snap` carries the snap and is
+ready to be wired once the batch ring exists.
+
+**Closed 2026-11-07, two of those.** *Pass 0* `0x140cc1870` is read and ported:
+a keyed memo (`dword[body+0x1a60] == dword[body+0x1b00]` plus six lane
+comparisons at `0.004`), a block clone through `0x140a01560`, **two** evaluator
+calls at layer masks `1` and `0x0e` (`block+0x06`, which the composer's own
+template sets to `0x0f`), and a min-score selection in which a **miss scores
+`1.0`** because that is a fresh record's `+0x30` - so a hit above `1.0` loses
+to a miss. `ow_sim::fan::pass_zero` / `PASS_ZERO_MASKS` reproduce it and a test
+pins the quirk. *The incremental ring* is read to its loop body, including its
+hand-rolled rotation `A' = A*sin + B*cos`, `B' = B*sin - A*cos`, the point
+update `record0+0x00 - offset`, and the `out+0x42 = (flags >> 2) & 1` write the
+stage map had missed. The shape pass's corner geometry is read and ported
+(`corner_pair`, `shape_probes`); only its loop's `m10`/`m11`/`m12` and its
+accept tail remain.
+
+**The batch ring's candidate list is the next interface question.** The batch
+flavour fills the query block's `+0x490` (pointer) and `+0x498` (count) with
+`n` quads plus a zero terminator, `+0x480` with a `0.015` splat, `+0x49c` with
+`1.0` and `+0x4a4` with `0`, then makes **one** evaluator call - where the
+shape pass and the incremental ring make one call per candidate. The obvious
+place to look for the list's consumer is `0x14203dae0` (the evaluator body) or
+`0x142cc45a0` (the handle dispatcher that flattens the block into the driver's
+`0x78` struct). Neither references those offsets in its linear sweep:
+grepping `dev/data/corpus/asm/014203dae0_FUN_14203dae0.asm` and
+`dev/data/corpus/asm/0142cc45a0_FUN_142cc45a0.asm` for `0x450`, `0x460`,
+`0x480`, `0x490`, `0x498`, `0x49c`, `0x4a4` finds no displacement at all, so
+the copy is either pointer-based (a loop over the block) or sits in the
+obfuscated region. A wider sweep of every corpus listing does find readers of
+`+0x490`/`+0x498`: `0x142cc1c80` keeps a growable `i32` vector there
+(ptr/count/capacity at `+0x490`/`+0x498`/`+0x49c`, with the capacity doubling
+by halves and node dedupe stamps at `[node+0x08]` and `[node+0x4c]`), which is
+a **broadphase node accumulator**, not the block's list - the block's `+0x49c`
+is `1.0f`, so it cannot be that capacity. The consumer therefore remains
+unread, and that has to change before the batch ring can be written: the
+multi-candidate answer is what `kind <= 1` then routes to the snap, and a
+one-candidate-at-a-time `CandidateSolver` cannot express it. The trait needs a
+list-shaped method, not a second loop.
 
 ## 1. The mover's input→velocity control law
 
@@ -608,8 +702,15 @@ root at `+0x20`, vertices at `+0x28`, triangles at `+0x30`}` with absolute
 pointers, so the world is the address space they live in, and the arm is now
 exercised by `fn/ShapeNarrowphase`'s corpus (6 type-3 hits). `block+0x70` is the
 `u16` mask each triangle's `+0x1c` is tested against, which every earlier
-fixture left zero. Types 2 (`0x142cd3c80`) and 4+ (`0x142cd0ae0`) are still
-unread; the practice range is entirely type 3, so those two do not block it.
+fixture left zero. Types 2 (`0x142cd3c80`) and 4+ (`0x142cd0ae0`) are now
+**read** (2026-11-07) but not implemented and not differenced: type 2 is a
+convex hull handed over as face planes with an analytic plane-entry walk, a
+`tmin`/`tmax` reject and a GJK fallback; type 4+ is a single kind, a
+height-field grid walked by a rectangle scan plus a 2D DDA over cells. Layouts
+and algorithms are in `formats/shape-narrowphase.md`; the working note is
+`dev/data/notes/narrowphase_types_2_4.md`. The practice range is entirely
+type 3, so those two do not block it, and `Narrowphase::UnreadType` stays the
+honest answer until each has a differential unit.
 Without those,
 a candidate cannot be scored: the fan reads a record only the live hit policy
 fills. So the next anchor is the chunk ingest in `formats/maps.md`, coupled
@@ -1430,12 +1531,25 @@ open**, and the pinned contact (tri 1, ids `0x12`/`0x22`, point
 `dev/gjk_simplex_diff.py` 30 seeded 3-simplices agree; `dev/gjk_closest_diff.py`
 17 live + 120 seeded, 0 failures.
 
-**Open: the 4-simplex `0x142cc7740`** (`0x1632` B, read structurally only: the
-orientation fix-up, four vertex / six edge / face regions, the interior
-`1/Σλ`); a tetrahedron around the origin reports a miss. It is reached by 7 of
-120 seeded descriptors and 0 of the 18 mesh cases. `simplex4` is a documented
-open branch, not a guess. That is **runtime, not asset, data**, so no install test
-is written — the doc says `not tested`.
+**Round 13 (2026-11-03): the 4-simplex `0x142cc7740` is read and implemented.**
+`0x1632` B, the three-vertex body one dimension up: an orientation fix-up that
+swaps vertices 1 and 2 when `dot(rot3(rot3(c-a)*(b-a) - rot3(b-a)*(c-a)), a-d)`
+is negative in every lane; four vertex regions (`count 1`, direction `-a` etc.);
+six edge regions (`count 2`, barycentrics from the two endpoint dots over their
+sum, direction the double rotation of the pair sum about the edge); four face
+regions (`count 3`, weights = the face's three triple products over their own
+sum, direction the face vector or its negation whichever faces the origin,
+record copies into slots 0/1/2 per face); and the interior case (`count 4`, the
+four plane terms as lambdas over their sum, direction zero, `AL = 0` when the
+sum is non-positive). `dev/gjk_simplex_diff.py` runs seeded quadruples through
+the client's bytes: every region is hit, the block, count and barycentrics agree
+exactly on all 60 cases, and the four-vertex direction agrees within one ULP on
+its low lanes. One genuine quirk is recorded in
+`formats/static-collision.md`: the `a-b-d` face's stored vector is the sign
+opposite of the vector its own guard and weights are written against. No state
+is left unimplemented; the residual is the direction's last bit on entered
+tetrahedra, and a real penetration simplex from the narrowphase is `not tested`
+(none of the 18 mesh queries builds one).
 
 **Round 12 (2026-11-02): two false leads are removed; the next anchor is the
 map-load path.** (a) The class static descriptor's slot 2

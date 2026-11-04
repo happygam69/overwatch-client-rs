@@ -135,6 +135,133 @@ wrapper distinguishes "filtered" from "missed", which is why the rejection path
 also builds and pushes a record (with a zeroed hit payload) instead of
 returning early.
 
+## Types 2 and 4+, read (2026-11-07)
+
+Both primitives are now read from the instruction stream; neither is implemented
+and neither has a differential unit, so both remain unverified. The working
+note with every constant is `dev/data/notes/narrowphase_types_2_4.md`.
+
+**Extent caveat first.** `dev/fn_extent.py` reports only the `.pdata` entry that
+covers the entry address, and for these three functions that entry is much
+shorter than the body. Type 2 `0x142cd3c80` has a `0x64`-byte root entry while
+its chained cluster (5 entries) runs to `0x142cd4151`. The type-4 leaf
+`0x142cd0540` has a `0xc4`-byte root with a 3-entry cluster to `0x142cd0818`,
+and the read went past that to `0x142cd0ad4` on control flow - that wider bound
+is not pinned by a chain walk and should be treated as a reading aid. Type 4+'s
+owner `0x142cd0ae0` is a single complete `0xc00`-byte entry, the one case here
+where the root is the body.
+
+### Type 2 — a convex hull handed over as face planes
+
+Pool `record+0x300`, stride `0x50`, filled by `ShapeFillType2` `0x142cd31f0`.
+The primitive is `0x142cd3c80`. Element:
+
+```text
++0x00 quad   world centre; written by the filler, never read by the primitive
++0x10 ptr    count0 world points, stride 0x10
++0x18 ptr    count1 planes (n.xyz, d), stride 0x10
++0x20 ptr    count1 bytes, copied, no reader here
++0x28 ptr    count2 dwords, copied, no reader here
++0x30 i32    count0      +0x34 i32 count1     +0x38 i32 count2
++0x3c f32    scale^3 * src[0x38]  (volume)
++0x40 f32    scale^2 * src[0x3c]  (area)
++0x44 f32    powf(0.238732398 * volume, 1/3) - the equal-volume sphere radius
++0x4c i32    pool free-chain link
+```
+
+The destructor `0x142cd35d0` confirms the four allocation sizes
+(`count0*16`, `count1*16`, `count1`, `count2*4`).
+
+1. **Gate:** all four lanes of `block+0x50` (expansion) at or below `0.005`
+   **and** `dword[block+0x38] == 0` - the same gate and constant the type-3
+   triangle test uses. Anything else goes to the GJK path.
+2. **Analytic path.** `S = R(start - pos)`, `E = R(end - pos)`, `D = E - S`:
+   note the two rotations are subtracted, not a rotation of the difference. The
+   walk keeps `tmax = 0`, `tmin = block+0x20` (the motion quad, four
+   independent lanes) and `best = -1` over the `count1` planes: per plane
+   `A = dot3(n, S)`, `B = dot3(n, D)`, `dist = d - A`, `q = |B|^2`, with the
+   `q` guard `0x143110818` (`1.1754944e-35`, an effective `|B|` threshold of
+   `sqrt(q/3)`). Entering (`B < 0` in every lane) raises `tmax` to `dist/B`
+   and records the plane; exiting (`B > 0`) lowers `tmin`; `B = 0` with
+   `dist < 0` rejects immediately; any mixed lane pattern does nothing. After
+   **every** plane, including the first, `tmin < tmax` failing on any lane
+   rejects.
+3. **Hit:** the record's fraction is `tmax`, the point is
+   `start + (end - start) * tmax`, and the normal is the winning plane's
+   `xyz` rotated to world through the client's **mixed** quaternion order
+   (`cross = rot3(v)*q - v*rot3(q)`, `spin = qw*v`,
+   `s = spin + rot3(cross)`, then a second pass and `2*rot3(cross2) + v`) -
+   the same asymmetry the point rotation does not have.
+4. **Inside path** when no plane was entered: `block+0x72 == 0` rejects,
+   otherwise the point is `block+0x00`, the normal is `normalize(start - end)`
+   (sign and all) and the fraction is `0`.
+5. **GJK path:** `0x142cc9460(out, desc)` with a descriptor built exactly as
+   the type-3 triangle test builds it, only the shape-A element differs;
+   shape B is the motion shape, `+0x80` the travel vector, `+0x90` the motion
+   quad, `+0xa0 = block+0x72`, `+0xa1 = 0`.
+
+Return is `al` only: `1` hit, `0` miss with the record **untouched** and no
+callback (the wrapper makes that call). Callers test `al`.
+
+### Type 4+ — one kind, a height-field grid
+
+Pool `record+0x330`, stride `0x50`, filled by `ShapeFillType4` `0x142ccf330`
+(at `0x142cb809b`, from `[descriptor+0x68]` and `word[descriptor+0x60]`). There
+is **no family dispatch** in this branch: the only discriminator is each cell's
+tag byte, and no sub-record offset varies. Owner `0x142cd0ae0`, per-cell leaf
+`0x142cd0540`.
+
+```text
++0x00 i32  count0 (grid points, axis 0)   +0x04 i32 count1 (axis 1)
++0x08 f32  cell size                     +0x0c i32 2*(count0-1)*(count1-1)
++0x10 quad local AABB min                +0x20 quad local AABB max
++0x30 u16  default surface id           +0x38 ptr grid, count0*count1 * 8 B
++0x40 ptr  optional per-cell callback    +0x4c i32 free-chain link
+```
+
+A grid entry is 8 bytes: `0..32` corner height, `32..48` surface id,
+`48..56` callback argument, `56..64` tag - tags `0..3` solid (they pick the
+diagonal), `4` empty. Cells are `(count0-1) x (count1-1)`.
+
+1. The support hull is inlined (`q = xform.quat`, `b = block+0x40`,
+   `v = R(start - pos)`); its points go to a stack buffer of `0x40` quads with
+   a heap fallback.
+2. `expansion = block+0x50`, raised by `0.02` when every lane is positive;
+   `centre = (hi + lo) * 0.5`, `step = ((hi - lo) * 0.5 + expansion) + 0.02`,
+   and the points are recentred in place.
+3. Each axis is widened by `step` along the travel direction, and the cell
+   index is `floor(v / cell)` with the compiler's floor idiom.
+4. A rectangle scan over both index ranges calls the leaf, then a 2D DDA
+   (`dt = cell / |span|`, first crossing `((idx+1)*cell - start) / |span|`
+   ascending and `(start - idx*cell) / |span|` descending, direction `±1`)
+   stops once both parameters pass `last_fraction + 0.01` or an index hits its
+   limit.
+5. Each cell gets a `0x78`-byte copy of the query block: `+0x00` centre,
+   `+0x10` end, `+0x20` the constant `(1,1,1,1)`, `+0x30` the recentred
+   points, `+0x38` their count, `+0x40` `(0,0,0,1)`, `+0x50` the expansion,
+   `+0x60` the caller's `+0x60`, `+0x70` `0xffff`, `+0x72` the caller's byte.
+6. Per cell: a bounds rejection, the empty tag, the four corner heights, an
+   AABB rejection against `box ± step`, a separate-axis rejection in lanes
+   0..2, then the diagonal from the tag and parity and **two**
+   `0x142cce430` triangle tests with ids `2*((count1-1)*i + j) + {0,1}`. After
+   the first hit the copied block's motion quad becomes that fraction.
+7. The answer rotates the local point and normal to world through the same
+   mixed order, publishes the fraction, the triangle id, the surface id from
+   the entry's bits, and the callback's return word (or the element's default
+   `+0x30`), with `0xffff` in the `+0x38` word and the tested/hit counters at
+   `+0x3c`/`+0x40`. **The last hit in scan order wins.**
+
+Return is again `al` only, and a miss leaves the record untouched.
+
+**What stays open on both.** The descriptor's source fields
+(`src+0x10`, `src+0x18`, the counts) are not tied to a named class; the ingest
+uses the descriptor's transform while the primitive uses the entry's, and the
+two agree only while the entry pose is identity. Type 4's DDA parameter and
+increment formulas need a lane-by-lane re-derivation before implementation
+even though the index arithmetic is settled, and no producer of a `+0x330`
+descriptor was traced. Neither primitive has a unit under `dev/verify_harness/`,
+so `Narrowphase::UnreadType` stays the honest answer for now.
+
 ## What is verified, and what is not
 
 `ow_sim::collide::shape_narrowphase` follows the above operation for operation
@@ -153,9 +280,9 @@ blob and the sink left null, so:
 - **Not verified: the hit callback's return path**, beyond the fact that it is
   called with those three arguments in that order. The unit uses a `ret` byte
   in the arena as the callback.
-- **Not verified: types 2 and 4+.** Both primitives are unread, so the Rust
-  reports `Narrowphase::UnreadType` for them rather than guessing. Type 4 is
-the remaining declared dead edge at `0x142cc1700`.
+- **Not verified: types 2 and 4+.** Both primitives are read (above) but not
+  implemented, so the Rust reports `Narrowphase::UnreadType` for them rather
+  than guessing. Type 4 is the remaining declared dead edge at `0x142cc1700`.
 
 ## The lesson the fixture taught
 

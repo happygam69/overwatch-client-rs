@@ -1569,22 +1569,27 @@ composer runs these stages over a single `CandidateQuery`:
 
    ```text
    s  = -dot(n, delta)                 ; the hsum negated by 0x142f817a0 (0x80000000 x4)
-   if s < 1.1920929e-7 skip            ; 0x142f7aad8 is FLT_EPSILON
-   t0 = dot(start - out_dir, n)
+   if s < 1.1920928955e-4 skip         ; 0x142f7aad8 = 0x38fa0000, not FLT_EPSILON
+   t0 = dot(n, start) - dot(record+0x00, n)   ; two hsums, then one SUBSS
    r  = RCPSS(s)                       ; 0x140cb993e, the client's reciprocal idiom
    t  = (2*r - r*r*s) * t0             ; 0x1431107f0 is 2.0f, one Newton step
    if t < 0 or t > 1.0 skip            ; 0x142f7aae4 is 1.0f
-   out_dir.y = (start + t*delta).y
+   record+0x04 = (start + t*delta).y   ; lane 1 of the record; copied out later
    ```
 
    The plane is `dot(p - out_dir, n) = 0` with `n = out_dir`: the snap seats
    the direction's `y` at the point of the sweep whose projection on the
-   direction equals the direction's own. It writes only lane 1
-   (`MOVSS [rsp+0x74]`, `0x140cb99b9`); the other three lanes are untouched.
-   Note the endpoints it reads are the ones written at `0x140cb92f3`/
+   direction equals the direction's own. It writes only lane 1 of the
+   **record** (`MOVSS [rsp+0x74]`, `0x140cb99b9`; the record sits at
+   `rsp+0x70`, so the store is `record+0x04`) and the record is copied to the
+   output afterwards, which is why the other three lanes are untouched. The
+   `s` test is `jb`, unordered-or-below, so a NaN sweep length skips like a
+   zero one.
+   The endpoints it reads are the ones written at `0x140cb92f3`/
    `0x140cb92fa`, not the ring loop's (`0x140cb9b5f`/`0x140cb9b66`, which come
-   later in address order), so the stage order inside `0x140cb86c0` is a
-   separate open question. The `out+0x41`/`out+0x42` bytes are written by the caller of this
+   later in address order). That is no longer a puzzle: those two stores are
+   the **batch ring's** endpoints and the incremental ring cannot reach the
+   snap at all - see *The stage order* below. The `out+0x41`/`out+0x42` bytes are written by the caller of this
    block (`0x140cb98e2`/`0x140cb98f7`), from `word[rbp-0x52]`: `|= key & 1` and
    `= (key >> 2) & 1`.
 
@@ -1624,17 +1629,304 @@ face list (vtable `+0xb0`), takes each triangle's centroid and normal,
 normalizes, tests `threshold < dot(normal, dir)` — the same strict rule — and
 keeps the best, writing lanes `+2/+5/+3/+7` and the word at `+0x3e`.
 
+**The stage order inside `0x140cb86c0`, read (2026-11-07).** The body has one
+`.pdata` entry, no chained fragments, and four arguments that matter: `rcx`
+body, `rdx` source, `r8` the `u16` output index, `xmm3` the frame `dt`; `r9` is
+never read. Two of the earlier notes were wrong about the branches, so the
+settled order is set out here with the gate that selects each stage:
+
+1. `0x140cb8747` the threshold (turn limit → `cosf`), both endpoints, the seed
+   and the speed - every call, before any branch.
+2. `0x140cb8d4a` **pass 0**, gated by `byte[body+0x659]`: one
+   `0x140cc1870(body, &record0, &block0)` query. On a hit with `(~flags & 1)`
+   set it stores `out+0x41 = ~flags & 1`, `out+0x42 = (flags >> 2) & 1` and
+   `*index = word[record0+0x3c]` - an **assignment**, where every later stage
+   ORs into `+0x41`.
+3. `0x140cb8df5` the result byte goes to `byte[shape+0x1016]`, then the
+   discard rule `!body[0x1a82] && !byte[shape+0xd42]` clears it; `0x140cb8e26`
+   exits on it, and on `byte[body+0x659] == 0`.
+4. `0x140cb8e3c` **shape pass** when a shape resolved and `byte[body+0x655]`
+   is clear; **ring** otherwise, i.e. when the shape is null or `+0x655` is
+   set. The two never mix: the shape pass has no route to the pentagon.
+5. `0x140cb8e4e` the shape pass builds the corner and extent via
+   `0x141ae3eb0` and probes **five** quads (the mover quad, the corner quad,
+   `(c.x, c.y, e.y, 0)`, `(e.x, c.y, c.z, 0)`, `(e.x, c.y, e.y, 0)`).
+   Each probe's acceptance is `(~flags & 1) && hsum(record0+0x10 * dir) >
+   threshold`, then a strictly smaller `|hsum((point - record0+0x00) * dir)|`,
+   then `record0+0x00.y > -FLT_MAX` (**not** an `out_dir.y < 0` gate).
+6. `0x140cb9263` `n = body[0x5bc]`, `r = maxss(body[0x65c], 0.35) *
+   body[0x5b8]` - shared by both ring flavours.
+7. `0x140cb9273` the **batch ring**, when `byte[0x1439b07b8] != 0`: the
+   endpoints are overwritten to `point + FLT_MAX*dir` and `point - speed*dir`,
+   `n` quads `(B*r', 0.015, A*r', 0)` with `r' = r - 0.015` plus one zero quad
+   are rotated by `0x1426c40f0(2*pi/n)`, and **one** evaluator call runs at
+   `0x140cb949b`. Then `0x142cba720(record0+0x28)` picks the tail: `kind <= 1`
+   → the snap, otherwise the pentagon.
+8. `0x140cb9ae0` the **incremental ring**, when that byte is zero: `n` single
+   evaluations, each with the pair offset `(B*r, carry, A*r, carry)` added to
+   both endpoints, acceptance `(flags & 1)` and then the smallest
+   `|hsum((point - record0+0x00) * dir)|`. **No pentagon, no snap** - so the
+   snap's endpoints are only ever the batch ring's and the old "address-order
+   conflict" was void.
+
+   Read to the bottom on 2026-11-07, the incremental ring's loop body is
+   `0x140cb9ae0..0x140cb9cf6` and its step is hand-rolled, not `0x1426c40f0`:
+   with the pair's two lanes in `xmm11`/`xmm14`, `cos` in `xmm15` and `sin` at
+   `[rbp+0xc0]`, the pair becomes `A' = A*sin + B*cos` and
+   `B' = B*sin - A*cos`, i.e. a rotation by **minus** the step angle in the
+   usual convention. The step offset multiplies those lanes by `xmm10`, and
+   `xmm10` is identified earlier in the function as the **floored seed**
+   (`max(seed, 2 * shape[0x2d2c])`, `0x140cb8b56`), so the offset is
+   `pair * seed` and the ring radius `r` must already be folded into the pair
+   at the ring's entry - which is **not yet read**. (An earlier draft of this
+   paragraph called `xmm10` the radius; the definition at `0x140cb8b65` is
+   direct evidence against that.) Each iteration also moves the running point
+   to `record0+0x00 - offset` (`xmm13`), and the ring writes `out+0x42 =
+   (flags >> 2) & 1` as well as `out+0x41 |= flags & 1`. The acceptance is the
+   shape pass's: `(~flags & 1)` sets the candidate flag only after the facing
+   term is positive, then the projection must beat `xmm12`, which starts at
+   `FLT_MAX` and is replaced by each accepted value.
+9. `0x140cb96c1` the **pentagon refine**, batch ring only: five iterations at
+   `off = 0.02*pair + 0.005*n2` (pair in lanes 0/2), the `y` lane of `B`
+   shifted by `-0.04`, the pair rotated by `(0.95105654, 0.30901697)`;
+   first-hit keeps, a facing pass replaces and breaks; `kind == 3` with
+   `byte[0x1439b08d0]` set hands the whole loop to `0x140cc2290`.
+10. `0x140cb988d` the **snap**, batch ring only, reading the batch ring's own
+    endpoints.
+11. `0x140cb99c5` `record0+0x00 = point.x`, `record0+0x08 = point.z`, then the
+    `xmm9 < body[0x610] || dt > xmm9` gate, then the write-out.
+12. `0x140cb9d46` **the write**: `out+0x00`/`out+0x10` the two quads,
+    `+0x30` tag, `+0x34` id, `+0x38` `record0+0x28`, `+0x40 = 1`, and
+    `*index = word[record0+0x3c]`. The no-hit path writes `+0x38 =
+    0xffff0000ffffffff`, `+0x40 = 0`, zeros the quads and leaves `*index`
+    untouched.
+
+### The batch ring's candidate list: what is proven, and what is not (2026-11-07)
+
+Steps 7, 9 and 10 are read; only step 8's *consumer* is not. What is proven:
+
+- the block carries a **ptr/count pair** at `+0x490`/`+0x498` and the ring fills
+  it with `n` quads plus one zero quad;
+- the evaluator the composer calls, `0x1420328c0`, is a thunk that builds a
+  stack descriptor and forwards to the dispatcher `0x14203dae0`;
+- the dispatcher's own `.pdata` entry (`0x14203dae0..0x14203df66`) is a
+  prologue stub - the function continues to `0x14203e0d6` - and it flattens the
+  block into a stack copy before dispatching;
+- the driver `0x142cc45a0` has the same shape (a 0x3e-byte root entry covering
+  four `.pdata` entries, `0x142cc45a0..0x142cc47c5`, read as one function) and
+  re-flattens into a sweep-options struct that carries a ptr/count pair onward
+  into the sweep driver `0x142cbd510`.
+
+What is **not** proven, and why it must stay open: the offset that proves the
+carry-through was found by grepping `dev/data/corpus/asm/`, and that corpus is
+a **linear** sweep over a `.pdata` range, not a flow-based decode. The
+`014203dae0_FUN_14203dae0.asm` listing desyncs at `0x14203db2f` - the bytes
+there decode as `rcr byte ptr [rax+0x7f], 0x1c` followed by `jle`, which is a
+jump table read as code - so any operand a grep finds after that point is not
+attributable to a function, and any operand it *misses* proves nothing either.
+The 350-entry `.pdata` run over `0x14203db00..0x142054500` is exactly the kind
+of table-rich region where this happens.
+
+So the honest statement is: **the list is carried through two block flattens to
+the sweep driver `0x142cbd510`, but that was read from a desynced listing and
+must be re-established with Ghidra's flow-based decode before the batch ring
+can be implemented.** Until then `+0x490`'s consumer stays unread, and the
+one-candidate-at-a-time `CandidateSolver` seam is a known limitation rather than
+a design choice.
+
+### The batch tail is closed
+
+Step 8's dispatch is read and ported: `0x142cba720(record0+0x28)` returns a
+kind, `0x140cb9864` compares it with `1` and `jg` selects the pentagon, so kinds
+`<= 1` take the snap. That is `ow_sim::fan::batch_tail` with
+`BATCH_TAIL_SNAP_MAX_KIND` and the `BatchTail` enum, tested. Both sub-passes
+below it are read and already ported (`fan::refine_pentagon`,
+`fan::back_snap`), so blocker 5 is closed at the code level; what remains
+there is only its position in the composer, which needs the batch ring.
+
+`out+0x41` is worth one line of its own because it is three different writes
+in three stages: an assignment in pass 0, `|= ~flags & 1` in the shape pass,
+and `|= flags & 1` in both rings.
+
+**The shape pass, read in part (2026-11-07).** `0x140cb8e4e` is reached only
+when `byte[body+0x659]` is non-zero, the shape pointer `r14` is non-null and
+`r13b` is zero; a pass-0 hit jumps straight to `0x140cb9d42` instead, so the
+static hit short-circuits the whole dynamic chain. The pipeline is
+`0x140d4c510(shape)` → an id, `0x142030030(body+0x240, id)` → the shape's
+collision record (null bails to `0x140cb9255`), a centre quad taken from
+`[shape+0xf60]` when `byte[shape+0x10c0]` is set and otherwise computed by
+`0x140c3c120(shape, &out)`, then `0x141af0070(&xform, record, centre)` and
+`0x141ae3eb0(record, &xform, &pair)` — the corner builder, whose two output
+quads are the corner at `+0x00` and the far corner at `+0x10` (the pair the
+earlier note called ``corner`` and ``corner plus half``).
+
+Five probe quads are built in the frame at `rbp+0x5b0..0x5ff` - one per
+`0x10` bytes, walked in order with `r13d = 5` and `r14 = &rbp+0x5b0`:
+
+```text
+0x5b0  centre                      (as returned by the centre path)
+0x5c0  splat(min.z)                one `movaps` of the `0xaa` shufps
+0x5d0  (min.z, min.y, far.z, 0)
+0x5e0  (far.x, min.y, min.z, 0)
+0x5f0  (far.x, min.y, far.z, 0)
+```
+
+The lane sources are worth naming because they are easy to mis-index: the
+`movaps` at `0x140cb8f9e` writes all of `0x5c0..0x5cf`, so quads 1 to 4 start at
+`0x5c0`, `0x5d0`, `0x5e0` and `0x5f0` - not at `0x5b0`, `0x5d0`, `0x5e0` and
+`0x5f0`. The lane-3 halves of quads 1 to 3 are zeroed by the three
+`mov dword ..., r15d` stores; quad 1's lane 3 keeps the broadcast's `min.z`,
+because the `0xaa` shufps runs after that store and writes all four lanes.
+
+The loop at `0x140cb9020` is the ring's shape: `s = hsum((point - quad[i]) *
+dir)` with the direction at `[body+0xc0]`, `base = quad[i] + s*dir`,
+`A = base + m10*dir` at `rbp+0x550` and `B = base - m12*dir` at `rbp+0x560`,
+where `m10` and `m12` are two register splats, neither identified yet. The
+evaluator is `0x1420328c0(manager, &record0, &block0)` and `al == 0` moves to
+the next probe. On a hit the flags byte is `byte[rbp-0x52]` and the pass
+writes `out+0x41 |= flags & 1`, `out+0x42 = (flags >> 2) & 1` and a `u16` from
+`word[rbp-0x54]`; acceptance is then
+`fabs(hsum((m11 - record0+0x00) * dir)) < FLT_MAX` (`0x142f844d8`) **and**
+`record0+0x04 > 3.3068924` (`0x142f88e58`). The `FLT_MAX` comparison can only
+reject a NaN, so the real gate is the altitude one, which is what makes a
+probe hit meaningful at all.
+
+This `m10`/`m11`/`m12` block replaces the earlier "still open" paragraph: all
+three registers are identified (seed endpoint, floored seed, speed), so the
+shape pass has no unidentified operand left.
+The three splats are now identified, and they are the same three the prose at
+the top of this section already named: **`xmm11` is the seed endpoint**
+`point + seed*dir` (built at `0x140cb8b08..0x140cb8b25`), **`xmm10` is the
+seed** after its floor (`max(seed, 2 * shape[0x2d2c])` at `0x140cb8b56..
+0x140cb8b72`), and **`xmm12` is the speed** (`max(x, body[0x5cc]) + xmm10` at
+`0x140cb8874`/`0x140cb888c`). So each probe sweeps from
+`quad[i] + (s + seed)*dir` to `quad[i] + (s - speed)*dir`, and the accept
+term `|hsum((xmm11 - record0+0x00) * dir)| < FLT_MAX` is a NaN reject on the
+gap between the hit point and the seed endpoint - it can never fail for finite
+values, which is why the `record0+0x04 > 3.3068924` altitude test is the real
+gate.
+
+The accept tail after `0x140cb9150` is read too: it recomputes the record's
+point as `s + hsum(((xmm11 - point)*dir - s)*dir) * dir`, sets `r12b = 1` for
+the caller, and stores the winning probe's index into `word[rbp-0x54]`. The
+one remaining unknown in this pass is the intent of that projection step;
+every operand in it is identified, so it can be ported literally.
+
+`ow_sim::fan` has
+`corner_pair` and `shape_probes` (the box and the five quads, both ported and
+unit-tested against the store map) but no loop, because the loop's three
+splats are not yet identified.
+
+What the store map now *does* settle: the probes are built from the box corners
+`0x141ae3eb0` returns, not from a rotating pair, so the earlier note that the
+shape pass built its five quads "from the shape's own basis" was right about
+the source (`min` and `far` are the shape's box) and wrong about the form (there
+is no rotation in it). `0x141ae3eb0` is
+`min = centre - (half_x, 0, half_x, 0)`,
+`far = min + (half_x, half_y, half_x, 0)`, with `half_x = shape+0x2d28 * 0.5`
+and `half_y = shape+0x2d2c` - **not** a radius. The result is asymmetric in x
+and z (`far.x == centre.x`, `far.z == centre.z`, `min.z == centre.z - half_x`),
+and the function's own ladder writes `0.001` into its y lane only for the
+following `movaps` to overwrite that lane before the subtraction; the `0.001`
+is dead. `ow_sim::fan::corner_pair` reproduces all of it, and
+`shape_probes` is the store order: `centre`, `splat(min.z)`, `(min.z, min.y,
+far.z, 0)`, `(far.x, min.y, min.z, 0)`, `(far.x, min.y, far.z, 0)`.
+
+**Pass 0 is closed (2026-11-07).** `0x140cc1870` (`MoverWishQueryCached`, body
+`0x140cc1870..0x140cc1cae` across three `.pdata` entries) is the static pass and
+it is small:
+
+1. The **cache key** is `dword[body+0x1a60] == dword[body+0x1b00]` and six
+   lane comparisons `|body[0x1ae0 + 4k] - state[0x450 + 4k]| <= 0.004` over
+   `k` in `{0,1,2,4,5,6}` - the two x/y/z triples at `+0x1ae0` and `+0x1af0`
+   against the state's at `+0x450` and `+0x460`, never touching `+0x1aec`.
+   On a match the answer is replayed from the state's `+0x440` and
+   `body[0x1b13]` supplies the hit flag, so the cache is `<=`-inclusive and
+   lane-for-lane - exactly `ow_sim::fan::memo_matches` and `MEMO_TOLERANCE`.
+2. On a miss it **clones the state into a query block** with `0x140a01560`,
+   a plain copy constructor (`+0x00..+0x18`, the three containers at `+0x20`,
+   `+0x130`, `+0x240`, the quads at `+0x450`/`+0x460`, the tail from `+0x470`
+   to `+0x4a4`), and overrides one byte: `block+0x06`, the **layer mask**,
+   which the composer's own template sets to `0x0f`.
+3. It then runs the evaluator **twice** on the same state with `block+0x06 =
+   1` and `block+0x06 = 0x0e`, and keeps the second record only when its
+   `+0x30` is **strictly** smaller than the first's.
+4. A freshly built record's `+0x30` is `1.0`, so a **miss scores 1.0**. A hit
+   above `1.0` therefore loses to a miss, and the pass returns the miss. That
+   is not a tolerance and not an oversight: it is the comparison the image
+   makes, and `ow_sim::fan::pass_zero` reproduces it (`PASS_ZERO_MASKS` is
+   `[1, 0x0e]`, and the miss's score defaults to `1.0` rather than infinity).
+5. The answer is stored back into the cache at `[body+0x1b08]` with
+   `byte[body+0x1b13]` and the key refreshed - but **only when
+   `record+0x20 == 0`**, the shape-object pointer. A static hit against a
+   shape is deliberately not cached.
+
+The records the two probes fill are the same 0x50-byte template the composer
+uses: `+0x00`/`+0x10` zero quads (`[0x14328cd40]`), `+0x20` = 0, `+0x28` =
+`0xffff0000ffffffff` (`[0x143110810]`), `+0x30` = 1.0, `+0x34..+0x3b` = `-1`,
+`+0x3c` = 1, `+0x40` = 0, `+0x48` = 0.
+
+Note also that the 2026-11-02 composition list above predates the stage map and
+its item 4 (``five quads from the shape's own basis``) is the **shape pass**
+that section describes, not the batch ring; its ordering claims are superseded
+by the stage map at the top of this section.
+
+**The record and block templates, read (2026-11-07).** The composer's two stack
+objects are the ones every later comparison reads, and they are initialised at
+`0x140cb8c19..0x140cb8d46` (block) and `0x140cb8cfc..0x140cb8d46` (record).
+`record0` sits at `rsp+0x70` (`rbp-0x90`) and `block0` at `rbp+0x100`; `rbp` is
+`rsp+0x100`, so both are plain offsets from the caller's frame.
+
+```text
+record0+0x00  = point            ; the query point quad, also the pre-hit value
+record0+0x10  = point            ; the normal lane, overwritten by the evaluator
+record0+0x20  = shape object ptr, or 0
+record0+0x28  = qword [0x143110410] = 0x45df5c7532d86ce3   ; a fixed value
+record0+0x30  = 1.0f
+record0+0x34  = 0xffffffffffffffff (all ones through +0x3b)
+record0+0x3c  = 1
+record0+0x40  = 0
+record0+0x48  = byte 0
+
+block0+0x000  = u16 r8w, else 0x10, else 0x18 by body[0x1a60] (0 / 1 / other)
+block0+0x002  = u16 0x10a1, or 0x10b1 / 0x10a9 / 0x10b9 when the byte
+                ((body[0x1a79] + 0x59) ^ 0x71) + 0x14, rotated right by 1,
+                is non-zero (0x140cb8c9d)
+block0+0x004  = u16 mask, word[body+0x23c]
+block0+0x006  = 0xf
+block0+0x008  = 0x0003000000000000     ; movabs at 0x140cb8be0
+block0+0x010  = 0, block0+0x018 = byte 0, block0+0x01c = byte 0
+block0+0x450  = A = point + seed*dir
+block0+0x460  = B = point - speed*dir
+block0+0x470  = 0
+block0+0x480  = point             ; the batch ring overwrites this with 0.015
+block0+0x490  = 0 (list pointer)  ; the batch ring fills it
+block0+0x498  = 0 (list count)    ; the batch ring fills it
+block0+0x49c  = 1.0f
+block0+0x4a0  = the caller's u16 index as a dword
+block0+0x4a4  = byte 0
+```
+
+Two consequences worth stating. First, the shape pass's comparison
+`|hsum((point - record0+0x00) * dir)|` reads a **hit point** the evaluator wrote,
+not the candidate: at template time `record0+0x00 == point`, so a probe that
+never writes the record would compare zero and win every time. Second,
+`block0+0x490`/`+0x498` are null and zero in every stage except the batch ring,
+which is the only caller that asks one evaluator call for `n` candidates.
+
 **In code (`crates/ow-sim/src/fan.rs`).** `solve` implements the gate, both
 endpoints, the threshold, the memo test, the ring → refine → back-transform
 order and both reflection bytes; the helpers `facing_threshold`,
 `memo_matches`, `endpoints`, `projection`, `project_back`, `back_snap` and
-`reflection_flags` carry the arithmetic with `sse_*` rounding. `back_snap` is
-pass 3 as re-read on 2026-11-06 but is **not** called by `solve`: the snap
-reads the ring loop's endpoints, and the order of the pentagon loop
-(`0x140cb96c1`) against the `2π/n` ring loop (`0x140cb9ae0`) inside
-`0x140cb86c0` is not settled, so wiring it would be a guess. Still behind the
-seam: the evaluator, pass 0's cache, the shape-ring branch, and the mesh-face
-refinement - `SolveContext` carries their inputs rather than inventing them.
+`reflection_flags` carry the arithmetic with `sse_*` rounding. The order is now
+settled (above), and it is not a straight line: pass 0 and the shape pass are
+exclusive of the rings, the ring flavour is exclusive of itself, and the
+pentagon and the snap are each reachable only from the batch ring, in that
+order. `back_snap` is pass 3 and is **not** called by `solve` yet only because
+the rings and the shape pass are not written - not because its position is
+unknown. Still behind the seam: the evaluator, pass 0's cache, both ring
+flavours, the pentagon and the mesh-face refinement - `SolveContext` carries
+their inputs rather than inventing them.
 
 **The ring's comparison operand (2026-11-06).** `accepts_ring` is followed by a
 strictly smaller `|projection|`, and the projected quad is the **candidate**

@@ -30,15 +30,35 @@
 //!   back-transform order, and the two reflection bytes (`|=` for one,
 //!   assignment for the other).
 //!
-//! What is **not** here, because it is not read: the evaluator `0x1420328c0`
-//! that scores a candidate (77 call sites, a general candidate test), the
-//! **outer** walk that decides which of the four call sites runs and what the
-//! query carries, pass 0's `MoverWishQueryCached` memory, the shape-ring branch
-//! behind the global toggle, and `0x140cc2290`'s mesh-face refinement. Those are
-//! inputs to this module, not outputs: [`accepts_pass1`],
-//! [`accepts_pass2`] and [`accepts_refine`] take the evaluator's answers as
-//! arguments rather than inventing them, [`refine_pentagon`] and [`solve`] take
-//! solver through [`CandidateSolver`].
+//! What is **not** here yet: the evaluator `0x1420328c0` that scores a
+//! candidate (77 call sites, a general candidate test), pass 0's
+//! `MoverWishQueryCached` memory, the two ring flavours, and `0x140cc2290`'s
+//! mesh-face refinement. Those are inputs to this module, not outputs:
+//! [`accepts_pass1`], [`accepts_pass2`] and [`accepts_refine`] take the
+//! evaluator's answers as arguments rather than inventing them,
+//! [`refine_pentagon`] and [`solve`] take solver through [`CandidateSolver`].
+//!
+//! The **stage order of the whole writer is read** (2026-11-07): `0x140cb86c0`
+//! is one `.pdata` entry with no chained fragments and it *branches* rather
+//! than running a fixed pass list. Gate `byte[body+0x659]` (`0x140cb8d4a`)
+//! leads to pass 0, and only a pass-0 result continues (`0x140cb8e26`). Then
+//! `0x140cb8e3c` picks one of two arms: the **shape pass** (`0x140cb8e4e`,
+//! taken when a shape resolved and `byte[body+0x655]` is clear, five probes,
+//! no route to the pentagon) or the **ring** (`0x140cb9263`), whose flavour is
+//! `byte[0x1439b07b8]`: set is the batch ring (`0x140cb9273`, one evaluator
+//! over `n` quads, then `kind <= 1` selects the snap else the pentagon),
+//! clear is the incremental ring (`0x140cb9ae0`, `n` single evaluations, no
+//! pentagon and no snap). The pentagon therefore *follows* the batch ring -
+//! the older "pentagon precedes the `2π/n` loop" note was address order, not
+//! control flow - and the snap reads the batch ring's own endpoints
+//! (`0x140cb92f3`/`0x140cb92fa`), which is why the incremental ring's later
+//! stores cannot disturb it. The full map is *The stage order inside
+//! `0x140cb86c0`* in `docs/formats/character-controller.md`.
+//!
+//! The composition here still implements the earlier reading of that order:
+//! gate, endpoints, threshold, memo, ring → refine → snap. Writing the two
+//! ring flavours and the shape pass is what closes the gap, and the order they
+//! hang off is no longer a guess.
 //!
 //! Every constant below is read from the current image. The addresses in the
 //! comments are the instruction that loads it.
@@ -380,6 +400,28 @@ pub fn refine_pentagon(
     best
 }
 
+/// `0x140cb9864`: the batch ring's tail dispatch returns the snap for kinds
+/// `0` and `1` and the pentagon refinement for anything larger.
+pub const BATCH_TAIL_SNAP_MAX_KIND: i32 = 1;
+
+/// Which of the two batch-only sub-passes runs after the batch ring.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BatchTail {
+    /// `0x140cb988d`: the back-snap that reads the batch ring's endpoints.
+    Snap,
+    /// `0x140cb96c1`: the five-direction pentagon refinement.
+    Pentagon,
+}
+
+/// `0x140cb9864`: `kind <= 1` takes the snap, everything else the pentagon.
+pub fn batch_tail(kind: i32) -> BatchTail {
+    if kind <= BATCH_TAIL_SNAP_MAX_KIND {
+        BatchTail::Snap
+    } else {
+        BatchTail::Pentagon
+    }
+}
+
 /// `1.17549435e-36` at `0x140cb953a` and `0x140cb95b6`.
 pub const REFINE_EPSILON: f32 = 1.175_494_4e-36;
 /// `0x140cb9844`: the pentagon step's scale on the rotated pair.
@@ -483,6 +525,78 @@ pub fn shape_ring_offset(pair: [f32; 2], seed: f32) -> [f32; 4] {
     ]
 }
 
+/// `0x141ae3eb0`: the shape's local box as its `(min, far)` corner quads.
+///
+/// ```text
+/// min = centre - (half_x, 0, half_x, 0)
+/// far = min + (half_x, half_y, half_x, 0)
+/// ```
+///
+/// `half_x` is `shape+0x2d28 * 0.5` and `half_y` is `shape+0x2d2c`; both are
+/// taken from the image and neither is a radius. The shape of the result is
+/// worth flagging: `far.z == centre.z` while `min.z == centre.z - half_x`, and
+/// `far.x == centre.x`, so the box only ever extends +y from `centre`. That is
+/// what the image does - the function's ladder also writes `0.001` into its y
+/// lane, but the `movaps` that stores the ladder overwrites that lane before
+/// the subtraction reads it, so the `0.001` never participates.
+pub fn corner_pair(centre: [f32; 4], half_x: f32, half_y: f32) -> ([f32; 4], [f32; 4]) {
+    let min = [centre[0] - half_x, centre[1], centre[2] - half_x, 0.0];
+    let far = [min[0] + half_x, min[1] + half_y, min[2] + half_x, 0.0];
+    (min, far)
+}
+
+/// The shape pass's five probe quads, in probe order.
+///
+/// The centre quad, then four built from the box corners' individual lanes:
+///
+/// ```text
+/// 0: centre
+/// 1: (min.z, min.z, min.z, min.z)
+/// 2: (min.z, min.y, far.z, 0)
+/// 3: (far.x, min.y, min.z, 0)
+/// 4: (far.x, min.y, far.z, 0)
+/// ```
+///
+/// Probe 1 is a broadcast, not a point: it is the same value in all four lanes,
+/// which the evaluator reads as a quad. The order is the store order in the
+/// image and the loop walks it in that order with `r13d = 5`.
+pub fn shape_probes(centre: [f32; 4], min: [f32; 4], far: [f32; 4]) -> [[f32; 4]; 5] {
+    [
+        centre,
+        [min[2]; 4],
+        [min[2], min[1], far[2], 0.0],
+        [far[0], min[1], min[2], 0.0],
+        [far[0], min[1], far[2], 0.0],
+    ]
+}
+
+/// Pass 0's two layer masks, in order: `block+0x06` set to `1`, then `0x0e`.
+///
+/// The composer's own block template carries `0x0f` at that byte; the static
+/// pass clones the state block and overrides it twice.
+pub const PASS_ZERO_MASKS: [u8; 2] = [0x01, 0x0e];
+
+/// Pass 0's selection rule (`0x140cc1b97`..): the second probe wins only when
+/// its score is **strictly** smaller, and a missed probe scores the record
+/// template's `1.0` rather than infinite.
+///
+/// That quirk is load-bearing. If the first probe hits with a score above
+/// `1.0` and the second probe misses, the client keeps the **miss**: the
+/// default `+0x30` of a fresh record is `1.0`, and `1.0 < score` takes the
+/// second record. A port that maps a miss to `f32::INFINITY` returns the hit
+/// instead and diverges on exactly that case.
+pub fn pass_zero(mut probe: impl FnMut(u8) -> Option<SweepHit>) -> Option<SweepHit> {
+    let first = probe(PASS_ZERO_MASKS[0]);
+    let second = probe(PASS_ZERO_MASKS[1]);
+    let first_score = first.as_ref().map_or(1.0, |hit| hit.score);
+    let second_score = second.as_ref().map_or(1.0, |hit| hit.score);
+    if second_score < first_score {
+        second
+    } else {
+        first
+    }
+}
+
 pub fn back_direction(descriptor: [f32; 4]) -> [f32; 4] {
     horizontal_unit(descriptor, descriptor[3]).unwrap_or([0.0, 0.0, 1.0, 0.0])
 }
@@ -580,7 +694,7 @@ pub const MEMO_TOLERANCE: f32 = 0.004;
 /// Whether the cached query may be reused for these endpoints.
 ///
 /// `MoverWishQueryCached 0x140cc1870` compares the two stored points against
-/// the query's two endpoints lane by lane, **twelve** comparisons in all: the
+/// the query's two endpoints lane by lane, **six** comparisons in all: the
 /// x, y and z of each endpoint, never `w`. The comparison is `<=`, so an
 /// exactly `0.004` move still reuses the cache.
 pub fn memo_matches(cached: [[f32; 3]; 2], candidate: [[f32; 3]; 2]) -> bool {
@@ -1074,6 +1188,15 @@ mod tests {
     }
 
     #[test]
+    fn the_batch_tail_snaps_for_kinds_zero_and_one() {
+        assert_eq!(batch_tail(-1), BatchTail::Snap);
+        assert_eq!(batch_tail(0), BatchTail::Snap);
+        assert_eq!(batch_tail(1), BatchTail::Snap);
+        assert_eq!(batch_tail(2), BatchTail::Pentagon);
+        assert_eq!(batch_tail(7), BatchTail::Pentagon);
+    }
+
+    #[test]
     fn ring_offsets_wrap_after_a_full_turn() {
         let offsets = ring_offsets([1.0, 0.0], 4);
         assert_eq!(offsets.len(), 4);
@@ -1320,6 +1443,67 @@ mod composition_tests {
         assert!(memo_matches(cached, nudged), "0.004 exactly still reuses");
         let past = [[1.0, 2.0, 3.0 + 0.005], [4.0, 5.0, 6.0]];
         assert!(!memo_matches(cached, past));
+    }
+
+    fn hit(score: f32) -> SweepHit {
+        SweepHit {
+            score,
+            normal: [0.0, 1.0, 0.0, 0.0],
+            word: 0,
+        }
+    }
+
+    #[test]
+    fn pass_zero_probes_the_two_masks_in_order() {
+        let mut seen = Vec::new();
+        let got = pass_zero(|mask| {
+            seen.push(mask);
+            None
+        });
+        assert_eq!(seen, vec![1u8, 0x0e]);
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn pass_zero_keeps_the_first_probe_on_a_tie() {
+        // The client compares `second < first` before swapping, so an equal
+        // score keeps the first record, not the second.
+        let got = pass_zero(|_mask| Some(hit(0.5)));
+        assert_eq!(got.map(|h| h.score), Some(0.5));
+        let got = pass_zero(|mask| Some(hit(if mask == 1 { 0.7 } else { 0.6 })));
+        assert_eq!(got.map(|h| h.score), Some(0.6));
+    }
+
+    #[test]
+    fn pass_zero_lets_a_miss_beat_a_late_hit() {
+        // A fresh record's `+0x30` is 1.0, so a miss scores 1.0 and a hit
+        // above 1.0 loses to it. Mapping a miss to infinity would invert this.
+        let got = pass_zero(|mask| if mask == 1 { Some(hit(1.2)) } else { None });
+        assert!(got.is_none(), "the miss at 1.0 wins over a 1.2 hit");
+        let got = pass_zero(|mask| if mask == 1 { Some(hit(0.9)) } else { None });
+        assert_eq!(got.map(|h| h.score), Some(0.9), "a 0.9 hit wins");
+    }
+
+    #[test]
+    fn the_shape_box_is_asymmetric_in_x_and_z() {
+        let (min, far) = corner_pair([10.0, 20.0, 30.0, 0.0], 2.0, 5.0);
+        assert_eq!(min, [8.0, 20.0, 28.0, 0.0]);
+        assert_eq!(far, [10.0, 25.0, 30.0, 0.0]);
+        // `far.x` only reaches the centre, and `far.z` is the centre's z.
+        assert_eq!(far[0], 10.0);
+        assert_eq!(far[2], 30.0);
+    }
+
+    #[test]
+    fn the_shape_probes_follow_the_store_order() {
+        let centre = [10.0, 20.0, 30.0, 0.0];
+        let (min, far) = corner_pair(centre, 2.0, 5.0);
+        let probes = shape_probes(centre, min, far);
+        assert_eq!(probes[0], centre);
+        assert_eq!(probes[1], [28.0; 4]);
+        assert_eq!(probes[2], [28.0, 20.0, 30.0, 0.0]);
+        assert_eq!(probes[3], [10.0, 20.0, 28.0, 0.0]);
+        assert_eq!(probes[4], [10.0, 20.0, 30.0, 0.0]);
     }
 
     #[test]

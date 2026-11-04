@@ -3,6 +3,173 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-07 - the 4-simplex is read, and the mover writer's stage order is closed
+
+- `0x142cc7740` (4-simplex) is transcribed into `ow_sim::collide::simplex4`
+  region by region from the instruction stream: the orientation swap, six
+  edges and twelve dots, four face vectors of the double-rotation form, twelve
+  triple products, four plane terms, then the vertex, edge, face and interior
+  regions in the client's own order. `dev/gjk_simplex_diff.py` over seeded
+  descriptor quadruples agrees exactly on the block, the `count` word and the
+  barycentrics in 60/60 and lands the four-vertex direction within 1 ULP of
+  its low lanes. Every region is hit; all 18 mesh queries stay in the
+  `count == 1` branch, so the penetration path is implemented rather than
+  open. One real client quirk is recorded: the `a`-`b`-`d` face stores a
+  vector whose sign is opposite to the one its own guard and weights use, so
+  that face's fourth lane is `-0.0` where its neighbours give `+0.0`.
+- `0x140cb86c0` (MoverWishWriter) is one `.pdata` entry with no chained
+  fragments, and its **stage order is settled**: it branches rather than
+  running a fixed pass list - gate `byte[body+0x659]` → pass 0 → either the
+  shape pass (when a shape resolved and `byte[body+0x655]` is clear, five
+  probes, no route to the pentagon) or the ring, whose flavour is chosen by
+  `byte[0x1439b07b8]`: set runs one evaluator over `n` quads and then
+  `kind <= 1` picks the snap else the pentagon, clear runs `n` single
+  evaluations and reaches neither. The old "pentagon precedes the `2π/n` ring"
+  reading was address order, not control flow: the pentagon follows the batch
+  ring, and the snap reads that ring's endpoints, which is exactly why the
+  incremental ring's later stores cannot disturb it. The map, gates and
+  addresses are in `docs/formats/character-controller.md`.
+- Two prose errors were corrected against the bytes on the way: the snap's
+  divide floor at `0x142f7aad8` is `0x38fa0000` (`1.1920928955e-4`), not
+  FLT_EPSILON, and `t0` is `hsum(n*start) - hsum(record+0x00, n)` rather than
+  `dot(start - out_dir, n)`. `ow_sim::fan::back_snap` already had both right.
+- The two unread narrowphase primitives are now **read**, though not
+  implemented and not differenced: type 2 `0x142cd3c80` is a convex hull handed
+  over as **face planes** (pool `record+0x300`, stride `0x50`) with an analytic
+  plane-entry walk (`tmax` rises on entries, `tmin` falls on exits, a
+  `tmin < tmax` reject after every plane, `B = 0` rejecting on a negative
+  distance) and a GJK fallback when the expansion or `block+0x38` is non-zero;
+  type 4+ `0x142cd0ae0` is **one kind** - a height-field grid (pool
+  `record+0x330`) whose 8-byte entries carry a height, a surface id, a callback
+  argument and a 4-state tag, walked by a rectangle scan plus a 2D DDA over
+  cells with two triangle tests per cell. Both return `al` alone and leave the
+  record untouched on a miss. Extents needed care: the `.pdata` root entries
+  are prologues only (`0x64` bytes for type 2 against a 5-entry cluster to
+  `0x142cd4151`), which `dev/fn_extent.py`'s group span shows but its root
+  report does not. Details in `docs/formats/shape-narrowphase.md`; neither can
+  be called implemented until it has a `dev/verify_harness/` unit.
+- The shape pass `0x140cb8e4e` is now read **in part** (STATUS "Next" item 1):
+  the precondition chain (a pass-0 hit short-circuits everything; the pass
+  needs `byte[body+0x659]`, a shape and `r13b == 0`), the five-stage pipeline
+  `0x140d4c510` -> `0x142030030` -> centre quad -> `0x141af0070` ->
+  `0x141ae3eb0`, the five-probe loop `s = hsum((point - quad[i]) * dir)`,
+  `base = quad[i] + s*dir`, `A = base + m10*dir`, `B = base - m12*dir`, and the
+  acceptance `fabs(hsum((m11 - record0+0x00) * dir)) < FLT_MAX &&
+  record0+0x04 > 3.3068924` plus the three flag writes
+  (`out+0x41 |= flags&1`, `out+0x42 = (flags>>2)&1`). Still open: the probe
+  quad swizzle's intent (its store map is read), `m10`/`m11`/`m12`, the accept
+  tail after `0x140cb9150`, and `0x142030030`'s record. No Rust yet, because
+  half a swizzle is not an expression.
+- **Pass 0 is closed and ported.** `0x140cc1870` (`MoverWishQueryCached`, body
+  `0x140cc1870..0x140cc1cae` over three `.pdata` entries) is a keyed memo plus
+  a block clone `0x140a01560` (a plain copy constructor) plus **two** evaluator
+  calls at layer masks `1` and `0x0e` on `block+0x06`, keeping the second only
+  when its `+0x30` is strictly smaller. A fresh record's `+0x30` is `1.0`, so a
+  **miss scores 1.0** and a hit above `1.0` loses to a miss - a quirk that a
+  port mapping a miss to infinity inverts. The cache store is skipped when
+  `record+0x20 != 0` (a shape-object pointer), so a static hit against a shape
+  is never cached. In Rust: `ow_sim::fan::pass_zero`, `PASS_ZERO_MASKS`,
+  and the existing `memo_matches` / `MEMO_TOLERANCE` (whose doc said "twelve
+  comparisons"; the image makes **six**).
+- **The shape pass's geometry is ported, its loop is not.** `0x141ae3eb0` gives
+  `min = centre - (half_x, 0, half_x, 0)` and
+  `far = min + (half_x, half_y, half_x, 0)` with `half_x = shape[0x2d28]*0.5`
+  and `half_y = shape[0x2d2c]`; the box is deliberately asymmetric in x and z,
+  and the `0.001` written into the ladder's y lane is dead (overwritten before
+  the subtraction). The five probe quads are
+  `centre`, `splat(min.z)`, `(min.z, min.y, far.z, 0)`, `(far.x, min.y, min.z,
+  0)`, `(far.x, min.y, far.z, 0)` - and the earlier lane map in the doc was
+  wrong because the `movaps` at `0x140cb8f9e` starts at `0x5c0`, not `0x5b0`.
+  In Rust: `ow_sim::fan::corner_pair`, `shape_probes`, with tests.
+- **The incremental ring is read to its loop body.** Its rotation is
+  hand-rolled (`A' = A*sin + B*cos`, `B' = B*sin - A*cos`, i.e. minus the step),
+  each iteration moves the point to `record0+0x00 - offset`, and it writes
+  `out+0x42 = (flags >> 2) & 1` as well as `out+0x41 |= flags & 1` - a write
+  the stage map had missed. Its step offset multiplies the pair lanes by
+  **`xmm10`, the floored seed** (`max(seed, 2*shape[0x2d2c])`,
+  `0x140cb8b56`), so `r` must already be inside the pair at the ring's entry;
+  that entry is the one piece of the ring still unread.
+- **The shape pass has no unidentified operand left**: `xmm11` is the seed
+  endpoint `point + seed*dir`, `xmm10` the floored seed, `xmm12` the speed
+  (`max(x, body[0x5cc]) + xmm10`), so each probe sweeps from
+  `quad[i] + (s+seed)*dir` to `quad[i] + (s-speed)*dir`. Its `FLT_MAX`
+  comparison is a NaN reject and the real gate is `record0+0x04 > 3.3068924`;
+  the accept tail recomputes the point as
+  `s + hsum(((xmm11 - point)*dir - s)*dir) * dir`. Not ported as a loop yet.
+- The batch ring's list consumer is **still unread**, and now for a sharper
+  reason. The chain is traced (evaluator `0x1420328c0` is a thunk to the
+  dispatcher `0x14203dae0`; the driver `0x142cc45a0` re-flattens into a
+  sweep-options struct and passes a ptr/count pair to `0x142cbd510`), but the
+  operand that proves it came from grepping `dev/data/corpus/asm/`, which is a
+  **linear `.pdata` sweep, not a flow-based decode**: the
+  `014203dae0_FUN_14203dae0.asm` listing desyncs at `0x14203db2f` (a jump table
+  read as `rcr byte ptr [rax+0x7f], 0x1c`). So neither an operand found there
+  nor one missed there proves anything, and the carry-through has to be
+  re-established with Ghidra before the batch ring is written. A sweep of every
+  corpus listing did turn up `0x142cc1c80` as a growable `i32` vector at
+  `+0x490`/`+0x498`/`+0x49c`, but that is a **broadphase node accumulator**
+  (dedupe stamps at `[node+0x08]`/`[node+0x4c]`); the block's `+0x49c` is
+  `1.0f`, so it is not that vector.
+- **The batch tail is closed** (blocker 5): `0x142cba720(record0+0x28)` picks
+  the snap for kinds `<= 1` and the pentagon above that (`0x140cb9864`), now
+  `ow_sim::fan::batch_tail` / `BatchTail` / `BATCH_TAIL_SNAP_MAX_KIND` with a
+  test. Both sub-passes were already ported (`refine_pentagon`, `back_snap`).
+
+## 2026-11-04 - image repair: the no-risk pass, and where functions came from
+
+- 110 provably wrong `noreturn` flags cleared (`docs/ghidra/ClearFalseNoReturn.java`,
+  restorable), and the analyzer plus the three options that applied them are
+  off; the program reports 69 flags / 28,412 call sites instead of 179 /
+  39,968.
+- The source of the invented functions is named: `dev/gh_apply_names.py` called
+  `disassemble_bytes` (64 bytes) then `create_function` when a rename failed.
+  It renames only now; `RecoverPointerFunctions.java` creates a function only
+  at a real `.pdata` start (would have created 72,786, now 4).
+- `dev/frame_check.py` checks four rules instead of three: a container must
+  resolve to the entry the client's unwind record names as chain parent, so
+  four rows that named a chained continuation are re-rooted in
+  `docs/function-names.csv` and ten malformed rows are re-quoted.
+- `docs/ghidra/BodySnapshot.java` diffs every body before/after a pass; the
+  first use found three bodies clipped by the repair (over-reach bytes only,
+  extents and chain counts untouched) - section 11 of the audit.
+
+## 2026-11-04 - image audit: the bytes are exact, the analysis is not
+
+- `docs/ghidra-image-audit.md` measures the live program with
+  `docs/ghidra/ImageAudit.java` (read-only, one run): 10 blocks hash-identical
+  to `module_offline.bin`, 201,246 `.pdata` entries with 0 broken unwind
+  records, 90.11% of `.text` claimed by an extent, 300/301 sampled functions
+  decompile.
+- Three measured defects, each with a repair list: 110 of the 179 `noreturn`
+  flags are wrong (11,552 call sites in 6,355 functions), 25,184 functions
+  stop at their real extent while `UNW_FLAG_CHAININFO` links their
+  continuation (16.0 MB, 32% of `.text`, 157 of 174 named functions), and 283
+  function objects sit on chained starts with 38 real starts missing.
+- Documentation depth measured: 1,679 named functions (1.4%), 4 user-defined
+  prototypes, 1,508 plate comments; `.rdata` 50.4% typed, `.data` 1.9%,
+  `_RDATA` 0%.
+- The census table in `docs/ghidra-project.md` and the expected
+  `atChained=0` in `docs/ghidra-migration.md` now carry the live numbers; the
+  repair backlog is the first entry in `docs/open-questions.md`.
+
+## 2026-11-04 - image audit, second pass: what else the analysis is missing
+
+- `docs/ghidra/ImageWorklist.java` adds the lists the first pass did not
+  measure (read-only, one run): **33,684** code addresses are the target of a
+  call or jump from inside a function while no function and no data item
+  covers them - 382 with ten or more references, the worst with 4,225 - and
+  `dev/fn_extent.py` confirms six of them have no `.pdata` entry at all, so a
+  function body there would be an inference, not a read.
+- Signature depth: 119,718 default signatures, 768 imported, **4 user-defined**;
+  747 functions (0.6%) have any parameter, 1,784 parameters in total. 47 names
+  are shared by two or more functions.
+- The 79 MSVC RTTI type descriptors in `.data` (Enlighten, `Geo`,
+  `DGTFProcessorFXVSA`, `std` exceptions) have **0** absolute xrefs, so the
+  locators that lead to their vtables are image-relative or absent; recorded in
+  section 8.9 rather than acted on.
+- Two first-pass numbers were re-measured and stand: `.text` holds no data items
+  inside a body (`data_in_text=0`), and 24 functions are thunks.
+
 ## 2026-11-07 - the triangle-box overlap is ported, and it is not yet proven
 
 - `ow_sim::collide::box_triangle_overlap` is a lane-for-lane port of
