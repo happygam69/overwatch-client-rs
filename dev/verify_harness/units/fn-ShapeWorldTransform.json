@@ -1,0 +1,65 @@
+{
+  "id": "fn/ShapeWorldTransform",
+  "title": "tier-2 shipped code: a shape entry's world frame against 0x142cb8b80",
+  "address": {
+    "v2b": "0x7ff7c79d8b80"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_transform",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "entry",
+      "kind": "ptr",
+      "ptr_len": 192
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "record",
+      "kind": "ptr",
+      "ptr_len": 680
+    },
+    {
+      "name": "owners",
+      "kind": "ptr",
+      "ptr_len": 320
+    },
+    {
+      "name": "poses",
+      "kind": "ptr",
+      "ptr_len": 1792
+    }
+  ],
+  "returns": "void",
+  "argFactory": "collision_transform_fixture",
+  "options": {
+    "iterations": 264,
+    "coverageThreshold": 90,
+    "mutationCount": 12,
+    "mutationKillRate": 0.7,
+    "seed": 20261101,
+    "coverageWindow": 88,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (shape_world_transform), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_transform entry.",
+    "The leaf returns the output pointer, so the unit declares its return channel void and the compared channel is the output pointee: the position quad at +0x00 and the quaternion at +0x10. The two pools are reached through the record's +0x2a0 and +0x288 pointers, so the fixture pins both to fixed arena addresses (ARENA_BASE is fixed by emu_oracle) and patches those addresses into the record.",
+    "The composed branch multiplies a difference by the zero quad at 0x142f84a00 in two places. Those multiplies are no-ops for finite inputs but propagate a non-finite difference, so the Rust keeps them verbatim rather than folding them away.",
+    "No image data is read by the leaf beyond its own constants, and it has no stack cookie."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the transform only. Which pool a real world fills, and which attach state a real shape entry carries, are set by the body and owner creation calls (0x142cb3940 / 0x142cd4ef0); the unit drives the leaf, not those callers.",
+    "The shape-entry array at [record+0x2b8] and the narrowphase's per-type dispatch remain outside this unit; the transform is verified as the leaf the dispatch calls.",
+    "Non-finite corpus values are NaN only, and only in the quaternion, because the emulator's softfloat is not faithful to x86 in two ways a richer corpus would expose: an invalid operation (inf * 0, which the (origin - pivot) * 0 term reaches for an infinite origin) answers 0x7fc00000 in the emulator where the x86 hardware QNaN indefinite is 0xffc00000; and when both operands of an ADDPS/SUBPS are NaN the emulator does not always return the destination's NaN. Both were measured on this machine with a runtime (black_box, not constant-folded) SSE probe. The hardware result for the infinite-origin lane is pinned by a Rust unit test in collide.rs instead."
+  ]
+}

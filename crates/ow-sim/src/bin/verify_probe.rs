@@ -968,6 +968,44 @@ fn collision_filter_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), Stri
     Ok((format!("{:x}", ret), vec![a, b]))
 }
 
+/// `0x142cb8b80`: a shape entry's world frame. `arg0` is the `0xc0`-byte
+/// shape entry, `arg1` the `0x20`-byte output (position quad then quaternion
+/// quad), `arg2` the world record, and `arg3`/`arg4` the two pools the
+/// record's `+0x2a0`/`+0x288` point at, resolved by the fixture. The leaf
+/// returns the output pointer, so the compared channel is the output pointee.
+fn collision_transform_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 5 {
+        return Err(format!("expected 5 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let entry = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0xc0 => b,
+        _ => return Err("arg0 must be the 0xc0-byte shape entry".into()),
+    };
+    let mut out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x20 => b,
+        _ => return Err("arg1 must be the 0x20-byte output".into()),
+    };
+    let record = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x2a8 => b,
+        _ => return Err("arg2 must be the world record".into()),
+    };
+    let owners = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg3 must be the owner pool".into()),
+    };
+    let poses = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg4 must be the pose array".into()),
+    };
+    let frame = ow_sim::collide::shape_world_transform(&entry, &record, &owners, &poses);
+    out[0x00..0x10].copy_from_slice(&quad_bytes(frame[0]));
+    out[0x10..0x20].copy_from_slice(&quad_bytes(frame[1]));
+    // The leaf only returns its output pointer, so the unit declares the
+    // return channel void and the compared channel is the output pointee.
+    Ok(("-".to_string(), vec![entry, out, record, owners, poses]))
+}
+
 /// `0x142cd56e0`: the collider's "is this triangle unusable" test. Three vec4
 /// corners, no pointee written; the compared channel is the whole return
 /// register (a `MOVMSKPS` mask on the non-finite exit, else 1 or 0).
@@ -1474,6 +1512,7 @@ fn handle_call(
         "collision_sweep_bounds" => collision_sweep_bounds_entry(args),
         "collision_sphere" => collision_sphere_entry(args),
         "collision_filter" => collision_filter_entry(args),
+        "collision_transform" => collision_transform_entry(args),
         "triangle_degenerate" => triangle_degenerate_entry(args),
         "collision_capsule" => collision_capsule_entry(args),
 

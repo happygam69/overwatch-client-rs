@@ -3,6 +3,28 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-07 - the shape world transform is verified against the client's bytes
+
+- `ShapeWorldTransform` `0x142cb8b80` is implemented as
+  `ow_sim::collide::shape_world_transform` and verified as
+  `fn/ShapeWorldTransform`: 328 cases, every channel, branch coverage 100%
+  (3/3), 9/9 mutants killed. The unit drives the leaf, not its callers: the
+  entry, the record, and the two pools the record's `+0x2a0`/`+0x288` point at
+  are all pinned by the fixture (`dev/verify_harness/collision_transform_fixture.py`).
+- The leaf only returns its output pointer, so the unit declares its return
+  channel `void` and compares the output pointee: the position quad at `+0x00`
+  and the quaternion at `+0x10` — which is exactly the `xform` the narrowphase
+  primitives take, so the transform and the sweep now meet at one layout.
+- **Two emulator NaN fidelities are recorded, not worked around silently.** The
+  verify harness's unicorn answers an invalid operation (`inf * 0`, which the
+  composed branch's `(origin - pivot) * 0` term reaches) with `0x7fc00000`
+  where x86 hardware gives the QNaN indefinite `0xffc00000`, and it does not
+  always return the destination's NaN when both `ADDPS`/`SUBPS` operands are
+  NaN. Both were measured with a runtime (not constant-folded) SSE probe on
+  this machine. The fixture therefore keeps non-finite values to NaN in the
+  quaternion only, and the hardware answer for the infinite-origin lane is
+  pinned by a Rust unit test in `collide.rs` instead of by the emulator.
+
 ## 2026-11-06 - the placeable transform is read, and the range's collision world is placed
 
 - The chain from a placed model to its collision shape's world frame is read end

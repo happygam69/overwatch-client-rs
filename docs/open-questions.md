@@ -570,7 +570,9 @@ as `fn/CollisionShapeFilter`, and the type-1 capsule as
 **The next read is the geometry, not more query code.** The five per-type
 primitives are inventoried with their sizes and their two-path shape
 (`formats/character-controller.md`), and the shape world transform
-`0x142cb8b80` is read. What a real candidate still needs is (a) the collision
+`0x142cb8b80` is read **and verified** as `fn/ShapeWorldTransform`
+(`ow_sim::collide::shape_world_transform`: 328 cases, every channel, coverage
+100%, 9/9 mutants). What a real candidate still needs is (a) the collision
 geometry the query walks (`record+0x2b8` entries and the per-type pools at
 `+0x2d0..+0x330`), which is the map's collision chunks, and (b) the hit
 policy's live collision world (`0x14202c580` -> `0x14202bc90`). Without those,

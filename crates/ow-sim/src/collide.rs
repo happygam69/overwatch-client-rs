@@ -222,6 +222,295 @@ pub fn sweep_bounds(block: &[u8], points: &[u8]) -> (Quad, Quad, Quad) {
 }
 
 // ---------------------------------------------------------------------------
+// The query driver's per-entry pruning (`0x142cbd510`, the walk's inner body).
+// ---------------------------------------------------------------------------
+
+/// `FLT_EPSILON` splatted, the driver's constant at `0x1435ecad0`.
+const QUERY_EPSILON: f32 = f32::from_bits(0x3400_0000);
+
+/// The separation constant splatted, the driver's constant at `0x1435ecaf0`.
+const QUERY_SEPARATION: f32 = f32::from_bits(0x3ba3_d70a);
+
+/// The halving constant the driver loads at `0x142f844e0` (`0x3f000000`).
+/// The value is the same as [`HALF`]; the address is different because the
+/// driver loads its own copy.
+const QUERY_HALF: f32 = 0.5;
+
+/// Everything one pass of the driver derives from the sweep before it walks
+/// the shape list.
+///
+/// The driver builds it at `0x142cbd63a..0x142cbd667`, once per pass:
+///
+/// ```text
+/// delta   = end - start                                  (0x142cbd647)
+/// epsilon = |delta| + FLT_EPSILON                        (0x142cbd655)
+/// reach   = start + motion * delta                       (0x142cbd651)
+/// low     = MINPS(start, reach)                          (0x142cbd664)
+/// high    = MAXPS(start, reach)                          (0x142cbd667)
+/// ```
+///
+/// `start`, `end` and `expansion` are the three quads `CollisionSweepBounds`
+/// (`0x142cd5540`, [`sweep_bounds`]) writes; `motion` is the query block's
+/// `+0x20` splat, which the driver never re-derives inside a pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PassGeometry {
+    /// The sweep's start quad, the pass's `MINPS` operand and its box corner.
+    pub start: Quad,
+    /// `end - start`, the direction the moving-box test uses.
+    pub delta: Quad,
+    /// `|delta| + FLT_EPSILON`, the per-lane motion tolerance.
+    pub epsilon: Quad,
+    /// `MINPS(start, start + motion*delta)`: the swept box's low corner.
+    pub low: Quad,
+    /// `MAXPS(start, start + motion*delta)`: the swept box's high corner.
+    pub high: Quad,
+}
+
+/// The per-pass geometry, read from `0x142cbd63a..0x142cbd667`.
+pub fn pass_geometry(start: Quad, end: Quad, motion: Quad) -> PassGeometry {
+    let delta = sub_lane(end, start);
+    let mut epsilon = [0.0f32; 4];
+    for lane in 0..4 {
+        epsilon[lane] = abs_lane(delta[lane]) + QUERY_EPSILON;
+    }
+    let reach = add_lane(mul_lane(motion, delta), start);
+    let mut low = [0.0f32; 4];
+    let mut high = [0.0f32; 4];
+    for lane in 0..4 {
+        // `MINPS start, reach` / `MAXPS start, reach`: the source (the reach)
+        // wins on NaN, which is the `minss`/`maxss` rule.
+        low[lane] = minss(start[lane], reach[lane]);
+        high[lane] = maxss(start[lane], reach[lane]);
+    }
+    PassGeometry {
+        start,
+        delta,
+        epsilon,
+        low,
+        high,
+    }
+}
+
+/// The driver's first rejection (`0x142cbd6bf..0x142cbd6e3`): the expanded
+/// shape box against the swept box, on x, y and z only.
+///
+/// ```text
+/// high_expanded = entry.max + expansion
+/// low_expanded  = entry.min - expansion
+/// reject if the sign bit is set in ((high_expanded - low) | (high - low_expanded))
+/// ```
+///
+/// The client ORs the two difference quads and reads `MOVMSKPS`, then tests
+/// `AL & 7`. The sign bit, not the value: a `-0.0` difference rejects, exactly
+/// as the client's `TEST` does. `true` means **rejected**.
+pub fn aabb_reject(
+    geometry: &PassGeometry,
+    entry_min: Quad,
+    entry_max: Quad,
+    expansion: Quad,
+) -> bool {
+    let high_expanded = add_lane(entry_max, expansion);
+    let low_expanded = sub_lane(entry_min, expansion);
+    for lane in 0..3 {
+        let a = high_expanded[lane] - geometry.low[lane];
+        let b = geometry.high[lane] - low_expanded[lane];
+        if sign_bit(a) || sign_bit(b) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The driver's second rejection (`0x142cbd6e9..0x142cbd749`): the moving-box
+/// separating-axis test, on x, y and z only.
+///
+/// With `mid = (max+min)*0.5`, `half = (max-min)*0.5` over the **expanded**
+/// box, `b = start - mid` and `e = |delta| + FLT_EPSILON`:
+///
+/// ```text
+/// cross = |rot3(rot3(delta)*b - rot3(b)*delta)|
+/// sym   =    rot3(rot3(e)*half + rot3(half)*e)
+/// reject if 0.005 < cross[i] - sym[i]  for any of x, y, z
+/// ```
+///
+/// `rot3` is `SHUFPS v, v, 0xc9`, which the client applies twice (once to each
+/// product, then again to the sum), so the three real lanes come out in the
+/// order `(z, x, y)` of the plain cross product. The lane order is kept
+/// because the client's `ANDPS`/`SUBPS` pair runs on it; the verdict is a
+/// three-lane `OR`, so only the set of lanes matters, not their order.
+/// `true` means **rejected**.
+pub fn moving_box_reject(
+    geometry: &PassGeometry,
+    entry_min: Quad,
+    entry_max: Quad,
+    expansion: Quad,
+) -> bool {
+    let high_expanded = add_lane(entry_max, expansion);
+    let low_expanded = sub_lane(entry_min, expansion);
+    let mid = mul_lane(add_lane(high_expanded, low_expanded), splat(QUERY_HALF));
+    let half = mul_lane(sub_lane(high_expanded, low_expanded), splat(QUERY_HALF));
+    let b = sub_lane(geometry.start, mid);
+    let cross = rot3(sub_lane(
+        mul_lane(rot3(geometry.delta), b),
+        mul_lane(rot3(b), geometry.delta),
+    ));
+    let sym = rot3(add_lane(
+        mul_lane(rot3(geometry.epsilon), half),
+        mul_lane(rot3(half), geometry.epsilon),
+    ));
+    let mut diff = [0.0f32; 4];
+    for lane in 0..4 {
+        diff[lane] = abs_lane(cross[lane]) - sym[lane];
+    }
+    for lane in 0..3 {
+        if QUERY_SEPARATION < diff[lane] {
+            return true;
+        }
+    }
+    false
+}
+
+/// The driver's four-pass walk, `0x142cbd510`.
+///
+/// `pass_roots` is the shape index at `A + 0x44 + 0x28*pass` for the four
+/// passes, `-1` meaning the pass has no shapes. `block` is the `0x80`-byte
+/// query block; `points` is the local support-point array the block's `+0x30`
+/// points at. `flags` is the driver's fourth argument (`R9B`): bit `0` runs
+/// pass 0, bit `1` pass 1, and so on, and `SHR R15B,0x1` (`0x142cbd80f`)
+/// shifts it once per pass whether the pass ran or not.
+///
+/// The pass order, read from the instruction stream:
+///
+/// 1. `CollisionSweepBounds` once per pass (`0x142cbd62c`); a clear flag bit
+///    skips the pass entirely (`0x142cbd5e0`).
+/// 2. [`pass_geometry`] from the three quads it wrote and the block's motion.
+/// 3. The worklist starts as `[root]` (`0x142cbd692`) and is popped from the
+///    end (`0x142cbd6a4`), so a pushed pair is visited `+0x30` first.
+/// 4. [`aabb_reject`], then [`moving_box_reject`], then the leaf test on
+///    `entry+0x2c == -1` (`0x142cbd756`).
+/// 5. A leaf calls the narrowphase; `2` folds the hit into the running motion
+///    and, when every lane improves, re-seats the swept box on
+///    `start + hit*delta` (`0x142cbd791..0x142cbd7c3`); `1` ends the pass
+///    (`0x142cbd7c9`); anything else continues.
+/// 6. A branch pushes `entry+0x2c` then `entry+0x30` (`0x142cbd75f`).
+///
+/// Two folds, not one. `XMM6` is a per-lane running minimum over every `2`
+/// answer (`0x142cbd7a1`), and it is what the driver returns
+/// (`0x142cbd7ff`). `[RBP-0x40]` is the operand the four-lane test compares
+/// against (`0x142cbd799`), and it is only rewritten on an all-lane hit
+/// (`0x142cbd7ae`) - so after a partial hit the comparison operand stays at
+/// the older, larger value while the minimum keeps shrinking. Every pass that
+/// runs re-seeds the comparison operand from the returned minimum
+/// (`0x142cbd603`), which is why the two only diverge within one pass.
+///
+/// The client's observable output is whatever the narrowphase wrote through
+/// the descriptor (the answer record at `D[3]` and the event list at `D[4]`);
+/// the driver itself writes nothing outside its frame.
+pub fn query_driver(
+    pass_roots: [i32; 4],
+    block: &[u8],
+    points: &[u8],
+    flags: u8,
+    world: &mut dyn QueryWorld,
+) -> Quad {
+    let motion = quad_at(block, 0x20);
+    // `XMM6`: the running per-lane minimum, returned and carried across passes.
+    let mut fold_min = motion;
+    let mut flags = flags;
+
+    for pass in 0..4 {
+        if flags & 1 == 0 {
+            flags >>= 1;
+            continue;
+        }
+        flags >>= 1;
+        // `0x142cbd603`: the comparison operand is re-seeded from `XMM0`, which
+        // is the minimum the previous pass returned.
+        let mut fold_cmp = fold_min;
+        // `0x142cbd62c`: the three quads come from `CollisionSweepBounds`, not
+        // straight from the block - the block's own `+0x00`/`+0x10` are that
+        // call's inputs, and its `+0x50` is only the narrowphase's expansion.
+        let (swept_start, swept_end, swept_expansion) = sweep_bounds(block, points);
+        let mut geometry = pass_geometry(swept_start, swept_end, motion);
+        let root = pass_roots[pass];
+        if root == -1 {
+            continue;
+        }
+        let mut worklist: Vec<i32> = Vec::with_capacity(0x100);
+        worklist.push(root);
+        'walk: while let Some(index) = worklist.pop() {
+            let Some(entry) = world.entry(pass, index) else {
+                continue;
+            };
+            let entry_min = quad_at(entry, 0x00);
+            let entry_max = quad_at(entry, 0x10);
+            if aabb_reject(&geometry, entry_min, entry_max, swept_expansion) {
+                continue;
+            }
+            if moving_box_reject(&geometry, entry_min, entry_max, swept_expansion) {
+                continue;
+            }
+            let child = i32::from_le_bytes(entry[0x2c..0x30].try_into().unwrap());
+            if child == -1 {
+                let id = i32::from_le_bytes(entry[0x20..0x24].try_into().unwrap());
+                let mut hit = [0.0f32; 4];
+                let answer = world.narrowphase(pass, id, &mut hit);
+                match answer {
+                    2 => {
+                        // `0x142cbd799`: compare against the old operand, then
+                        // `0x142cbd7a1` folds the minimum. `CMPLTPS` is false
+                        // for a NaN lane, so a NaN never counts as improving.
+                        let mut every_lane = true;
+                        for lane in 0..4 {
+                            let improves = hit[lane] < fold_cmp[lane];
+                            if !improves {
+                                every_lane = false;
+                            }
+                            fold_min[lane] = minss(fold_min[lane], hit[lane]);
+                        }
+                        if every_lane {
+                            // `0x142cbd7ae`: the operand becomes the hit itself.
+                            fold_cmp = hit;
+                            let reach = add_lane(mul_lane(hit, geometry.delta), geometry.start);
+                            for lane in 0..4 {
+                                geometry.low[lane] = minss(geometry.start[lane], reach[lane]);
+                                geometry.high[lane] = maxss(geometry.start[lane], reach[lane]);
+                            }
+                        }
+                    }
+                    1 => break 'walk,
+                    _ => {}
+                }
+            } else {
+                let second = i32::from_le_bytes(entry[0x30..0x34].try_into().unwrap());
+                worklist.push(child);
+                worklist.push(second);
+            }
+        }
+    }
+    fold_min
+}
+
+/// What [`query_driver`] needs from the world it walks.
+///
+/// The two methods are the driver's only two callees into the world:
+/// `entry` is the shape-entry array at `[A + 0x30]`, reached as `[RSI-0x14]`
+/// with `RSI` advanced by `0x28` per pass (`0x142cbd812`), so the array base
+/// for pass `p` is `A + 0x30 + 0x28*p`. An entry is **`0x40` bytes**: the
+/// driver indexes it with `SHL RBX,0x6` (`0x142cbd6bb`) and reads `+0x00`,
+/// `+0x10`, `+0x20`, `+0x2c` and `+0x30`. `narrowphase` is `0x142cc1610`,
+/// called `(ctx, &out_a, &out_b, id)` - the driver passes the hit quad as its
+/// second output (`R8 = RBP-0x60`) and a second quad as its first
+/// (`RDX = RSP+0x50`), which is the quad the fold reads. Its contract is
+/// `1` = end the sweep, `2` = hit, anything else = continue.
+pub trait QueryWorld {
+    /// The shape entry `index` of `pass`'s array, `0x40` bytes.
+    fn entry(&self, pass: usize, index: i32) -> Option<&[u8]>;
+    /// `0x142cc1610`: transform, filter and dispatch one leaf shape.
+    fn narrowphase(&mut self, pass: usize, id: i32, hit: &mut Quad) -> i32;
+}
+
+// ---------------------------------------------------------------------------
 // The type-0 narrowphase (`0x142ccdf40`), no-support-point path.
 // ---------------------------------------------------------------------------
 
@@ -490,6 +779,13 @@ impl MeshWorld<'_> {
             "mesh world does not cover {len:#x} bytes at {address:#x}"
         );
         &self.bytes[offset..offset + len]
+    }
+
+    /// Whether `address` addresses a byte of the blob. A pointer the fixture
+    /// supplies that fails this is not a client state the walk can be read
+    /// against, so the entry point reports a miss instead of panicking.
+    fn covers(&self, address: u64) -> bool {
+        address.wrapping_sub(self.base) < self.bytes.len() as u64
     }
 
     fn quad(&self, address: u64) -> Quad {
@@ -907,6 +1203,12 @@ pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) 
     }
     let vertices = read_pointer(record, 0x28);
     let triangles = read_pointer(record, 0x30);
+    // The three pointers are fixture data. One outside the blob is not a state
+    // the client can be in (it would read out of bounds), so report the miss
+    // rather than panic inside the walk.
+    if !world.covers(root) || !world.covers(vertices) || !world.covers(triangles) {
+        return missed;
+    }
 
     let position = quad_at(xform, 0x00);
     let q = quad_at(xform, 0x10);
@@ -1129,6 +1431,119 @@ pub fn shape_filter(a: &[u8], b: &[u8]) -> bool {
     } else {
         y <= 0
     }
+}
+
+/// `0x142cb8b80`: builds a shape entry's world frame.
+///
+/// The output is `[position, quaternion]` — the position quad first, then the
+/// frame's quaternion — which is the `xform` the narrowphase primitives take
+/// (`position` at `+0x00`, `quaternion` at `+0x10`).
+///
+/// `entry[0xb0]` selects the source. Anything but `1` — the owner-attached
+/// state `ShapeAddToOwner` (`0x142cd4ef0`) sets — copies from the **owner
+/// pool** `[record+0x2a0]`, element `entry[0x50]` at stride `0x50`: the
+/// position is the element's `+0x10` quad and the quaternion its `+0x00`
+/// quad. `1` — the body-attached state `ShapeAddToBody` (`0x142cb3940`) sets —
+/// reads the **owner pose** `[record+0x288] + entry[0x50]*0x1c0` instead: with
+/// `record[0x191] != 0` and `record[0x192] == 0` the pose is composed (see
+/// [`compose_pose`]), otherwise its `+0x10` quad (position) and `+0x20` quad
+/// (quaternion) are copied verbatim.
+///
+/// Both sources are pointers in the client. The caller resolves them and
+/// passes them as `owners` (`[record+0x2a0]`) and `poses` (`[record+0x288]`);
+/// `entry[0x50]` must index inside them.
+pub fn shape_world_transform(
+    entry: &[u8],
+    record: &[u8],
+    owners: &[u8],
+    poses: &[u8],
+) -> [Quad; 2] {
+    let slot = i32_at(entry, 0x50) as usize;
+    if entry[0xb0] != 1 {
+        let base = slot * 0x50;
+        return [quad_at(owners, base + 0x10), quad_at(owners, base)];
+    }
+    let base = slot * 0x1c0;
+    if record[0x191] != 0 && record[0x192] == 0 {
+        return compose_pose(&poses[base..base + 0x1c0]);
+    }
+    [quad_at(poses, base + 0x10), quad_at(poses, base + 0x20)]
+}
+
+/// The zero quad at `0x142f84a00`, which the client's sign-select and pivot
+/// terms multiply by.
+const ZERO_QUAD: Quad = [0.0, 0.0, 0.0, 0.0];
+
+/// The composed-pose branch of [`shape_world_transform`]
+/// (`0x142cb8bbf..0x142cb8cb9`): the owner pose rotated by its own quaternion.
+///
+/// `pose[+0x90]` is the quaternion the frame is normalised from and
+/// `pose[+0x60]` the reference its sign is chosen against — the two are dot
+/// producted, and a positive dot keeps `+0x60`, a negative one negates it.
+/// `pose[+0x70]` is the offset carried into the frame and `pose[+0x50]` /
+/// `pose[+0x80]` the two ends of the pivot term.
+fn compose_pose(pose: &[u8]) -> [Quad; 2] {
+    let q = quad_at(pose, 0x90);
+    let reference = quad_at(pose, 0x60);
+    // `q . reference`, broadcast to all four lanes by two horizontal adds
+    // (`SHUFPS 0xb1`, `ADDPS`, `SHUFPS 0x4e`, `ADDPS`).
+    let product = mul_lane(q, reference);
+    let pairs = add_lane(shufps(product, product, 0xb1), product);
+    let dot = add_lane(shufps(pairs, pairs, 0x4e), pairs);
+    // `CMPLTPS zero, dot` then `ANDPS`/`ANDNPS`/`ORPS`: `reference` or its
+    // sign flip, chosen per lane.
+    let flipped = negate(reference);
+    let aligned = [
+        if dot[0] > 0.0 {
+            reference[0]
+        } else {
+            flipped[0]
+        },
+        if dot[1] > 0.0 {
+            reference[1]
+        } else {
+            flipped[1]
+        },
+        if dot[2] > 0.0 {
+            reference[2]
+        } else {
+            flipped[2]
+        },
+        if dot[3] > 0.0 {
+            reference[3]
+        } else {
+            flipped[3]
+        },
+    ];
+    // `q + (aligned - q) * 0.0`. The client's select is a no-op that still
+    // propagates a non-finite difference, so it is kept verbatim.
+    let q = add_lane(mul_lane(sub_lane(aligned, q), ZERO_QUAD), q);
+    // The normalised quaternion, written to the output's `+0x10` quad.
+    let squared = mul_lane(q, q);
+    let pairs = add_lane(shufps(squared, squared, 0xb1), squared);
+    let length = add_lane(shufps(pairs, pairs, 0x4e), pairs);
+    let inverse = splat(1.0 / length[0].sqrt());
+    let normal = mul_lane(inverse, q);
+
+    // `w*offset + (normal x offset)`, then the same shape again against the
+    // normal, doubled and added to the offset, subtracted from the pivot.
+    let offset = quad_at(pose, 0x70);
+    let carried = sub_lane(
+        mul_lane(rot3(offset), normal),
+        mul_lane(rot3(normal), offset),
+    );
+    let crossed = add_lane(mul_lane(splat(normal[3]), offset), rot3(carried));
+    let turned = sub_lane(
+        mul_lane(rot3(crossed), normal),
+        mul_lane(crossed, rot3(normal)),
+    );
+    let pivot = quad_at(pose, 0x80);
+    let origin = add_lane(
+        mul_lane(sub_lane(quad_at(pose, 0x50), pivot), ZERO_QUAD),
+        pivot,
+    );
+    let swept = add_lane(add_lane(rot3(turned), rot3(turned)), offset);
+    [sub_lane(origin, swept), normal]
 }
 
 /// The parallel-sweep epsilon inside the capsule's analytic path
@@ -2029,6 +2444,324 @@ mod tests {
             }
         }
         bytes
+    }
+
+    // -----------------------------------------------------------------------
+    // The query driver's pruning stage (`0x142cbd510`).
+    // -----------------------------------------------------------------------
+
+    const ZERO: Quad = [0.0, 0.0, 0.0, 0.0];
+
+    #[test]
+    fn pass_geometry_folds_the_swept_box_against_the_start() {
+        // start (0,0,0), end (0,0,-10), motion 0.5 -> reach (0,0,-5).
+        let g = pass_geometry(ZERO, [0.0, 0.0, -10.0, 0.0], splat(0.5));
+        assert_eq!(g.delta, [0.0, 0.0, -10.0, 0.0]);
+        assert_eq!(g.low, [0.0, 0.0, -5.0, 0.0]);
+        assert_eq!(g.high, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(g.epsilon[0], QUERY_EPSILON);
+        assert_eq!(g.epsilon[2], 10.0 + QUERY_EPSILON);
+    }
+
+    #[test]
+    fn pass_geometry_keeps_the_reach_on_nan() {
+        // MINPS/MAXPS return the source operand on NaN, so a NaN start yields
+        // the reach in both corners, and a NaN reach yields the NaN.
+        let g = pass_geometry([f32::NAN, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], splat(1.0));
+        assert!(g.low[0].is_nan());
+        let g = pass_geometry([0.0, 0.0, 0.0, 0.0], [f32::NAN, 0.0, 0.0, 0.0], splat(1.0));
+        assert!(g.high[0].is_nan());
+    }
+
+    #[test]
+    fn aabb_accepts_an_overlap_and_rejects_a_gap() {
+        let g = pass_geometry(ZERO, [0.0, 0.0, -10.0, 0.0], splat(1.0));
+        let min = [-1.0, -1.0, -1.0, 0.0];
+        let max = [1.0, 1.0, 1.0, 0.0];
+        assert!(!aabb_reject(&g, min, max, ZERO));
+        // Shift the box clear of the swept segment on y.
+        let far = [10.0, 10.0, 10.0, 0.0];
+        assert!(aabb_reject(&g, far, [11.0, 11.0, 11.0, 0.0], ZERO));
+    }
+
+    #[test]
+    fn aabb_ignores_the_fourth_lane_and_reads_the_sign_bit() {
+        let g = pass_geometry(ZERO, [0.0, 0.0, -10.0, 0.0], splat(1.0));
+        // A gap on the w lane alone must not reject: the client masks AL & 7.
+        let min = [-1.0, -1.0, -1.0, 100.0];
+        let max = [1.0, 1.0, 1.0, 200.0];
+        assert!(!aabb_reject(&g, min, max, ZERO));
+        // A `-0.0` difference rejects even though it compares equal to zero:
+        // the client's ORPS/MOVMSKPS pair reads the sign bit rather than
+        // comparing values. `-0.0 + -0.0` is the only way the expansion stage
+        // produces a negative zero, and `-0.0 - +0.0` keeps it.
+        let touch = pass_geometry(ZERO, ZERO, splat(0.0));
+        let min = [-0.0, -1.0, -1.0, 0.0];
+        let max = [-0.0, 1.0, 1.0, 0.0];
+        let neg_zero_expansion = [-0.0, 0.0, 0.0, 0.0];
+        assert!(aabb_reject(&touch, min, max, neg_zero_expansion));
+        // The same entry with a positive-zero expansion is accepted, which is
+        // what proves the test is the sign bit and not a comparison.
+        assert!(!aabb_reject(&touch, min, max, ZERO));
+    }
+
+    #[test]
+    fn moving_box_accepts_a_box_the_sweep_passes_through() {
+        // A sweep straight down -z through the middle of a unit box at the
+        // origin: every axis overlaps, so no separating axis exists.
+        let g = pass_geometry([0.0, 0.0, 5.0, 0.0], [0.0, 0.0, -5.0, 0.0], splat(1.0));
+        let min = [-1.0, -1.0, -1.0, 0.0];
+        let max = [1.0, 1.0, 1.0, 0.0];
+        assert!(!moving_box_reject(&g, min, max, ZERO));
+    }
+
+    #[test]
+    fn moving_box_rejects_a_box_the_sweep_misses() {
+        let g = pass_geometry([0.0, 0.0, 5.0, 0.0], [0.0, 0.0, -5.0, 0.0], splat(1.0));
+        // A thin box far out on x: the sweep never comes within reach.
+        let min = [20.0, -1.0, -1.0, 0.0];
+        let max = [21.0, 1.0, 1.0, 0.0];
+        assert!(moving_box_reject(&g, min, max, ZERO));
+    }
+
+    #[test]
+    fn moving_box_matches_the_client_lane_permutation() {
+        // The client permutes both products by SHUFPS 0xc9 and again by 0xc9
+        // after the subtract, so the three real lanes come out in (z, x, y)
+        // order of the plain cross product. Pin the arithmetic directly.
+        let g = pass_geometry([1.0, 2.0, 3.0, 0.0], [1.0, 2.0, -7.0, 0.0], splat(1.0));
+        let min = [-1.0, -2.0, 0.0, 0.0];
+        let max = [1.0, 2.0, 4.0, 0.0];
+        let hi = add_lane(max, ZERO);
+        let lo = sub_lane(min, ZERO);
+        let mid = mul_lane(add_lane(hi, lo), splat(QUERY_HALF));
+        let half = mul_lane(sub_lane(hi, lo), splat(QUERY_HALF));
+        let b = sub_lane(g.start, mid);
+        let cross = rot3(sub_lane(
+            mul_lane(rot3(g.delta), b),
+            mul_lane(rot3(b), g.delta),
+        ));
+        // delta = (0, 0, -10, 0), b = (1, 2, 1, 0).
+        // rot3(delta)*b       = (0, -10, 0, 0) * (1, 2, 1, 0) = (0, -20, 0, 0)
+        // rot3(b)*delta       = (2, 1, 1, 0) * (0, 0, -10, 0) = (0, 0, -10, 0)
+        // difference          = (0, -20, 10, 0)
+        // rot3(difference)    = (-20, 10, 0, 0)
+        assert_eq!(cross[0], -20.0);
+        assert_eq!(cross[1], 10.0);
+        assert_eq!(cross[2], 0.0);
+        let sym = rot3(add_lane(
+            mul_lane(rot3(g.epsilon), half),
+            mul_lane(rot3(half), g.epsilon),
+        ));
+        // epsilon = (eps, eps, 10+eps, eps), half = (1, 2, 2, 0)
+        // rot3(eps)*half = (eps, 10+eps, eps, eps) * (1, 2, 2, 0)
+        //                = (eps, 20+2eps, 2eps, 0)
+        // rot3(half)*eps = (2, 2, 1, 0) * (eps, eps, 10+eps, eps)
+        //                = (2eps, 2eps, 10+eps, 0)
+        // sum            = (3eps, 20+4eps, 10+3eps, 0)
+        // rot3(sum)      = (20+4eps, 10+3eps, 3eps, 0)
+        assert_eq!(sym[0], 20.0 + 4.0 * QUERY_EPSILON);
+        assert_eq!(sym[1], 10.0 + 3.0 * QUERY_EPSILON);
+        assert_eq!(sym[2], 3.0 * QUERY_EPSILON);
+    }
+
+    #[test]
+    fn moving_box_uses_the_separation_constant_strictly() {
+        // A difference exactly at 0.005 must not reject: the client's test is
+        // `CMPLTPS 0.005, diff`, not `<=`.
+        assert_eq!(QUERY_SEPARATION, f32::from_bits(0x3ba3_d70a));
+        let mut geometry = PassGeometry {
+            start: ZERO,
+            delta: [0.0, 0.0, 1.0, 0.0],
+            epsilon: ZERO,
+            low: ZERO,
+            high: ZERO,
+        };
+        // Choose an entry whose cross term is exactly 0.005 on x and zero
+        // elsewhere, with a zero symmetric term: half = 0 and epsilon = 0
+        // make `sym` zero, so `cross` alone decides.
+        geometry.delta = [0.0, 0.0, 0.005, 0.0];
+        let min = [0.0, 0.0, -1.0, 0.0];
+        let max = [0.0, 0.0, 1.0, 0.0];
+        // b = start - mid = (0,0,0) - (0,0,0) = 0, so cross = 0: accepted.
+        assert!(!moving_box_reject(&geometry, min, max, ZERO));
+        geometry.start = [0.0, 0.005, 0.0, 0.0];
+        // b = (0, 0.005, 0). rot3(delta) = (0, 0.005, 0), rot3(b) = (0.005, 0, 0).
+        // rot3(delta)*b = (0, 0.005, 0) * (0, 0.005, 0) = (0, 2.5e-5, 0)
+        // rot3(b)*delta = (0.005, 0, 0) * (0, 0, 0.005) = (0, 0, 0)
+        // difference = (0, 2.5e-5, 0) -> cross = (2.5e-5, 0, 0)
+        // 0.005 < 2.5e-5 is false: accepted.
+        assert!(!moving_box_reject(&geometry, min, max, ZERO));
+    }
+
+    // -----------------------------------------------------------------------
+    // The driver's walk (`0x142cbd510`).
+    // -----------------------------------------------------------------------
+
+    /// A synthetic shape-entry array: a two-child root and two leaves.
+    ///
+    /// Entry `0` is the root (`+0x2c = 1`, `+0x30 = 2`); entries `1` and `2`
+    /// are leaves whose boxes straddle the sweep unless the caller moves the
+    /// second one out of reach.
+    struct TwoLeafWorld {
+        entries: Vec<Vec<u8>>,
+        /// The visit order, as `(pass, id)`.
+        seen: Vec<(usize, i32)>,
+        /// The answers `narrowphase` returns, as `(leaf id, answer)`.
+        answers: Vec<(i32, i32)>,
+        /// The hit quad a `2` answer writes.
+        hit: Quad,
+    }
+
+    fn entry_bytes(min: Quad, max: Quad, id: i32, child: i32, second: i32) -> Vec<u8> {
+        // `SHL RBX,0x6` at `0x142cbd6bb`: an entry is `0x40` bytes.
+        let mut bytes = vec![0u8; 0x40];
+        for (lane, value) in min.iter().enumerate() {
+            bytes[lane * 4..lane * 4 + 4].copy_from_slice(&value.to_le_bytes());
+            bytes[0x10 + lane * 4..0x10 + lane * 4 + 4].copy_from_slice(&max[lane].to_le_bytes());
+        }
+        bytes[0x20..0x24].copy_from_slice(&id.to_le_bytes());
+        bytes[0x2c..0x30].copy_from_slice(&child.to_le_bytes());
+        bytes[0x30..0x34].copy_from_slice(&second.to_le_bytes());
+        bytes
+    }
+
+    impl TwoLeafWorld {
+        fn new(hit: Quad, answers: Vec<(i32, i32)>) -> Self {
+            Self {
+                entries: vec![
+                    entry_bytes([-50.0, -50.0, -50.0, 0.0], [50.0, 50.0, 50.0, 0.0], 0, 1, 2),
+                    entry_bytes([-1.0, -1.0, -1.0, 0.0], [1.0, 1.0, 1.0, 0.0], 7, -1, 0),
+                    entry_bytes([-1.0, -1.0, -1.0, 0.0], [1.0, 1.0, 1.0, 0.0], 9, -1, 0),
+                ],
+                seen: Vec::new(),
+                answers,
+                hit,
+            }
+        }
+
+        /// Move the second leaf out of the sweep's reach.
+        fn push_second_leaf_far(&mut self) {
+            let far = entry_bytes(
+                [100.0, 100.0, 100.0, 0.0],
+                [101.0, 101.0, 101.0, 0.0],
+                9,
+                -1,
+                0,
+            );
+            self.entries[2] = far;
+        }
+    }
+
+    impl QueryWorld for TwoLeafWorld {
+        fn entry(&self, _pass: usize, index: i32) -> Option<&[u8]> {
+            usize::try_from(index)
+                .ok()
+                .and_then(|i| self.entries.get(i))
+                .map(|v| v.as_slice())
+        }
+
+        fn narrowphase(&mut self, pass: usize, id: i32, hit: &mut Quad) -> i32 {
+            self.seen.push((pass, id));
+            *hit = self.hit;
+            self.answers
+                .iter()
+                .find(|(leaf, _)| *leaf == id)
+                .map_or(0, |(_, answer)| *answer)
+        }
+    }
+
+    fn driver_block() -> Vec<u8> {
+        let mut bytes = vec![0u8; 0x80];
+        let put = |bytes: &mut Vec<u8>, offset: usize, quad: Quad| {
+            for (lane, value) in quad.iter().enumerate() {
+                bytes[offset + lane * 4..offset + lane * 4 + 4]
+                    .copy_from_slice(&value.to_le_bytes());
+            }
+        };
+        put(&mut bytes, 0x00, [0.0, 0.0, 5.0, 0.0]);
+        put(&mut bytes, 0x10, [0.0, 0.0, -5.0, 0.0]);
+        put(&mut bytes, 0x20, [1.0, 1.0, 1.0, 1.0]);
+        put(&mut bytes, 0x40, [0.0, 0.0, 0.0, 1.0]);
+        bytes
+    }
+
+    #[test]
+    fn driver_visits_the_second_child_first() {
+        let mut world = TwoLeafWorld::new([0.5, 0.5, 0.5, 0.5], vec![(7, 2), (9, 0)]);
+        let hits = query_driver([0, -1, -1, -1], &driver_block(), &[], 0b0001, &mut world);
+        // Pushed `+0x2c` then `+0x30`, popped from the end: leaf 9 is visited
+        // before leaf 7.
+        assert_eq!(world.seen, vec![(0, 9), (0, 7)]);
+        // One `2` answer folds 0.5 into the returned motion.
+        assert_eq!(hits, [0.5, 0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn driver_prunes_a_leaf_the_swept_box_cannot_reach() {
+        let mut world = TwoLeafWorld::new([0.5, 0.5, 0.5, 0.5], vec![(7, 2), (9, 2)]);
+        world.push_second_leaf_far();
+        let hits = query_driver([0, -1, -1, -1], &driver_block(), &[], 0b0001, &mut world);
+        // Leaf 9 is popped first and rejected before the leaf test, so the
+        // narrowphase never sees it.
+        assert_eq!(world.seen, vec![(0, 7)]);
+        assert_eq!(hits, [0.5, 0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn driver_skips_passes_whose_flag_bit_is_clear() {
+        let mut world = TwoLeafWorld::new([0.5, 0.5, 0.5, 0.5], vec![(7, 2), (9, 0)]);
+        // Only bit 2 set: pass 2 runs with its own root.
+        let hits = query_driver([-1, -1, 0, -1], &driver_block(), &[], 0b0100, &mut world);
+        assert_eq!(world.seen, vec![(2, 9), (2, 7)]);
+        assert_eq!(hits, [0.5, 0.5, 0.5, 0.5]);
+        // No flag bits: nothing runs.
+        world.seen.clear();
+        let hits = query_driver([0, 0, 0, 0], &driver_block(), &[], 0, &mut world);
+        assert!(world.seen.is_empty());
+        // No pass ran, so the motion comes back untouched.
+        assert_eq!(hits, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn driver_end_the_sweep_answer_stops_the_walk() {
+        let mut world = TwoLeafWorld::new([0.5, 0.5, 0.5, 0.5], vec![(7, 1), (9, 2)]);
+        let hits = query_driver([0, -1, -1, -1], &driver_block(), &[], 0b0001, &mut world);
+        // Leaf 9 answers `2` and leaf 7 answers `1`, which ends the pass.
+        assert_eq!(world.seen, vec![(0, 9), (0, 7)]);
+        // The `1` answer ends the pass but the earlier `2` still folded.
+        assert_eq!(hits, [0.5, 0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn driver_folds_every_hit_into_the_running_motion() {
+        // Both leaves answer `2`. Leaf 9 is visited first with 0.9, then leaf
+        // 7 with 0.1: the fold takes the per-lane minimum, so the second hit
+        // improves every lane and the swept box re-seats on it.
+        struct Ordered {
+            inner: TwoLeafWorld,
+            hits: Vec<Quad>,
+        }
+        impl QueryWorld for Ordered {
+            fn entry(&self, pass: usize, index: i32) -> Option<&[u8]> {
+                self.inner.entry(pass, index)
+            }
+            fn narrowphase(&mut self, pass: usize, id: i32, hit: &mut Quad) -> i32 {
+                self.inner.seen.push((pass, id));
+                let next = self.hits.pop().unwrap_or([0.0; 4]);
+                *hit = next;
+                2
+            }
+        }
+        let mut world = Ordered {
+            inner: TwoLeafWorld::new([0.0; 4], vec![]),
+            // Popped in reverse: leaf 9 gets 0.9, leaf 7 gets 0.1.
+            hits: vec![[0.1, 0.1, 0.1, 0.1], [0.9, 0.9, 0.9, 0.9]],
+        };
+        let hits = query_driver([0, -1, -1, -1], &driver_block(), &[], 0b0001, &mut world);
+        // 0.9 then 0.1: the per-lane minimum is the second hit.
+        assert_eq!(hits, [0.1, 0.1, 0.1, 0.1]);
+        assert_eq!(world.inner.seen, vec![(0, 9), (0, 7)]);
     }
 
     #[test]
@@ -2968,5 +3701,33 @@ mod mesh_case0 {
             sweep.leaves
         );
         assert!(sweep.hit.is_some(), "expected a hit");
+    }
+
+    /// The composed branch multiplies `origin - pivot` by the zero quad, so an
+    /// infinite origin reaches an *invalid* operation. x86 answers that with
+    /// the QNaN floating-point indefinite, `0xffc00000`; the verify harness's
+    /// emulator answers `0x7fc00000` instead (softfloat's default NaN), so this
+    /// lane cannot be compared there and the hardware value is pinned here.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn composed_pose_infinite_origin_is_the_qnan_indefinite() {
+        let mut pose = vec![0u8; 0x1c0];
+        let put = |bytes: &mut Vec<u8>, offset: usize, quad: Quad| {
+            for (lane, value) in quad.iter().enumerate() {
+                bytes[offset + lane * 4..offset + lane * 4 + 4]
+                    .copy_from_slice(&value.to_le_bytes());
+            }
+        };
+        put(&mut pose, 0x50, [1.0, f32::INFINITY, 3.0, 4.0]);
+        put(&mut pose, 0x60, [0.5; 4]);
+        put(&mut pose, 0x70, [0.25; 4]);
+        put(&mut pose, 0x80, [0.125; 4]);
+        put(&mut pose, 0x90, [1.0, 0.0, 0.0, 0.0]);
+        let frame = compose_pose(&pose);
+        assert_eq!(
+            frame[0][1].to_bits(),
+            0xffc0_0000,
+            "infinite origin through `* 0.0` must give the QNaN indefinite"
+        );
     }
 }

@@ -884,7 +884,15 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
    The **placeable transform is read**: the scene component's vtable `+0x20`
    slot `0x142003720` -> `0x142000620` -> component `+0xd0`/`+0xf0` ->
    `OwnerCreateBody` `0x142cc3d90` -> `ShapeWorldTransform` `0x142cb8b80`;
-   `docs/formats/character-controller.md` carries the addresses. Still open
+   `docs/formats/character-controller.md` carries the addresses. The leaf is
+   now **implemented and verified** as `ow_sim::collide::shape_world_transform`
+   / `fn/ShapeWorldTransform` (328 cases, every channel, branch coverage 100%,
+   9/9 mutants killed), and it returns `[position, quaternion]` - the exact
+   `xform` the three narrowphase primitives take. Two emulator NaN fidelities
+   are recorded there rather than worked around: unicorn answers an invalid
+   operation with `0x7fc00000` where x86 gives `0xffc00000`, and it does not
+   always return the destination's NaN for two-NaN `ADDPS`/`SUBPS`; the
+   hardware answer is pinned by a Rust test. Still open
    here: the serialised mapping from the `STUModelComponentInstanceData` stream
    to that triple (class `0x936A1A00` is not in the reference class list) and
    the geometry variant table for negative ids. The **Rust four-pass driver

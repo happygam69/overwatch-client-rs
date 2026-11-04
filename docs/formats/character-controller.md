@@ -1162,6 +1162,30 @@ record carries the **quaternion at `+0x00` and the position at `+0x10`**.
   (`(2q*q)` magnitude fold, `sqrtss`+`divss`, then the cross-product terms).
   The two modes are selected per record, not per shape.
 
+**The transform is implemented and verified.** `ow_sim::collide::shape_world_transform`
+is the leaf, operation for operation, and `fn/ShapeWorldTransform` proves it
+against the client's bytes: 328 cases, every channel, branch coverage 100%
+(3/3), 9/9 mutants killed. It returns `[position, quaternion]`, which is the
+`xform` the narrowphase primitives take (`position` at `+0x00`, `quaternion`
+at `+0x10`), so `sphere_sweep` / `capsule_sweep` / `mesh_sweep` and the
+transform now share one layout.
+
+**Two emulator NaN fidelities, measured and recorded.** The verify harness's
+unicorn is not faithful to x86 in two places the composed branch can reach,
+so the unit's corpus does not depend on either and the hardware answer is
+pinned by a Rust test instead:
+
+* an invalid operation answers `0x7fc00000` in the emulator; the x86 QNaN
+  indefinite is `0xffc00000`. The composed branch reaches one when the origin
+  is infinite, through `(origin - pivot) * 0`;
+* when both operands of an `ADDPS`/`SUBPS` are NaN the emulator does not always
+  return the destination's NaN, which is what hardware does.
+
+Both were measured on this machine with a runtime SSE probe (`black_box` on the
+operands, so nothing is constant-folded: a folded probe answers `0x7fc00000`
+for `inf * 0` and is wrong). Non-finite corpus values are therefore NaN only,
+and only in the quaternion.
+
 **The two attachment paths are read, and they are what select the branch.**
 
 * `ShapeAddToBody` `0x142cb3940` decodes the handle (`generation<<48 |
