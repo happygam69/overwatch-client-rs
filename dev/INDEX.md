@@ -128,6 +128,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `tex_oracle.py` | Cross-check our texture decoders against an independent implementation. | 300 |
 | `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 81 |
 | `verify_harness/apply_character_move_fixture.py` | Inputs for the `fn/ApplyCharacterControllerMove` unit (no-shape path). | 43 |
+| `verify_harness/box_triangle_fixture.py` | Inputs for the `box_triangle_overlap` unit (`0x142cd58a0`). | 179 |
 | `verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` | 575 |
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/bvh_fixture.py` | Inputs for the BVH builder unit (`0x142ccb1b0`). | 144 |

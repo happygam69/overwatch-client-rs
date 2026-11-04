@@ -875,6 +875,146 @@ fn sign_bit(v: f32) -> bool {
     v.to_bits() & 0x8000_0000 != 0
 }
 
+/// `CMPLTPS dst, src` collected by `MOVMSKPS`: one bit per lane, set when the
+/// lane is ordered and less than.
+#[inline]
+fn lt_mask(dst: Quad, src: Quad) -> u32 {
+    let mut mask = 0u32;
+    if dst[0] < src[0] {
+        mask |= 1;
+    }
+    if dst[1] < src[1] {
+        mask |= 2;
+    }
+    if dst[2] < src[2] {
+        mask |= 4;
+    }
+    if dst[3] < src[3] {
+        mask |= 8;
+    }
+    mask
+}
+
+/// The edge tolerance (`0x1435ecfd0`): `(0.005, 0.005, 0.005, 0.005)`.
+const EDGE_EPS: Quad = [
+    f32::from_bits(0x3ba3_d70a),
+    f32::from_bits(0x3ba3_d70a),
+    f32::from_bits(0x3ba3_d70a),
+    f32::from_bits(0x3ba3_d70a),
+];
+
+/// `0x142cd58a0`: the triangle-box overlap test the mesh gather runs on every
+/// candidate triangle.
+///
+/// The box arrives as eight floats - the low corner in `0..3`, the high corner
+/// in `4..7` - and the three vertices as float4 quads. The separating axes are
+/// the three slabs, the triangle's normal, and one axis per triangle edge; the
+/// edge axes carry the client's `0.005` tolerance.
+///
+/// The returned `u64` is the client's `EAX` after the final `SETZ`: `0` for a
+/// miss and `1` for an overlap. `MOVMSKPS` only ever fills four bits, so the
+/// byte above `AL` is always zero even though the client never clears it.
+pub fn box_triangle_overlap(box8: &[u8], p0: &[u8], p1: &[u8], p2: &[u8]) -> u64 {
+    let low = quad_at(box8, 0x00);
+    let high = quad_at(box8, 0x10);
+    let v0 = quad_at(p0, 0);
+    let v1 = quad_at(p1, 0);
+    let v2 = quad_at(p2, 0);
+
+    // `centre = (high + low) * 0.5`, `half = (high - low) * 0.5`.
+    let centre = mul_lane(add_lane(high, low), HALF);
+    let half = mul_lane(sub_lane(high, low), HALF);
+
+    let d0 = sub_lane(v0, centre);
+    let d1 = sub_lane(v1, centre);
+    let d2 = sub_lane(v2, centre);
+
+    // The triangle's own AABB against the box's half extents: the client
+    // builds `max(min - half, -half - max)` and rejects on any of x, y, z.
+    let high_rel = quad_max(quad_max(d0, d1), d2);
+    let low_rel = quad_min(quad_min(d0, d1), d2);
+    let slab = quad_max(sub_lane(low_rel, half), sub_lane(negate(half), high_rel));
+    if lt_mask(ZERO_QUAD, slab) & 7 != 0 {
+        return 0;
+    }
+
+    // The three edges and the normal. `rot3(rot3(e12)*e01 - rot3(e01)*e12)`
+    // is `cross(e01, e12)` lane for lane.
+    let e01 = sub_lane(v1, v0);
+    let e12 = sub_lane(v2, v1);
+    let e20 = sub_lane(v0, v2);
+    let r_e01 = rot3(e01);
+    let r_e12 = rot3(e12);
+    let normal = rot3(sub_lane(mul_lane(r_e12, e01), mul_lane(r_e01, e12)));
+
+    // The normal axis: `|n . d0| <= |n| . half`.
+    let support = dot3(quad_abs(normal), half);
+    let plane = dot3(normal, d0);
+    if lt_mask(ZERO_QUAD, sub_lane(quad_abs(plane), support)) == 0xf {
+        return 0;
+    }
+
+    // Edge 1, `e01`. Each edge axis is `e * (1 / sqrt(e . e))`, and the test
+    // is `0.005 < (|a|*0.5 - |b|*0.5) - term` on x, y, z.
+    let axis = mul_lane(splat(1.0 / dot3(e01, e01)[0].sqrt()), e01);
+    let r_axis = rot3(axis);
+    let sum = add_lane(d2, d0);
+    let a = rot3(sub_lane(mul_lane(rot3(sum), axis), mul_lane(r_axis, sum)));
+    let b = rot3(sub_lane(mul_lane(rot3(e20), axis), mul_lane(r_axis, e20)));
+    let abs_axis = quad_abs(axis);
+    let term = rot3(add_lane(
+        mul_lane(rot3(abs_axis), half),
+        mul_lane(rot3(half), abs_axis),
+    ));
+    let edge = sub_lane(
+        sub_lane(mul_lane(quad_abs(a), HALF), mul_lane(quad_abs(b), HALF)),
+        term,
+    );
+    if lt_mask(EDGE_EPS, edge) & 7 != 0 {
+        return 0;
+    }
+
+    // Edge 2, `e12`. Its `b` term uses `e01` and its `a` term uses
+    // `d1 + d0`; the term quad multiplies `d0` rather than `half`.
+    let axis = mul_lane(splat(1.0 / dot3(e12, e12)[0].sqrt()), e12);
+    let r_axis = rot3(axis);
+    let sum = add_lane(d1, d0);
+    let a = rot3(sub_lane(mul_lane(rot3(sum), axis), mul_lane(r_axis, sum)));
+    let b = rot3(sub_lane(mul_lane(r_e01, axis), mul_lane(r_axis, e01)));
+    let abs_axis = quad_abs(axis);
+    let term = rot3(add_lane(
+        mul_lane(rot3(abs_axis), half),
+        mul_lane(abs_axis, d0),
+    ));
+    let edge = sub_lane(
+        sub_lane(mul_lane(quad_abs(a), HALF), mul_lane(quad_abs(b), HALF)),
+        term,
+    );
+    if lt_mask(EDGE_EPS, edge) & 7 != 0 {
+        return 0;
+    }
+
+    // Edge 3, `e20`. Its `a` term uses `e12` and its `b` term uses `d2 + d1`.
+    let axis = mul_lane(splat(1.0 / dot3(e20, e20)[0].sqrt()), e20);
+    let r_axis = rot3(axis);
+    let sum = add_lane(d2, d1);
+    let a = rot3(sub_lane(mul_lane(rot3(sum), axis), mul_lane(r_axis, sum)));
+    let b = rot3(sub_lane(mul_lane(r_e12, axis), mul_lane(r_axis, e12)));
+    let abs_axis = quad_abs(axis);
+    let term = rot3(add_lane(
+        mul_lane(rot3(abs_axis), half),
+        mul_lane(abs_axis, d0),
+    ));
+    let edge = sub_lane(
+        sub_lane(mul_lane(quad_abs(a), HALF), mul_lane(quad_abs(b), HALF)),
+        term,
+    );
+    if lt_mask(EDGE_EPS, edge) & 7 != 0 {
+        return 0;
+    }
+    1
+}
+
 /// `0x142cce430`: one triangle against the query block.
 ///
 /// The leaf's first test is `CMPLEPS` of the block's scaled expansion against

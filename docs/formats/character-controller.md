@@ -2493,6 +2493,23 @@ point transform), one of two colour pairs `(1.0, 0.3)` chosen by `resolved & 1`
 and `record.flags & 0x18`, and a `0.1`-long normal ray from the centroid. It is
 **not** part of the result.
 
+### The overlap test's port is unverified
+
+`ow_sim::collide::box_triangle_overlap` is a lane-for-lane port of
+`0x142cd58a0`, driven through `box_triangle_overlap` in
+`crates/ow-sim/src/bin/verify_probe.rs`, with the fixture at
+`dev/verify_harness/box_triangle_fixture.py` and the unit at
+`dev/verify_harness/units/scaffolds/fn-BoxTriangleOverlap.json`. **It is not a
+claim and it is not in the gate.** The port agrees with the client on 346 of
+349 cases and diverges on three where the triangle only touches the box: a
+triangle lying in the box's own face plane, a zero-size box sitting at a
+triangle's interior point, and one special-value case. Two transcription
+errors were found and fixed on the way - the third edge's two cross terms were
+swapped - and a fourth, still unfound, disagreement remains in that same
+family, so the sign or the operand order of one of the `|a|*0.5 - |b|*0.5`
+terms is probably still wrong. Until all 349 agree, the read above describes
+the client and the Rust beside it is an attempt.
+
 Still open, and each is a single-function read:
 
 | address | what it answers |

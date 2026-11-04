@@ -968,6 +968,36 @@ fn collision_filter_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), Stri
     Ok((format!("{:x}", ret), vec![a, b]))
 }
 
+/// `0x142cd58a0`: the triangle-box overlap test the mesh gather runs on every
+/// candidate triangle. `arg0` is the 8-float box (low corner then high
+/// corner), `arg1..arg3` the three vertices as float4 quads. The compared
+/// channel is the whole return register, which the client leaves as `SETZ AL`
+/// over the last `MOVMSKPS`, so it is `0` or `1`.
+fn box_triangle_overlap_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let box8 = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x20 => b,
+        _ => return Err("arg0 must be the 8-float box".into()),
+    };
+    let p0 = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x10 => b,
+        _ => return Err("arg1 must be vertex 0".into()),
+    };
+    let p1 = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x10 => b,
+        _ => return Err("arg2 must be vertex 1".into()),
+    };
+    let p2 = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x10 => b,
+        _ => return Err("arg3 must be vertex 2".into()),
+    };
+    let ret = ow_sim::collide::box_triangle_overlap(&box8, &p0, &p1, &p2);
+    Ok((format!("{:x}", ret), vec![box8, p0, p1, p2]))
+}
+
 /// `0x142cb8b80`: a shape entry's world frame. `arg0` is the `0xc0`-byte
 /// shape entry, `arg1` the `0x20`-byte output (position quad then quaternion
 /// quad), `arg2` the world record, and `arg3`/`arg4` the two pools the
@@ -1716,6 +1746,7 @@ fn handle_call(
         "collision_sweep_bounds" => collision_sweep_bounds_entry(args),
         "collision_sphere" => collision_sphere_entry(args),
         "collision_filter" => collision_filter_entry(args),
+        "box_triangle_overlap" => box_triangle_overlap_entry(args),
         "collision_transform" => collision_transform_entry(args),
         "collision_narrowphase" => collision_narrowphase_entry(args),
         "query_driver" => query_driver_entry(args),

@@ -3,6 +3,19 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-07 - the triangle-box overlap is ported, and it is not yet proven
+
+- `ow_sim::collide::box_triangle_overlap` is a lane-for-lane port of
+  `0x142cd58a0`, ported from the instruction stream rather than the decompile
+  (the decompile reuses names across the three edge blocks and hides which
+  register feeds which term).
+- The harness unit is at
+  `dev/verify_harness/units/scaffolds/fn-BoxTriangleOverlap.json`, **out of the
+  gate on purpose**: 346 of 349 fixture cases agree and three touching-geometry
+  cases diverge. Two real transcription errors were caught this way - the third
+  edge's cross terms were swapped - so the differential harness did its job
+  even though it has not yet passed.
+
 ## 2026-11-07 - the mesh gather, its accept, and the closest point are read
 
 - The refinement's candidate gather is `0x142caea70`, a **box-BVH walk**, not a
