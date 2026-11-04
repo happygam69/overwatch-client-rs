@@ -7,6 +7,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 
 | tool | what it answers | lines |
 |---|---|---|
+| `_dbg.py` | Re-derive ConstructEngineSubsystems' schedule from the instruction stream. | 400 |
 | `anim_chain_args.py` | Collect the animation-chain function list (main module) for headless. | 79 |
 | `audit_image.py` | Audit the ground-truth image's function bookkeeping: `.pdata` facts, bridge counts and the name table. | 253 |
 | `brush_mesh_oracle.py` | Oracle for stage 1 of the brush tree -> mesh conversion. | 450 |
@@ -21,6 +22,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `clip_lab.py` | Analysis workbench for the animation clip chunk (asset type 0x006). | 211 |
 | `clip_layout.py` | Map a clip's reference graph and solve for the element size of each block. | 146 |
 | `clip_structure.py` | Dump the entire file structure to find pose data. | 57 |
+| `codec_scan.py` | Enumerate the client's out-of-line 64-bit obfuscation primitives. | 123 |
 | `corpus.py` | Build and query a standing corpus for the current image. | 675 |
 | `data/bc7oracle/texture2ddecoder/__init__.py` | A python wrapper for [Perfare](https://github.com/Perfare)'s [Texture2DDecoder](https://github.com/Perfare/AssetStudio/tree/master/Texture2DDecoder). | 31 |
 | `data/gen_body.py` | (no header) | 25 |
@@ -62,7 +64,23 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `data/tmp/stats42.py` | (no header) | 7 |
 | `deviation_check.py` | Check that the legacy deviations and the code agree. | 92 |
 | `disp_scan.py` | Every instruction in `.text` whose memory operand has a given displacement. | 117 |
-| `field_index.py` | Field-access index over the complete client image. | 417 |
+| `eng_build.py` | Build the engine-slot table by walking the disassembly block by block. | 96 |
+| `eng_bytescan.py` | Byte-level scan of ConstructEngineSubsystems for 64-bit stores with a | 56 |
+| `eng_class_profile.py` | Profile every subsystem class: its constructor and its vtables. | 368 |
+| `eng_csv.py` | Produce the engine-slot table from the linear-sweep disassembly. | 130 |
+| `eng_csv2.py` | Emit dev/engine_subsystems.csv from dev/eng_tab.json plus tail/attach facts. | 107 |
+| `eng_dump.py` | Linear-sweep disassemble a VA range of the offline image, skipping bad bytes. | 48 |
+| `eng_filter.py` | Filtered view of the engine dump: keep only decision-relevant instructions. | 43 |
+| `eng_gen_classes.py` | Write `crates/ow-engine/src/classes.rs` from the constructor/vtable profile. | 160 |
+| `eng_gen_subsystems.py` | Generate `crates/ow-engine/src/subsystems.rs` from the verified census. | 370 |
+| `eng_rip.py` | Resolve every rip-relative memory operand in the engine dump and report | 46 |
+| `eng_tab.py` | Per-block reconstruction of ConstructEngineSubsystems (0x140554220). | 118 |
+| `eng_table.py` | Reconstruct the engine-slot table of ConstructEngineSubsystems (0x140554220). | 86 |
+| `eng_verify_schedule.py` | Re-derive ConstructEngineSubsystems' schedule from the instruction stream. | 409 |
+| `eng_win.py` | Print raw disassembly windows (multiple ranges) from the engine dump. | 35 |
+| `engine_ref_scan.py` | Find every RIP-relative reference to one or more data addresses in .text. | 122 |
+| `engine_slot_consumers.py` | Which functions consume which `[engine + slot]`, and what they do with it. | 370 |
+| `field_index.py` | Field-access index over the complete client image. | 477 |
 | `find_anim_decoder.py` | Find code that reads the animation clip header, by the loads it must make. | 107 |
 | `find_field_writes.py` | Find the code that reads or writes one struct-field offset. | 124 |
 | `find_tables.py` | Find large arrays of code pointers (jump/dispatch tables) in the module image. | 79 |
@@ -91,6 +109,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `pe_layout.py` | Classify an address in the install's PE: raw-backed, zero-fill (BSS), or unmapped. | 125 |
 | `pool_lea_args.py` | Which function collects a given object offset and hands it to a helper. | 61 |
 | `pool_scan.py` | Verified store/load census for the Domino world's pool-table fields. | 384 |
+| `probe_candidate_evaluator.py` | Run the fan's candidate evaluator `0x1420328c0` offline with a built world. | 711 |
 | `probe_cellbytes.py` | Diagnostic: settle MapChunkCellBytesFixup's array/record indirection. | 137 |
 | `probe_evaluator.py` | Trace one call of an obfuscated function, to map its executed blocks. | 171 |
 | `probe_node_types.py` | Recover the node-type registry table from the image. | 170 |

@@ -9,6 +9,83 @@ read, it stays here and the gameplay feature stays unimplemented.
 
 ---
 
+## 0. The engine object and its subsystem schedule
+
+**Status: the object, both constructors, its interface registry and the
+subsystem schedule are read and shipped in `crates/ow-engine`; the creation
+step's five callees, the meaning of the 65 subsystem rows and the 20 dropped
+constructions are open.**
+
+Read (`0x470` bytes, published in `[0x143b7f410]` by `0x140585220`):
+
+- `WorldBaseCtor` `0x141c507c0` and `WorldCtor` `0x1405838c0`: every field
+  offset and every written value, including the two codec-encoded seeds, the
+  placeholder `INTERFACE_ARRAY(0)` (`0x4daa5a973c0808b6`) at `+0x058`,
+  `+0x1f4 = 0.25`, `+0x1f0 = 0x10` and the 71-slot table at `+0x228`.
+- `+0x008` is `(the constructor's **fifth** argument == 0)`: entry spills `r9d`
+  into the fifth argument's home slot and compares that. The sixth argument
+  lands at `+0x178`.
+- `+0x018` and `+0x058` are written twice as well. `+0x018` ends as an encoded
+  heap pointer (`0x18317a531d116c0c` family, `World::encode_q_18`); `+0x058`
+  ends as `((r8 ^ 0x238e31e8cd062f58) ror 0x31) + 0x34b5f414245bf6ef`
+  (`World::encode_q_58`). The constants the constructor writes first are
+  placeholders, like `+0x460`'s.
+- `+0x460` is written twice: first as the address codec at 0, then as the same
+  codec applied to the address of a `0x1b8`-byte object the constructor builds
+  (`0x140be33c0`) and drops. The field is therefore an encoded heap address.
+- `+0x468` copies the u32 at `0x1441880e8` (zero-fill), and `0x140585220` then
+  overwrites it with `[0x141c51cc0(...)+0x138]`.
+- The codec helpers `0x140543a40` (`EncodeSeed38`) and `0x1405674e0`
+  (`EncodeSeedB0`) were created as functions in the Ghidra project; they are
+  called directly from `0x141c507c0` but had no boundary.
+- `RegisterWorldInterface` `0x141c52d10` (inline codec), the array growth
+  `0x140767da0` (half-again, borrowed-tag in capacity bit 31), the index-map
+  builder `0x141c553a0` and the insert `0x141c56fb0` (which also stores the
+  encoded engine back pointer at `subsystem+0x008`).
+- `ConstructEngineSubsystems` `0x140554220`: its 65-row schedule and the
+  21-entry tail attach list are a per-row decode of the instruction stream
+  (`dev/eng_verify_schedule.py`, reconciled on 1531 instructions, 80 `Alloc`,
+  84 registrations, 65 stores and the five empty offsets), modelled in
+  `ow_engine::subsystems` with `tests/subsystem_schedule.rs`; `World` refuses a
+  slot the client never writes. The bytes agree with the Ghidra project at the
+  sites sampled.
+- The **35 constructors and their 96 vtable installs** (`dev/eng_class_profile.py`
+  -> `ow_engine::classes`, `tests/class_layout.rs`): 70 constructor-installed
+  tables + 47 block-stored tables, disjoint (117). All 31 stub slots have a
+  block store that overwrites the stub's `0x142f7d778`, so they are derived
+  classes sharing one base constructor; the object's `+0x00` table is
+  block-stored in 32 slots, constructor-installed in 30, unobservable in 3
+  (`+0x220`, `+0x340`, `+0x358`); `+0x2f0` is an aggregation of six sub-objects
+  and `+0x308` the one non-stub slot the block re-points. A table's length is
+  only read where both ends are known: 44 of 117 are exactly 15 entries, two
+  stop at the read cap and are open.
+
+Open, in the order they block progress:
+
+1. **What each subsystem *is*.** The producers and vtables are read (35
+   constructors, 117 tables) but not one class is named. The unit to name is a
+   slot's own **15-entry table** (44 of the 117 are exactly 15 entries; a
+   longer read has run into the neighbouring tables of the bank). A name needs
+   a method inside those 15 entries that calls a known subsystem API, or a
+   consumer that identifies the subsystem. Four tables contain a curated name
+   and none is inside a slot's first 15 entries, so the four are leads, not
+   answers. Also start with the three objects whose `+0x00` table is not
+   observable in the schedule (`+0x220` decode, `+0x340`/`+0x358` factories)
+   and with the `+0x448` adjustor, whose `0x68`-byte object is built inline.
+2. The 20 registrations whose objects never reach a slot, including the
+   `Alloc(0x980)` object that follows `+0x220` and the anti-tamper block's
+   garbage interface.
+2. `0x140585220`'s unread callees: `0x141c57c40` (the constructor's second
+   argument), `0x141c52fc0` (runs right after publication),
+   `0x141b33e20`/`0x141c61a80` (a stack "debug name" pair staging `0x6f`),
+   `0x141c51cc0` (the lookup whose `+0x138` becomes `+0x468`), `0x141c56970`.
+3. The pointer→index map at `+0x198` is not modelled, only its effect on the
+   array's growth.
+4. `+0x0e8..+0x1c8` and the other unwritten ranges are assumed zero because
+   `Alloc`'s flag-0 path zeroes; not yet proven by a read for this call site.
+
+Where: `docs/formats/engine.md`, `crates/ow-engine/`.
+
 ## 1a. The fan's per-candidate refinement block
 
 **Status: the block is read and implemented; the outer walk is open.**
@@ -36,6 +113,41 @@ and both reflection bytes). What remains behind the `CandidateSolver` seam is
 not the loop but two inputs: pass 0's `MoverWishQueryCached`, and the shape-ring
 branch behind the global toggle (`0x141ae3eb0`'s corner/extent pair,
 `0x140cc2290`'s mesh-face refinement). Those are the next anchors.
+
+**Fixed 2026-11-06: the ring's comparison operand.** `solve` projected the
+query point, which is the same for all `n` steps, so the ring kept its first
+facing hit. The documented acceptance is a strictly smaller `|projection|`
+than the best so far, and the only quad that varies is the candidate `A`; the
+code now projects `A`. Two tests pin it (see
+`docs/formats/character-controller.md`).
+
+**Closed 2026-11-06: pass 3 is not five candidates.** The composition step 6
+was a misreading. Pass 3 is one snap of the accepted direction's `y` lane onto
+the plane `dot(p - out_dir, n) = 0` with `n` the accepted direction itself:
+`s = -dot(n, end - start)` (skip below `1.1920929e-7`), `t0 = dot(start, n) -
+dot(out_dir, n)`, `t = (2r - r*r*s)*t0` with `r = RCPSS(s)` (one Newton step,
+`2.0` from `0x1431107f0`), skip unless `0 <= t <= 1`, then `out_dir.y = (start
++ t*delta).y`. Addresses `0x140cb98fa..0x140cb99b9`; the `0x80000000` splat at
+`0x142f817a0` is the negation and `0x142f7aad8` is FLT_EPSILON. The five-quad
+loop with `s = dot(scale, base - cand)` and the `out_dir.y < 0` gate is the
+**shape branch** (`_DAT_1439b07b8` set), whose quads come from
+`FUN_141ae3eb0`'s corner and extent, not from pass 3.
+
+**Open, and the next read in `0x140cb86c0`: the stage order.** The function is
+1450 instructions and the doc's four-pass map is incomplete. In address order
+the stages are: an early block that seeds `[rbp+0x550]`/`[rbp+0x560]`
+(`0x140cb8c19`, `0x140cb906e`, `0x140cb92f3`), a loop that reads them at
+`0x140cb9518`, the pentagon loop (`0x140cb96c1`), the pass-3 snap
+(`0x140cb9884`), and the `2*pi/n` ring loop (`0x140cb9ae0`) which overwrites
+those two endpoints at `0x140cb9b5f`/`0x140cb9b66`. So the snap reads the
+endpoints written at `0x140cb92f3`, **not** the ring loop's, and the pentagon
+runs before the ring. `ow-sim::fan::back_snap` carries the snap but `solve`
+does not call it: wiring it needs the accepted candidate's real endpoints,
+which the current composition does not track.
+
+**Still open in the composer:** pass 0's cache, the shape-ring branch
+(`_DAT_1439b07b8`), the mesh-face refinement `0x140cc2290` and the tagged-hit
+`MoverWishTransform` path.
 
 ## 1. The mover's input→velocity control law
 
@@ -512,13 +624,13 @@ initialise step (`owner+0x620` = the 0x3210-byte geometry, two worlds from
 `FUN_1404f6e10` registers `FUN_142029f00` as node type 2 in `0x141c5ff40`;
 that factory builds a 0x30-byte type descriptor (vtable `0x1433654a0`) and
 registers a 0x910-byte class via `0x141c4b050` → `TypeRegistrationCore`. The
-descriptor's slot 2 (`0x1407803f0`) is **instantiate-by-key**: it
-de-obfuscates the key, calls `(*(*key))(key, 0)` (the class's own
-deserialiser) and then `[container+0x20]->vtable[0x58]`. The next read is the
-key that selects the geometry class (or the map-side node carrying the
-collision chunk); the consumer reads the fixed-up component offsets
-`+0x10`/`+0x58`/`+0x68` directly, so it will not appear in a hash search
-either.
+descriptor's slot 2 (`0x1407803f0`) is a **release**, not an instantiate (round
+12 below): it returns the instance to the allocation strategy, so the earlier
+"key that selects the geometry class" is withdrawn. The creation is slot 1
+(alloc) followed by the node's slot 8 with the record; the next read is the
+asset-preload service's `vtable+0x38` (the all-preloads-done callback). The
+consumer reads the fixed-up component offsets `+0x10`/`+0x58`/`+0x68` directly,
+so it will not appear in a hash search either.
 
 **The STU load path is read (2026-11-01), and it explains the fixup**
 (`formats/stu.md`, "The load path"): `FUN_1421d26d0` resolves each sub-record
@@ -1222,6 +1334,11 @@ per-model bodies share the node's world slot.**
 
 **Open (round 9):** whether a placed node passes the node gate (`[node+0x454]`
 bit `0x200`, copied from the node creation record's `+0x10` at `0x14202c6e4`).
+**Round 13 addendum (2026-11-03):** the record is now read structurally as
+`{+0x10 flags, +0x18 world/transform descriptor}`; `+0x18` is read at its
+`+0x10` into `[node+0x630]` (`0x14202d1c6`) and handed to the world allocator
+`0x142cc3c80` twice for the two world slots, so the gate word and the node's
+placement arrive in the same record. Its producer is still the anchor.
 The creation entry is **`WorldBase` slot 8** (vtable `0x143367630`,
 `0x143367630 + 8*8 = 0x143367670`; the earlier "slot 32" measured `0x100` from a
 neighbouring table base). `WorldBase` is `0x910` bytes (ctor `0x1420271d0`,
@@ -1282,6 +1399,134 @@ orientation fix-up, four vertex / six edge / face regions, the interior
 120 seeded descriptors and 0 of the 18 mesh cases. `simplex4` is a documented
 open branch, not a guess. That is **runtime, not asset, data**, so no install test
 is written — the doc says `not tested`.
+
+**Round 12 (2026-11-02): two false leads are removed; the next anchor is the
+map-load path.** (a) The class static descriptor's slot 2
+(`0x1407803f0`, formerly named `TypeDescriptorInstantiate`) is a **release**, not an
+instantiate: it calls the instance's first vtable entry and returns the memory
+through the allocation strategy's slot `0x58` (`0x141c5f420`, a per-block
+free-list return; the allocator is slot `0x50`, `0x141c5ef30`, reached by
+`0x141c4b270`). So the "key that selects the geometry class" is withdrawn —
+the decoded word is the instance handle. (b) The "world-creation path is
+obfuscated" row is withdrawn: `0x14055a0f0` is the map-load entry (it registers
+the CVar whose name decodes to `debug.showMapLoadAfterMS`), truncated in the
+project image by a false `noreturn` (`0x141bb8d40` returns); its `0x140be1570`
+builds a `0x910` `WorldBase` plus a `0x2ad0` camera-view object for the
+map-load path, and is the **only** `E8` caller of `WorldBaseCtor`. Node
+instances go through the reflected type allocator `0x1420266d0`, which has no
+`E8` caller and one 8-byte pointer (`0x1433654a8`). (c) A third holder consumer
+exists: `0x142090e00` (13 contiguous `.pdata` entries, span
+`0x142090e00..0x142094d34`, stored as a 186-byte stub) creates a Domino world
+and body per streaming owner through `0x142cdf8e0`/`0x142cdf930` ->
+`0x142cde350` -> `0x142cc3c80`, sets the world record's `+0x19b` byte, and
+walks holders with `+0x2a == 4`; the range has none. **Next anchor:** `[[service]+0x38]`, the all-preloads-done callback in
+`0x141fe0580` (reached from `MapPreloadAssets` `0x14077b7d0` and
+`0x14077b5e0`). The state object is the `0xf8`-byte global `_DAT_143b796a8`
+(ctor `0x140544de0`): three GUID maps at `+0x88`/`+0x90`/`+0x98`, a lock at
+`+0x28`, total `+0x68`, done `+0x6c`. The service class is identified: vtable `0x142f8d970`, size `0xf8` (deleting
+destructor `0x14077afa0`), and slot `+0x38` is `0x141fe0f80`, which sets the
+loaded byte at `+0x78` and clears `+0x70` -- the callback only flips the state.
+The level start is the **poller of `service+0x78`**, the next read. The service
+pointer is the encoded field at `context+0x78` (decoded by `0x14054a010` with
+the anti-tamper qword at `0x143b79598+0x2f`). `0x140554220` is the engine
+subsystem constructor, not the map load.
+Full detail: `formats/static-collision.md` check 17.
+
+**Round 13 (2026-11-03): the evaluator runs end to end offline, on a built
+world.** `dev/probe_candidate_evaluator.py` seeds the two prologue globals, the
+guard block `Q = [0x143b79598]`, the `world+8` service decode, a domino record
+and one type-3 shape, then runs `0x1420328c0` under the harness oracle. It
+reaches the wrapper, the obfuscated body, the handle dispatcher, the query
+driver, the narrowphase, the type-3 mesh walk and the hit policy, and fills the
+answer record: point `(0.75, 0.9, 0)`, normal `(0, 0, 1)`, fraction `0.5`,
+`word34 = 1`, ids `0x12`/`0x22`. The guard's "two encodings" question is
+**closed**: the key byte is the constant `0x26`, the table is at
+`0x142f7d158`, and the equal branch is a null-byte read trap (r12 is zeroed at
+`0x14203db79`), so one body exists. The record layouts (pass sub-records at
+`+0x1b0`, entries at `+0x2b8`, transform pool at `+0x2a0`, type-3 pool at
+`+0x318`) are in `formats/character-controller.md`.
+
+**The real geometry now runs too.** `crates/ow-tank/examples/mesh_world_dump.rs`
+writes the assembled world (272 distinct shapes, 4,797,872 bytes) and the
+probe's `--mesh-world` builds the record, entries, pools and BVH around it. With
+the pinned shape alone, the client reproduces `mesh_world_real`'s pinned hit
+exactly (point `(0.99500012, 4.0, 0.99500012)`, normal `(0, 1, 0)`, fraction
+`0x3e8051b8`, triangle `7`).
+
+**Round 20 (2026-11-06): the placeable transform is read and applied.** The
+dump now carries **3,017 placed instances** — one per model-group entry, each
+with the entry's `translation`/`rotation` — and the probe writes them into the
+owner pool `[record+0x2a0]`, which is where `ShapeWorldTransform`
+(`0x142cb8b80`) reads a shape's world frame. With all 3,017 in one BVH the
+pinned query returns **the same answer record byte for byte** as the
+single-instance run (point `(23.947973, -19.990925, 31.369896)`, normal
+`(0.360226, 0.926024, 0.112766)`, fraction `0x3e8051b8`, triangle `6`). Before
+the placement the same query hit a different shape (y `5.843`, triangle
+`7054`), so the local frames were the whole of the error. The chain is:
+`STUModelComponentInstanceData`'s `m_pose` triple -> the scene component's
+`+0x20` vtable slot `0x142003720` -> `0x142000620` -> component `+0xd0`
+(quaternion) / `+0xf0` (position) -> the collision builder -> `OwnerCreateBody`
+`0x142cc3d90` -> body `+0x20`/`+0x10` -> `ShapeWorldTransform`.
+`docs/formats/character-controller.md` carries the addresses.
+
+**Round 19 (2026-11-03): the map blob carries the chunk payload pointers.**
+`LoadMapAssetChunks` (`0x141ff5c80`) stores one handle per chunk in the map
+asset blob; the completion `0x142e49400` decodes them and writes the payload
+pointers at `+0x2F8` (collision, kind `0x11`), `+0x300` (pathing), `+0x308`
+(streaming), `+0x310`/`+0x318`/`+0x320` (slots `0x20`/`0x1F`/`0x23`), with the
+extra-chunk payload array at `+0x2F0` and the "loaded" byte at `+0x410`.
+`DmWorldConstruct` sizes a `0x58`-stride pool at `world+0x348` from the
+description's `+0x40 + +0x44`; `0x142cc2ae0` walks it with `0x58` stride and
+`0xC0` records at `world+0x2B8`. The collision chunk's `0x58` sectors are
+pointer-based, the world's pool records are index-based, so they are not the
+same record. `dev/field_index.py` gains a `map-asset` profile; no
+first-argument consumer of the blob exists in the map/scene/collision bands
+(the completion itself is a naked thunk target without `.pdata`), so the
+sector consumer is likely a job lambda reached through the job table.
+
+**Round 18 (2026-11-03): the node record is read field by field, and the map's
+entity components are named by data.** The record consumer `0x14202c660` is
+decompiled whole (`formats/static-collision.md` check 18): `+0x00` id ->
+state record `+0x170`; `+0x10` flags -> `[node+0x454]`; `+0x18` a **Domino
+settings description** whose `+0x10` block is copied to `[node+0x630]` and
+which is passed to `0x142cc3c80` twice for two worlds; `+0x28`..`+0x48`
+copied; `+0x50` an asset reference decoded with `ror 0xf`/add/xor; `+0x60`..
+`+0x8f` -> node `+0x878`..`+0x8a4`; `+0x90` copied by `0x141c60250`. Each flag
+bit has a read site (`0x20` state record, `0x200` geometry + worlds, `0x01`,
+`0x02`, `0x04`, `0x40`, `0x80`, `0x4000`, mask `0x15`). The description is a
+**capacity template** (19 pool counts at `+0x20`..`+0x70` in
+`DmWorldConstruct`; rotation `+0x10`/w `+0xac`, layer count `+0x20`, child
+list `+0x140`/`+0x160` in `ConstructDominoWorld`), not map geometry, so a
+node's worlds start empty of shapes. The init's own `OwnerCreateBody`
+descriptor is constant (no shape source): the init creates a body record but
+no shape. The 0x300 object it allocates on flag `0x20` is a separate **state
+record** (`0x142026e20`, no vtable, id at `+0x170`), not the builder's scene
+component. Separately, the map's entity component records are `{u32 component
+id, u32 offset}`, and the STU asset at the offset names the class
+(`crates/ow-tank/examples/map_entity_probe.rs`): 550 entities, 644 records,
+13 ids, 6 named (`0x02` `STUModelComponentInstanceData` on 475, `0x03`
+`STUStatescriptComponentInstanceData`, `0x06` `STUWaypointInstanceData`,
+`0x0b` `STUTargetTagInstanceData`, `0x10` `STUECAISpawnerInstanceData`,
+`0x11` `STUECHintPointInstanceData`); none of the 13 is a collision
+component, matching the collision component attaching at the node.
+
+Next for this item: (a) ~~the placeable transform~~ — **read and applied**: the
+builder's second argument is the **0x300-byte scene component** (ctor
+`0x141ff90e0`, kind `0x14`, vtables `0x1433632e0`/`0x143363320`), attached to
+the node's component list `[node+0x520]`/`[node+0x52c]`; its vtable `+0x20`
+slot is `0x142003720`, which copies three quads out of the component's instance
+data (`+0x160` position, `+0x150` scale, `+0x140` quaternion) and hands them to
+`0x142000620`, the writer of `+0xd0`/`+0xe0`/`+0xf0`. The map chunk carries the
+same triple per placed model (`ModelGroupEntry`), and the probe reproduces the
+client's answer with all 3,017 instances placed; (b) the record's producer, now
+constrained to a writer that supplies a Domino **settings** description with
+the flags word; (c) a Rust implementation of the four-pass driver, so the
+probe's oracle can become a `fn/CandidateHitPolicy` unit; (d) the geometry's
+variant table for negative ids; (e) the **serialised** mapping from the
+`STUModelComponentInstanceData` stream to the `(position, scale, quaternion)`
+triple — the client reads it through the component's accessor, so a Rust
+reader that wants the component's own value rather than the map chunk's must
+read `m_pose` (class `0x936A1A00`, not in the reference class list).
 
 ---
 
@@ -1435,6 +1680,16 @@ application and sampler path above remain open.
 **What would settle it.** Read the client's material application and texture
 sampler path, then account for every submesh. Do not assume missing install
 content; the bundle-aware path opens the assets.
+
+**Hazard recorded 2026-11-06 (descriptor size walk).** The walk's mip count is
+`field - bias` in 32-bit wrapping arithmetic, where `field` is the 4-bit
+descriptor word at bits 39..42 and `bias` is the caller's requested mip. A
+16-mip chain stores `0`, so any `bias > 0` asks for `2^32 - bias` levels and
+the client's loop would spin that long before answering. No caller in the
+image was found passing such a bias, so the port keeps the read arithmetic and
+`ow-tank`'s `verify_probe` refuses `bias > field` instead of generating a case
+no client can complete. If a real caller is found with `bias > field`, that is
+the read that settles which of the two operands is a count.
 
 **Next anchor.** `formats/materials.md`, `crates/ow-tank/src/material.rs`,
 `crates/ow-scene/src/lib.rs`.

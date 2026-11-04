@@ -145,6 +145,66 @@ MODIFIER_REC_FIELDS = {
     0x1C: "end", 0x20: "end2", 0x28: "field_id", 0x2C: "op",
     0x30: "value", 0x34: "bound",
 }
+# The asset-preload service (`_DAT_143b796a8` +0x78): three GUID maps, a
+# refcount pair and the catalog sub-object. `MapPreloadAssets` and the
+# all-preloads-done callback both take it as their first argument.
+PROFILES["preload-service"] = {
+    0x08: "started",
+    0x28: "lock",
+    0x68: "total",
+    0x6C: "done",
+    0x70: "pending",
+    0x78: "loaded",
+    0x88: "map.0x75",
+    0x90: "map.0xc5",
+    0x98: "map.0x77",
+    0xB8: "catalog",
+}
+
+# The map asset (type 0x002, e.g. 2,928 B for the practice variation): the
+# loader `LoadMapAssetChunks` (0x141ff5c80) stores one asset handle per chunk
+# field and the completion `0x142e49400` decodes each handle into its payload
+# pointer. The collision chunk's payload (kind 0x11) is `payload.collision`.
+PROFILES["map-asset"] = {
+    0x1B0: "extra.count",
+    0x1B4: "extra.guids",
+    0x1B8: "chunk.collision",
+    0x1C0: "chunk.pathing",
+    0x1C8: "chunk.streaming",
+    0x1D0: "handle.collision",
+    0x1D8: "handle.pathing",
+    0x1E0: "handle.streaming",
+    0x1E8: "handle.slot20",
+    0x1F0: "handle.slot1f",
+    0x1F8: "handle.slot23",
+    0x208: "handle.slots1",
+    0x2E8: "guid.array",
+    0x2F0: "payload.array",
+    0x2F8: "payload.collision",
+    0x300: "payload.pathing",
+    0x308: "payload.streaming",
+    0x310: "payload.slot20",
+    0x318: "payload.slot1f",
+    0x320: "payload.slot23",
+    0x410: "loaded",
+}
+
+# The placed scene component: ctor `0x141ff90e0`, 0x300 bytes, registration kind
+# 0x14, vtables 0x1433632e0/0x143363320. Its local transform is the quaternion
+# at +0xd0 and the position at +0xf0; the update `0x142003720` derives a world
+# matrix into +0x140..+0x16c. A writer of +0xd0/+0xf0 for a placed map entity
+# is the placeable transform the collision builder reads.
+PROFILES["scene-component"] = {
+    0xD0: "local.quat.x", 0xD4: "local.quat.y", 0xD8: "local.quat.z",
+    0xDC: "local.quat.w",
+    0xE0: "local.sx", 0xE4: "local.sy", 0xE8: "local.sz", 0xEC: "local.sw",
+    0xF0: "local.pos.x", 0xF4: "local.pos.y", 0xF8: "local.pos.z",
+    0xFC: "local.pos.w",
+    0x140: "world.0", 0x144: "world.1", 0x148: "world.2", 0x14C: "world.3",
+    0x150: "world.4", 0x154: "world.5", 0x158: "world.6", 0x15C: "world.7",
+    0x160: "world.8", 0x164: "world.9", 0x168: "world.10", 0x16C: "world.11",
+}
+
 PROFILES["modifier-records"] = {
     0x870: "table.ptr",
     0x878: "table.count",

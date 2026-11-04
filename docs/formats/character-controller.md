@@ -740,22 +740,31 @@ step) and reads back `source+0x00` (the wish) and `source+0x40` (the gate).
 
 `0x14203dae0` is **1158 bytes in the image's obfuscated region**. A trace of
 the function (below) shows the *reachable* code is small — the prologue
-`0x14203dae0..0x14203dbd9` plus the body `0x14203de51..0x14203e0fe` — and the
-scattered blocks (`0x14203f5bb`, `0x1420404ab`, `0x142046b12`, …
-`0x1420543f2`) are junk that real data does not reach.
+`0x14203dae0..0x14203dbd9`, the world-table lookup `0x14203dc51..0x14203ddf1`
+(entered only when `[0x143b795b0]` and `[0x143b795a0]` are non-null), and the
+body `0x14203de51..0x14203e0fe` — and the scattered blocks (`0x14203f5bb`,
+`0x1420404ab`, `0x142046b12`, … `0x1420543f2`) are junk that real data does
+not reach. The lookup reads a sorted `i32` table: `count` at the object's
+`+0x00`, array pointer at `+0x08`; a miss continues to the guard.
 
-**The guard is pointer-keyed, not data-keyed.** The body starts by reading the
-caller's home slot for `RCX` (`[rsp+0x20]` in its frame, i.e. the low byte of
-`param_1`), adding `0x84` and `0x7c` through two one-instruction stubs
-(`0x14053de90` = `add byte [rcx], 0x84; ret`, `0x14053be10` = `add byte
-[rcx], 0x7c; ret`), then decoding that byte through the nibble table at
-`0x1433d158`, XORing with the build byte `0x143847d3c` and `[Q+0xdd0]`, and
-comparing to `0x40`. So the opaque predicate selects a variant from the
-**pointer value**, which is why a straight decompile is unusable: the two
-variants are different encodings, and an emulator can be made to take either
-by choosing the world pointer's low byte. Both variants must agree — the
-predicate is obfuscation, not behaviour — but that is a claim to test, not to
-assume.
+**The guard is constant-keyed, and the equal branch is a trap (2026-11-03).**
+The entry at `0x14203de51` is a misaligned decode of the preceding instruction:
+it **writes** the constant `0x26` into its own stack slot `[rsp+0x20]`, then
+feeds that byte through two one-instruction stubs (`0x14053de90` = `add byte
+[rcx], 0x84; ret`, `0x14053be10` = `add byte [rcx], 0x7c; ret`, net +0x100)
+and back into the slot, so the value is unchanged. The decode is
+`nibble(0x26) = 0x96`, then `^ [0x143847d3c]` (`0x17`), `ror 5`, then `^
+[Q+0xdd0]`, compared with `0x40`; the nibble table is at **`0x142f7d158`**
+(the older `0x1433d158` was a digit short). The guard therefore depends on the
+anti-tamper block `Q = [0x143b79598]`, **not on the world pointer** — the
+earlier "pointer-keyed" reading is withdrawn.
+
+The equal branch (`0x14203deb6`) reads `[r12]`, and `r12` is zeroed at
+`0x14203db79` on every path that reaches the guard, so that branch is a
+**null-byte read trap**: it is not a second encoding of the body. The two
+branches do not "both agree"; there is one body and one canary. A probe that
+seeds `Q`, a world and a shape now runs the whole chain and returns a scored
+candidate (see below), which is the test the earlier note asked for.
 
 **The body is read.** With `param_1` the world, `param_2` the descriptor and
 `param_3` the caller's block:
@@ -817,6 +826,80 @@ always writes as `0` (`0x14203e022`), so it is dead on this caller; the
 `0x142cadf00` thunk it would call is a dynamic-import trampoline
 (`rax = [global]; jmp rax` else `jmp 0x141b328e0`), not the query.
 
+**The evaluator runs offline on a built world (2026-11-03).** `dev/probe_candidate_evaluator.py`
+now runs `0x1420328c0` end to end under the harness oracle and prints the
+answer record. It seeds the two globals the prologue tests, the guard block,
+the service chain, a domino record and one type-3 shape, then calls the
+wrapper. With a two-quad synthetic mesh and a sweep from `(0.75, 0.9, 5)` to
+`(0.75, 0.9, -5)` the client returns **1** (accepted) and fills the record
+with point `(0.75, 0.9, 0)`, normal `(0, 0, 1)`, fraction `0.5`,
+`word34 = 1`, ids `0x12`/`0x22`, key `0`, slot `0xffff` — the same triangle
+the `fn/MeshSweep` unit pins, reached now through the whole evaluator.
+
+What the probe had to build, all from the client's own reads:
+
+```text
+world+8 : the service slot, encoded; the body's decode is
+          add 0x1e2421a4798a328, ror 0x22, xor 0xe1379e3cb308170d, ror 0x2b,
+          then [p+0x28], sub 0x72184667dd2c7821, xor 0x8ef3269b22f53799,
+          add 0xb9e8ebfc25914471, load. Encoding a target is the inverse.
+world+0x620 : geometry; u16 handle at +0x31f8
+0x1442a0bc0 : holds a pointer to the handle table (not the table itself)
+record+0x1b0 + 0x28*pass : +0x30 BVH array, +0x44 root index (-1 = empty)
+record+0x2b8 : 0xc0 shape entries
+record+0x2a0 : transform pool, 0x50 stride: quat at +0x00, position at +0x10
+               (static path reads element +0x50, not +0x24)
+record+0x318 : type-3 pool, 0x50 stride: scale, 1/scale, root, vertices,
+               triangles
+entry : type byte +0x20 (3 = mesh), type index +0x24, transform index +0x50,
+        layer masks +0x98 (four u16), mode byte +0xb0 (0 = static)
+BVH node (0x40) : box min +0x00, box max +0x10, shape id +0x20,
+                  -1 leaf marker +0x2c
+```
+
+The query block the driver receives is built by `0x142cc45a0` from the
+evaluator's 0x71-byte struct: start/end quads, motion splat, support pointer
+and count, a constant rotation quad, the descriptor object's `+0x480` splat as
+expansion at `+0x50`, the constant `0.005` splat at `+0x60`, the layer mask at
+`+0x70` and the byte at `+0x72`. The pass flags `r9b` are byte 6 of the
+descriptor object's `+0x00` qword, which is the same qword whose first two
+`u16` lanes are the layer filter — so one 64-bit field carries masks, flags
+and the `+0x02` word the handle path tests.
+
+**The range's real geometry runs, and the pinned hit is reproduced
+(2026-11-03).** `crates/ow-tank/examples/mesh_world_dump.rs` writes the world
+`ow_tank::mesh_world` assembles (272 shapes, 4,797,872 bytes, base
+`0x1_0000_0000`) plus each shape's three array addresses; the probe's
+`--mesh-world` builds the record, entries, both pools and a BVH around it. With
+the one pinned shape in the BVH and the `mesh_world_real` query (a quarter of
+the way in on x and z in f32, swept from `high_y + 2` to `low_y - 2`), the
+client returns the pinned hit **exactly**: point `(0.99500012, 4.0,
+0.99500012)`, normal `(0, 1, 0)`, fraction `0x3e8051b8`, triangle `7`.
+
+Two details the record exposes:
+
+* the answer record's `+0x3c`/`+0x3e` are the policy's **resolved** id and
+  kind, not the triangle's ids. Triangle id `0x8000` is a negative `i16`, so
+  the policy looks it up in the geometry's variant table and falls back to the
+  pending id `1` when that table is not built — which is what the record shows.
+  A positive id passes through (the synthetic case's `0x12`/`0x22`).
+* with `--all-shapes` the pinned query hits **the same placed surface as the
+  single-instance run**, byte for byte: every shape carries its placement, so
+  the broadphase selects the instance under the query instead of whichever
+  overlaid shape came first. The point is a map coordinate
+  (`(23.948, -19.991, 31.370)` on the range), not a local one. Before the
+  placement was applied the same query hit another shape at y `5.843`,
+  fraction `0.0208`, triangle `7054`.
+
+**What is still open here.** (a) ~~the placeable transform~~ — **read**: the
+  scene component's `+0xd0`/`+0xf0` come from its instance data through
+  `0x142003720` and `0x142000620`, and the map chunk carries the same
+  `(translation, scale, rotation)` triple per placed model (see "The shape
+  world transform is read" below); (b) a Rust implementation of the four-pass driver
+(the narrowphase and the policy are already in `ow-sim`), which is what a
+`fn/CandidateHitPolicy` unit needs; (c) the geometry's variant table, which
+would let the policy resolve negative ids instead of returning `1`.
+
 **`0x142cbd510` is the collision query driver**: 877 bytes
 (`0x142cbd510..0x142cbd87c`), four passes over one island's shape list. It
 reads the eight quads of the block at `+0x00`/`+0x10`/`+0x20`/`+0x30`/
@@ -876,10 +959,27 @@ indices `+0x2c`/`+0x30`):
    the `MINPS`/`MAXPS` NaN rule are reproduced in `ow-sim::collide`.
 4. `entry+0x2c == -1` marks a leaf: `0x142cc1610(D, &hit, B, entry+0x20)` runs
    the narrowphase. Its return drives the driver: `1` ends the sweep, `2` is a
-   hit (the hit quad is folded into `minps` over the block's motion; when all
-   four lanes are below the current motion it becomes the new motion and the
-   swept end moves to `start + hit*delta`), anything else continues.
+   hit, anything else continues. The hit is folded into **two** running quads,
+   not one (read 2026-11-06): `XMM6` is a per-lane `minps` over every `2`
+   answer (`0x142cbd7a1`) and is what the driver returns (`0x142cbd7ff`,
+   `XMM0 = XMM6`); `[rbp-0x40]` is the operand the four-lane test compares
+   against (`CMPLTPS hit, [rbp-0x40]` at `0x142cbd799`) and is rewritten to the
+   hit itself only when all four lanes improved (`0x142cbd7ae`). So after a
+   partial hit the minimum keeps shrinking while the comparison operand stays
+   at the older, larger value. Each pass that runs re-seeds the operand from
+   the minimum (`0x142cbd603`, `MOVAPS [rbp-0x40],XMM0` where `XMM0` is the
+   previous pass's return), so the two only diverge inside one pass. The
+   all-lane branch also re-seats the swept box on `start + hit*delta`
+   (`0x142cbd7a9..0x142cbd7c3`).
 5. otherwise `entry+0x2c` and `entry+0x30` are pushed as child indices.
+
+Two details the earlier note had wrong. The flag byte is shifted once per pass
+whether or not the pass ran (`SHR R15B,0x1` at `0x142cbd80f`, on the shared
+tail), and the driver's return value is the folded **motion quad**, not a hit
+count - there is no counter in the function. `ow-sim::collide::query_driver`
+carries both folds (`fold_min` returned, `fold_cmp` the operand) and five
+tests pin the walk: the child order, the AABB prune, the flag-bit skip, the
+`1` answer ending a pass, and the per-lane minimum.
 
 So `0x142cbd510` is a bounding-volume hierarchy walk over one island's shape
 list: the four passes sweep the character's local support points, the per-shape
@@ -1047,17 +1147,67 @@ support-point path, declared), 12/12 mutants killed. The implementation is
 verified `sphere_sweep`.
 
 **The shape world transform is read.** `0x142cb8b80(entry, &out, record)`
-writes two quads (0x20 bytes) and is `0x150` bytes:
+writes two quads (0x20 bytes) and is `0x150` bytes. **Both branches index with
+`entry[0x50]`**, which is the attached record's own index — not
+`entry[0x24]`, which is the shape's index in the `+0x2b8` entry pool:
 
-* `entry[0xb0] != 1` (the path every static shape takes):
-  `out[0x00] = pool[idx][+0x10]`, `out[0x10] = pool[idx][+0x00]`, with
-  `pool = [record+0x2a0]` and `idx = entry[0x24]`, stride `0x50`.
-* `entry[0xb0] == 1`: the pose path. `idx = entry[0x50]`, `pose =
+* `entry[0xb0] != 1` (the owner path, and the path a hand-built static shape
+takes): `out[0x00] = pool[idx][+0x10]`, `out[0x10] = pool[idx][+0x00]`, with
+`pool = [record+0x2a0]` and `idx = entry[0x50]`, stride `0x50`. So the owner
+record carries the **quaternion at `+0x00` and the position at `+0x10`**.
+* `entry[0xb0] == 1` (the body path): `idx = entry[0x50]`, `pose =
   [record+0x288] + idx*0x1c0`. When `record[0x191] == 0` or
   `record[0x192] != 0` it copies `pose[+0x10]` and `pose[+0x20]`; otherwise it
   builds a normalised quaternion from `pose[+0x60]`..`pose[+0x90]`
   (`(2q*q)` magnitude fold, `sqrtss`+`divss`, then the cross-product terms).
   The two modes are selected per record, not per shape.
+
+**The two attachment paths are read, and they are what select the branch.**
+
+* `ShapeAddToBody` `0x142cb3940` decodes the handle (`generation<<48 |
+gen<<32 | index`), checks `[record+0x288][index][+0x00] == index` and
+`[+0x198] == generation`, then calls `FUN_142cb0a20(body, record, descriptor)`.
+That allocates an entry from `+0x2b8`, calls `ShapeEntryFromDescriptor`, sets
+**`entry[0xb0] = 1`**, then `entry[0x50] = body[0x00]` (the body's own index)
+and `entry[0x54] = body[0x158]`, and pushes the entry onto the body's list
+(`body[0x158] = entry_index`, `body[0x15c] += 1`).
+* `ShapeAddToOwner` `0x142cd4ef0` does the same against `+0x2a0`/`+0x2ac` and
+`FUN_142cd4350(owner, record, descriptor)`, which sets **`entry[0xb0] = 2`** and
+`entry[0x50] = owner[0x20]` (the owner's own index). `ShapeWorldTransform`'s
+`!= 1` test therefore sends owner-attached shapes down the `+0x2a0` branch.
+* `ShapeEntryFromDescriptor` `0x142cb7f10` itself writes `entry[0x50] =
+  -1` and never touches `entry[0xb0]`; the attach functions are the only
+  writers of both fields.
+
+**Where the transform comes from.** `OwnerCreateBody` `0x142cc3d90(owner_id,
+config)` takes eight floats — `config[0..3]` the quaternion, `config[4..7]` the
+position — validates them (no infinities, `|q|^2 > 1.17e-35`), allocates with
+`FUN_142cbff20`, and returns the handle. For a **placed model** the config is
+the scene component's instance data, read end to end:
+
+* the component's `+0x20` vtable slot (vtable `0x1433632e0`, slot 4) is
+  `0x142003720`, the instance-data apply. It copies three quads from
+  `*(accessor(instance_data, 1) + 0x10)` into the component: `+0x160` = the
+  **position** quad, `+0x150` = the **scale** quad, `+0x140` = the
+  **quaternion** quad, then calls `0x142000620`.
+* `0x142000620` is the local-transform writer. With `component[0x298] == 0`
+  (no parent) it takes those three quads as the local transform — quaternion,
+  scale, position, each accepted only when it differs from the current value
+  (`q·q_new < 0.9999999`, `|pos-pos_new|^2 > 1e-8`, same for scale) — builds
+  the 3x3 at `+0x60`/`+0x70`/`+0x80`, and writes **`+0xd0` the quaternion,
+  `+0xe0` the scale, `+0xf0` the position**. With a parent it hands over to
+  `0x141ffab90`, which composes `+0xd0`/`+0xf0` with `+0x298`.
+* the collision builder reads `[component+0xd0]` and `[component+0xf0]` as the
+  `OwnerCreateBody` config, so the shape's world frame is that
+  `(quaternion, position)` pair.
+
+The map chunk already carries the same triple: `teMapPlaceableModelGroup`'s
+`Entry` is `{translation[3], scale[3], rotation[4]}`
+(`ow_tank::mapchunk::ModelGroupEntry`), and a model-group placeable's own
+transform is identity. `crates/ow-tank/examples/mesh_world_dump.rs` therefore
+places one shape instance per entry, and the probe reproduces the client's own
+answer with all 3,017 placed instances in one broadphase
+(`dev/probe_candidate_evaluator.py --mesh-world ... --all-shapes`).
 
 **The evaluator's hit contract is read.** `0x14203dae0` has two query paths
 and two results:
@@ -1322,12 +1472,41 @@ composer runs these stages over a single `CandidateQuery`:
    pass replaces it, and a facing pass breaks. A `kind == 3` hit with
    `_DAT_1439b08d0` set hands the whole refine to the obfuscated indirect
    `0x140cc2290` instead.
-6. **Pass 3, the back-transform.** Five candidate quads are re-evaluated:
-   `s = -dot(cand, dir)`, `A = s*dir + cand + seed*dir`, `B = s*dir + cand -
-   speed*dir`; on a facing pass with `|proj| < best` **and** `last_dot < 0`
-   the output direction becomes `s*dir + cand` (that is `back_direction`),
-   the normal becomes the record's quad, and `out+0x41 |= (key>>8)&1` while
-   `out+0x42 = (key>>10)&1` (OR for the first, assignment for the second).
+6. **Pass 3, the back-transform (re-read 2026-11-06).** It is **not** a
+   five-candidate loop. Once a hit has been accepted, one snap runs at
+   `0x140cb9884..0x140cb99db` with `n` = the accepted direction
+   (`[rbp-0x80]`, copied from the candidate at `0x140cb9834`), `start`/`end`
+   the sweep's two endpoints (`[rbp+0x550]`/`[rbp+0x560]`) and `delta = end -
+   start`:
+
+   ```text
+   s  = -dot(n, delta)                 ; the hsum negated by 0x142f817a0 (0x80000000 x4)
+   if s < 1.1920929e-7 skip            ; 0x142f7aad8 is FLT_EPSILON
+   t0 = dot(start - out_dir, n)
+   r  = RCPSS(s)                       ; 0x140cb993e, the client's reciprocal idiom
+   t  = (2*r - r*r*s) * t0             ; 0x1431107f0 is 2.0f, one Newton step
+   if t < 0 or t > 1.0 skip            ; 0x142f7aae4 is 1.0f
+   out_dir.y = (start + t*delta).y
+   ```
+
+   The plane is `dot(p - out_dir, n) = 0` with `n = out_dir`: the snap seats
+   the direction's `y` at the point of the sweep whose projection on the
+   direction equals the direction's own. It writes only lane 1
+   (`MOVSS [rsp+0x74]`, `0x140cb99b9`); the other three lanes are untouched.
+   Note the endpoints it reads are the ones written at `0x140cb92f3`/
+   `0x140cb92fa`, not the ring loop's (`0x140cb9b5f`/`0x140cb9b66`, which come
+   later in address order), so the stage order inside `0x140cb86c0` is a
+   separate open question. The `out+0x41`/`out+0x42` bytes are written by the caller of this
+   block (`0x140cb98e2`/`0x140cb98f7`), from `word[rbp-0x52]`: `|= key & 1` and
+   `= (key >> 2) & 1`.
+
+   The five-candidate loop with `s = dot(scale, base - cand)`,
+   `A = s*scale + cand`, `E1 = A + seed*scale`, `E2 = A - speed*scale`, the
+   `|dot(E1, scale)| < best` test and the `out_dir.y < 0` gate is the **shape
+   branch** (`_DAT_1439b07b8` set), not pass 3: it starts from
+   `FUN_141ae3eb0`'s corner `local_b38` and extent `local_b28` and runs five
+   iterations over the quads `local_628`/`local_618`/`local_608`/`local_5f8`/
+   `local_5e8`.
 7. **The write.** `out+0x00..0x1f` = direction then normal quads;
    `out+0x30` = the record's tag word; `out+0x34` = the resolved id;
    `out+0x38` = the record's `local_c40`; `out+0x40` = 1. The no-hit path
@@ -1360,10 +1539,30 @@ keeps the best, writing lanes `+2/+5/+3/+7` and the word at `+0x3e`.
 **In code (`crates/ow-sim/src/fan.rs`).** `solve` implements the gate, both
 endpoints, the threshold, the memo test, the ring → refine → back-transform
 order and both reflection bytes; the helpers `facing_threshold`,
-`memo_matches`, `endpoints`, `projection`, `project_back` and
-`reflection_flags` carry the arithmetic with `sse_*` rounding. Still behind the
+`memo_matches`, `endpoints`, `projection`, `project_back`, `back_snap` and
+`reflection_flags` carry the arithmetic with `sse_*` rounding. `back_snap` is
+pass 3 as re-read on 2026-11-06 but is **not** called by `solve`: the snap
+reads the ring loop's endpoints, and the order of the pentagon loop
+(`0x140cb96c1`) against the `2π/n` ring loop (`0x140cb9ae0`) inside
+`0x140cb86c0` is not settled, so wiring it would be a guess. Still behind the
 seam: the evaluator, pass 0's cache, the shape-ring branch, and the mesh-face
-refinement — `SolveContext` carries their inputs rather than inventing them.
+refinement - `SolveContext` carries their inputs rather than inventing them.
+
+**The ring's comparison operand (2026-11-06).** `accepts_ring` is followed by a
+strictly smaller `|projection|`, and the projected quad is the **candidate**
+`A` the step just built, not the query point: `A` is the only value that
+changes between the `n` steps, and a loop-invariant operand would make the
+acceptance equivalent to "the first facing hit", which the pass then hands to
+the refine. `projection(candidate, dir)` is now what `solve` evaluates, pinned
+by `the_ring_keeps_the_closest_candidate_not_the_first`, and
+`an_aligned_ring_hit_flows_through_refine_and_the_back_transform` derives the
+closest candidate instead of assuming the first.
+
+**Still open in the composer:** pass 3 re-evaluates **five** candidate quads
+(this page's step 6) and the port re-evaluates only the ring's winning `A`;
+the `last_dot < 0` gate and the per-candidate `s` are not implemented. Pass 0's
+cache, the shape-ring branch (`_DAT_1439b07b8`), the mesh-face refinement
+`0x140cc2290` and the tagged-hit `MoverWishTransform` path are open as before.
 
 ### The collision query driver and the hit contract (2026-11-02)
 

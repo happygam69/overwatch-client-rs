@@ -90,7 +90,15 @@ client-side mode→variation selector.
   controller, and the two `ADDPS` operand orders are pinned. They do **not**
   make movement playable: the wish producer, the meaning of the published
   value (`entry+0x10`, which the client's get/set pair share) and collision
-  are open. The wish writer's fan solver is read and implemented in
+  are open. The collision side moved: the **placeable transform is read** (the
+  scene component's vtable `+0x20` slot `0x142003720` copies the component's
+  instance data and `0x142000620` writes the local `+0xd0` quaternion /
+  `+0xf0` position, which `OwnerCreateBody` `0x142cc3d90` takes as the shape's
+  body and `ShapeWorldTransform` `0x142cb8b80` reads back), so the range's
+  collision world can be assembled in map coordinates: the offline probe
+  places all **3,017** model-group instances and the client's own query
+  returns the same answer record byte for byte as for the single pinned shape.
+  The wish writer's fan solver is read and implemented in
   `ow-sim::fan` (both seed terms, the `+0.1` bias, the speed, the radius, the
   72°/`2π/N` candidate rotations, both acceptance rules and the gate); its
   candidate evaluator `0x1420328c0` is open, so no wish is produced yet; it is
