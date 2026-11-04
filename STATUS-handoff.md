@@ -93,7 +93,15 @@ Two signatures there were false: the refinement returns a `bool` and
 `0x142cc5bc0` returns its point in `XMM0`, both printed as `void`. The
 remaining reads are the triangle record `0x142cae760`, the point transform
 `0x142cb4a30` and the handle accessors; the geometry is in
-`docs/formats/character-controller.md`. **Not implemented, not tested.**
+`docs/formats/character-controller.md`.
+
+The overlap test `0x142cd58a0` now has a lane-for-lane port
+(`ow_sim::collide::box_triangle_overlap`) and a differential unit that is
+**kept out of the gate**: it agrees on 346 of 349 fixture cases and diverges on
+three where the triangle only touches the box. That unit is at
+`dev/verify_harness/units/scaffolds/fn-BoxTriangleOverlap.json`; until all 349
+agree the port is unverified and nothing calls it. The rest of the refinement
+is read but not implemented.
 
 * the brush route (node type 2 → model collision descriptor → brush → mesh) is
   read and implemented end to end — `ow_tank::brush`, `brush_mesh` and
