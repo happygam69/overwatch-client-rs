@@ -1,0 +1,51 @@
+{
+  "id": "fn/Md5Transform",
+  "title": "tier-2 shipped code: the BLTE MD5 block transform at 0x1426ab530",
+  "address": {
+    "v2b": "0x7ff7c73cb530"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "md5_transform",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 64
+    },
+    {
+      "name": "state",
+      "kind": "ptr",
+      "ptr_len": 16
+    }
+  ],
+  "returns": "void",
+  "argFactory": "md5_transform_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 24,
+    "mutationKillRate": 1.0,
+    "seed": 4252,
+    "coverageWindow": 1913,
+    "allowedImageReads": []
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/blte.rs::md5_transform, the 64-round block core the shipped md5() itself calls, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the md5_transform entry. The ledger binds the verdict to blte.rs + the probe source + the git revision. The function was hoisted out of md5() for this unit, so the unit tests the code the BLTE frame-header hash runs, not a copy.",
+    "Oracle is Md5Transform at exe 0x1426ab530. Signature: (const u8 block[64], u32 state[4]). The client loads the four state words little-endian, adds each round's message word from the block, keeps the four accumulators in registers, adds each accumulator back into the state word it came from and returns. The return register is meaningless (the client is a leaf that leaves arithmetic in RAX), so the unit declares void and compares the 16-byte state through the memory channel.",
+    "Reading note: the Ghidra listing for Md5Transform ends after its first 64 bytes (body 0x1426ab530..0x1426ab570) and the rest of the body is not claimed by any function, so a reader who trusts the listing will see one and a half rounds. The linear disassembly continues at instruction boundaries to the RET at 0x1426abca8, which stores the four summed words back through the state pointer: the body is 1913 bytes (0x1426ab530..0x1426abca9) of straight-line code. coverageWindow is that extent, which is what makes the coverage claim below exact rather than a 0x2000-byte guess.",
+    "Compared channels are the 16 state bytes after the call and the block, which must come back unchanged (the transform reads its input). The fixture throws the block patterns that flip every message-word bit at the state patterns that make the carry and rotation chains distinguishable: block zeros / all 0xFF / 0x00..0x3F / reversed ramp / a single 0x80 at either end / seeded random, against the RFC init words, zeros, all 0xFFFFFFFF and seeded random.",
+    "Coverage: the body has no conditional branch at all (the 64 rounds are inlined), so the sweep discovers 0 sites and the stage reports 0/0 = 100%, the same shape as fn/Salsa20StateInit. The mutation stage carries this unit: the mutants rewrite the message-word index arithmetic, the round-function selection, the shift constants and the sums, and every one of them must change one of the 16 state bytes.",
+    "Known-answer backing: blte.rs's own md5_matches_rfc_1321_vectors test pins the RFC 1321 digests through md5(), which now calls this function, so a wrong constant is caught by a committed unit test as well as by the oracle. The refactor leaves every digest bit-identical.",
+    "allowedImageReads: none (measured). The transform reads only the two arena buffers; all 64 round constants are immediates in its code, not data reads."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "the return value",
+      "why": "The client's return register holds intermediate arithmetic after the last store, not a result; nothing consumes it. The state written through the second argument is the whole output, and it is compared byte for byte."
+    }
+  ]
+}

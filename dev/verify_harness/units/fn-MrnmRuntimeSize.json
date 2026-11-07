@@ -1,0 +1,37 @@
+{
+  "id": "fn/MrnmRuntimeSize",
+  "title": "tier-2 shipped code: the MRNM runtime-block size against MrnmRuntimeSize (0x141b89390)",
+  "address": {
+    "v2b": "0x7ff7c68a9390"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "mrnm_runtime_size",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "payload",
+      "kind": "ptr",
+      "ptr_len": 1792
+    }
+  ],
+  "returns": "u64",
+  "argFactory": "mrnm_size_fixture",
+  "options": {
+    "iterations": 96,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 21321
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/mrnm.rs (runtime_size), built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the mrnm_runtime_size entry.",
+    "Oracle is MrnmRuntimeSize at exe 0x141b89390 (v2b 0x7ff7c68a9390), 0x2F bytes. It returns submesh_count*0xa0 + 0xc0 + vertex_count*0xf8 + index_count*0x18 as a 32-bit int; the probe returns the same value zero-extended.",
+    "Three reads: u32 at payload+0x1c (submeshes), u8 at +0x22 (vertex buffers), u8 at +0x23 (index buffers). The fixture varies all three over their full descriptor counts, including the all-zero case.",
+    "The function is straight-line, so coverage is 100% by construction. Every constant in the formula is mutation-killable: each count is exercised at a value above 0."
+  ],
+  "acknowledgedGaps": [
+    "The client's arithmetic is a 32-bit int expression. The fixture never produces counts large enough to overflow (the descriptors cap at 3), so the wrapping behaviour is documented in the port but not exercised."
+  ]
+}

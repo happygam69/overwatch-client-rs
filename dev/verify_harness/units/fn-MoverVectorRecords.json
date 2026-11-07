@@ -1,0 +1,53 @@
+{
+ "id": "fn/MoverVectorRecords",
+ "title": "tier-2 shipped code: the four-lane record applier at 0x140cb3b10",
+ "address": {
+  "v2b": "0x7ff7c59d3b10"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "mover_vector_records",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-sim",
+ "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+ "args": [
+  {
+   "name": "body",
+   "kind": "ptr",
+   "ptr_len": 7168
+  },
+  {
+   "name": "quad",
+   "kind": "ptr",
+   "ptr_len": 16
+  },
+  {
+   "name": "mode",
+   "kind": "u64"
+  },
+  {
+   "name": "records",
+   "kind": "ptr",
+   "ptr_len": 1024
+  }
+ ],
+ "returns": "u64",
+ "argFactory": "mover_vector_fixture",
+ "options": {
+  "iterations": 400,
+  "coverageThreshold": 95,
+  "mutationCount": 14,
+  "mutationKillRate": 0.8,
+  "seed": 30309,
+  "coverageWindow": 120
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is `crates/ow-sim/src/modifiers.rs` (`apply_vector_records`), called through the `mover_vector_records` entry.",
+  "`FUN_140cb3b10` walks the 0x40-byte records at `body+0x960` (count `+0x968`), keeps those whose window `[+0x1c,+0x20)` holds the frame id `body+0xe4` and whose `+0x28` equals the caller's mode, and applies the op at `+0x2c` to the four-lane quad at `+0x30`. With mode 1 the y lane is restored to the value it held before each record.",
+  "The oracle reads the records from the arena address in `body+0x960`; the candidate receives the same bytes as its fourth argument. The quad is a 16-byte `float*` on both sides, so the mutated quad is the second channel.",
+  "Cases cross the five ops with NaN, infinite, zero and equal-length quads, the window and mode edges, several matching records in table order, and both mode values for the y-lane restore."
+ ],
+ "acknowledgedGaps": [
+  "The record producer is not covered here; the fixture builds the array itself (open, `docs/open-questions.md`).",
+  "This leaf is not called from the jump function: it is the applier for `body+0x960`, the table the per-frame velocity resolve reads."
+ ]
+}

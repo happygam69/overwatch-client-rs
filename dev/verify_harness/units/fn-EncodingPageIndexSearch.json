@@ -1,0 +1,48 @@
+{
+  "id": "fn/EncodingPageIndexSearch",
+  "title": "tier-2 shipped code: the encoding page-index binary search at 0x142498880",
+  "address": {
+    "v2b": "0x7ff7c71b8880"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "encoding_page_index_search",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    { "name": "index", "kind": "ptr", "ptr_len": 64 },
+    { "name": "pages", "kind": "u64" },
+    { "name": "width", "kind": "u64" },
+    { "name": "key", "kind": "ptr", "ptr_len": 32 },
+    { "name": "key_len", "kind": "u64" }
+  ],
+  "returns": "u64",
+  "argFactory": "encoding_page_index_search_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 20,
+    "mutationKillRate": 1.0,
+    "seed": 4251,
+    "coverageWindow": 146,
+    "allowedImageReads": []
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/encoding.rs::page_index_search, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the encoding_page_index_search entry. The ledger binds the verdict to encoding.rs + the probe source + the git revision.",
+    "Oracle is EncodingPageIndexSearch at exe 0x142498880, 146 bytes (0x142498880..0x142498912). Signature: (index*, u32 pages, u8 width, key*, u8 key_len). The fifth argument (key_len) is a stack argument: the client reads it as a byte at the caller's [rsp+0x28]. The oracle writes stack arguments there, and fn/ApplyMoverSettings, fn/BuildBvh, fn/ShapeWorldTransform, fn/MrnmHandler and fn/MoverStateVector already rely on that. coverageWindow is the whole 146-byte extent, so the sweep sees exactly this function's branches.",
+    "The client's arithmetic, in order: an entry stride of `width + 0x10`; `mid = ((hi - lo) >> 1) + lo` in 32-bit unsigned; `memcmp(key, index + mid * stride, key_len)` with the product taken in 32 bits; an equal result returns `mid`; a positive result sets `lo = mid + 1`; a negative one sets `hi = mid`; the loop runs while `lo < hi`; the miss is `lo - 1` in 32-bit wrapping arithmetic. The return is zero-extended (the client writes the answer with a 32-bit LEA/MOV), which is why the unit declares u64: a 0xFFFFFFFF miss is compared exactly, not masked.",
+    "Compared channels are the return and both input buffers. The search writes nothing, so the index and key buffers are the 'no unintended write' guard: a candidate that stored into either is a divergence.",
+    "The fixture pins `pages == 0` (the 0xFFFFFFFF miss, taken without reading the index), a key below every page, a key exactly at a page first key, keys between pages, a key above the last page, the last page keyed 0xFF..FF, widths 1/2/4/8/16 and pages 0/1/2/3/5/17. An all-equal index returns the first probe of the search, which is the lower-middle `pages >> 1`; those cases come first in the corpus because the mutation stage scores only its first 48 cases, and an even page count separates the lower-middle from the upper-middle. A key_len shorter than two pages' shared prefix pins that the search compares exactly `key_len` bytes and not the full width. `key_len` is swept from 0 to `width + 1`, which is the raw length the search uses (the record scans use min(key_len, width) instead).",
+    "Coverage: the coverage window is the whole 146-byte function, so all four of its conditional branches are measured: `pages != 0`, the equal compare, `memcmp > 0` (`lo = mid + 1`) and `lo < hi`. Both edges of each are reached by the corpus: 4/4 = 100%.",
+    "allowedImageReads: none. The client calls the CRT memcmp at 0x142efecf0 with plain arena pointers at these sizes and reads no image byte; the measured run confirms it.",
+    "Mutation: the mutated body is page_index_search, which is the whole search. Eleven mutants are generated and all eleven are killed. Two of them stop the loop from advancing `lo`; the mutated search then never answers, which the harness scores as a divergence after the retried call budget - the same outcome a frozen caller would see, and not a false kill (the original answers in microseconds). The rest are detected by the returned page, or by a panic when a wrong bound walks the slice.",
+    "Relations: fn/EncodingFindCKey and fn/EncodingFindEKey call this function, so their results already compared it; this unit is what measures its branch sites and its own return."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "page counts large enough that the 32-bit entry-offset product leaves the arena",
+      "why": "The client computes `mid * (width + 0x10)` in 32 bits and adds it to the index base, so a page count above 2^32 / (width + 0x10) wraps the offset instead of failing, and `mid` itself is a 32-bit value. Representing that needs an index buffer of that size in the emulator's arena, which cannot exist; a fault is not a behaviour. Every page count the encoding files on this install use (16,025 ckey and 10,519 ekey pages at width 16) is far below the wrap, and the fixture's page counts keep the whole index inside the arena."
+    }
+  ]
+}

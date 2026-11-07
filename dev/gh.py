@@ -15,10 +15,13 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
-BASE = "http://127.0.0.1:8089"
+# Two bridges can run at once: the headless one (8089, usually no program) and
+# the GUI one (8090, holding `/Overwatch.exe`). `GH_BASE` picks one.
+BASE = os.environ.get("GH_BASE", "http://127.0.0.1:8089")
 
 
 def call(path: str, body: dict | None = None, timeout: int = 120) -> dict:

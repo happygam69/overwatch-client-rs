@@ -110,7 +110,7 @@ _KNOWN_OPTION_KEYS = {
     "coverageWindow",
 }
 _ARG_KINDS = ("f32", "f64", "u64")
-_RET_KINDS = ("f32", "f64", "u64", "vec4", "void")
+_RET_KINDS = ("f32", "f64", "u64", "vec4", "u8", "void")
 
 
 @dataclass
@@ -192,14 +192,18 @@ class MutantOutcome:
 
     ``killed`` is the verdict; ``detail`` records why (the first diverging
     case and channel, including a timeout), and ``build_error`` is set when
-    the mutant did not compile. A build failure is still killed, exactly as
-    before, and counted in both numerator and denominator.
+    the mutant did not compile. A build failure caused by the mutated source
+    is still killed, exactly as before, and counted in both numerator and
+    denominator. ``infra`` marks a mutant the harness could not evaluate at
+    all (a missing artifact, a transport failure, a timeout after a retry):
+    that is not a kill and must make the unit inconclusive, never verified.
     """
 
     mutant: Any
     killed: bool
     detail: str = ""
     build_error: str = ""
+    infra: bool = False
 
 
 def _warn(msg: str) -> None:
@@ -369,6 +373,11 @@ def _bits_equal(a: int, b: int, ret_kind: str) -> bool:
         # payloads. A position is state, not an arithmetic result: a payload
         # change is a divergence.
         return a == b
+    if ret_kind == "u8":
+        # The client contracts only AL (status byte) and leaves RAX's upper
+        # bits holding unrelated arithmetic. Masking is the contract, not a
+        # tolerance: the two values are compared bit-exactly inside the byte.
+        return (a & 0xFF) == (b & 0xFF)
     return False
 
 
@@ -859,7 +868,10 @@ def run_unit(
             )
         if cov.coverage < cov_gate:
             gaps = ", ".join(f"{a:#x}" for a in cov.missed[:8])
-            log(f"  INCONCLUSIVE: coverage {cov.coverage:.1f}% < gate {cov_gate}%")
+            log(
+                f"  INCONCLUSIVE: coverage {cov.coverage:.1f}% < gate {cov_gate}%; "
+                f"missed {gaps}"
+            )
             return entry(
                 "inconclusive",
                 coverage=cov.coverage,
@@ -921,78 +933,129 @@ def run_unit(
         # worker. `pool.map` keeps the report in mutant order; the verdicts
         # are per-mutant and do not depend on scheduling.
         def _probe(m) -> MutantOutcome:
-            mdir = tempfile.mkdtemp(prefix="mutant_")
-            mc = None
-            try:
-                if unit.candidate_loader in ("rust", "cargo"):
-                    from candidate_rust import RustCandidate
+            # A mutant the harness could not build, start or drive is
+            # retried once with a fresh work dir and a doubled call timeout.
+            # A second infrastructure failure is NOT a kill: the mutant was
+            # never evaluated, so the unit cannot be verified on it.
+            last_infra = ""
+            for attempt in range(2):
+                mdir = tempfile.mkdtemp(prefix="mutant_")
+                mc = None
+                try:
+                    try:
+                        if unit.candidate_loader in ("rust", "cargo"):
+                            from candidate_rust import RustCandidate
 
-                    mc = RustCandidate(
-                        entry=unit.entry,
-                        arg_kinds=[a.kind if a.kind != "ptr" else "ptr" for a in unit.args],
-                        ret_kind=unit.ret_kind,
-                        work_dir=mdir,
-                        source_override=m.source,
-                        source_path=cand_path if unit.candidate_loader == "cargo" else None,
-                        loader=unit.candidate_loader,
-                        state_base=unit.state.base if unit.state is not None else None,
-                        state_bytes=unit.state.data if unit.state is not None else None,
-                        call_timeout=mutation_call_timeout,
-                        crate_dir=cand_crate_dir,
-                        cargo_probe=cand_probe,
-                    )
-                else:
-                    from candidate_c import CCandidate
+                            mc = RustCandidate(
+                                entry=unit.entry,
+                                arg_kinds=[
+                                    a.kind if a.kind != "ptr" else "ptr"
+                                    for a in unit.args
+                                ],
+                                ret_kind=unit.ret_kind,
+                                work_dir=mdir,
+                                source_override=m.source,
+                                source_path=cand_path
+                                if unit.candidate_loader == "cargo"
+                                else None,
+                                loader=unit.candidate_loader,
+                                state_base=unit.state.base
+                                if unit.state is not None
+                                else None,
+                                state_bytes=unit.state.data
+                                if unit.state is not None
+                                else None,
+                                call_timeout=mutation_call_timeout * (attempt + 1),
+                                crate_dir=cand_crate_dir,
+                                cargo_probe=cand_probe,
+                            )
+                        else:
+                            from candidate_c import CCandidate
 
-                    mc = CCandidate(
-                        c_file=unit.c_file,
-                        entry=unit.entry,
-                        arg_kinds=[a.kind if a.kind != "ptr" else "ptr" for a in unit.args],
-                        ret_kind=unit.ret_kind,
-                        work_dir=mdir,
-                        source_override=m.source,
-                    )
-            except RuntimeError as e:
-                shutil.rmtree(mdir, ignore_errors=True)
-                return MutantOutcome(m, killed=True, build_error=str(e))
-            try:
-                for idx, (args, o) in enumerate(mutation_oracle):
-                    c = mc.call(args)
-                    if not c.ok:
-                        # A fault is a divergence. A timeout is a fault: the
-                        # broken mutant never answered, which is exactly the
-                        # detection the stage is asking for.
-                        return MutantOutcome(
-                            m, killed=True, detail=f"case {idx}: candidate fault: {c.fault}"
+                            mc = CCandidate(
+                                c_file=unit.c_file,
+                                entry=unit.entry,
+                                arg_kinds=[
+                                    a.kind if a.kind != "ptr" else "ptr"
+                                    for a in unit.args
+                                ],
+                                ret_kind=unit.ret_kind,
+                                work_dir=mdir,
+                                source_override=m.source,
+                            )
+                    except RuntimeError as e:
+                        msg = str(e)
+                        # A source that does not compile is a killed mutant
+                        # (the compiler is the detector). Anything else is an
+                        # infrastructure failure and gets the retry.
+                        compile_failed = (
+                            unit.candidate_loader == "c"
+                            or "build failed" in msg
+                            or "rustc" in msg
                         )
-                    if unit.ret_kind != "void" and not _bits_equal(
-                        o.ret_bits, c.ret_bits, unit.ret_kind
-                    ):
-                        return MutantOutcome(
-                            m, killed=True, detail=f"case {idx}: return differs"
-                        )
-                    if _mem_channel(o.pointee_after, c.pointee_after, args) is not None:
-                        return MutantOutcome(
-                            m, killed=True, detail=f"case {idx}: pointee differs"
-                        )
-                    if (
-                        _state_channel(
-                            getattr(o, "state_after", None),
-                            getattr(c, "state_after", None),
-                            unit,
-                            args,
-                        )
-                        is not None
-                    ):
-                        return MutantOutcome(
-                            m, killed=True, detail=f"case {idx}: state differs"
-                        )
-                return MutantOutcome(m, killed=False)
-            finally:
-                close = getattr(mc, "close", None)
-                if close is not None:
-                    close()
-                shutil.rmtree(mdir, ignore_errors=True)
+                        if compile_failed:
+                            return MutantOutcome(m, killed=True, build_error=msg)
+                        last_infra = msg
+                        continue
+                    evaluated = True
+                    for idx, (args, o) in enumerate(mutation_oracle):
+                        c = mc.call(args)
+                        if not c.ok:
+                            if getattr(c, "infra", False):
+                                # A timeout is retried once with a doubled
+                                # budget; a second timeout is a non-terminating
+                                # mutant, which is a divergence (killed), not a
+                                # harness failure. A closed pipe / missing
+                                # artifact is a harness failure.
+                                timed_out = "timed out" in (c.fault or "")
+                                if timed_out and attempt == 1:
+                                    return MutantOutcome(
+                                        m,
+                                        killed=True,
+                                        detail=(
+                                            f"case {idx}: no return within "
+                                            f"{mutation_call_timeout * 2:g}s"
+                                        ),
+                                    )
+                                last_infra = f"case {idx}: {c.fault}"
+                                evaluated = False
+                                break
+                            # A fault is a divergence.
+                            return MutantOutcome(
+                                m,
+                                killed=True,
+                                detail=f"case {idx}: candidate fault: {c.fault}",
+                            )
+                        if unit.ret_kind != "void" and not _bits_equal(
+                            o.ret_bits, c.ret_bits, unit.ret_kind
+                        ):
+                            return MutantOutcome(
+                                m, killed=True, detail=f"case {idx}: return differs"
+                            )
+                        if _mem_channel(o.pointee_after, c.pointee_after, args) is not None:
+                            return MutantOutcome(
+                                m, killed=True, detail=f"case {idx}: pointee differs"
+                            )
+                        if (
+                            _state_channel(
+                                getattr(o, "state_after", None),
+                                getattr(c, "state_after", None),
+                                unit,
+                                args,
+                            )
+                            is not None
+                        ):
+                            return MutantOutcome(
+                                m, killed=True, detail=f"case {idx}: state differs"
+                            )
+                    if evaluated:
+                        return MutantOutcome(m, killed=False)
+                finally:
+                    close = getattr(mc, "close", None)
+                    if close is not None:
+                        close()
+                    shutil.rmtree(mdir, ignore_errors=True)
+            return MutantOutcome(m, killed=False, infra=True, detail=last_infra)
 
         workers = max(1, min(mutant_workers, len(active)))
         log(
@@ -1008,6 +1071,24 @@ def run_unit(
         killed = 0
         scored = 0
         survivors: List[Any] = []
+        # A mutant that could not be built/started/driven was never evaluated.
+        # Counting it as killed would inflate the kill rate and could turn an
+        # untested unit into a false "verified". Report it and stop.
+        infra = [r for r in outcomes if r.infra]
+        if infra:
+            for r in infra:
+                log(
+                    f"  mutant {r.mutant.kind}@{r.mutant.line} not evaluated: "
+                    f"{r.detail}"
+                )
+            return entry(
+                "inconclusive",
+                coverage=cov.coverage,
+                notes=[
+                    f"{len(infra)} mutant(s) could not be evaluated "
+                    f"(infrastructure, not a kill): {infra[0].detail}"
+                ],
+            )
         for res in outcomes:
             m = res.mutant
             scored += 1

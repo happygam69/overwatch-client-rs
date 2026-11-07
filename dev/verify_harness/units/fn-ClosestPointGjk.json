@@ -1,0 +1,79 @@
+{
+  "id": "fn/ClosestPointGjk",
+  "title": "tier-2 shipped code: the closest-point GJK at 0x142cc9460",
+  "address": {
+    "v2b": "0x7ff7c79e9460"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "gjk_closest",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 64
+    },
+    {
+      "name": "descriptor",
+      "kind": "ptr",
+      "ptr_len": 164
+    },
+    {
+      "name": "first",
+      "kind": "ptr",
+      "ptr_len": 128
+    },
+    {
+      "name": "second",
+      "kind": "ptr",
+      "ptr_len": 128
+    }
+  ],
+  "returns": "u8",
+  "argFactory": "gjk_closest_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 70,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 1420359,
+    "coverageWindow": 2955,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4-0x7ff7c7c9aae7",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f",
+      "0x7ff7c7cc62f0-0x7ff7c7cc62ff",
+      "0x7ff7c7d8ad20-0x7ff7c7d8ad2f",
+      "0x7ff7c7dc4b40-0x7ff7c7dc4b4f",
+      "0x7ff7c7dc4bf0-0x7ff7c7dc4bff",
+      "0x7ff7c7e30818-0x7ff7c7e3081b",
+      "0x7ff7c7e3e0c0-0x7ff7c7e3e0cf",
+      "0x7ff7c80b1030-0x7ff7c80b103f",
+      "0x7ff7c80b2af0-0x7ff7c80b2aff",
+      "0x7ff7c830ccb0-0x7ff7c830ccdf",
+      "0x7ff7c830ccf0-0x7ff7c830ccff",
+      "0x7ff7c87e5f40-0x7ff7c87e5f47"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (closest_point), called by crates/ow-sim/src/bin/verify_probe.rs through the gjk_closest entry. This is the body the type-3 triangle test 0x142cce430 calls whenever the support count is non-zero or an expansion lane is above 0.005 - the path the live character walk (radius 0.35) takes.",
+    "The oracle runs the real 0x142cc9460 and the harness compares the whole 0x40-byte output block byte for byte (point at +0x00, normal at +0x10, residual at +0x20, iteration count at +0x30) and the AL return. The client stores the iteration count inside its loop, so a rejection after one completed iteration still leaves it behind; the unit's probe mirrors that.",
+    "The client's signature is (out, descriptor). The descriptor is the client's own 0xA4-byte block; the two point-array pointers are the fixture's arena addresses, and the probe receives the same arrays as its third and fourth arguments (fixture plumbing - the client dereferences the descriptor's pointers, the Rust entry takes the slices).",
+    "The corpus opens with the walk's own descriptor (a triangle against one support point, radius 0.35, motion 1.0, both flags clear), then the non-zero-extension acceptance, the flag-0 inside rejection, the flag-1 shrink, the motion-budget rejection, the slope rejection, both four-vertex penetration arms and a duplicate-support-pair case.",
+    "The four-vertex body 0x142cc7740 is outside this function's extent and is exercised by the declared specials; its own differential is dev/gjk_simplex_diff.py (fn/ClosestPointGjk does not state a claim about it)."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "Branch coverage is 74.5% (35 of 47 swept sites with both edges)",
+      "why": "The 12 sites without both edges are recorded, not declared unreachable: the empty-array guard on the first point set (the client's two callers always pass three triangle vertices and a non-empty support array), the simplex-count dispatch's unselected arms, the sub-simplex reduction's failure return, the iteration-cap equality arm and the output normal fallback at reduced_sq <= eps. The 264-case corpus does not construct those states; the differential (every channel of the 0x40-byte output) and the 12/12 mutation stage carry the unit."
+    },
+    {
+      "what": "The four-vertex reduction 0x142cc7740 is a separate function",
+      "why": "The client's 0x142cc9460 calls it on a penetration simplex; the unit's corpus reaches it (the two tetrahedron specials) and the oracle executes it, so the differential covers the call, but the harness's coverage window and mutant source are the GJK body only. The sub-simplex bodies are differenced separately by dev/gjk_simplex_diff.py (400 seeded quadruples), which is a dev probe, not a gated unit."
+    },
+    "NaN payloads: the emulator's softfloat is not faithful to x86 for invalid operations and for an ADDPS/SUBPS whose second operand is NaN (the same limitation fn/ShapeWorldTransform declares), so the corpus keeps every input finite and no NaN lane is compared."
+  ]
+}

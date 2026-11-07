@@ -23,11 +23,11 @@ arena address:
     +0xd00 mesh world   the BVH nodes, vertices and triangles a type-3 element
                       points at
 
-The corpus stays on types **0 and 1** — the two per-type primitives that are
-verified — because the emulator would run the unread ones and there is nothing
-to compare against. It varies the shape index, the pool index, both transform
-branches (`entry[0xb0]`), the layer filter's three outcomes, and hits against
-misses.
+The corpus covers types **0 and 1** (the two per-type analytic primitives) and
+**3** (the mesh, through the arena mesh world at `+0xd00`) — all verified. It
+varies the shape index, the pool index, both transform branches (`entry[0xb0]`),
+the layer filter's three outcomes, and hits against misses. Types 2 and 4+ are
+read but not implemented, so they are not in the corpus.
 
 `ctx[0x20]` is the sink and is left null, so the wrapper skips its push
 entirely; the callback slot points at `0x140c9f110`, the leaf that returns a

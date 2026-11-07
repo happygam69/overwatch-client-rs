@@ -1,0 +1,35 @@
+{
+ "id": "fn/MoverOnGround",
+ "title": "tier-2 shipped code: MoverOnGround 0x140ca91e0",
+ "address": {
+  "v2b": "0x7ff7c59c91e0"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "mover_on_ground",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-sim",
+ "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+ "args": [
+  {
+   "name": "body",
+   "kind": "ptr",
+   "ptr_len": 7168
+  }
+ ],
+ "returns": "void",
+ "argFactory": "mover_on_ground_fixture",
+ "options": {
+  "iterations": 120,
+  "coverageThreshold": 95,
+  "mutationCount": 10,
+  "mutationKillRate": 0.8,
+  "seed": 27187,
+  "coverageWindow": 60
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is `crates/ow-sim/src/jump.rs`, called through the `mover_on_ground` entry of `crates/ow-sim/src/bin/verify_probe.rs`.",
+  "The oracle runs the leaf with a synthetic 0x1c00-byte mover body; the whole body is the state channel, so the flag word at +0x10d0, the frame stamp at +0x10e0 and the +0x1a76 latch are all compared. The leaf has no callees and dereferences no pointer inside the body.",
+  "The 0x80000c mask gates the clear and the frame stamp, but the +0x1a76 latch clears on every path - the cases carry the latch pre-set so that difference is visible."
+ ],
+ "acknowledgedGaps": []
+}

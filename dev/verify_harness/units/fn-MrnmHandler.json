@@ -1,0 +1,66 @@
+{
+  "id": "fn/MrnmHandler",
+  "title": "tier-2 shipped code: the MRNM runtime-block load against MrnmHandler (0x141b88f10)",
+  "address": {
+    "v2b": "0x7ff7c68a8f10"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "mrnm_load",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "payload",
+      "kind": "ptr",
+      "ptr_len": 1792
+    },
+    {
+      "name": "model",
+      "kind": "ptr",
+      "ptr_len": 256
+    },
+    {
+      "name": "dst",
+      "kind": "ptr",
+      "ptr_len": 1536
+    },
+    {
+      "name": "payload_base",
+      "kind": "u64"
+    },
+    {
+      "name": "dst_base",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "mrnm_load_fixture",
+  "options": {
+    "iterations": 96,
+    "coverageThreshold": 90,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 18500,
+    "allowedImageReads": [
+      "0x7ff7c8339480-0x7ff7c833951f",
+      "0x7ff7c87e5f40-0x7ff7c87e5f47",
+      "0x7ff7c87e5f98-0x7ff7c87e5faf"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/mrnm.rs (load), built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the mrnm_load entry. The ledger binds the verdict to mrnm.rs + the probe source + the git revision.",
+    "Oracle is MrnmHandler at exe 0x141b88f10 (v2b 0x7ff7c68a8f10). Its .pdata entry covers only 0x141b88f10..0x141b88f42 (0x33 bytes), one of the truncated extents the image audit records; the decompile and the emulator both follow the body past that boundary, so the unit declares no coverageWindow and the sweep keeps its default 0x2000 ceiling.",
+    "The client's first two stores are part of the handler: model+0x00 = dst (the model object's back-pointer) and dst+0x00 = 0. The probe reproduces the model store because the crate returns an owned block instead of carving the model object; the block's first qword (the OR of every submesh's +0x28 mask, skipping -1) is produced by the library.",
+    "The payload arrives with the dispatcher's fixup applied: the fixture declares the same relocation slots as fn/MrnmFixup and both sides rebase them to the same arena address. The destination is zeroed on both sides, which is the only initial state the block's unwritten gaps (0x14..0x20, 0x96..0xa0 of a submesh record, the index record's +0x0c) can have in this test.",
+    "Coverage exercises each of the three descriptor loops at zero and non-zero counts, an element count of zero, a separate-asset flag (0x10) set and clear, a submesh byte +0x7b of zero (taking the model object's +0xaa default) and non-zero, and a used mask of zero, a pattern and -1.",
+    "The two bases are passed in the client's dead R9 and first stack argument slots; the client reads RCX/RDX/R8 only, so the extra values are invisible to the oracle.",
+    "The handler's element-array copy enters the CRT memcpy, which reads its feature flag at exe 0x143ac5f98 and its internal jump tables at exe 0x143619480..0x14361951f; the function's own prologue reads the /GS cookie at exe 0x143ac5f40. Those three ranges are declared image reads: fixed code/CRT data the candidate's copy does not consult, not game state."
+  ],
+  "acknowledgedGaps": [
+    "The 8-byte vertex-element records are copied as bytes, which is exactly what the client's load does. No client code read by this crate decodes their semantic, format or offset fields, so those remain a reading of the file (crate::model).",
+    "The block's unwritten gaps are compared only as zero, because both destinations start zeroed. The client's allocator makes no zeroing promise; the function writes 0 to the gap fields it cares about (submesh +0x0c, +0x2c, +0x3c) and leaves the rest.",
+    "The client aligns (dst + 0xcf) down to 16. The fixture's destination is 16-byte aligned, so the arrays start at +0xc0 on both sides; a misaligned destination is not generated (the crate also rejects a block that the alignment would overrun).",
+    "The separate-asset path copies the two asset GUIDs; it does not open or read the vertex-data asset. Nothing in this function does."
+  ]
+}

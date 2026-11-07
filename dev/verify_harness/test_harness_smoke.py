@@ -339,6 +339,12 @@ def test_runner_helpers():
           _bits_equal(0x7FF8000000000000, 0xFFF8000000000042, "f64"))
     check("bits/u64-exact",
           not _bits_equal(1, 2, "u64"))
+    # The client's AL-only status contract: only the low byte is compared, so
+    # RAX's unrelated upper bits cannot cause a false divergence.
+    check("bits/u8-masks-upper-bits",
+          _bits_equal(0x1234, 0xAB34, "u8"))
+    check("bits/u8-low-byte-distinct",
+          not _bits_equal(0x1234, 0xAB35, "u8"))
 
     args = [ArgSpec(kind="ptr", mem=bytes(range(16)), relocs=(8,))]
     o_after = bytes(range(16))

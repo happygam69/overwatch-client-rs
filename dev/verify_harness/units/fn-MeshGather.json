@@ -1,0 +1,78 @@
+{
+  "id": "fn/MeshGather",
+  "title": "The fan refinement's triangle gather: the type-3 BVH walk that feeds the box-triangle accept",
+  "address": {
+    "v2b": "0x7ff7c79cea70"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "mesh_gather",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "object",
+      "kind": "ptr",
+      "ptr_len": 2640
+    },
+    {
+      "name": "container",
+      "kind": "ptr",
+      "ptr_len": 1040
+    },
+    {
+      "name": "box8",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "mask",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "mesh_gather_fixture",
+  "options": {
+    "iterations": 266,
+    "coverageThreshold": 85,
+    "mutationCount": 32,
+    "mutationKillRate": 0.8,
+    "seed": 1370,
+    "coverageWindow": 665,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4-0x7ff7c7c9aaf3",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7ca44e0-0x7ff7c7ca44ef",
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f",
+      "0x7ff7c830cfc0-0x7ff7c830cfcf",
+      "0x7ff7c830cfd0-0x7ff7c830cfdf",
+      "0x7ff7c87e5f40-0x7ff7c87e5f4f"
+    ],
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c79ceb82",
+        "edge": "0x7ff7c79cecb6",
+        "why": "The leaf's triangle count is tested twice: 0x142caeb7b is entered only when the count byte at node+0x1f is non-zero, and 0x142caeb80 tests the same `al` again before the leaf loop, so the second test always falls through. No input can take the jump."
+      },
+      {
+        "site": "0x7ff7c79cec11",
+        "edge": "0x7ff7c79cec13",
+        "why": "The capacity test's growth edge. `count == capacity` calls the allocator 0x142cadee0, which jumps through the allocator hook global (zero in the offline image) into the CRT allocator 0x141bb6660; that path faults with an unmapped read at 0x0, so the growth block cannot execute in this image. Every fixture case keeps the capacity above the hit count, which is the refinement's own inline-128 case."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (mesh_gather), called by crates/ow-sim/src/bin/verify_probe.rs through the mesh_gather entry. The oracle is the leaf at exe 0x142caea70 (v2b 0x7ff7c79cea70).",
+    "The .pdata entry covers only the first 0x65 bytes (0x142caea70..0x142caead5) while the body runs to the `ret` at 0x142caed09, so the unit declares the true 0x299-byte extent for coverage; the rest of the body is read from the linear disassembly.",
+    "The compared channels are the object blob, the query box, and the caller's container: the capacity and count at +0x208/+0x20c and the inline id array at +0x210, sentinel-filled with 0xcc so an unwritten slot cannot pass. The container's data pointer is the same absolute arena address on both sides and neither side rewrites it.",
+    "The walk: root at the record's +0x20, nodes of 0x20 bytes (low corner +0x00, high corner +0x0c, an i32 at +0x18 that is the far child's offset in nodes or the leaf's first triangle index, the u16 mask at +0x1c, the u8 leaf count at +0x1f), the adjacent child at node+0x20 pushed last so the adjacent subtree is walked first, triangles of 0x20 bytes with the three corner indices at +0x00/+0x04/+0x08 and the u16 mask at +0x1c, vertices of 0x10 bytes. A leaf takes its triangles in index order. The per-triangle accept is the verified fn/BoxTriangleOverlap.",
+    "The record's +0x10 quad multiplies both query-box corners before the walk (the same 1/scale the type-3 sweep applies), and the node test is the sign-bit OR of `scaled high - node low` and `node high - scaled low`, not an ordered compare - the fixture carries a NaN corner for exactly that.",
+    "Two guards return before the walk: a null root, and a signed i32 at the record's +0x44 of 0x80 or more. The 0x80 and 0x7f fixture cases sit on that boundary and the -1 case pins the compare's signedness.",
+    "The fixture's trees are built from the triangles they cover; the order the walk emits is adjacent-subtree-first, which the two-leaf, three-level and six-leaf right-skewed cases pin."
+  ],
+  "acknowledgedGaps": [
+    "The id container's growth is not modelled: the port returns the ids in a Vec and the probe writes them into the inline array at +0x210, leaving the pointer and capacity alone. The fixture keeps every capacity above the hit count, which is the refinement's own inline-128 case, so the doubling path (0x142cadee0 allocator, 0x142efe2b0 copy, 0x142cadf00 free) is untested rather than verified.",
+    "Only the gather is verified. The fan refinement that calls it (0x140cc2290) is read but not implemented, and the triangle record fill (0x142cae760) belongs to the type-3 sweep, not this leaf."
+  ]
+}

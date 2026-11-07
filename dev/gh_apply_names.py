@@ -12,9 +12,16 @@ things are applied per row:
     tag, so an MCP read brings its own documentation and tag-filtered lists
     work. A row's comments carry what the repo already claims - no new facts.
 
-A row is added when a function's role is understood, never before. A function
-the project has not analysed yet is created first (Ghidra makes one at the
-address and names it), so a row never silently does nothing.
+A row is added when a function's role is understood, never before. This script
+only renames a function that already exists in the project: it never creates
+one. The earlier version disassembled 64 bytes and created a function when the
+rename failed, which is how invented functions entered the map - a chained
+`.pdata` continuation or a data slot in the middle of a body would become a
+"function" with guessed extent, and every lookup afterwards saw callers that do
+not exist. A row with no function object is reported as MISS; the map is built
+by `DisassemblePdataFunctions.java` / `RecoverRealPdataFunctions.java`, and a
+`.pdata`-less target is left unnamed by design (docs/ghidra-image-audit.md,
+section 8.8).
 """
 
 from __future__ import annotations
@@ -73,11 +80,11 @@ def restore_saved_plates(programs, rows_: list[dict[str, str]]) -> None:
 
 
 def make_and_name(program: str, address: str, name: str) -> dict:
-    """Name a function, creating a small one first if the project has none.
+    """Rename the function at `address`; never create one.
 
-    The window is deliberately small: a function whose body Ghidra has to
-    discover by following the flow becomes enormous in a flat image, and the
-    decompiler then chokes on it.
+    A rename is refused when no function object exists, and it is refused when
+the address lies inside another function's body (a chained continuation or a
+local label) - naming that would either invent a function or split its parent.
     """
     body = {
         "function": address,
@@ -86,30 +93,9 @@ def make_and_name(program: str, address: str, name: str) -> dict:
         "strict_mode": "warn",
     }
     out = gh.call("/rename_function", body)
-    if ok(out):
-        return out
-    gh.call(
-        "/disassemble_bytes",
-        {
-            "start_address": address,
-            "length": 64,
-            "program": program,
-            "include_instructions": False,
-            "restrict_to_execute_memory": False,
-        },
-    )
-    made = gh.call(
-        "/create_function",
-        {
-            "address": address,
-            "name": name,
-            "program": program,
-            "disassemble_first": False,
-        },
-    )
-    if not ok(made):
-        return made
-    return gh.call("/rename_function", body)
+    if not ok(out):
+        return {"message": f"no function object at {address} (rename-only: not created)"}
+    return out
 
 
 def main() -> int:

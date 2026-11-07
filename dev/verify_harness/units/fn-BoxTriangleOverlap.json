@@ -1,0 +1,64 @@
+{
+  "id": "fn/BoxTriangleOverlap",
+  "title": "The mesh gather triangle-box overlap: the per-triangle separating-axis accept",
+  "address": {
+    "v2b": "0x7ff7c79f58a0"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "box_triangle_overlap",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "box8",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "v0",
+      "kind": "ptr",
+      "ptr_len": 16
+    },
+    {
+      "name": "v1",
+      "kind": "ptr",
+      "ptr_len": 16
+    },
+    {
+      "name": "v2",
+      "kind": "ptr",
+      "ptr_len": 16
+    }
+  ],
+  "returns": "u64",
+  "argFactory": "box_triangle_fixture",
+  "options": {
+    "iterations": 349,
+    "coverageThreshold": 85,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 5891,
+    "coverageWindow": 1260,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4-0x7ff7c7c9aaf3",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17af",
+      "0x7ff7c7ca44e0-0x7ff7c7ca44ef",
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f",
+      "0x7ff7c830cfc0-0x7ff7c830cfcf",
+      "0x7ff7c830cfd0-0x7ff7c830cfdf"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (box_triangle_overlap), called by crates/ow-sim/src/bin/verify_probe.rs through the box_triangle_overlap entry. The oracle is the leaf at exe 0x142cd58a0 (v2b 0x7ff7c79f58a0); the unit declares the 0x4ec-byte coverage window.",
+    "The compared channel is the whole return register. The client's four exits all reach the epilogue through `XOR AL,AL` (miss) or `TEST AL,0x7; SETZ AL` (overlap) over the last `MOVMSKPS`, and `MOVMSKPS` only fills four bits, so the byte above AL is zero on every path. The oracle's EAX is therefore 0 or 1 and the port returns the same.",
+    "The test is the Akenine-Moller triangle-box one in the client's own order: the three slab axes, the triangle normal `rot3(rot3(e12)*e01 - rot3(e01)*e12)`, and one axis per triangle edge - each edge axis normalised by `1/sqrt(e.e)` and compared against the 0.005 tolerance at 0x1435ecfd0. The three edge axes' lane arithmetic is read from the instruction stream, not the decompile (the decompile reuses names across the three blocks): edge 1 pairs `e01` with `d2+d0` and `e20`, edge 2 pairs `e12` with `d1+d0` and `e01`, edge 3 pairs `e20` with `d2+d1` and `e12`, and all three build the same support term from `|axis|` and the half extents.",
+    "The `w` lane is carried through every operation untouched, so the fixture varies it: a NaN or an infinity there changes nothing on the client's side and must change nothing in the port. One declared case unsorts the box's `w` corner (`high.w` below `low.w`) with a non-zero `w` edge, which makes the edge lanes' own `w` lane positive (4 on edge 1, 2.83 on edge 2) and pins the `& 7` mask the client tests with.",
+    "The fixture is ordered so a mutation prefix always covers every exit: the slab reject, the normal-axis reject, each edge reject, the accept, and the two edges' tolerance bands. The band cases are what make the `1/sqrt(e.e)` normalisation observable at all - a scale change to an edge axis is invisible to the sign of the test unless a lane sits inside `0 < lane <= 0.005`.",
+    "Every compared channel of the corpus agrees: 413 cases (all 351 fixture cases, then 62 of them repeated by the 64-case edge pool), 100% of the collected branch sites and 12/12 mutants killed."
+  ],
+  "acknowledgedGaps": [
+    "Only the overlap test is verified. The BVH walk that calls it (0x142caea70), the record fill (0x142cae760) and the refinement that consumes the gather (0x140cc2290) are read but not implemented."
+  ]
+}

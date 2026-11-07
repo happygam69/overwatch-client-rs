@@ -119,6 +119,48 @@ def _cases():
             (1.0, 0.0, 0.0, 0.0),
             (0.0, 1.0, 0.0, 0.0),
         ),
+        # The edge axes' tolerance band. The mutation stage only takes a prefix
+        # of the corpus, and a scale change to an edge axis (`1/sqrt(e.e)`
+        # replaced by `sqrt(e.e)`, or the `1.0` replaced) is invisible unless a
+        # case sits inside `0 < edge lane <= 0.005`: on such a case the client
+        # accepts while the scaled lane is over the tolerance and rejects.
+        # Each case below was translated until the deciding lane of that edge
+        # measured 0.0045 against `0x142cd58a0`, then the client's own bytes
+        # fixed the verdict (accept).
+        #
+        # Edge 1 decides alone (lane 0.029, x/y/z slabs and edges 2/3 clear):
+        # with the axis zeroed the client accepts, so this case is what makes a
+        # zeroed `1.0` observable.
+        (unit, (-1.25, -0.5, 1.0, 0.0), (0.75, 0.25, 1.25, 0.0), (-1.5, -1.75, 1.75, 0.0)),
+        # Edge 2 decides alone (lane 0.194): the same, for `e12`.
+        (unit, (-1.75, 1.25, 1.5, 0.0), (-1.0, 0.25, 1.75, 0.0), (-1.75, -1.0, -0.75, 0.0)),
+        # Edge 1's lane 0.0045, `e01 . e01` 4.625: a 1.5 or 4.625 scale of the
+        # axis puts the lane over 0.005 and the client would reject, so the
+        # normalize mutants diverge here. The client accepts.
+        (
+            unit,
+            (-1.0387098789215088, -0.5, 1.0, 0.0),
+            (0.961290180683136, 0.25, 1.25, 0.0),
+            (-1.2887098789215088, -1.75, 1.75, 0.0),
+        ),
+        # Edge 2's lane 0.0045, `e12 . e12` 8.375: the same for the second edge.
+        (
+            unit,
+            (-1.75, 1.25, 0.767363965511322, 0.0),
+            (-1.0, 0.25, 1.0173640251159668, 0.0),
+            (-1.75, -1.0, -1.4826359748840332, 0.0),
+        ),
+        # An unsorted w corner (`high.w` below `low.w`) with a `w` edge: the
+        # edge lanes' own `w` lane is then `-2*|axis.w|*half.w` = 4 on edge 1
+        # and 2.83 on edge 2, so a widened xyz mask (`& 7` -> `& 0xf`) rejects
+        # while the client, which masks with 7, accepts. The corner is unsorted
+        # in `w` only, the way the `flipped` case is unsorted in xyz.
+        (
+            (-1.0, -1.0, -1.0, 0.0, 1.0, 1.0, 1.0, -2.0),
+            (0.0, 0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0, 2.0),
+            (0.0, 1.0, 0.0, 0.0),
+        ),
     ]
 
     # Every special value in one coordinate of one vertex, against the unit

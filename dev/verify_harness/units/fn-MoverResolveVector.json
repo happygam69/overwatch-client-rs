@@ -1,0 +1,66 @@
+{
+ "id": "fn/MoverResolveVector",
+ "title": "tier-2 shipped code: the per-frame vector resolve, phases 1-4, at 0x140cb2220",
+ "address": {
+  "v2b": "0x7ff7c59d2220"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "mover_resolve_vector",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-sim",
+ "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+ "args": [
+  {
+   "name": "body",
+   "kind": "ptr",
+   "ptr_len": 7168
+  },
+  {
+   "name": "records",
+   "kind": "ptr",
+   "ptr_len": 1120
+  }
+ ],
+ "returns": "void",
+ "argFactory": "mover_resolve_fixture",
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 95,
+  "mutationCount": 14,
+  "mutationKillRate": 0.8,
+  "seed": 29539,
+  "coverageWindow": 731,
+  "allowedImageReads": [
+   "0x7ff7c59d3af8-0x7ff7c59d3b10",
+   "0x7ff7c7c9aad0-0x7ff7c7c9aad8",
+   "0x7ff7c7ca4b18-0x7ff7c7ca4b20",
+   "0x7ff7c7e307e0-0x7ff7c7e307f0",
+   "0x7ff7c7e30800-0x7ff7c7e30808"
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is `crates/ow-sim/src/resolve.rs` (`resolve_local`, `sqrt_newton`, `rsqrtss`, `landing_rise`), called through the `mover_resolve_vector` entry of `crates/ow-sim/src/bin/verify_probe.rs`.",
+  "The oracle runs `FUN_140cb2220` (`0x140cb2220`) with `body+0x968` (the 0x40-byte record count) pinned to zero, which keeps the client out of phase 5 - both record passes sit behind `if (n40 > 0)`. That leaves phases 1-4 (properties 0x22/0x23 on the length, 0x24 on the y lane, 0x25 inside the `body+0x60c` lateral cap) and the closing landing test, which calls `MoverOnLanding` when the world lane rose by more than `0.004`.",
+  "The state file word carries bit 24 (`0x1000000`), so `0x140c9f300` and `0x140ca2740` take their direct-copy path and the stage reduces to the local law. The unit therefore proves the local law, not the transform pair.",
+  "`RSQRTSS` is what settles the square root: the oracle's value is exactly `f32(1 / f32_sqrt(x))` - 220 of 220 sampled inputs - while the double-precision forms differ in 44 of 220. `ow_sim::resolve::rsqrtss` reproduces it and `sqrt_newton` reproduces the one-Newton-step sequence, which is one ulp below the true root on `9.0` and must not be replaced by `sqrt`.",
+  "The records are the applier's input from `fn/MoverPropertyRecords`: the fixture builds them, so this unit proves the resolve, not where a record comes from.",
+  "The coverage window stops at `0x140cb24fb`, the store of the resolved vector: phases 1-4. The closing landing test at `0x140cb260e` is still compared through the body (its `MoverOnLanding` writes the flag word), but its branches are outside the window, together with phase 5's gates - those need either the bit-24-clear transform path or a matching 0x40-byte record, both outside this unit."
+ ],
+ "acknowledgedGaps": [
+  "Phase 5 (the 0x40-byte record passes, mode 1 then mode 0, behind `(*body->vtable)[0xa8](body) != 2`) and its five-way plane-projection hit path at `0x140cb26a2` are not covered: the count is pinned to zero.",
+  "The transform pair `0x140c9f300`/`0x140ca2740` is not exercised: bit 24 pins the direct-copy path.",
+  "`MoverAdvance` and the swept solve - where the live position comes from - are outside this unit."
+ ],
+ "knownEquivalentMutants": [
+  {
+   "kind": "cmp-flip >to>=",
+   "line": 121,
+   "why": "`sq > GUARD_SQ` to `>=` differs only when `sq == GUARD_SQ` exactly, and there the inner `len > GUARD_LEN` rejects: `len = sqrt_newton(1.17549435e-36) = 1.08e-18`, three orders below the 1.19e-05 guard. The outer comparison can never change an observable."
+  },
+  {
+   "kind": "cmp-flip >to>=",
+   "line": 139,
+   "why": "The same argument on the masked length: at `masked == GUARD_SQ` the root is the same 1.08e-18 value and the inner guard rejects it."
+  }
+ ]
+}

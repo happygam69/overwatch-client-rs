@@ -1,0 +1,35 @@
+{
+ "id": "fn/MoverEnterAir",
+ "title": "tier-2 shipped code: MoverEnterAir 0x140ca9150",
+ "address": {
+  "v2b": "0x7ff7c59c9150"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "mover_enter_air",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-sim",
+ "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+ "args": [
+  {
+   "name": "body",
+   "kind": "ptr",
+   "ptr_len": 7168
+  }
+ ],
+ "returns": "void",
+ "argFactory": "mover_enter_air_fixture",
+ "options": {
+  "iterations": 120,
+  "coverageThreshold": 95,
+  "mutationCount": 10,
+  "mutationKillRate": 0.8,
+  "seed": 27188,
+  "coverageWindow": 60
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is `crates/ow-sim/src/jump.rs`, called through the `mover_enter_air` entry of `crates/ow-sim/src/bin/verify_probe.rs`.",
+  "The oracle runs the leaf with a synthetic 0x1c00-byte mover body; the whole body is the state channel, so the flag word at +0x10d0, the frame stamp at +0x10e0 and the +0x1a76 latch are all compared. The leaf has no callees and dereferences no pointer inside the body.",
+  "No early return; bits 2 and 3 clear, bit 23 sets, and the frame stamp happens only when the 0x80000c mask was clear."
+ ],
+ "acknowledgedGaps": []
+}

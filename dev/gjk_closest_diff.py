@@ -165,9 +165,6 @@ def compare(label: str, desc: bytes, first: bytes, second: bytes, oracle: EmuOra
     rust_out, rust_ret = probe_run(desc, first, second)
     if client_out == rust_out and client_ret == rust_ret:
         return True
-    if reached["four"] > before:
-        reached["open"] = reached.get("open", 0) + 1
-        return True
     print(f"  FAIL {label}")
     print(f"          client ret={client_ret} {describe(client_out)}")
     print(f"          ow-sim ret={rust_ret} {describe(rust_out)}")
@@ -228,7 +225,7 @@ def main(argv) -> int:
                 break
     print(
         f"live: {len(live)}  seeded: {seeded}  failures: {failures}  "
-        f"open four-vertex cases (0x142cc7740 is not transcribed): {reached.get('open', 0)}"
+        f"4-simplex entries: {reached.get('four', 0)}"
     )
     return 1 if failures else 0
 

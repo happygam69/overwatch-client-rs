@@ -88,14 +88,14 @@
     "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (shape_narrowphase), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_narrowphase entry.",
     "The leaf is void and writes only its second argument, the hit quad, which is the record's +0x20 quad - so that quad is the compared channel. The sink (ctx[0x20]) is null, so the wrapper skips its push and the 0x40-byte hit record stays on its own frame.",
     "Everything the leaf reaches through pointers lives in one arena blob: the record, the filter arguments, the entry array, both transform pools and all five per-type pools. Every pointer inside it is an absolute arena address and the probe translates it back by ARENA_BASE.",
-    "The corpus stays on type 0 (sphere) and type 1 (capsule) - the two per-type primitives that are verified - and walks the shape index, the pool index, both transform branches, the filter's three outcomes and hits against misses. Types 2 and 4+ are unread, so the emulator would run code there is nothing to compare against.",
+    "The corpus covers type 0 (sphere), type 1 (capsule) and type 3 (mesh, through the arena mesh world) and walks the shape index, the pool index, both transform branches, the filter's three outcomes and hits against misses. Types 2 (0x142cd3c80) and 4+ (0x142cd0ae0) are read but not implemented, so the Rust reports UnreadType for them instead of guessing.",
     "The callback slot points at 0x140c9f110 (the leaf that returns a zero quad) so the indirect call is a real call; with a null sink its return is discarded by the wrapper.",
     "The 0x7ff7c7e30818 and 0x7ff7c80b1030 reads are the two copies of the squared-length epsilon the sphere and capsule paths use.",
     "The 0x7ff7c87e5f40 read is the stack cookie (0x143ac5f40): the leaf has a frame cookie and ends with __security_check_cookie."
   ],
   "acknowledgedGaps": [
-    "The type-3 mesh path is implemented in the same function but is not exercised here: mesh_sweep needs a MeshWorld, which the narrowphase must derive from the element's own absolute pointers at +0x20/+0x28/+0x30, and the fixture that would prove that path is not built yet.",
-    "Types 2 (0x142cd3c80) and 4+ (0x142cd0ae0) are unread, so the Rust reports Narrowphase::UnreadType for them instead of guessing. The practice range is entirely type 3.",
+    "The type-3 mesh path is exercised through MeshWorld::from_arena (the fixture emits kind 3); the mesh's own leaf is proven separately as fn/MeshSweep, which owns the 0.35-expansion handoff to 0x142cc9460 (fn/ClosestPointGjk).",
+    "Types 2 (0x142cd3c80, reached through 0x142ccd770) and 4+ (0x142cd0ae0) are now read and transcribed into CollisionTriangle and VecOperations, but the tree converter 0x142cb5000 is only partly read, so the Rust still reports Narrowphase::UnreadType for them instead of guessing. The practice range is entirely type 3.",
     "The sink push (FUN_142cc1450) and the hit callback are outside this unit: the wrapper's observable output is the hit quad, and the sink is null so nothing is pushed."
   ]
 }

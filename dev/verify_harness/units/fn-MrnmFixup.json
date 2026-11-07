@@ -1,0 +1,43 @@
+{
+  "id": "fn/MrnmFixup",
+  "title": "tier-2 shipped code: the MRNM offset-to-pointer rebase against MrnmFixup (0x141b893e0)",
+  "address": {
+    "v2b": "0x7ff7c68a93e0"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "mrnm_fixup",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "payload",
+      "kind": "ptr",
+      "ptr_len": 1792
+    },
+    {
+      "name": "payload_base",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "mrnm_fixup_fixture",
+  "options": {
+    "iterations": 96,
+    "coverageThreshold": 90,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 19794
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/mrnm.rs (fixup), built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the mrnm_fixup entry. The ledger binds the verdict to mrnm.rs + the probe source + the git revision.",
+    "Oracle is MrnmFixup at exe 0x141b893e0 (v2b 0x7ff7c68a93e0), 0xEB bytes. It rebases three header qwords, then per vertex buffer the element-array slot (+0x10) and, only when flags bit 0x10 is clear, the two data-stream slots (+0x50/+0x58), then per index buffer the data slot (+0x08). A stored zero stays zero; the submesh descriptors are not touched.",
+    "The payload keeps every slot in its file-relative form; the client's dead second argument (RDX) carries the payload's arena base on both sides, so the oracle and the probe write the same absolute pointer values and the whole 0x700-byte payload is compared without masking any slot.",
+    "The fixture varies the two loop counts (0..3 each), the 0x10 flag per vertex buffer, an element count of zero, and puts non-zero data in the submesh index-start block at +0x40..+0x60 so a spurious write there is caught.",
+    "The function has no allocator or external call; every branch is reachable, so coverage is measured across all of them."
+  ],
+  "acknowledgedGaps": [
+    "Offset arithmetic only: the unit proves the rebase formula and the exact slot set. It says nothing about what the pointers point at; that is fn/MrnmHandler.",
+    "The client has no bounds check. The 0x700-byte payload keeps every rebased address inside it; a stored offset that would leave the payload is not generated."
+  ]
+}

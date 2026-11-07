@@ -1,0 +1,85 @@
+{
+  "id": "fn/CdnIndexPageSelect",
+  "title": "tier-2 shipped code: the CDN index page selection and page scan at 0x1424da730",
+  "address": {
+    "v2b": "0x7ff7c71fa730"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "cdn_index_page_select",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    { "name": "index", "kind": "ptr", "ptr_len": 28672 },
+    { "name": "key", "kind": "ptr", "ptr_len": 32 },
+    { "name": "key_len", "kind": "u64" },
+    { "name": "out_offset", "kind": "ptr", "ptr_len": 8 },
+    { "name": "out_size", "kind": "ptr", "ptr_len": 4 },
+    { "name": "out_key16", "kind": "ptr", "ptr_len": 16 }
+  ],
+  "returns": "u8",
+  "argFactory": "cdn_page_select_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 20,
+    "mutationKillRate": 1.0,
+    "seed": 4621,
+    "coverageWindow": 469,
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c71fa7be",
+        "edge": "0x7ff7c71fa833",
+        "why": "the page the selection reports is `(hi + lo) / 2` with `0 <= lo <= hi <= pageCount`, so it is never negative; the client's `page < 0` test can only fire for a page count above the 32-bit signed range, which needs an index larger than the emulator's arena"
+      },
+      {
+        "site": "0x7ff7c71fa7d2",
+        "edge": "0x7ff7c71fa835",
+        "why": "`CdnIndexPageResident` (0x1424da590) returns AL=0 on both whole-file paths (the store at 0x1424da705 and the already-current skip), and this unit's object is always whole-file (`+0x38 == 0`); a non-zero resident status only comes from the streamed branch, which the port does not implement and this unit does not cover"
+      },
+      {
+        "site": "0x7ff7c71fa855",
+        "edge": "0x7ff7c71fa891",
+        "why": "the 6th argument is a 16-byte arena buffer on every case this unit can build (the oracle's pointer slot is an arena address), so the client's null-out_key16 guard is not reachable through the harness's argument surface"
+      }
+    ],
+    "allowedImageReads": [
+      "0x7ff7c87e5f40-0x7ff7c87e5f4f",
+      "0x7ff7c8339480-0x7ff7c83395d4"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/container.rs: select_page (the lower bound with its early equal exit) and decode_page_record (the record scan and the size/offset/key16 decode), built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the cdn_index_page_select entry. Production uses both: PageIndex::find_page is select_page and PageIndex::group_lookup / loose_lookup call decode_page_record. The ledger binds the verdict to container.rs + the probe source + the git revision.",
+    "Oracle is CdnIndexPageSelect at exe 0x1424da730, 469 bytes (0x1424da730..0x1424da904). Signature: (index*, key*, u8 key_len, u64* out_offset, u32* out_size, u8* out_key16). Arguments 5 and 6 are stack arguments: the client reads them at the caller's [rsp+0x28] and [rsp+0x30], the oracle writes stack arguments there, and fn/EncodingPageIndexSearch, fn/ApplyMoverSettings, fn/BuildMvh, fn/MrnmHandler and fn/MoverStateVector already rely on that. coverageWindow is the whole 469-byte extent, confirmed with the Ghidra bridge by disassembling 0x1424da730..0x1424da905 (the last byte decodes as the JMP of the found path).",
+    "The client's arithmetic, in order. `keyBytes=*(u8*)(index+0x5e)`, `pageCount=*(i32*)(index+0x78)`, `cmpLen=min(keyBytes,keyLen)` computed once. The walk: `lo=0; hi=pageCount; page=0; while (lo != hi) { mid=(hi+lo)/2; cmp=memcmp(*(u64*)(index+0x88)+mid*keyBytes, key, cmpLen); if (cmp<0) lo=mid+1; else { hi=mid; if (cmp==0) { page=mid; break; } } } page=lo` after the loop. `page == pageCount` (which covers pageCount==0) and `page < 0` are the misses; status 6. Any other page calls CdnIndexPageResident (0x1424da590) and returns its non-zero status unchanged.",
+    "CdnIndexPageResident is NOT a unit of its own: it is 82 bytes of .pdata extent whose whole-file path lives past that extent (0x1424da6ee..0x1424da705) and it takes a lock-free pointer-computation path plus a streamed/HTTP path that needs the container, its I/O engine and a TLS-scoped lock object. Its whole-file expression is read and is staged here: `if (*(u8*)(index+0x38) == 0) { *(i32*)(index+0xa0)=page; *(u64*)(index+0x98)=*(u64*)(index+0x50) + (u32)(page * *(i32*)(index+0x6c)); return 0; }` — the product is a 32-bit IMUL zero-extended into the 64-bit add, and AL is cleared on both whole-file paths. The probe reproduces those two stores from the object's own fields and writes them back into the arena, so the unit compares the whole index object (including +0x98 and +0xa0) and a candidate that skipped the resident side effects diverges.",
+    "The record scan: `entriesPerPage=*(i32*)(index+0x74)`, `elementCount=*(i32*)(index+0x60)`, `count=min(entriesPerPage, elementCount - entriesPerPage*page)` in 32-bit wrapping arithmetic with an unsigned minimum, `entrySize=*(i32*)(index+0x70)`, `pageBase=*(u64*)(index+0x98)`; for `i in 0..count` the record is `pageBase + (u32)(entrySize*i)` and the first record whose `min(keyBytes,keyLen)` prefix matches wins (no equal-range expansion). The decode then writes `*out_size` (big-endian over `*(u8*)(index+0x5d)` bytes, accumulated in 32 bits, the slot zeroed first) and `*out_offset` (big-endian over `*(u8*)(index+0x5c)` bytes, accumulated in 64 bits, the slot zeroed first), and — before either — copies `min(keyBytes,16)` bytes of the RECORD into `out_key16` and zero-fills the rest to 16 when `out_key16` is non-null. Both out slots are written only on the found path; a miss, an empty count or a resident status leaves them untouched, which the fixture sees as its 0xA5 fill.",
+    "Return channel: AL. A found record returns `XOR AL,AL` (0) while RAX's upper bits still hold the last accumulated offset, a miss is `MOV AL,0x6`, and a resident status is returned as-is. The unit declares `returns: u8`, so the runner compares the low byte exactly and ignores the upper bits the client's callers ignore too.",
+    "Compared channels: the return, the whole index object (object fields, last-key array and page bodies, each of which the selector must not write), the 32-byte query buffer, and the three out slots. The resident's two stores at +0x98/+0xa0 are part of the object channel.",
+    "The fixture builds one arena buffer holding the object, the last-key array (+0x88) and the page bodies (+0x50), all as absolute arena addresses, and stores the buffer's own address at +0xa8 (a slot the selector never reads) so the probe can translate the pointers into offsets in its copy — the same plumbing fn/EncodingFindCKey uses at +0x68. Page bodies are `pageSize = 0x1000` bytes apart, records are `keyBytes + sizeWidth + offsetWidth` bytes, `entriesPerPage = pageSize / entrySize`, and the element count makes the last page partly filled as on a real index.",
+    "The pinned cases: a key on page 0, on the middle page and on the last page; a key at a page's first record; a key below every last key (page 0) and above the last key (status 6, both resident stores untouched); a key between two pages' last keys (the next page is selected and the scan misses); a key exactly equal to a page's last key (the early equal exit); two pages with the SAME last key, where the early exit answers the later page and a pure lower bound would answer the earlier one; duplicate records with one key (the first record wins); `key_len` shorter than the key width with the query's tail differing from the record's (the compare is `min(keyBytes,keyLen)` and the 16-byte copy comes from the record); `pageCount == 0`; a partly filled last page; a page with `count == 0`; the wrapping `elementCount - entriesPerPage*page`; offset widths 4/5/6/0; size width 4 and 0 (the size loop skipped); key widths 16 and 8 (the zero-fill copy path). The sweep after the specials varies page count 0..6, all widths, element counts and queries.",
+    "Coverage: the window is the whole 469-byte function, so all sixteen of its conditional branch sites are measured. Thirteen reach both edges with the corpus; three declare one dead edge, each validated by the coverage stage (site ran, exactly one edge observed, the declared edge never observed): the negative-page test, the resident non-zero-status test and the null-out_key16 test. 13/13 = 100%.",
+    "Mutation: the mutated body is select_page, the client's control-flow core (the loop, the three-way compare, the `lo`/`hi` update and the miss test). decode_page_record's scan and decode lines are not mutated by this unit — one mutation target per unit — but every case compares their three outputs (out_offset, out_size, out_key16) plus the object and the status, and the corpus gives every record a distinct size, a distinct offset and a distinct ordinal, so a decode defect shows up on the first divergent case. This is a declared gap, not a silent one.",
+    "allowedImageReads: 0x7ff7c87e5f40-0x7ff7c87e5f4f is the /GS security cookie at exe 0x143ac5f40, which CdnIndexPageResident (0x1424da590) reads and re-xors in its epilogue; 0x7ff7c8339480-0x7ff7c83395d4 is the CRT's memcpy/memset partial-block dispatch block at exe 0x143619480 (dword jump-offset tables, the same block fn/ApplyMoverSettings declares). They are fixed image data read by the stack check and the byte-copy helpers, not game state. The measured run reports exactly these ranges: 0x7ff7c83394a0+4, 0x7ff7c8339550+4 and 0x7ff7c87e5f40+8.",
+    "Relations: the page reader 0x1424d9af0 is fn/CdnIndexFooterParse; the batch wrapper CdnIndexPageSelectBatch (0x1424da910), CdnIndexPageResident (0x1424da590), the caller CdnResolveLocation (0x1424b0cc0) and the CDN config wiring are outside this unit."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "The streamed/HTTP CdnIndexPageResident branch",
+      "why": "The unit's object is always whole-file (`+0x38 == 0`), the branch ow-casc implements. The streamed branch builds an HTTP range request through the container's vtable and I/O engine, checks the page against its stored MD5 and needs the container object, its TLS-scoped lock and the extra scratch page; the oracle takes plain buffers and cannot build that state, and the port does not implement it. `decode_page_record` and `select_page` are branch-independent of it, and the coverage stage's second declaration pins that the resident never returns a non-zero status in this unit."
+    },
+    {
+      "what": "A `key_len` that makes the client's memcmp read past the query buffer",
+      "why": "The client passes `min(keyBytes,keyLen)` to memcmp without checking the key buffer, so a key_len above the buffer's length reads whatever follows it. The fixture keeps `key_len <= 16 <= keyBytes` in the 32-byte query buffer and the probe refuses a longer one, so no case depends on the bytes past the buffer."
+    },
+    {
+      "what": "A page body shorter than the records the footer describes",
+      "why": "The client computes `pageBase + entrySize*i` and reads without a bound. The fixture always supplies `pageSize` bytes per page and the probe slices what the resident pointer names; decode_page_record returns a miss for a record it cannot read inside the supplied body rather than reading past it, so a fault is not a behaviour here."
+    },
+    {
+      "what": "decode_page_record's own mutants",
+      "why": "The mutation stage rewrites one function body per unit, and it is select_page (the search). The scan and decode are compared on every case through out_offset, out_size, out_key16, the object and the status, and the corpus separates every record's size, offset and ordinal, but no mutant of decode_page_record is generated, so the mutation kill rate does not measure that function directly."
+    }
+  ]
+}

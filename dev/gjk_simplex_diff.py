@@ -8,9 +8,8 @@ direction the routine publishes, byte for byte.
 The corpus is seeded (a fixed generator, not a hand-picked list) so a
 divergence is reproducible: `--seed N` re-runs a case.
 
-The 4-simplex body (`0x142cc7740`) is **not** transcribed in `ow-sim`; every
-four-vertex case it is handed is therefore reported as `OPEN` and counted
-separately, never as a failure. `--only 3` runs just the three-vertex body.
+Both bodies are transcribed, so a four-vertex divergence is a failure like any
+other. `--only 3` / `--only 4` runs a single body.
 
     python dev/gjk_simplex_diff.py             # run the corpus
     python dev/gjk_simplex_diff.py --build     # rebuild the probe first
@@ -161,7 +160,6 @@ def main(argv) -> int:
         only = int(argv[argv.index("--only") + 1])
 
     failures = 0
-    open_cases = 0
     tested = 0
     for index, (count_vertices, vertices) in enumerate(corpus(seed, count)):
         if only and count_vertices != only:
@@ -175,9 +173,6 @@ def main(argv) -> int:
         rust_out, rust_block, rust_ret = probe_run(name, block, bytes(out))
         if client_out == rust_out and client_block == rust_block and client_ret == rust_ret:
             continue
-        if count_vertices == 4:
-            open_cases += 1
-            continue
         failures += 1
         print(f"  FAIL case {index} ({name}) vertices={vertices}")
         print(f"          client ret={client_ret} {describe(client_block, client_out)}")
@@ -188,13 +183,7 @@ def main(argv) -> int:
                 break
         else:
             print("          simplex blocks agree; the direction differs")
-        if failures >= 8:
-            print("  (stopping after 8 failures)")
-            break
-    print(
-        f"cases: {tested}  failures: {failures}  "
-        f"open four-vertex cases (0x142cc7740 is not transcribed): {open_cases}"
-    )
+    print(f"cases: {tested}  failures: {failures}")
     return 1 if failures else 0
 
 

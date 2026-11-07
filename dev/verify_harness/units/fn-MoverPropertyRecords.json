@@ -1,0 +1,63 @@
+{
+ "id": "fn/MoverPropertyRecords",
+ "title": "tier-2 shipped code: the single-property record query at 0x140cb3990",
+ "address": {
+  "v2b": "0x7ff7c59d3990"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "mover_property_records",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-sim",
+ "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+ "args": [
+  {
+   "name": "body",
+   "kind": "ptr",
+   "ptr_len": 7168
+  },
+  {
+   "name": "value",
+   "kind": "ptr",
+   "ptr_len": 4
+  },
+  {
+   "name": "property",
+   "kind": "u64"
+  },
+  {
+   "name": "records",
+   "kind": "ptr",
+   "ptr_len": 1008
+  }
+ ],
+ "returns": "u64",
+ "argFactory": "mover_property_fixture",
+ "options": {
+  "iterations": 400,
+  "coverageThreshold": 95,
+  "mutationCount": 14,
+  "mutationKillRate": 0.8,
+  "seed": 28786,
+  "coverageWindow": 120,
+  "allowedImageReads": [
+   "0x7ff7c59d3af8-0x7ff7c59d3b10"
+  ],
+  "unreachableBranches": [
+   {
+    "site": "0x7ff7c59d3a05",
+    "edge": "0x7ff7c59d39ee",
+    "why": "the null-record test only fires when the array pointer is null with a nonzero count; the window read of the same record faults before it, so the edge cannot execute"
+   }
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is `crates/ow-sim/src/modifiers.rs` (`apply_property_records`), called through the `mover_property_records` entry.",
+  "`FUN_140cb3990` walks the 0x38-byte records at `body+0x870` (count `+0x878`), keeps those whose window `[+0x1c,+0x20)` holds the frame id `body+0xe4`, and applies the op at `+0x2c` for every record whose `+0x28` equals the caller's property. It is the function the jump stage calls for properties 0x14, 0x15 and 0x26.",
+  "The oracle reads the records from the arena address in `body+0x870`; the candidate receives the same bytes as its fourth argument because the probe has no address space. The value is a `float*` on both sides, so the mutated float is the second channel; the returned byte is the client's `bl` (`0x140cb3a8a`), set by any record matching the window and the property, even with an out-of-range op.",
+  "Cases cross the six in-range ops and two out-of-range ones with a NaN, both infinities, signed zero and the equal-operand cases, plus window edges, a property mismatch and several matching records in table order.",
+  "The six-entry op jump table at `0x140cb3af8` is read as image data; it is declared in `allowedImageReads` because the oracle has to read it to dispatch."
+ ],
+ "acknowledgedGaps": [
+  "The record producer is not covered here: the fixture builds the array itself, so this unit proves the applier, not where the records come from (open, `docs/open-questions.md`)."
+ ]
+}

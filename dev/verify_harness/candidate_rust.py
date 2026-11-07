@@ -70,6 +70,13 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     ],
     "mover_apply_modifiers": ["crates/ow-sim/src/modifiers.rs"],
     "mover_gate": ["crates/ow-sim/src/gate.rs"],
+    "mover_property_records": ["crates/ow-sim/src/modifiers.rs"],
+    "mover_vector_records": ["crates/ow-sim/src/modifiers.rs"],
+    "mover_on_landing": ["crates/ow-sim/src/jump.rs"],
+    "mover_enter_air": ["crates/ow-sim/src/jump.rs"],
+    "mover_on_takeoff": ["crates/ow-sim/src/jump.rs"],
+    "mover_on_ground": ["crates/ow-sim/src/jump.rs"],
+    "mover_resolve_vector": ["crates/ow-sim/src/resolve.rs"],
     "mover_character_position": [
         "crates/ow-sim/src/world.rs",
         "crates/ow-sim/src/state.rs",
@@ -116,7 +123,10 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "collision_capsule": ["crates/ow-sim/src/collide.rs"],
     "mesh_sweep": ["crates/ow-sim/src/collide.rs"],
     "collision_narrowphase": ["crates/ow-sim/src/collide.rs"],
+    "gjk_closest": ["crates/ow-sim/src/collide.rs"],
     "query_driver": ["crates/ow-sim/src/collide.rs"],
+    "box_triangle_overlap": ["crates/ow-sim/src/collide.rs"],
+    "mesh_gather": ["crates/ow-sim/src/collide.rs"],
     "build_bvh": ["crates/ow-sim/src/collider.rs"],
     "mover_state_vector": [
         "crates/ow-sim/src/movement.rs",
@@ -130,14 +140,20 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "controller_advance": ["crates/ow-sim/src/movement.rs"],
     "salsa20_xor": ["crates/ow-casc/src/blte.rs"],
     "salsa20_state_init": ["crates/ow-casc/src/blte.rs"],
+    "md5_transform": ["crates/ow-casc/src/blte.rs"],
     "dynamic_index_hash": ["crates/ow-casc/src/index.rs"],
     "dynamic_index_key_hash": ["crates/ow-casc/src/index.rs"],
     "encoding_header_parse": ["crates/ow-casc/src/encoding.rs"],
     "encoding_find_ckey": ["crates/ow-casc/src/encoding.rs"],
     "encoding_find_ekey": ["crates/ow-casc/src/encoding.rs"],
+    "encoding_page_index_search": ["crates/ow-casc/src/encoding.rs"],
     "cdn_index_footer_parse": ["crates/ow-casc/src/container.rs"],
+    "cdn_index_page_select": ["crates/ow-casc/src/container.rs"],
     "chunk_guid": ["crates/ow-tank/src/mapguid.rs"],
     "cell_bytes_fixup": ["crates/ow-tank/src/collision.rs"],
+    "mrnm_fixup": ["crates/ow-tank/src/mrnm.rs"],
+    "mrnm_runtime_size": ["crates/ow-tank/src/mrnm.rs"],
+    "mrnm_load": ["crates/ow-tank/src/mrnm.rs"],
     "cmf_key_154504": ["crates/ow-tank/src/manifest.rs"],
     "cmf_iv_154504": ["crates/ow-tank/src/manifest.rs"],
     "bundle_lookup": ["crates/ow-tank/src/bundle.rs"],
@@ -164,6 +180,13 @@ ENTRY_MUTATION: Dict[str, str] = {
     "mover_apply_settings": "apply_settings",
     "mover_apply_modifiers": "apply_state_modifiers",
     "mover_gate": "movement_gate",
+    "mover_property_records": "apply_property_records",
+    "mover_vector_records": "apply_vector_records",
+    "mover_on_landing": "mover_on_landing",
+    "mover_enter_air": "mover_enter_air",
+    "mover_on_takeoff": "mover_on_takeoff",
+    "mover_on_ground": "mover_on_ground",
+    "mover_resolve_vector": "resolve_local",
     "mover_character_position": "position",
     "mover_world_position": "world_position",
     "mover_rigid_position": "position",
@@ -185,6 +208,7 @@ ENTRY_MUTATION: Dict[str, str] = {
     "collision_capsule": "capsule_sweep",
     "mesh_sweep": "mesh_sweep",
     "collision_narrowphase": "shape_narrowphase",
+    "gjk_closest": "closest_point",
     "build_bvh": "build_node",
     "mover_state_vector": "forward_transform",
     "mover_wish_spring": "wish_spring",
@@ -193,14 +217,21 @@ ENTRY_MUTATION: Dict[str, str] = {
     "build_mover_command": "build_physics_command",
     "controller_advance": "advance",
     "salsa20_xor": "salsa20",
+    "md5_transform": "md5_transform",
     "dynamic_index_hash": "hash_index",
     "dynamic_index_key_hash": "key_hash",
     "encoding_header_parse": "write_header_fields",
     "encoding_find_ckey": "find_ckey_record",
     "encoding_find_ekey": "find_ekey_record",
+    "encoding_page_index_search": "page_index_search",
     "cdn_index_footer_parse": "parse_index_footer",
+    # The mutated body is the search: the client's control-flow core.
+    "cdn_index_page_select": "select_page",
     "chunk_guid": "chunk_guid",
     "cell_bytes_fixup": "fixup_cell_bytes",
+    "mrnm_fixup": "fixup",
+    "mrnm_runtime_size": "runtime_size",
+    "mrnm_load": "load",
     "cmf_key_154504": "key_154504",
     "cmf_iv_154504": "iv_154504",
     # The entry is a thin wrapper; the search the unit proves is `offset_of`.
@@ -332,6 +363,10 @@ class RustCandidateResult:
     pointee_after: Dict[int, bytes]
     state_after: Optional[bytes] = None
     fault: Optional[str] = None
+    # True when the probe could not be evaluated (a timeout or a transport
+    # failure), as opposed to the mutated code itself faulting. An
+    # unevaluated mutant is not a kill and must not be counted as one.
+    infra: bool = False
 
 
 class RustCandidate:
@@ -769,7 +804,17 @@ class RustCandidate:
         try:
             resp = self._roundtrip(" ".join(parts))
         except RuntimeError as e:
-            return RustCandidateResult(ok=False, ret_bits=0, pointee_after={}, fault=str(e))
+            msg = str(e)
+            return RustCandidateResult(
+                ok=False,
+                ret_bits=0,
+                pointee_after={},
+                fault=msg,
+                # A timeout / closed pipe means the harness could not evaluate
+                # the mutant. A probe death after a panic is the mutant's own
+                # fault and is a genuine divergence.
+                infra=("timed out" in msg or "stdin closed" in msg),
+            )
         toks = resp.split(" ")
         if toks[0] == "err":
             return RustCandidateResult(

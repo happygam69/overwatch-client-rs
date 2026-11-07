@@ -11,10 +11,25 @@
   "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
   "suite": "casc",
   "args": [
-    { "name": "info", "kind": "ptr", "ptr_len": 1024 },
-    { "name": "key", "kind": "ptr", "ptr_len": 16 },
-    { "name": "key_len", "kind": "u64" },
-    { "name": "out", "kind": "ptr", "ptr_len": 8 }
+    {
+      "name": "info",
+      "kind": "ptr",
+      "ptr_len": 1024
+    },
+    {
+      "name": "key",
+      "kind": "ptr",
+      "ptr_len": 16
+    },
+    {
+      "name": "key_len",
+      "kind": "u64"
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 8
+    }
   ],
   "returns": "void",
   "argFactory": "encoding_find_ckey_fixture",
@@ -31,7 +46,7 @@
     "The fixture embeds the info struct, the page index and the page bodies in one arena buffer. The info's section pointers are absolute arena addresses as in the client; the unused +0x68 slot holds the info buffer's own arena address so the probe can translate them into offsets in its copy. The out slot is compared, so the unit proves the exact record address, not merely hit/miss.",
     "Return channel: the unit declares `void` because the client's RAX on a miss can still hold a transient body pointer (the loop's last LEA) while callers test only AL. The out slot is zeroed first and written only on a hit, so the memory channel is exactly the caller-visible hit/miss and record address; the AL value is 0 iff out is nonzero. This is an acknowledged gap on RAX's unused upper bits, not on the lookup result.",
     "The fixture pins an empty index, one/three pages, exact first keys, keys between pages, below and above, two-ekey records, a record after a low-byte-zero terminator (unreachable), a nonzero high count byte (ignored), duplicate keys (the first record wins), compare lengths 0/1/2, and widths 1/2/4/8/16. Later cases sweep page counts 0..3, widths 1/2/4/8/16, key lengths 0..=width and query bytes that hit and miss.",
-    "Coverage: the oracle window is the 205-byte FUN_142498540. The corpus reaches both edges of its search-result test, its page-bound test, its low-count-byte test, its memcmp test and its next-record test. FUN_142498880 is a callee outside that window: its result is compared on every case, but its own branch sites are measured by no unit because the ABI passes the fifth argument on the stack and the oracle supports four register arguments only.",
+    "Coverage: the oracle window is the 205-byte FUN_142498540. The corpus reaches both edges of its search-result test, its page-bound test, its low-count-byte test, its memcmp test and its next-record test. The page search FUN_142498880 is a callee outside that window, so its own branch sites are measured by fn/EncodingPageIndexSearch, which calls it directly with all five arguments (the fifth on the stack); this unit compares every page the search chooses.",
     "Mutation: the mutated Rust body is find_ckey_record, which contains the search and the scan. Every mutant must be killed by the out address or the zero-on-miss channel.",
     "Not tested: a short page body (the client reads past it; this reader stops), a null info/key pointer (not representable), and the page-hash bytes (the lookup never reads them)."
   ],
@@ -42,7 +57,7 @@
     },
     {
       "what": "The branch sites inside the callee FUN_142498880",
-      "why": "The page search is called by FUN_142498540 and is inside this unit's behaviour, but its own 146-byte body is outside the coverage window. A standalone unit for 0x142498880 cannot exist: its fifth argument (the key length) is passed on the stack, and the oracle's call path rejects stack arguments. The unit's results still compare every search outcome to the client's."
+      "why": "The page search is called by FUN_142498540 and is inside this unit's behaviour, but its 146-byte body is outside this unit's coverage window. It is measured separately by fn/EncodingPageIndexSearch, which calls 0x142498880 directly with its fifth argument on the stack and reaches both edges of all four of its conditional branches (4/4) with 11/11 mutants killed. This unit's channel is the page the search chose, seen from the caller."
     }
   ]
 }

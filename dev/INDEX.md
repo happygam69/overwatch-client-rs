@@ -7,7 +7,6 @@ helpers are listed here so nothing on disk is unaccounted for.
 
 | tool | what it answers | lines |
 |---|---|---|
-| `_dbg.py` | Re-derive ConstructEngineSubsystems' schedule from the instruction stream. | 400 |
 | `anim_chain_args.py` | Collect the animation-chain function list (main module) for headless. | 79 |
 | `audit_image.py` | Audit the ground-truth image's function bookkeeping: `.pdata` facts, bridge counts and the name table. | 253 |
 | `brush_mesh_oracle.py` | Oracle for stage 1 of the brush tree -> mesh conversion. | 450 |
@@ -25,7 +24,15 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `codec_scan.py` | Enumerate the client's out-of-line 64-bit obfuscation primitives. | 123 |
 | `corpus.py` | Build and query a standing corpus for the current image. | 675 |
 | `data/bc7oracle/texture2ddecoder/__init__.py` | A python wrapper for [Perfare](https://github.com/Perfare)'s [Texture2DDecoder](https://github.com/Perfare/AssetStudio/tree/master/Texture2DDecoder). | 31 |
+| `data/dispfind.py` | Find every instruction whose memory operand displacement is one of the given | 59 |
+| `data/findfield.py` | (no header) | 16 |
+| `data/findstore.py` | (no header) | 17 |
 | `data/gen_body.py` | (no header) | 25 |
+| `data/lsx.py` | Linear disassembly of the recovered image for reading (dev helper, gitignored). | 40 |
+| `data/notes/_dbg.py` | Re-derive ConstructEngineSubsystems' schedule from the instruction stream. | 400 |
+| `data/notes/trace_s4.py` | Symbolic tracer for the 4-simplex closest-point function at 0x142cc7740. | 293 |
+| `data/notes/trace_s4b.py` | Register/stack tracer for 0x142cc7740 (the 4-simplex reduction). | 269 |
+| `data/notes/trace_s4c.py` | Per-region decoder for 0x142cc7740 (the 4-simplex reduction). | 303 |
 | `data/read/bvhprobe.py` | Dump the client's BVH builder output for one fixture case. | 59 |
 | `data/read/callers.py` | Find direct callers of an image address by scanning for `E8 rel32` bytes. | 68 |
 | `data/read/census.py` | Shape-producer census: union of Ghidra's caller functions and a verified scan. | 279 |
@@ -53,6 +60,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `data/read/xref.py` | (no header) | 35 |
 | `data/read/xrefs.py` | (no header) | 22 |
 | `data/refs.py` | (no header) | 13 |
+| `data/scanfield.py` | Scan every Ghidra function body for memory operands with a given displacement. | 46 |
 | `data/tmp/analyze.py` | (no header) | 16 |
 | `data/tmp/classify.py` | (no header) | 12 |
 | `data/tmp/cmp.py` | (no header) | 8 |
@@ -62,6 +70,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `data/tmp/recovered.py` | (no header) | 14 |
 | `data/tmp/stats35.py` | (no header) | 12 |
 | `data/tmp/stats42.py` | (no header) | 7 |
+| `data/tmp/strscan.py` | Throwaway: dump every printable run (>=5 chars) of the flat module image | 21 |
 | `deviation_check.py` | Check that the legacy deviations and the code agree. | 92 |
 | `disp_scan.py` | Every instruction in `.text` whose memory operand has a given displacement. | 117 |
 | `eng_build.py` | Build the engine-slot table by walking the disassembly block by block. | 96 |
@@ -86,12 +95,13 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `find_tables.py` | Find large arrays of code pointers (jump/dispatch tables) in the module image. | 79 |
 | `fn_extent.py` | Recover a function's TRUE extent when the image stores it as `.pdata` fragments. | 152 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
-| `frame_check.py` | Check cited addresses and function-name entries against the one address frame. | 317 |
-| `gh.py` | Call the Ghidra bridge over HTTP. | 67 |
-| `gh_apply_names.py` | Name the client's functions in the Ghidra project, and carry the written findings with them. | 172 |
+| `frame_check.py` | Check cited addresses and function-name entries against the one address frame. | 434 |
+| `gh.py` | Call the Ghidra bridge over HTTP. | 70 |
+| `gh_apply_names.py` | Name the client's functions in the Ghidra project, and carry the written findings with them. | 158 |
 | `gh_apply_types.py` | Apply the understood struct layouts and function prototypes to the Ghidra program. | 172 |
-| `gjk_closest_diff.py` | Differential probe: the closest-point GJK, client vs `ow-sim`. | 238 |
-| `gjk_simplex_diff.py` | Differential probe: the closest-point sub-simplex bodies, client vs `ow-sim`. | 203 |
+| `gh_decompile.py` | Decompile one client function by address and write it under dev/decompiles. | 53 |
+| `gjk_closest_diff.py` | Differential probe: the closest-point GJK, client vs `ow-sim`. | 235 |
+| `gjk_simplex_diff.py` | Differential probe: the closest-point sub-simplex bodies, client vs `ow-sim`. | 192 |
 | `gjk_simplex_probe.py` | Oracle probe for the closest-point sub-simplex routines. | 134 |
 | `gjk_trace.py` | Trace the type-3 triangle test's closest-point GJK over the diff corpus. | 166 |
 | `gjk_trace_one.py` | Trace the client's closest-point GJK one descriptor at a time. | 143 |
@@ -128,13 +138,14 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `tex_oracle.py` | Cross-check our texture decoders against an independent implementation. | 300 |
 | `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 81 |
 | `verify_harness/apply_character_move_fixture.py` | Inputs for the `fn/ApplyCharacterControllerMove` unit (no-shape path). | 43 |
-| `verify_harness/box_triangle_fixture.py` | Inputs for the `box_triangle_overlap` unit (`0x142cd58a0`). | 179 |
+| `verify_harness/box_triangle_fixture.py` | Inputs for the `box_triangle_overlap` unit (`0x142cd58a0`). | 221 |
 | `verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` | 575 |
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/bvh_fixture.py` | Inputs for the BVH builder unit (`0x142ccb1b0`). | 144 |
 | `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 249 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 832 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 877 |
 | `verify_harness/cdn_index_footer_fixture.py` | Deterministic inputs for the `fn/CdnIndexFooterParse` unit. | 178 |
+| `verify_harness/cdn_page_select_fixture.py` | Deterministic inputs for the `fn/CdnIndexPageSelect` unit. | 340 |
 | `verify_harness/cell_bytes_fixture.py` | Inputs for the `cell_bytes_fixup` unit (`0x141ff51a0`). | 115 |
 | `verify_harness/character_position_fixture.py` | Inputs for the `fn/CharacterPosition` unit. | 36 |
 | `verify_harness/chunk_guid_fixture.py` | Deterministic table-slot inputs for the `fn/ChunkGuid` unit. | 99 |
@@ -156,32 +167,47 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/encoding_find_ckey_fixture.py` | Deterministic inputs for the `fn/EncodingFindCKey` unit. | 262 |
 | `verify_harness/encoding_find_ekey_fixture.py` | Deterministic inputs for the `fn/EncodingFindEKey` unit. | 215 |
 | `verify_harness/encoding_header_parse_fixture.py` | Deterministic inputs for the `fn/EncodingHeaderParse` unit. | 207 |
+| `verify_harness/encoding_page_index_search_fixture.py` | Deterministic inputs for the `fn/EncodingPageIndexSearch` unit. | 197 |
 | `verify_harness/gen.py` | Deterministic input generation for one unit. | 258 |
+| `verify_harness/gjk_closest_fixture.py` | Inputs for the `closest_point` unit (`0x142cc9460`). | 339 |
 | `verify_harness/ledger.py` | Digest-bound verification records. | 155 |
+| `verify_harness/md5_transform_fixture.py` | Deterministic block/state inputs for the `fn/Md5Transform` unit. | 95 |
 | `verify_harness/mesh_fixture.py` | Inputs for the `mesh_sweep` unit (`0x142caed30`, type 3). | 294 |
+| `verify_harness/mesh_gather_fixture.py` | Inputs for the `mesh_gather` unit (`0x142caea70`). | 378 |
 | `verify_harness/move_character_fixture.py` | Inputs for the `fn/MoveCharacterController` unit (no-shape path). | 60 |
 | `verify_harness/move_character_shape_fixture.py` | Inputs for the `fn/MoveCharacterControllerShape` unit. | 50 |
 | `verify_harness/mover_apply_modifiers_fixture.py` | Inputs for the `fn/ApplyStateModifiers` unit. | 449 |
 | `verify_harness/mover_apply_settings_fixture.py` | Inputs for the `fn/ApplyMoverSettings` unit. | 99 |
 | `verify_harness/mover_command_fixture.py` | Deterministic body inputs for the `fn/BuildMoverPhysicsCommand` unit. | 121 |
 | `verify_harness/mover_default_settings_fixture.py` | Inputs for the `fn/DefaultMoverSettings` unit. | 42 |
+| `verify_harness/mover_enter_air_fixture.py` | Inputs for the `mover_enter_air` unit (`0x140ca9150`). | 71 |
 | `verify_harness/mover_gate_fixture.py` | Inputs for the `fn/MoverGate` unit. | 74 |
+| `verify_harness/mover_on_ground_fixture.py` | Inputs for the `mover_on_ground` unit (`0x140ca91e0`). | 71 |
+| `verify_harness/mover_on_landing_fixture.py` | Inputs for the `mover_on_landing` unit (`0x140ca9120`). | 71 |
+| `verify_harness/mover_on_takeoff_fixture.py` | Inputs for the `mover_on_takeoff` unit (`0x140ca9190`). | 102 |
+| `verify_harness/mover_property_fixture.py` | Inputs for the `fn/MoverPropertyRecords` unit (`0x140cb3990`). | 140 |
 | `verify_harness/mover_ramp_fixture.py` | Deterministic inputs for the `fn/MoverRampVector` unit. | 143 |
 | `verify_harness/mover_ramp_scalar_fixture.py` | Inputs for the `fn/MoverRampScalar` unit. | 22 |
 | `verify_harness/mover_ramp_scalar_offset_fixture.py` | Inputs for the `fn/MoverRampScalarOffset` unit. | 26 |
+| `verify_harness/mover_resolve_fixture.py` | Inputs for the `mover_resolve_vector` unit (`0x140cb2220`). | 201 |
 | `verify_harness/mover_state_fixture.py` | Inputs for the `fn/StateTransform` unit. | 61 |
 | `verify_harness/mover_state_vector_fixture.py` | Inputs for the `fn/MoverStateVector` unit. | 78 |
+| `verify_harness/mover_vector_fixture.py` | Inputs for the `fn/MoverVectorRecords` unit (`0x140cb3b10`). | 146 |
 | `verify_harness/mover_wish_copy_fixture.py` | Inputs for the `fn/MoverWishCopy` unit. | 78 |
 | `verify_harness/mover_wish_forward_fixture.py` | Inputs for the `fn/MoverWishForward` unit. | 53 |
 | `verify_harness/mover_wish_inverse_fixture.py` | Inputs for the `fn/MoverWishInverse` unit. | 64 |
 | `verify_harness/mover_wish_spring_fixture.py` | Inputs for the `fn/MoverWishSpring` unit. | 205 |
+| `verify_harness/mrnm_fixture.py` | Synthetic `MRNM` payloads for the three model-mesh units. | 242 |
+| `verify_harness/mrnm_fixup_fixture.py` | `MrnmFixup` (`0x141b893e0`) inputs: a structurally valid MRNM payload with | 12 |
+| `verify_harness/mrnm_load_fixture.py` | `MrnmHandler` (`0x141b88f10`) inputs: payload (with its relocation slots | 13 |
+| `verify_harness/mrnm_size_fixture.py` | `MrnmRuntimeSize` (`0x141b89390`) inputs: the same synthetic payloads the | 11 |
 | `verify_harness/mutate.py` | Behaviour-changing mutations of a C candidate, for measuring whether the | 268 |
 | `verify_harness/orthonormalize_basis_fixture.py` | Structured input factory for fn/OrthonormalizeCameraBasis. | 100 |
 | `verify_harness/orthonormalize_state_fixture.py` | State-mode fixture for fn/OrthonormalizeCameraBasis-state. | 26 |
 | `verify_harness/perspective_matrix_fixture.py` | Structured input factory for fn/BuildPerspectiveMatrix. | 159 |
 | `verify_harness/query_driver_fixture.py` | Inputs for the `query_driver` unit (`0x142cbd510`). | 437 |
 | `verify_harness/rigid_position_fixture.py` | Inputs for the `fn/RigidPosition` unit. | 29 |
-| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1085 |
+| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1166 |
 | `verify_harness/salsa20_fixture.py` | Deterministic Salsa20 inputs for the `fn/Salsa20Xor` unit. | 156 |
 | `verify_harness/salsa20_state_fixture.py` | Deterministic key/nonce/counter inputs for the `fn/Salsa20StateInit` unit. | 92 |
 | `verify_harness/scaffold_unit.py` | Scaffold a verification unit from an address. | 297 |
@@ -192,7 +218,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `verify_harness/shape_dispatch_fixture.py` | Inputs for the `fn/ShapeDispatch` unit. | 49 |
 | `verify_harness/shape_points_fixture.py` | Inputs for the `shape_points` shape-bounds unit. | 51 |
 | `verify_harness/shape_sphere_fixture.py` | Inputs for the `shape_sphere` shape-bounds unit. | 42 |
-| `verify_harness/test_harness_smoke.py` | Smoke tests for the verify_harness fixes. | 449 |
+| `verify_harness/test_harness_smoke.py` | Smoke tests for the verify_harness fixes. | 455 |
 | `verify_harness/test_run_unit_e2e.py` | End-to-end test: run the full five-stage ladder on synthetic bytes. | 139 |
 | `verify_harness/texture_count_bits_fixture.py` | Structured inputs for fn/TextureCountBitsShifted. | 53 |
 | `verify_harness/texture_descriptor_fixture.py` | Structured inputs for fn/TextureDescriptor. | 117 |
