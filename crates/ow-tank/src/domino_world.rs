@@ -40,7 +40,7 @@
 
 /// The global world table (`0x1442a0bc0`), indexed by a world slot. The same
 /// table `RunCharacterControllerSweep`'s handle decode reads.
-pub const WORLD_TABLE: u64 = 0x1442_0bc0;
+pub const WORLD_TABLE: u64 = 0x1_442a_0bc0;
 /// The slot bound both users reject at: a slot `>= 0x3fff` is not a world.
 pub const WORLD_SLOT_LIMIT: u16 = 0x3fff;
 /// The empty-slot sentinel a free table entry holds

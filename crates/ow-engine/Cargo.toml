@@ -1,0 +1,9 @@
+lints.workspace = true
+[package]
+name = "ow-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The client's engine object and its obfuscated handle codecs, rebuilt field for field from the current image"

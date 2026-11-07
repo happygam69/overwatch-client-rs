@@ -58,8 +58,8 @@
 //!   20-byte stride only for the two families it was measured on (`0x006d2000`,
 //!   `0x00533c00`); every other family yields `None`, because the earlier 32-byte
 //!   grid was an index-table false positive and no family is verified at 32 bytes.
-//!   [`RECORD`] / [`FAMILY_STRIDE`] are retained for existing callers and
-//!   documented as ungated.
+//!   [`RECORD`] is retained for existing callers and documented as ungated;
+//!   there is no 32-byte constant, because that grid was a false positive.
 //! * a **bounded value search** (*install*): [`CHANNEL_VALUE_WINDOW`] caps the
 //!   channel value hunt at 8 KB past the key list (measured coverage 65% there,
 //!   against 73.1% unbounded вЂ” the cap trades the last 8 points for a bounded
@@ -323,14 +323,6 @@ impl ReferenceHeader {
         (self.fps * self.duration) as usize + 1
     }
 }
-
-/// The stride of the record table of the rig family the corpus was first read on.
-///
-/// Kept only as a note: a *second* family measures 20 bytes here, so the stride is
-/// a property of the rig, not of the format. See the module comment. New code must
-/// use [`record_stride_for_family`]; this constant is retained for existing callers
-/// and is **ungated** вЂ” it names no family.
-pub const FAMILY_STRIDE: usize = 32;
 
 /// Byte offset of the kind discriminator inside a graph record.
 ///

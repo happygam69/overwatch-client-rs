@@ -152,6 +152,120 @@ pub fn literal_of(stu: &Stu, instance: usize, class_hash: u32) -> Option<Value> 
     }
 }
 
+/// `STUStatescriptStateHero` (reference types
+/// `TankLib/STU/Types/STUStatescriptStateHero.cs`): the node that sets a
+/// controller's hero.
+///
+/// Registered as a runtime component type by `0x140402690`
+/// (`RegisterComponentTypeDescriptor`: class `0x91428992`, size `0xF0`, handle
+/// `0x2CFABF7924BC00A5`, interface table `0x14404EEC0`), so a state node is a
+/// component instance of that size at run time.
+pub const HERO_STATE: u32 = 0x9142_8992;
+
+/// Fields of [`HERO_STATE`].
+pub mod hero_state {
+    /// `m_hero`: the hero to set. A `STUConfigVar`: a literal
+    /// ([`LITERAL_HERO_VARS`]) or a runtime variable ([`CONFIG_VAR_DYNAMIC`]).
+    pub const HERO: u32 = 0x37AB_13D3;
+    /// `m_controller`: the controller to set it on.
+    pub const CONTROLLER: u32 = 0x176E_D263;
+}
+
+/// `STUConfigVarHero` and `STU_4867E869`: the two resource config vars that
+/// carry a literal hero asset reference under `m_hero`
+/// (both are `STU_E4324757 : STUConfigVarResource`).
+pub const LITERAL_HERO_VARS: [u32; 2] = [0xCBED_B8FD, 0x4867_E869];
+
+/// `STUConfigVarDynamic`: `m_identifier` names a runtime value.
+pub const CONFIG_VAR_DYNAMIC: u32 = 0x4B09_3107;
+
+/// Where a [`HERO_STATE`] gets its hero from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeroInput {
+    /// `STUConfigVarDynamic`: the hero is runtime variable `id`. The client's
+    /// variable table is the remaining read; the id is what the client stores.
+    Dynamic(u32),
+    /// A resource config var carrying a hero asset ref written into the graph
+    /// ([`LITERAL_HERO_VARS`]).
+    Literal(u64),
+    /// A config var of a class this reader does not decode (an expression, a
+    /// filter, ...). Carries the class hash rather than a guess.
+    Other(u32),
+    /// The node carries no `hero` input.
+    Missing,
+}
+
+/// One hero-setting node of a graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeroState {
+    /// Instance index of the node.
+    pub state: usize,
+    pub hero: HeroInput,
+    /// Class hash of the `controller` input, when the node has one.
+    pub controller: Option<u32>,
+}
+
+/// Every [`HERO_STATE`] node in a graph, in instance order.
+///
+/// The node's inputs are embedded instances, so they are found through the
+/// instance table's owner link (the same join [`params_of`] uses) rather than
+/// by decoding a field of unknown width.
+pub fn hero_states_of(stu: &Stu) -> Vec<HeroState> {
+    let mut owned: HashMap<(usize, u32), usize> = HashMap::new();
+    for (index, info) in stu.instances.iter().enumerate() {
+        if info.embedder_index >= 0 {
+            owned.insert((info.embedder_index as usize, info.embedder_field), index);
+        }
+    }
+
+    let mut out = Vec::new();
+    for (state, info) in stu.instances.iter().enumerate() {
+        if info.hash != HERO_STATE {
+            continue;
+        }
+        let hero = match owned.get(&(state, hero_state::HERO)) {
+            Some(&child) => hero_input_of(stu, child),
+            None => HeroInput::Missing,
+        };
+        let controller = owned
+            .get(&(state, hero_state::CONTROLLER))
+            .map(|&child| stu.instances[child].hash);
+        out.push(HeroState {
+            state,
+            hero,
+            controller,
+        });
+    }
+    out
+}
+
+fn hero_input_of(stu: &Stu, instance: usize) -> HeroInput {
+    let class_hash = stu.instances[instance].hash;
+    match class_hash {
+        CONFIG_VAR_DYNAMIC => dynamic_identifier_of(stu, instance)
+            .map(HeroInput::Dynamic)
+            .unwrap_or(HeroInput::Other(class_hash)),
+        hash if LITERAL_HERO_VARS.contains(&hash) => {
+            let start = stu.payload_start(instance);
+            let bag_index = stu.i32_at(start).unwrap_or(-1);
+            stu.read_asset_ref_at(start, bag_index, hero_state::HERO)
+                .map(HeroInput::Literal)
+                .unwrap_or(HeroInput::Other(class_hash))
+        }
+        other => HeroInput::Other(other),
+    }
+}
+
+fn dynamic_identifier_of(stu: &Stu, instance: usize) -> Option<u32> {
+    let start = stu.payload_start(instance);
+    let bag_index = stu.i32_at(start)?;
+    let layout = stu.layout_at(start, bag_index);
+    let field = layout
+        .iter()
+        .find(|f| f.hash == classes::config_var_dynamic::IDENTIFIER)?;
+    stu.u32_at(start + field.offset)
+}
+
 /// Literals of every state in a graph, named or not.
 ///
 /// [`params_of`] reports only fields the reference types name, which is right

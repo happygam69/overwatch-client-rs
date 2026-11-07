@@ -13,7 +13,7 @@
 //!
 //! What lives here is only what the client's code was read to do:
 //!
-//! - [`instance_array`]: `GeometryBuild` (`0x14213c440`) turns the 16-byte
+//! - [`ArrayRecord`]: `GeometryBuild` (`0x14213c440`) turns the 16-byte
 //!   array slot at `C+0x98` plus the tag at `C+0xa0` into a point array and a
 //!   count. The same expression is used twice in that function — once for the
 //!   "is there anything here" guard and once for the ring builder's arguments.

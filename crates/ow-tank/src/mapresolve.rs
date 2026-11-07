@@ -68,7 +68,7 @@ use std::fmt;
 
 use ow_stu::Stu;
 
-use crate::mapchunk::{Kind, MapChunk};
+use crate::mapchunk::{Body, Kind, MapChunk};
 use crate::mapguid;
 use crate::{guid, text, GameData};
 
@@ -802,6 +802,135 @@ pub fn is_map_asset(guid: u64) -> bool {
     guid::type_of(guid) == 0x002
 }
 
+/// A spawn-room volume, read from the map's own trigger-volume chunk.
+///
+/// The chunk kind is `0x17` (`teMAP_PLACEABLE_TYPE_TRIGGER_VOLUME`). Each
+/// placeable carries an STU blob and then an oriented box record: at the
+/// placeable's `+0xA0` a unit yaw axis `(x, 0, z)`, at `+0xAC` the box centre,
+/// and at `+0xB8` its half extents `(x, y, z)`. The practice range has two
+/// such volumes; the spawn room's is the one whose centre lies inside one of
+/// the map's own `MAP_PLACEABLE_AREA` boxes (the other sits above the firing
+/// range and inside none).
+///
+/// This is map data, not the client's spawn selector: the selector is still
+/// unread, so `ow-client` uses this volume as its declared viewer default.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpawnRoom {
+    /// The trigger volume's box centre, world space.
+    pub centre: [f32; 3],
+    /// The volume's yaw axis `(x, 0, z)`, unit length.
+    pub axis: [f32; 3],
+    /// The box's half extents `(x, y, z)`, metres.
+    pub extents: [f32; 3],
+}
+
+impl SpawnRoom {
+    /// The volume's floor: the bottom of its box.
+    pub fn floor(&self) -> f32 {
+        self.centre[1] - self.extents[1]
+    }
+
+    /// A point just above the volume's floor, for the floor search: high
+    /// enough to admit the floor's swept-sphere centre (one collision radius
+    /// above the surface) and still below the props standing in the room.
+    pub fn floor_probe(&self) -> [f32; 3] {
+        [self.centre[0], self.floor() + 0.45, self.centre[2]]
+    }
+}
+
+fn rd_f32_at(bytes: &[u8], at: usize) -> Option<f32> {
+    let b = bytes.get(at..at + 4)?;
+    Some(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+fn rd_vec3_at(bytes: &[u8], at: usize) -> Option<[f32; 3]> {
+    Some([
+        rd_f32_at(bytes, at)?,
+        rd_f32_at(bytes, at + 4)?,
+        rd_f32_at(bytes, at + 8)?,
+    ])
+}
+
+/// Whether a world point is inside an area box (the box is oriented by its
+/// quaternion; the test rotates the delta into the box's frame).
+fn area_box_contains(b: &crate::mapchunk::AreaBox, point: [f32; 3], pad: f32) -> bool {
+    let d = glam::Vec3::new(
+        point[0] - b.translation[0],
+        point[1] - b.translation[1],
+        point[2] - b.translation[2],
+    );
+    let q = glam::Quat::from_xyzw(
+        b.orientation[0],
+        b.orientation[1],
+        b.orientation[2],
+        b.orientation[3],
+    );
+    let local = q.inverse() * d;
+    local.x.abs() <= b.extents[0] + pad
+        && local.y.abs() <= b.extents[1] + pad
+        && local.z.abs() <= b.extents[2] + pad
+}
+
+/// The map's spawn-room volume, or `None` when the map has no trigger volume
+/// inside one of its area boxes.
+///
+pub fn spawn_room(scene: &Scene, data: &GameData) -> Option<SpawnRoom> {
+    let mut areas: Vec<crate::mapchunk::AreaBox> = Vec::new();
+    for chunk in &scene.chunks {
+        if chunk.kind != 0x0A {
+            continue;
+        }
+        let Some(c) = &chunk.chunk else { continue };
+        for p in &c.placeables {
+            if let Body::Area(a) = &p.body {
+                areas.extend(a.boxes.iter().copied());
+            }
+        }
+    }
+    if areas.is_empty() {
+        return None;
+    }
+    for chunk in &scene.chunks {
+        if chunk.kind != 0x17 {
+            continue;
+        }
+        let Ok(bytes) = data.open_asset(chunk.guid) else {
+            continue;
+        };
+        let Ok(c) = MapChunk::parse(&bytes, Kind::Unknown) else {
+            continue;
+        };
+        for p in &c.placeables {
+            let at = p.offset + 0xA0;
+            if at + 0x24 > p.offset + p.size {
+                continue;
+            }
+            let Some(axis) = rd_vec3_at(&bytes, at) else {
+                continue;
+            };
+            let Some(centre) = rd_vec3_at(&bytes, at + 0x0C) else {
+                continue;
+            };
+            let Some(extents) = rd_vec3_at(&bytes, at + 0x18) else {
+                continue;
+            };
+            if extents.iter().any(|v| !v.is_finite() || *v <= 0.0)
+                || !centre.iter().all(|v| v.is_finite())
+            {
+                continue;
+            }
+            if areas.iter().any(|b| area_box_contains(b, centre, 0.5)) {
+                return Some(SpawnRoom {
+                    centre,
+                    axis,
+                    extents,
+                });
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,5 +981,36 @@ mod tests {
             bytes,
         };
         assert!(asset.stored_chunks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_area_box_test_rotates_the_point_into_the_box_frame() {
+        // A box centred at the origin, half extent 2 along each axis, turned
+        // 90 degrees about Y: a point on the world +x axis is on the box's
+        // local -z axis and must still be inside.
+        let quarter = std::f32::consts::FRAC_PI_4;
+        let box_ = crate::mapchunk::AreaBox {
+            orientation: [0.0, quarter.sin(), 0.0, quarter.cos()],
+            translation: [0.0, 0.0, 0.0],
+            extents: [2.0, 2.0, 2.0],
+            unknown: [0.0; 4],
+        };
+        assert!(area_box_contains(&box_, [1.5, 0.0, 0.0], 0.0));
+        assert!(area_box_contains(&box_, [0.0, 0.0, 1.5], 0.0));
+        assert!(!area_box_contains(&box_, [2.5, 0.0, 0.0], 0.0));
+    }
+
+    #[test]
+    fn the_spawn_floor_probe_is_below_the_props_and_above_the_floor() {
+        let room = SpawnRoom {
+            centre: [10.0, 2.0, 30.0],
+            axis: [0.0, 0.0, 1.0],
+            extents: [4.0, 5.0, 6.0],
+        };
+        assert_eq!(room.floor(), -3.0);
+        let probe = room.floor_probe();
+        assert!(probe[1] > room.floor());
+        assert_eq!(probe[0], room.centre[0]);
+        assert_eq!(probe[2], room.centre[2]);
     }
 }

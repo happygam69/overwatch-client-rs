@@ -1297,6 +1297,7 @@ dependencies = [
  "ow-casc",
  "ow-render",
  "ow-scene",
+ "ow-sim",
  "ow-stu",
  "ow-tank",
  "pollster",
@@ -1304,6 +1305,10 @@ dependencies = [
  "wgpu",
  "winit",
 ]
+
+[[package]]
+name = "ow-engine"
+version = "0.1.0"
 
 [[package]]
 name = "ow-render"

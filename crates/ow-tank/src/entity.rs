@@ -176,9 +176,196 @@ pub mod mover_fields {
     pub const BACK: u32 = 0x61D6_B4E9;
     pub const CROUCH: u32 = 0x0DDD_18C3;
     pub const FALL_TERMINAL: u32 = 0xB742_45E8;
+    /// Class `+0x78`: the collision extent, maxed by `ConstructMoverBody`
+    /// (`0x140ca9730`) against `2.1 * CAPSULE_RADIUS + CAPSULE_OFFSET`.
+    /// Formerly carried as "the unnamed scalar"; the capsule read named it.
     pub const UNNAMED_SCALAR: u32 = 0x1972_C687;
+    /// Class `+0x7c`: **the collision capsule's radius** (mover `+0x5a4`).
+    pub const CAPSULE_RADIUS: u32 = 0x7A70_E3E3;
+    /// Class `+0x80`: the height the capsule's segment is derived against
+    /// (mover `+0x5a8`, `fVar2` in `0x140ca5db0`).
+    pub const CAPSULE_OFFSET: u32 = 0x4A57_6BC2;
+    /// Class `+0x84`: the **second** capsule triple's extent, maxed by
+    /// `ConstructMoverBody` against `2.1 * SECOND_RADIUS + SECOND_OFFSET`. On
+    /// the common hero it reads `1.25` against the first triple's `2.0`; which
+    /// state selects it (crouch is the obvious candidate) is not proven yet.
+    pub const SECOND_EXTENT: u32 = 0x03E0_4168;
+    /// Class `+0x88`: the second capsule's radius (`0.5`).
+    pub const SECOND_RADIUS: u32 = 0x915F_F368;
+    /// Class `+0x8c`: the second capsule's offset (`0.25`).
+    pub const SECOND_OFFSET: u32 = 0xD97B_3735;
+    /// Class `+0xa4`: the up field, doubled and clamped at zero into the mover's
+    /// `+0x68c` step-up limit (`0.5` on the common hero, so `1.0` m).
+    pub const STEP_UP_FIELD: u32 = 0x08FF_AA0A;
+    /// Class `+0xe4`: the vertical lane a standing jump takes off with.
+    ///
+    /// `FUN_140cc1440` (`0x140cc1627`) reads `body+0x60c` and `0x140cb2220`
+    /// (`0x140cb246d`) reads the same slot as the movement vector's lateral
+    /// cap, so the field is named for how it is *used* on take-off, not for a
+    /// role: the two readers do not agree on a single meaning. The body slot is
+    /// `0x528 + 0xe4` under `CopyMoverComponentFields` (`0x140ca4680`) /
+    /// `FUN_140ca4980`; the offset is proved by the terminal-fall field, which
+    /// `ApplyStateModifiers` reads at `body+0x614` and the class declares at
+    /// `+0xec`. Every playable hero on this install reads `6.0`.
+    pub const TAKEOFF_LANE: u32 = 0xEC28_9987;
+    /// Class `+0xe8`: the **gravity magnitude**, a positive scale on the
+    /// client's `10.0` constant.
+    ///
+    /// `FUN_140ca72d0` (`0x140ca72d0`) builds the frame's gravity vector as
+    /// `(state_gate ? -10.0 : 0.0) * body[0x610] * body[0xc0..0xcc]`; the body
+    /// slot is `0x528 + 0xe8` under the component copy, and `0x140cb2010`
+    /// (`0x140cb20be`) reads the same slot as the drag law's numerator. The
+    /// `-10.0` is the image constant at `0x1431161f8` returned by the gate
+    /// `0x14202fb00`. A state modifier can scale the slot
+    /// (`FUN_140cbeaa6` `0x140cbf...`, `body[0x610] *= param`).
+    pub const GRAVITY: u32 = 0xC2C4_0969;
+    /// Class `+0xf0`: the terminal speed the drag law uses **while rising**.
+    ///
+    /// `0x140cb2010` (`0x140cb2064..0x140cb2078`) picks `body+0x618` when the
+    /// movement vector's vertical lane is `> 0` and `body+0x614`
+    /// ([`FALL_TERMINAL`]) otherwise, then divides the gravity scale by the
+    /// square of the pick. So `+0xec` and `+0xf0` are the down and up terminal
+    /// speeds of the same quadratic drag. The class default is absent, so the
+    /// value is the hero's own or nothing.
+    pub const RISE_TERMINAL: u32 = 0x975F_21A5;
     /// The integer field; not a float, never carried as one.
     pub const INT_FIELD: u32 = 0x5C6B_4602;
+}
+
+/// One movement row, the named floats the walk reads.
+///
+/// The field hashes are the ones the STU class declares at its own offsets
+/// (`STUCharacterMoverComponent`: `0xA8` side, `0xAC` back, `0xB0` forward,
+/// `0xBC` crouch, `0xDC` the unnamed speed scalar, `0xEC` terminal fall), and
+/// the client's runtime slot is STU offset + 4 (`docs/formats/character-controller.md`).
+/// Every value is carried as it reads; a missing field is `None`, never zero —
+/// an absent field means the class default, which this reader does not know.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct MoverRow {
+    /// `0x031FE7EE`: the unnamed scalar the component schema puts after crouch.
+    pub speed: Option<f32>,
+    /// `0x19452F15`: the forward base speed.
+    pub forward: Option<f32>,
+    /// `0xCFD3E635`: the sideways base speed.
+    pub side: Option<f32>,
+    /// `0x61D6B4E9`: the backpedal base speed.
+    pub back: Option<f32>,
+    /// `0x0DDD18C3`: the crouch speed.
+    pub crouch: Option<f32>,
+    /// `0xB74245E8`: the terminal fall speed (the drag law's down terminal).
+    pub fall_terminal: Option<f32>,
+    /// `0xC2C40969`: the gravity magnitude (a scale on the client's `10.0`).
+    pub gravity: Option<f32>,
+    /// `0x975F21A5`: the terminal speed while rising (the drag law's up
+    /// terminal).
+    pub rise_terminal: Option<f32>,
+}
+
+/// Read the hero entity's collision capsule from its mover component.
+///
+/// The three inputs are the class's `+0x78`, `+0x7c`, `+0x80`
+/// ([`mover_fields::UNNAMED_SCALAR`], [`mover_fields::CAPSULE_RADIUS`],
+/// [`mover_fields::CAPSULE_OFFSET`]); [`crate::character_collision::capsule_from_mover`]
+/// is the client's construction. `Ok(None)` means the entity has no mover
+/// component; a component missing any of the three declares no capsule, which
+/// is reported as `None` rather than invented from a class default.
+pub fn mover_capsule_of(
+    data: &GameData,
+    entity: u64,
+) -> Result<Option<crate::character_collision::Capsule>> {
+    let mut stu = data.stu_of(entity)?;
+    let Some(inst) = stu.instance(classes::CHARACTER_MOVER_COMPONENT) else {
+        return Ok(None);
+    };
+    let extent = stu.read_f32(inst, mover_fields::UNNAMED_SCALAR);
+    let radius = stu.read_f32(inst, mover_fields::CAPSULE_RADIUS);
+    let offset = stu.read_f32(inst, mover_fields::CAPSULE_OFFSET);
+    let (Some(extent), Some(radius), Some(offset)) = (extent, radius, offset) else {
+        return Ok(None);
+    };
+    Ok(Some(crate::character_collision::capsule_from_mover(
+        extent, radius, offset,
+    )))
+}
+
+/// Read the hero entity's vertical step limits from its mover component.
+///
+/// `ConstructMoverBody` (`0x140ca9730`) stores them at mover `+0x688` (the
+/// negative downward limit) and `+0x68c` (the upward one);
+/// [`crate::character_collision::step_limits_from_mover`] is that construction
+/// from the component's `+0x78..+0x8c` and `+0xa4`. `Ok(None)` means no mover
+/// component or a missing field - never a class default.
+pub fn mover_step_limits_of(
+    data: &GameData,
+    entity: u64,
+) -> Result<Option<crate::character_collision::StepLimits>> {
+    let mut stu = data.stu_of(entity)?;
+    let Some(inst) = stu.instance(classes::CHARACTER_MOVER_COMPONENT) else {
+        return Ok(None);
+    };
+    let read = |stu: &mut Stu, hash: u32| stu.read_f32(inst, hash);
+    let extent = read(&mut stu, mover_fields::UNNAMED_SCALAR);
+    let radius = read(&mut stu, mover_fields::CAPSULE_RADIUS);
+    let offset = read(&mut stu, mover_fields::CAPSULE_OFFSET);
+    let second_extent = read(&mut stu, mover_fields::SECOND_EXTENT);
+    let second_radius = read(&mut stu, mover_fields::SECOND_RADIUS);
+    let second_offset = read(&mut stu, mover_fields::SECOND_OFFSET);
+    let up = read(&mut stu, mover_fields::STEP_UP_FIELD);
+    let (Some(extent), Some(radius), Some(offset), Some(second_extent), Some(second_radius)) =
+        (extent, radius, offset, second_extent, second_radius)
+    else {
+        return Ok(None);
+    };
+    let (Some(second_offset), Some(up)) = (second_offset, up) else {
+        return Ok(None);
+    };
+    Ok(Some(crate::character_collision::step_limits_from_mover(
+        extent,
+        radius,
+        offset,
+        second_extent,
+        second_radius,
+        second_offset,
+        up,
+    )))
+}
+
+/// Read the named [`MoverRow`] of an entity's mover component.
+///
+/// `Ok(None)` means the entity has no mover component at all (an AI or a prop);
+/// a component with a field absent leaves that field `None`.
+pub fn mover_row_of(data: &GameData, entity: u64) -> Result<Option<MoverRow>> {
+    let mut stu = data.stu_of(entity)?;
+    let Some(inst) = stu.instance(classes::CHARACTER_MOVER_COMPONENT) else {
+        return Ok(None);
+    };
+    let read = |stu: &mut Stu, hash: u32| stu.read_f32(inst, hash);
+    Ok(Some(MoverRow {
+        speed: read(&mut stu, mover_fields::SPEED),
+        forward: read(&mut stu, mover_fields::FORWARD),
+        side: read(&mut stu, mover_fields::SIDE),
+        back: read(&mut stu, mover_fields::BACK),
+        crouch: read(&mut stu, mover_fields::CROUCH),
+        fall_terminal: read(&mut stu, mover_fields::FALL_TERMINAL),
+        gravity: read(&mut stu, mover_fields::GRAVITY),
+        rise_terminal: read(&mut stu, mover_fields::RISE_TERMINAL),
+    }))
+}
+
+/// The mover component's take-off lane, `0xEC289987` (class `+0xe4`).
+///
+/// This is the value `FUN_140cc1440` writes into the vertical lane of the
+/// movement vector when a standing jump starts. It is **not consumed** by
+/// anything in `ow-client` yet: the per-frame decay of that lane (the vector
+/// record table at `body+0x960` and the sweep solver) is unread, so there is no
+/// arc to put it in (`docs/open-questions.md` item 1b). `Ok(None)` means no
+/// mover component or no such field - never a class default.
+pub fn mover_takeoff_lane_of(data: &GameData, entity: u64) -> Result<Option<f32>> {
+    let mut stu = data.stu_of(entity)?;
+    let Some(inst) = stu.instance(classes::CHARACTER_MOVER_COMPONENT) else {
+        return Ok(None);
+    };
+    Ok(stu.read_f32(inst, mover_fields::TAKEOFF_LANE))
 }
 
 /// A hero entity's mover figures: base speed plus every other float the mover

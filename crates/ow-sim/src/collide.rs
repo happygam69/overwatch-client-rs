@@ -63,8 +63,9 @@
 //! The triangle test itself (`0x142cce430`) takes two paths: the analytic one
 //! when the support-point count is zero and every lane of the block's scaled
 //! expansion compares `<= 0.005`, and the closest-point solver `0x142cc9460`
-//! otherwise. Both are implemented; the solver's four-vertex reduction
-//! (`0x142cc7740`) is the one branch still open. See [`mesh_triangle`] and
+//! otherwise. Both are implemented and verified (the solver is `fn/ClosestPointGjk`,
+//! 264 cases, every channel, 12/12 mutants; the four-vertex reduction
+//! `0x142cc7740` is executed by its tetrahedron cases). See [`mesh_triangle`] and
 //! [`closest_point`].
 
 use crate::movement::{maxss, minss};
@@ -650,8 +651,9 @@ pub const SHAPE_XFORM_LEN: usize = 0x20;
 /// `block` is the `0x78`-byte query block (`+0x00` start, `+0x10` end,
 /// `+0x20` motion, `+0x38` support-point count, `+0x50` expansion,
 /// `+0x72` the "hit while already inside" byte). Only the count `<= 0` path is
-/// implemented: the count `> 0` path hands the block to `0x142cc9460`, which
-/// is unread.
+/// implemented: the count `> 0` path hands the block to `0x142cc9460`, whose
+/// body is verified as `fn/ClosestPointGjk`, but this leaf's handoff to it is
+/// not ported, so a sphere query with support points is still open.
 ///
 /// The three output quads are the world contact point, the world normal and
 /// the hit fraction. `None` is a miss, on which the client leaves its output
@@ -975,7 +977,8 @@ pub fn box_triangle_overlap(box8: &[u8], p0: &[u8], p1: &[u8], p2: &[u8]) -> u64
     }
 
     // Edge 2, `e12`. Its `b` term uses `e01` and its `a` term uses
-    // `d1 + d0`; the term quad multiplies `d0` rather than `half`.
+    // `d1 + d0`; the term is the same `rot3(rot3(|axis|)*half +
+    // rot3(half)*|axis|)` the first edge builds.
     let axis = mul_lane(splat(1.0 / dot3(e12, e12)[0].sqrt()), e12);
     let r_axis = rot3(axis);
     let sum = add_lane(d1, d0);
@@ -984,7 +987,7 @@ pub fn box_triangle_overlap(box8: &[u8], p0: &[u8], p1: &[u8], p2: &[u8]) -> u64
     let abs_axis = quad_abs(axis);
     let term = rot3(add_lane(
         mul_lane(rot3(abs_axis), half),
-        mul_lane(abs_axis, d0),
+        mul_lane(rot3(half), abs_axis),
     ));
     let edge = sub_lane(
         sub_lane(mul_lane(quad_abs(a), HALF), mul_lane(quad_abs(b), HALF)),
@@ -994,7 +997,8 @@ pub fn box_triangle_overlap(box8: &[u8], p0: &[u8], p1: &[u8], p2: &[u8]) -> u64
         return 0;
     }
 
-    // Edge 3, `e20`. Its `a` term uses `e12` and its `b` term uses `d2 + d1`.
+    // Edge 3, `e20`. Its `a` term uses `e12` and its `b` term uses `d2 + d1`;
+    // the term is the same mirror of `|axis|` and `half`.
     let axis = mul_lane(splat(1.0 / dot3(e20, e20)[0].sqrt()), e20);
     let r_axis = rot3(axis);
     let sum = add_lane(d2, d1);
@@ -1003,7 +1007,7 @@ pub fn box_triangle_overlap(box8: &[u8], p0: &[u8], p1: &[u8], p2: &[u8]) -> u64
     let abs_axis = quad_abs(axis);
     let term = rot3(add_lane(
         mul_lane(rot3(abs_axis), half),
-        mul_lane(abs_axis, d0),
+        mul_lane(rot3(half), abs_axis),
     ));
     let edge = sub_lane(
         sub_lane(mul_lane(quad_abs(a), HALF), mul_lane(quad_abs(b), HALF)),
@@ -1013,6 +1017,235 @@ pub fn box_triangle_overlap(box8: &[u8], p0: &[u8], p1: &[u8], p2: &[u8]) -> u64
         return 0;
     }
     1
+}
+
+/// `0x142caea70`: the fan refinement's triangle gather.
+///
+/// The live path's only caller of [`box_triangle_overlap`]. The query is a box,
+/// not a sphere: the object record's `+0x10` quad - the same `1/scale` the
+/// type-3 sweep applies to the expansion - scales both of the query box's
+/// corners into the object's local space, and the walk collects the index of
+/// every triangle whose node box test, layer mask and separating-axis accept
+/// all pass.
+///
+/// The record is the type-3 mesh record: root at `+0x20`, vertex array at
+/// `+0x28`, triangle array at `+0x30`. A node is `0x20` bytes: the low corner at
+/// `+0x00`, the high corner at `+0x0c`, an `i32` at `+0x18` that is the second
+/// child's offset **in nodes** when the node is internal and the first
+/// triangle's index when it is a leaf, the `u16` layer mask at `+0x1c` and the
+/// leaf's triangle count at `+0x1f`. The adjacent child is the next node
+/// (`node + 0x20`); it is pushed last, so **the adjacent subtree is walked
+/// before the far one**, and a leaf's triangles are taken in index order. That
+/// order is the whole output: the container is an ordered list.
+///
+/// Two guards return before the walk: a null root, and a **signed** `i32` at the
+/// record's `+0x44` of `0x80` or more (the client's 128-entry traversal stack,
+/// an inline array of node pointers; a negative word passes).
+///
+/// The node test is not a min/max slab: the client ORs `scaled high - node low`
+/// with `node high - scaled low` and rejects when any of the first three lanes
+/// has its **sign bit** set, so a `NaN` lane is decided by its sign bit and not
+/// by an ordered compare.
+///
+/// The client appends the ids into a
+/// `{+0x200 data, +0x208 capacity, +0x20c count}` container that doubles through
+/// the allocator `0x142cadee0`, copies with `0x142efe2b0` and frees through
+/// `0x142cadf00`. That growth is memory management, not a gameplay value: the
+/// refinement passes an inline 128-entry buffer, so this port returns the ids
+/// in a `Vec` and does not model the container. The unit pins a capacity above
+/// every hit count and states the gap.
+pub fn mesh_gather(record: &[u8], world: &MeshWorld<'_>, box8: &[u8], mask: u16) -> Vec<u32> {
+    let mut ids: Vec<u32> = Vec::new();
+    let root = read_pointer(record, 0x20);
+    if root == 0 || i32_at(record, 0x44) >= 0x80 {
+        return ids;
+    }
+    let vertices = read_pointer(record, 0x28);
+    let triangles = read_pointer(record, 0x30);
+    // The three pointers are fixture data. One outside the blob is not a state
+    // the client can be in (it would read out of bounds), so report no hits
+    // rather than panic inside the walk.
+    if !world.covers(root) || !world.covers(vertices) || !world.covers(triangles) {
+        return ids;
+    }
+
+    let scale = quad_at(record, 0x10);
+    let low = mul_lane(scale, quad_at(box8, 0x00));
+    let high = mul_lane(scale, quad_at(box8, 0x10));
+    // The eight floats the accept reads: the scaled low corner then the scaled
+    // high corner, the same stack pair the client builds at `rsp+0x80`.
+    let mut query = [0u8; 32];
+    for lane in 0..4 {
+        query[lane * 4..lane * 4 + 4].copy_from_slice(&low[lane].to_le_bytes());
+        query[16 + lane * 4..16 + lane * 4 + 4].copy_from_slice(&high[lane].to_le_bytes());
+    }
+
+    let mut stack: Vec<u64> = vec![root];
+    while let Some(node) = stack.pop() {
+        if !world.covers(node) || world.u16(node, 0x1c) & mask == 0 {
+            continue;
+        }
+        // `ORPS` of the two differences, then `MOVMSKPS & 7`: the sign bits of
+        // the first three lanes.
+        let rejected = {
+            let above = sub_lane(high, world.quad(node));
+            let below = sub_lane(world.quad(offset(node, 0x0c)), low);
+            (0..3).any(|lane| (above[lane].to_bits() | below[lane].to_bits()) & 0x8000_0000 != 0)
+        };
+        if rejected {
+            continue;
+        }
+        let child = world.i32(node, 0x18);
+        let count = world.u8(node, 0x1f);
+        if count == 0 {
+            // Far child first, so the adjacent node pops first.
+            stack.push(offset(node, i64::from(child) * MESH_NODE_LEN as i64));
+            stack.push(offset(node, MESH_NODE_LEN as i64));
+            continue;
+        }
+        let base = i64::from(child) * MESH_TRIANGLE_LEN as i64;
+        for i in 0..i32::from(count) {
+            let triangle = offset(triangles, base + i64::from(i) * MESH_TRIANGLE_LEN as i64);
+            if world.u16(triangle, 0x1c) & mask == 0 {
+                continue;
+            }
+            let corner = |slot: usize| {
+                offset(
+                    vertices,
+                    i64::from(world.i32(triangle, slot)) * MESH_VERTEX_LEN as i64,
+                )
+            };
+            let hit = box_triangle_overlap(
+                &query,
+                world.slice(corner(0x00), MESH_VERTEX_LEN),
+                world.slice(corner(0x04), MESH_VERTEX_LEN),
+                world.slice(corner(0x08), MESH_VERTEX_LEN),
+            );
+            if hit != 0 {
+                ids.push(child.wrapping_add(i) as u32);
+            }
+        }
+    }
+    ids
+}
+
+#[cfg(test)]
+mod mesh_gather_test {
+    use super::*;
+
+    /// A world blob with the record first: node 0 is the root, its adjacent
+    /// leaf sits at 0x20 and its far leaf at 0x40 (the root's `+0x18` is 2).
+    fn blob() -> Vec<u8> {
+        let mut bytes = vec![0u8; 0x50 + 0x100];
+        let put_quad = |bytes: &mut Vec<u8>, offset: usize, quad: Quad| {
+            for (lane, value) in quad.iter().enumerate() {
+                bytes[offset + lane * 4..offset + lane * 4 + 4]
+                    .copy_from_slice(&value.to_le_bytes());
+            }
+        };
+        let world = 0x50usize;
+        put_quad(&mut bytes, 0x10, [1.0; 4]);
+        for (slot, offset) in [(0x20, world), (0x28, world + 0x80), (0x30, world + 0xc0)] {
+            bytes[slot..slot + 8].copy_from_slice(&(offset as u64).to_le_bytes());
+        }
+        // Nodes: the root's box covers both triangles, then one leaf each.
+        let put_node = |bytes: &mut Vec<u8>,
+                        slot: usize,
+                        low: [f32; 3],
+                        high: [f32; 3],
+                        child: i32,
+                        count: u8| {
+            let at = world + slot * 0x20;
+            put_quad(bytes, at, [low[0], low[1], low[2], 0.0]);
+            put_quad(bytes, at + 0x0c, [high[0], high[1], high[2], 0.0]);
+            bytes[at + 0x18..at + 0x1c].copy_from_slice(&child.to_le_bytes());
+            bytes[at + 0x1c..at + 0x1e].copy_from_slice(&1u16.to_le_bytes());
+            bytes[at + 0x1f] = count;
+        };
+        put_node(&mut bytes, 0, [0.0, 0.0, 0.0], [3.0, 1.0, 0.0], 2, 0);
+        put_node(&mut bytes, 1, [0.0, 0.0, 0.0], [1.0, 1.0, 0.0], 0, 1);
+        put_node(&mut bytes, 2, [2.0, 0.0, 0.0], [3.0, 1.0, 0.0], 1, 1);
+        // Vertices: triangle 0 spans 0..1, triangle 1 spans 2..3 on x.
+        let vertex = |bytes: &mut Vec<u8>, slot: usize, point: [f32; 3]| {
+            put_quad(
+                bytes,
+                world + 0x80 + slot * 0x10,
+                [point[0], point[1], point[2], 0.0],
+            );
+        };
+        for (slot, point) in [
+            (0, [0.0, 0.0, 0.0]),
+            (1, [1.0, 0.0, 0.0]),
+            (2, [0.0, 1.0, 0.0]),
+            (3, [2.0, 0.0, 0.0]),
+            (4, [3.0, 0.0, 0.0]),
+            (5, [2.0, 1.0, 0.0]),
+        ] {
+            vertex(&mut bytes, slot, point);
+        }
+        // Triangle records: three corner indices at +0x00 and the mask at +0x1c.
+        for (slot, corners) in [(0, [0i32, 1, 2]), (1, [3, 4, 5])] {
+            let at = world + 0xc0 + slot * 0x20;
+            for (k, corner) in corners.iter().enumerate() {
+                bytes[at + k * 4..at + k * 4 + 4].copy_from_slice(&corner.to_le_bytes());
+            }
+            bytes[at + 0x1c..at + 0x1e].copy_from_slice(&1u16.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn world(bytes: &[u8]) -> MeshWorld<'_> {
+        MeshWorld {
+            base: 0x50,
+            bytes: &bytes[0x50..],
+        }
+    }
+
+    fn query(low: [f32; 3], high: [f32; 3]) -> Vec<u8> {
+        let mut bytes = vec![0u8; 32];
+        for (base, corner) in [(0usize, low), (16usize, high)] {
+            for (lane, value) in corner.iter().enumerate() {
+                bytes[base + lane * 4..base + lane * 4 + 4].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn the_adjacent_leaf_is_walked_before_the_far_one() {
+        let bytes = blob();
+        let world = MeshWorld {
+            base: 0x50,
+            bytes: &bytes[0x50..],
+        };
+        let box8 = query([-0.5, -0.5, -0.5], [3.5, 1.5, 0.5]);
+        assert_eq!(mesh_gather(&bytes[..0x50], &world, &box8, 1), vec![0, 1]);
+        // A box over the far triangle alone, then a mask that skips both.
+        let far = query([1.5, -0.5, -0.5], [3.5, 1.5, 0.5]);
+        assert_eq!(mesh_gather(&bytes[..0x50], &world, &far, 1), vec![1]);
+        assert!(mesh_gather(&bytes[..0x50], &world, &box8, 2).is_empty());
+    }
+
+    #[test]
+    fn the_guard_word_is_a_signed_boundary() {
+        let mut bytes = blob();
+        let guard = |bytes: &mut Vec<u8>, value: i32| {
+            bytes[0x44..0x48].copy_from_slice(&value.to_le_bytes());
+        };
+        let box8 = query([-0.5, -0.5, -0.5], [3.5, 1.5, 0.5]);
+        guard(&mut bytes, 0x7f);
+        assert_eq!(
+            mesh_gather(&bytes[..0x50], &world(&bytes), &box8, 1).len(),
+            2
+        );
+        guard(&mut bytes, 0x80);
+        assert!(mesh_gather(&bytes[..0x50], &world(&bytes), &box8, 1).is_empty());
+        guard(&mut bytes, -1);
+        assert_eq!(
+            mesh_gather(&bytes[..0x50], &world(&bytes), &box8, 1).len(),
+            2
+        );
+    }
 }
 
 /// `0x142cce430`: one triangle against the query block.
@@ -1334,6 +1567,33 @@ fn support_hull(
 /// expansion lane above `0.005`. The triangle callback argument is null on this
 /// path (the wrapper `0x142caed10` zeroes it), so the walk never stops early.
 pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) -> MeshSweep {
+    // The block points at the support points; a Rust caller that holds them
+    // directly (the character's capsule) uses [`mesh_sweep_with_points`].
+    let count = i32_at(block, 0x38);
+    let points: Vec<u8> = if count > 0 {
+        world
+            .slice(read_pointer(block, 0x30), count as usize * MESH_VERTEX_LEN)
+            .to_vec()
+    } else {
+        Vec::new()
+    };
+    mesh_sweep_with_points(record, world, block, xform, &points)
+}
+
+/// The same leaf, with the support points supplied directly instead of read
+/// through the block's `+0x30` pointer and the world image.
+///
+/// `points` must be `block[0x38]` `vec4`s. The character controller reaches the
+/// leaf this way: its capsule's two centres are fixed by the mover and rotated
+/// by the query's own quaternion (`block+0x40`, see [`sweep_bounds`]), so they
+/// are not a world-resident array.
+pub fn mesh_sweep_with_points(
+    record: &[u8],
+    world: &MeshWorld,
+    block: &[u8],
+    xform: &[u8],
+    points: &[u8],
+) -> MeshSweep {
     let missed = MeshSweep {
         hit: None,
         internals: 0,
@@ -1380,7 +1640,6 @@ pub fn mesh_sweep(record: &[u8], world: &MeshWorld, block: &[u8], xform: &[u8]) 
         // The support-point hull replaces the sweep's start and end with the
         // point cloud's centre (and the end shifted by the same delta), and
         // the expansion with centre-relative half extent + expansion + 0.02.
-        let points = world.slice(read_pointer(block, 0x30), count as usize * MESH_VERTEX_LEN);
         let (hull_start, hull_end, hull_step) = support_hull(
             points,
             count as usize,
@@ -1856,7 +2115,9 @@ fn sphere_record(centre: Quad, radius: f32) -> [u8; SPHERE_RECORD_LEN] {
 /// `0x142ccd7b0` type 1 (capsule), the no-support-point path.
 ///
 /// The leaf has three paths and this implements the two that do not need the
-/// unread support-point routine: a degenerate capsule (`|P1-P0|^2 <= eps`)
+/// support-point routine (the routine itself is verified as
+/// `fn/ClosestPointGjk`; the handoff inside this leaf is not ported): a
+/// degenerate capsule (`|P1-P0|^2 <= eps`)
 /// recurses into the sphere leaf at the midpoint, and the analytic path folds
 /// the sweep into the capsule's frame and runs the line-against-segment
 /// closest approach. When the entry point lands outside the segment it also
@@ -2383,10 +2644,11 @@ pub struct GjkOutput {
 /// `radius_a` along the normal), the unit normal, the residual vector and the
 /// iteration count. Returning false leaves the caller's output untouched.
 ///
-/// **One branch is open**: the four-vertex reduction `0x142cc7740` is not
-/// transcribed, so a simplex that becomes a tetrahedron around the origin
-/// reports a miss instead of a penetration contact. That state never arises in
-/// the 17-query differential corpus, which is exact; see
+/// **The four-vertex reduction is [`simplex4`]**, and both it and this body are
+/// verified against the client's bytes as `fn/ClosestPointGjk`: 264 cases, the
+/// whole `0x40`-byte output and the `AL` return, 74.5% of the swept branch
+/// sites, 12/12 mutants. The sub-simplex bodies also have their own dev
+/// differentials (`dev/gjk_simplex_diff.py`, 400 seeded quadruples); see
 /// `docs/formats/static-collision.md`.
 pub fn closest_point(input: &GjkInput<'_>, out: &mut GjkOutput) -> bool {
     debug_assert!(!input.a.is_empty() && !input.b.is_empty());

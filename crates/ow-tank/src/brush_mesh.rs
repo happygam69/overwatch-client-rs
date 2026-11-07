@@ -293,6 +293,11 @@ pub fn hull_stage(brush: &Brush) -> Result<HullStage, Error> {
                 y = v.y;
                 divisor = v.divisor;
             }
+            if node.prev < 0 || node.prev as usize >= n {
+                return Err(Error::MalformedRing {
+                    start: start as u32,
+                });
+            }
             let prev_node = &brush.nodes[node.prev as usize];
             let op = classify(
                 node.x,

@@ -96,6 +96,15 @@ struct Census {
     outer_e: usize,
     outer_lz4: usize,
     outer_other: usize,
+    // Stored bytes per classified mode, and the frame header's own total. The
+    // two sums must agree: it is the check that the mode byte was read at each
+    // chunk's start offset.
+    stored_n: u64,
+    stored_z: u64,
+    stored_e: u64,
+    stored_lz4: u64,
+    stored_other: u64,
+    declared_stored: u64,
     inner_n: usize,
     inner_z: usize,
     inner_e: usize,
@@ -123,10 +132,17 @@ fn outer_mode(
     read_record_at(files, data_dir, location, chunk_at, &mut mode);
     census.chunks += 1;
     match mode[0] {
-        b'N' => census.outer_n += 1,
-        b'Z' => census.outer_z += 1,
+        b'N' => {
+            census.outer_n += 1;
+            census.stored_n += stored;
+        }
+        b'Z' => {
+            census.outer_z += 1;
+            census.stored_z += stored;
+        }
         b'E' => {
             census.outer_e += 1;
+            census.stored_e += stored;
             // The E header is at most 1+1+8+1+8+1 bytes; 32 bytes also covers
             // the first 16 bytes of ciphertext.
             let available = stored.min(32) as usize;
@@ -171,8 +187,12 @@ fn outer_mode(
         }
         b'4' => {
             census.outer_lz4 += 1;
+            census.stored_lz4 += stored;
         }
-        _ => census.outer_other += 1,
+        _ => {
+            census.outer_other += 1;
+            census.stored_other += stored;
+        }
     }
 }
 
@@ -250,6 +270,7 @@ fn sampled_install_blte_containers_match_the_parsed_census() {
             let header_size = u32::from_be_bytes([prefix[4], prefix[5], prefix[6], prefix[7]]);
             if header_size == 0 {
                 census.direct += 1;
+                census.declared_stored += size - blte_at - 8;
                 outer_mode(
                     &mut census,
                     &mut archives,
@@ -286,6 +307,7 @@ fn sampled_install_blte_containers_match_the_parsed_census() {
                     chunk_at + u64::from(chunk.stored) <= size,
                     "chunk {index} runs past the record"
                 );
+                census.declared_stored += u64::from(chunk.stored);
                 outer_mode(
                     &mut census,
                     &mut archives,
@@ -370,6 +392,18 @@ fn sampled_install_blte_containers_match_the_parsed_census() {
             + census.inner_lz4
             + census.inner_other
             + census.encrypted_missing_key
+    );
+    // Each mode byte is read at `header_size + sum(previous stored sizes)`, so
+    // the bytes carried by the five classified modes must equal the total the
+    // frame headers (or the direct form's record tail) declared. A wrong chunk
+    // start offset shows up here as a mismatch.
+    assert_eq!(
+        census.stored_n
+            + census.stored_z
+            + census.stored_e
+            + census.stored_lz4
+            + census.stored_other,
+        census.declared_stored
     );
 
     // The full scan (one-off, stride 1) found 1,146,326 unique salt-0 keys:

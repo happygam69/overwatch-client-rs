@@ -23,6 +23,20 @@
 //! `-1` at a root); bind poses are 48-byte records (quaternion, scale, a pad,
 //! translation, a pad); bone ids are `u32` hashes, not strings — the engine's
 //! own vocabulary is `BoneLabelGUID`-keyed (`animation.md`).
+//!
+//! **The client's own reader (`MsklTableBuild`, `0x141b894d0`) sizes each
+//! table**, and three of those sizes differ from what the offsets suggest:
+//! the id array is `bones_simple` u32s (offset 110), not `id_count` (116); the
+//! remap at offset 80 is `remap_count` (114) u16s; and the arrays at 88 and 96
+//! are `bones_abs` u16s and `remap_count` 8-byte records. `bones_simple` and
+//! `id_count` hold the same value on all 7,359 install models this crate
+//! parses, so the two readings of the id count agree there; the client's is the
+//! one used here. The array at offset 88 is the **inverse of the remap** — for
+//! every bone, the mesh slot that names it, or `0xFFFF` for a bone no mesh
+//! slot names (measured: the table is the exact inverse on all 7,328 skinned
+//! install models, and `0xFFFF` sits exactly on the `bones_abs - remap_count`
+//! unmapped bones; Tracer's character leaves 30 of its 229 bones unmapped). `ow-tank::skin` reads the forward table; the inverse is recorded
+//! here rather than exposed, because nothing consumes it yet.
 
 use std::fmt;
 
@@ -75,9 +89,14 @@ pub struct Skeleton {
     /// File offset the inverted-bind array was read from, kept so a diagnostic
     /// can show the raw bytes behind a rejected layout.
     pub inverse_bind_offset: Option<usize>,
-    /// Bone id hashes; length = `id_count`.
+    /// Bone id hashes, one per `bones_simple` bone. The client copies
+    /// `bones_simple` u32s (`MsklTableBuild`); the reference calls the count
+    /// `IDCount` at 116 — measured equal on every install model.
     pub ids: Vec<u32>,
-    /// The remap table (`remap_count` `u16`s), when present.
+    /// The remap table (`remap_count` `u16`s), when present. This is the
+    /// **mesh slot → bone** map: a vertex's raw blend index names a slot here,
+    /// not a bone (`ow-tank::skin`). Its inverse, bone → slot with `0xFFFF`
+    /// for an unskinned bone, is the array at file offset 88.
     pub remap: Vec<u16>,
 }
 
@@ -183,7 +202,6 @@ pub fn parse(d: &[u8]) -> Result<Skeleton> {
     let bones_simple = u16_at(d, 110).unwrap_or(0);
     let bones_cloth = u16_at(d, 112).unwrap_or(0);
     let remap_count = u16_at(d, 114).unwrap_or(0);
-    let id_count = u16_at(d, 116).unwrap_or(0);
 
     let mut parents = Vec::new();
     if hierarchy_off > 0 && bones_abs > 0 {
@@ -244,8 +262,9 @@ pub fn parse(d: &[u8]) -> Result<Skeleton> {
     }
 
     let mut ids = Vec::new();
-    if ids_off > 0 && id_count > 0 {
-        for i in 0..id_count as usize {
+    if ids_off > 0 && bones_simple > 0 {
+        // `MsklTableBuild` copies `bones_simple` ids from offset 56.
+        for i in 0..bones_simple as usize {
             ids.push(u32_at(d, ids_off + i * 4).ok_or(Error::Truncated("ids"))?);
         }
     }
@@ -304,7 +323,7 @@ mod tests {
         d[104..108].copy_from_slice(&0i32.to_le_bytes());
         for (slot, v) in [
             (108usize, bones as u16),
-            (110, 2),
+            (110, bones as u16),
             (112, 2),
             (114, bones as u16),
             (116, bones as u16),
@@ -346,7 +365,7 @@ mod tests {
         let d = synth();
         let s = parse(&d).expect("parses");
         assert_eq!(s.bones_abs, 4);
-        assert_eq!(s.bones_simple, 2);
+        assert_eq!(s.bones_simple, 4);
         assert_eq!(s.bones_cloth, 2);
         assert_eq!(s.parents, vec![-1, 0, 1, 1]);
         assert_eq!(s.ids.len(), 4);

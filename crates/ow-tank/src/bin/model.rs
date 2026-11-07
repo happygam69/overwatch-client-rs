@@ -131,7 +131,7 @@ fn main() -> std::process::ExitCode {
         model.triangle_count()
     );
     println!(
-        "  extents (lod<=0): min ({:.3}, {:.3}, {:.3}) max ({:.3}, {:.3}, {:.3}); size ({:.3}, {:.3}, {:.3})",
+        "  extents (finest lod): min ({:.3}, {:.3}, {:.3}) max ({:.3}, {:.3}, {:.3}); size ({:.3}, {:.3}, {:.3})",
         min[0], min[1], min[2], max[0], max[1], max[2], size[0], size[1], size[2]
     );
     println!(
@@ -422,10 +422,13 @@ fn main() -> std::process::ExitCode {
         }
     }
 
-    let semantics = model::vertex_semantics(&bytes, &loader).unwrap_or_default();
-    println!("  vertex semantics (semantic, index, format, submeshes):");
-    for (semantic, index, format, count) in semantics {
-        println!("    {semantic:>3}, {index}, format {format:#04x}  x{count}");
+    let elements = model::vertex_elements(&bytes).unwrap_or_default();
+    println!("  vertex elements (semantic, index, format, stream, offset, stride, buffers):");
+    for e in elements {
+        println!(
+            "    {:>3}, {}, format {:#04x}, stream {}, +{:<2} stride {:<2}  x{}",
+            e.semantic, e.index, e.format, e.stream, e.offset, e.stride, e.buffers
+        );
     }
 
     if let Some(n) = flag("--vertices").and_then(|v| v.parse::<usize>().ok()) {

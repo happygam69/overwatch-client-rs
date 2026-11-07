@@ -4,9 +4,11 @@
 //! The group and code layouts below are read off the install (the code
 //! reference agrees with none of what the assets carry, and the group
 //! reference describes a different header entirely). The instance layout is a
-//! port of the reference reader only: this build's registry holds zero
-//! type-`0x086` assets, so no instance below is verified against real data.
-//! See `docs/formats/shaders.md` for the findings.
+//! port of the reference reader only. This build **registers no loader for the
+//! type at all**: the asset-type job table at `0x143a7c3a0` maps `0x085` to job
+//! 23 and `0x087` to 25 but `0x086` to 0, and the registry holds zero
+//! type-`0x086` assets. So no instance below is verified against real data and
+//! none can be on this build. See `docs/formats/shaders.md` for the findings.
 //!
 //! Group (`0x085`), header 184 bytes, `N = u32` at `0x64`. Verified on 100
 //! openable groups; every offset relation below held on all of them:
@@ -26,8 +28,8 @@
 //! 0x70  u64 d_offset         D = u64 × N, all 0xFF observed
 //! 0x78  u64 e_offset         E = u64 × N, source GUIDs (type 0x040)
 //! 0x80  u64 f_offset         F = u64 × N, all 0xFF observed; ends at EOF
-//! 0x88  u64 zero
-//! 0x90  u64 zero
+//! 0x88  u64 g_offset         G = u64 × N, one hash-like value per record
+//! 0x90  u64 h_offset         H = u64 × N, all 0xFF observed; ends at EOF
 //! 0x98  u64 source_guid      type 0x088
 //! 0xA0  u64 zero
 //! 0xA8  u64 zero

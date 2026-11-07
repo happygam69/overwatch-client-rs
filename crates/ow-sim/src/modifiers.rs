@@ -406,6 +406,149 @@ pub fn apply_state_modifiers(
     let _ = (old_660, old_650, old_664);
 }
 
+/// `FUN_140cb3990` (`0x140cb3990`): the single-property query over the
+/// state-modifier records.
+///
+/// This is the function every "property" read in the mover goes through - the
+/// jump stage asks it for property `0x14` (jump requested) and `0x15` (crouch
+/// requested) and for the `0x22`-`0x26` wish properties. It walks the same
+/// 0x38-byte records as [`apply_state_modifiers`] (`body+0x870`, count
+/// `body+0x878`), keeps those whose window `[+0x1c, +0x20)` holds the frame id
+/// `body+0xe4`, and applies the op of every record whose `+0x28` equals
+/// `property`, in table order:
+///
+/// | op (`+0x2c`) | effect on the value |
+/// |---|---|
+/// | 0 | `value + current` (the record's float is the destination) |
+/// | 1 | `value * current` |
+/// | 2 | `value` |
+/// | 3 | `minss(current, value)` |
+/// | 4 | `maxss(current, value)` |
+/// | 5 | `maxss(minss(current, maxss(value, bound)), value)` |
+///
+/// `bound` is `+0x34`. An op outside `0..=5` leaves the value alone but still
+/// counts as applied (`bl = 1` at `0x140cb3a8a` is outside the jump table).
+/// Returns the value and whether any record matched.
+pub fn apply_property_records(
+    records: &[u8],
+    frame_id: u32,
+    property: i32,
+    value: f32,
+) -> (f32, bool) {
+    let mut value = value;
+    let mut applied = false;
+    let count = records.len() / 0x38;
+    for i in 0..count {
+        let record = &records[i * 0x38..(i + 1) * 0x38];
+        if frame_id < u32_at(record, 0x1c) || frame_id >= u32_at(record, 0x20) {
+            continue;
+        }
+        if i32_at(record, 0x28) != property {
+            continue;
+        }
+        let op = i32_at(record, 0x2c);
+        let arg = f32_at(record, 0x30);
+        let bound = f32_at(record, 0x34);
+        match op {
+            0 => value = sse_add(arg, value),
+            1 => value = sse_mul(arg, value),
+            2 => value = arg,
+            3 => value = minss(value, arg),
+            4 => value = maxss(value, arg),
+            5 => value = maxss(minss(value, maxss(arg, bound)), arg),
+            _ => {}
+        }
+        applied = true;
+    }
+    (value, applied)
+}
+
+/// The three-lane squared length `FUN_140cb3b10` compares: `(y*y + x*x) + z*z`,
+/// in the client's own add order, so a NaN lane behaves as it does there. The
+/// fourth lane is not part of the length.
+fn quad_length_sq(q: [f32; 4]) -> f32 {
+    sse_add(
+        sse_add(sse_mul(q[1], q[1]), sse_mul(q[0], q[0])),
+        sse_mul(q[2], q[2]),
+    )
+}
+
+/// `FUN_140cb3b10` (`0x140cb3b10`): the four-lane record applier.
+///
+/// The companion of [`apply_property_records`] for the 0x40-byte records at
+/// `body+0x960` (count `body+0x968`). A record is live when its window
+/// `[+0x1c, +0x20)` holds the frame id `body+0xe4` and its `+0x28` equals
+/// `mode`; its op is `+0x2c`:
+///
+/// | op | effect on the quad |
+/// |---|---|
+/// | 0 | `quad + record` (lane by lane) |
+/// | 1 | `quad * record` |
+/// | 2 | `record` |
+/// | 3 | `record` when `|quad| > |record|` (the shorter wins) |
+/// | 4 | `record` when `|quad| < |record|` (the longer wins) |
+///
+/// The length is [`quad_length_sq`]. With `mode == 1` the `y` lane is put back
+/// the way it arrived, per record - which is why the lateral lanes are the ones
+/// the movement vector's state modifiers act on.
+///
+/// The two comparisons are `COMISS` + `JBE` (op 3) and `COMISS` + `JAE` (op 4),
+/// so an unordered pair differs between them: op 3 keeps the quad, op 4 takes
+/// the record. Both are reproduced as the client's branch, not as a
+/// `min`/`max`.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn apply_vector_records(
+    records: &[u8],
+    frame_id: u32,
+    mode: i32,
+    quad: [f32; 4],
+) -> ([f32; 4], bool) {
+    let mut quad = quad;
+    let mut applied = false;
+    let count = records.len() / 0x40;
+    for i in 0..count {
+        let record = &records[i * 0x40..(i + 1) * 0x40];
+        if frame_id < u32_at(record, 0x1c) || frame_id >= u32_at(record, 0x20) {
+            continue;
+        }
+        if i32_at(record, 0x28) != mode {
+            continue;
+        }
+        let lane_y = quad[1];
+        let mut v = [0.0f32; 4];
+        for (k, lane) in v.iter_mut().enumerate() {
+            *lane = f32_at(record, 0x30 + 4 * k);
+        }
+        match i32_at(record, 0x2c) {
+            0 => {
+                for k in 0..4 {
+                    quad[k] = sse_add(quad[k], v[k]);
+                }
+            }
+            1 => {
+                for k in 0..4 {
+                    quad[k] = sse_mul(quad[k], v[k]);
+                }
+            }
+            2 => quad = v,
+            // `comiss s2,s1 ; jbe` skips when `s2 <= s1` or unordered.
+            3 if quad_length_sq(quad) > quad_length_sq(v) => {
+                quad = v;
+            }
+            // `comiss s2,s1 ; jae` skips when `s2 >= s1`, so unordered copies.
+            4 if !(quad_length_sq(quad) >= quad_length_sq(v)) => {
+                quad = v;
+            }
+            _ => {}
+        }
+        if mode == 1 {
+            quad[1] = lane_y;
+        }
+        applied = true;
+    }
+    (quad, applied)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

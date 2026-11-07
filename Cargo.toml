@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/ow-casc",
+    "crates/ow-engine",
     "crates/ow-scene",
     "crates/ow-client",
     "crates/ow-render",
@@ -30,6 +31,7 @@ needless_range_loop = "allow"
 
 [workspace.dependencies]
 ow-casc = { path = "crates/ow-casc" }
+ow-engine = { path = "crates/ow-engine" }
 ow-scene = { path = "crates/ow-scene" }
 ow-client = { path = "crates/ow-client" }
 ow-render = { path = "crates/ow-render" }

@@ -21,17 +21,20 @@
 //! slice of a preloaded state buffer. A `ptr` hex field or a response byte
 //! field of `-` is the empty byte string (an empty field would vanish under
 //! whitespace splitting). The entries verified here (`salsa20_xor`,
-//! `salsa20_state_init`, `dynamic_index_hash`, `dynamic_index_key_hash`,
-//! `encoding_header_parse`) take plain arena buffers, so a non-empty
+//! `salsa20_state_init`, `md5_transform`, `dynamic_index_hash`,
+//! `dynamic_index_key_hash`, `encoding_header_parse`,
+//! `encoding_page_index_search`) take plain arena buffers, so a non-empty
 //! relocation list or a guest address is rejected rather than silently
 //! ignored.
 
 use std::io::{self, BufRead, Write};
 
-use ow_casc::blte::{salsa20, salsa20_state_init};
-use ow_casc::container::{parse_index_footer, INDEX_FOOTER_SIZE};
+use ow_casc::blte::{md5_transform, salsa20, salsa20_state_init};
+use ow_casc::container::{
+    decode_page_record, parse_index_footer, select_page, IndexFooter, INDEX_FOOTER_SIZE, PAGE_MISS,
+};
 use ow_casc::encoding::{
-    find_ckey_record, find_ekey_record, write_header_fields, HEADER_FIELDS_SIZE,
+    find_ckey_record, find_ekey_record, page_index_search, write_header_fields, HEADER_FIELDS_SIZE,
 };
 use ow_casc::index::{hash_index, key_hash};
 
@@ -189,6 +192,70 @@ impl<'a> EncodingInfo<'a> {
     }
 }
 
+/// The CDN index object `CdnIndexPageSelect` (`0x1424da730`) takes: the
+/// footer fields at the client's own offsets, the 64-bit pointers into the
+/// same arena buffer, and the two whole-file fields `CdnIndexPageResident`
+/// writes. The fixture embeds the object's own guest address at `+0xa8` (the
+/// selector never reads that slot) so the probe can turn the absolute pointers
+/// into offsets in its copy, exactly as `EncodingInfo` does with `+0x68`.
+struct CdnIndexObject<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> CdnIndexObject<'a> {
+    fn u8_at(&self, off: usize) -> Result<u8, String> {
+        self.bytes
+            .get(off)
+            .copied()
+            .ok_or_else(|| format!("object-shorter-than-{off:#x}"))
+    }
+
+    fn u32_at(&self, off: usize) -> Result<u32, String> {
+        self.bytes
+            .get(off..off + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .ok_or_else(|| format!("object-shorter-than-{off:#x}"))
+    }
+
+    fn u64_at(&self, off: usize) -> Result<u64, String> {
+        self.bytes
+            .get(off..off + 8)
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+            .ok_or_else(|| format!("object-shorter-than-{off:#x}"))
+    }
+
+    /// The object's own arena address, kept in the unused `+0xa8` slot.
+    fn own_address(&self) -> Result<u64, String> {
+        self.u64_at(0xa8)
+    }
+
+    /// An arena offset for an absolute pointer the fixture stored.
+    fn rel(&self, absolute: u64) -> Result<usize, String> {
+        absolute
+            .checked_sub(self.own_address()?)
+            .map(|v| v as usize)
+            .ok_or_else(|| "pointer-before-object".to_string())
+    }
+
+    /// The footer fields the selector reads, at the client's object offsets.
+    fn footer(&self) -> Result<IndexFooter, String> {
+        Ok(IndexFooter {
+            // The selector reads no version byte; the object has none.
+            version: 0,
+            page_size: self.u32_at(0x6c)?,
+            offset_bytes: self.u8_at(0x5c)?,
+            size_bytes: self.u8_at(0x5d)?,
+            key_bytes: self.u8_at(0x5e)?,
+            checksum_size: self.u8_at(0x5f)?,
+            element_count: self.u32_at(0x60)?,
+            entries_per_page: self.u32_at(0x74)?,
+            page_count: self.u32_at(0x78)?,
+            last_key_bytes: self.u32_at(0x7c)?,
+            checksum_bytes: self.u32_at(0x80)?,
+        })
+    }
+}
+
 fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     match entry {
         // crates/ow-casc/src/blte.rs
@@ -249,6 +316,80 @@ fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), St
                 put_word(&mut state, i, *w);
             }
             Ok(("-".to_string(), vec![state, key.to_vec(), nonce.to_vec()]))
+        }
+        // crates/ow-casc/src/blte.rs
+        "md5_transform" => {
+            if args.len() != 2 {
+                return Err(format!("expected 2 args, got {}", args.len()));
+            }
+            let mut it = args.into_iter();
+            let block = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let state = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg1 must be a plain arena buffer".into()),
+            };
+            let block: [u8; 64] = block
+                .as_slice()
+                .try_into()
+                .map_err(|_| "block-must-be-64-bytes".to_string())?;
+            let mut words = <[u8; 16]>::try_from(state.as_slice())
+                .map_err(|_| "state-must-be-16-bytes".to_string())?;
+            let mut state_words = [0u32; 4];
+            for (index, word) in state_words.iter_mut().enumerate() {
+                *word = u32::from_le_bytes(words[index * 4..index * 4 + 4].try_into().unwrap());
+            }
+            md5_transform(&mut state_words, &block);
+            for (index, word) in state_words.iter().enumerate() {
+                words[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+            }
+            // The block is returned unchanged as well, so a transform that
+            // wrote through its input pointer is a compared divergence.
+            Ok(("-".to_string(), vec![block.to_vec(), words.to_vec()]))
+        }
+        // crates/ow-casc/src/encoding.rs
+        "encoding_page_index_search" => {
+            if args.len() != 5 {
+                return Err(format!("expected 5 args, got {}", args.len()));
+            }
+            let mut it = args.into_iter();
+            let index = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let pages = match it.next() {
+                Some(Arg::U64(v)) => v,
+                _ => return Err("arg1 must be u64".into()),
+            };
+            let width = match it.next() {
+                Some(Arg::U64(v)) => v,
+                _ => return Err("arg2 must be u64".into()),
+            };
+            let key = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg3 must be a plain arena buffer".into()),
+            };
+            let key_len = match it.next() {
+                Some(Arg::U64(v)) => v,
+                _ => return Err("arg4 must be u64".into()),
+            };
+            let pages = u32::try_from(pages).map_err(|_| "pages-past-u32".to_string())?;
+            let width = u8::try_from(width).map_err(|_| "width-past-u8".to_string())?;
+            let key_len = u8::try_from(key_len).map_err(|_| "key-length-past-u8".to_string())?;
+            // The client reads the entry without a bounds check; the fixture
+            // never asks for an index it does not supply, so a short one is a
+            // fixture error rather than a safety edge.
+            let needed = (pages as usize) * (width as usize + 16);
+            if index.len() < needed {
+                return Err("index-shorter-than-pages-times-stride".into());
+            }
+            if usize::from(key_len) > key.len() {
+                return Err("key-length-past-key".into());
+            }
+            let page = page_index_search(&index, pages, width, &key, key_len);
+            Ok((format!("{:x}", u64::from(page)), vec![index, key]))
         }
         // crates/ow-casc/src/index.rs
         "dynamic_index_hash" => {
@@ -435,12 +576,115 @@ fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), St
                 return Err("out-must-be-48-bytes".into());
             };
             let code = parse_index_footer(&data, len, total_len, &mut out);
-            // `void` return: the client writes only AL and leaves RAX's upper
-            // bits from unrelated arithmetic, so callers test AL only. The
-            // memory channel compares the footer copy and every derived field;
-            // the hash-zeroing reject and every early reject are visible there.
-            let _ = code;
-            Ok(("-".to_string(), vec![data, out.to_vec()]))
+            // The client contracts only AL: success is `XOR AL,AL`, every
+            // reject is `MOV AL,0x8`. The harness's `u8` return kind masks
+            // RAX to the low byte, so the status is compared exactly while
+            // the memory channel compares the footer copy and every derived
+            // field. RAX's upper bits are ignored, as the client's callers do.
+            Ok((format!("{:x}", u64::from(code)), vec![data, out.to_vec()]))
+        }
+        // crates/ow-casc/src/container.rs
+        "cdn_index_page_select" => {
+            if args.len() != 6 {
+                return Err(format!("expected 6 args, got {}", args.len()));
+            }
+            let mut it = args.into_iter();
+            let mut index = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let key = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg1 must be a plain arena buffer".into()),
+            };
+            let key_len = match it.next() {
+                Some(Arg::U64(v)) => {
+                    u8::try_from(v).map_err(|_| "key-length-past-u8".to_string())?
+                }
+                _ => return Err("arg2 must be u64".into()),
+            };
+            let mut out_offset = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg3 must be a plain arena buffer".into()),
+            };
+            // Arguments 5 and 6 travel on the stack in the client's ABI; the
+            // oracle writes them at the caller's [rsp+0x28] and [rsp+0x30].
+            let mut out_size = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg4 must be a plain arena buffer".into()),
+            };
+            let mut out_key16 = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg5 must be a plain arena buffer".into()),
+            };
+            // The client reads the query and the object without a bounds
+            // check; the fixture never asks for a region it does not supply,
+            // so a short one is a fixture error, not a safety edge.
+            if usize::from(key_len) > key.len() {
+                return Err("key-length-past-key".into());
+            }
+            if out_offset.len() < 8 || out_size.len() < 4 || out_key16.len() < 16 {
+                return Err("out-buffer-too-short".into());
+            }
+            let (footer, own, last_keys_off, bodies_abs, whole_file) = {
+                let object = CdnIndexObject { bytes: &index };
+                (
+                    object.footer()?,
+                    object.own_address()?,
+                    object.rel(object.u64_at(0x88)?)?,
+                    object.u64_at(0x50)?,
+                    object.u8_at(0x38)?,
+                )
+            };
+            if whole_file != 0 {
+                // Declared gap: the streamed/HTTP `CdnIndexPageResident`
+                // branch is read but not implemented, and this unit's object
+                // is always whole-file.
+                return Err("streamed-index-branch-not-covered".into());
+            }
+            let last_keys_span = (footer.page_count as usize) * usize::from(footer.key_bytes);
+            let page = {
+                let last_keys = index
+                    .get(last_keys_off..last_keys_off + last_keys_span)
+                    .ok_or("last-keys-outside-index")?;
+                select_page(
+                    last_keys,
+                    footer.page_count,
+                    footer.key_bytes,
+                    &key,
+                    key_len,
+                )
+            };
+            // The client reports AL only: 0 on a hit, 6 on a miss, otherwise
+            // the resident status. The harness masks both sides to the byte.
+            let mut status = 6u64;
+            if page != PAGE_MISS {
+                // `CdnIndexPageResident` (`0x1424da590`), whole-file branch
+                // (`index+0x38 == 0`): the current page becomes `page` and the
+                // page pointer `pageBodies + (u32)(page * pageSize)`. Those two
+                // object fields are the client's side effects of the call, so
+                // the probe writes them back and the unit compares the whole
+                // object; a candidate that skipped them diverges.
+                let page_ptr =
+                    bodies_abs.wrapping_add(u64::from(page.wrapping_mul(footer.page_size)));
+                index[0x98..0xa0].copy_from_slice(&page_ptr.to_le_bytes());
+                index[0xa0..0xa4].copy_from_slice(&page.to_le_bytes());
+                let page_base = page_ptr
+                    .checked_sub(own)
+                    .map(|v| v as usize)
+                    .ok_or("page-before-object")?;
+                let body = index.get(page_base..).ok_or("page-outside-index")?;
+                if let Some(record) = decode_page_record(&footer, page, body, &key, key_len) {
+                    out_offset[..8].copy_from_slice(&record.offset.to_le_bytes());
+                    out_size[..4].copy_from_slice(&record.size.to_le_bytes());
+                    out_key16[..16].copy_from_slice(&record.key16);
+                    status = 0;
+                }
+            }
+            Ok((
+                format!("{:x}", status),
+                vec![index, key, out_offset, out_size, out_key16],
+            ))
         }
         other => Err(format!("unknown-entry-{}", other)),
     }

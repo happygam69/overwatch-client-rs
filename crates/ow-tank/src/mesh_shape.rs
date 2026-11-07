@@ -10,12 +10,16 @@
 //!
 //! Two things are captured here because they are read exactly:
 //!
-//! - [`array_header`]: the block stores each of its three arrays as a pointer
-//!   plus a tag; `0x141b53af0` reads the array's 16-byte header
+//! - **the array tag rule**: the block stores each of its three arrays as a
+//!   pointer plus a tag; `0x141b53af0` reads the array's 16-byte header
 //!   `{data pointer, u64 count}` at `pointer` when the tag is `1` and at
-//!   `pointer + 8` otherwise. The field offsets are [`OFF_NODES`],
-//!   [`OFF_POINTS`], [`OFF_TRIANGLES`], [`OFF_NODE_COUNT`], [`OFF_38B71436`],
-//!   [`OFF_HEIGHT`] and [`OFF_5BD33E19`].
+//!   `pointer + 8` otherwise ([`header_offset`]). The field offsets are
+//!   [`OFF_NODES`], [`OFF_POINTS`], [`OFF_TRIANGLES`], [`OFF_NODE_COUNT`],
+//!   [`OFF_38B71436`], [`OFF_HEIGHT`] and [`OFF_5BD33E19`].
+//!   The scene path reads the same arrays through the STU registry's typed
+//!   fields (`ow_tank::range_world::block_arrays`), which is where the loader
+//!   has already resolved this tag, so the rule is stated here and applied
+//!   there.
 //! - [`shape_record`]: `MeshShapeFill`'s 19 dwords, by byte offset, including
 //!   the `1/scale` lanes and the one scaled float at `+0x48`.
 //!
@@ -60,14 +64,6 @@ pub fn header_offset(tag: u64) -> usize {
 pub struct ArrayHeader {
     pub data: u64,
     pub count: u64,
-}
-
-/// Apply `0x141b53af0`'s rule to one array slot: the two words at the field are
-/// `{pointer, tag}`, and the header sits at `pointer + header_offset(tag)`.
-/// `header` is what is stored there.
-pub fn array_header(slot: [u64; 2], header: ArrayHeader) -> ArrayHeader {
-    let _ = header_offset(slot[1]);
-    header
 }
 
 /// What `0x141b53af0` unpacks into its `0x30`-byte output.

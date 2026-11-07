@@ -44,12 +44,13 @@
 //! through the byte at `+0x72` (`0x73` bytes); [`QUERY_BLOCK_LEN`] rounds that up
 //! so every quad lane read stays inside the block.
 //!
-//! **Only the no-support-point query is representable here.** `MeshTriangleTest`
-//! (`0x142cce430`) takes the read triangle path only when the support-point
-//! count is exactly `0` *and* every lane of the scaled expansion is at most
-//! `0.005`; any other state hands the triangle to `0x142cc9460`, which is not
-//! read. [`query_block`] therefore writes a count of `0` and no support-point
-//! pointer, and the capsule / support-point narrowphase stays **open**.
+//! **The no-support-point query is what this module builds.** `MeshTriangleTest`
+//! (`0x142cce430`) takes the fast analytic triangle path only when the
+//! support-point count is exactly `0` *and* every lane of the scaled expansion
+//! is at most `0.005`; any other state (including the walk's `0.35` radius)
+//! hands the triangle to `0x142cc9460`, verified as `fn/ClosestPointGjk`.
+//! [`query_block`] writes a count of `0` and no support-point pointer; the
+//! caller's expansion decides which of the two read triangle paths runs.
 
 use crate::mesh_shape::{self, MeshSource};
 

@@ -321,11 +321,14 @@ pub struct EntityBody {
 /// (`var _ = reader.ReadUInt32(); // type`) and an offset it resolves as
 /// `record_start + relative_offset`, an absolute offset within the asset.
 ///
-/// What is exposed here is exactly that: the type word (likely the component's
-/// STU instance hash, e.g. `STUComponentInstanceData` = `0xA46203AB` in the
-/// reference's type table -- **not verified** in this reader) and the target
-/// offset. The reference then parses a whole STU stream at the target; this
-/// reader does not, so the data *length* under the record is unknown here.
+/// What is exposed here is exactly that: the type word and the target offset.
+/// The word is a small **component id**, not an STU hash: the practice range
+/// uses ids `2`..`0x20`, and the STU asset at the target names the component's
+/// data class (`2` = `STUModelComponentInstanceData`, `3` =
+/// `STUStatescriptComponentInstanceData`, `0x0b` = `STUTargetTagInstanceData`,
+/// ...). `crates/ow-tank/examples/map_entity_probe.rs` reads the map that way.
+/// The reference parses a whole STU stream at the target; this reader does not,
+/// so the data *length* under the record is unknown here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InstanceDataRef {
     /// The record's first word, discarded by the reference.

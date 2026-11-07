@@ -686,6 +686,190 @@ fn mover_gate_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     Ok((format!("{:x}", u64::from(gate)), vec![body, results]))
 }
 
+/// `FUN_140cb3990` (`0x140cb3990`): the single-property query over the 0x38-byte
+/// state records. `arg3` is the record array the body's `+0x870` names; the
+/// probe receives it directly because it has no address space.
+fn mover_property_records_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let body = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x1c00 => b,
+        _ => return Err("arg0 must be the mover body".into()),
+    };
+    let value = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 4 => b,
+        _ => return Err("arg1 must be the 4-byte value".into()),
+    };
+    let property = match it.next() {
+        Some(Arg::U64(v)) => v as u32 as i32,
+        _ => return Err("arg2 must be the property id".into()),
+    };
+    let records = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg3 must be the record array".into()),
+    };
+    let frame_id = u32::from_le_bytes(body[0xe4..0xe8].try_into().unwrap());
+    let start = f32::from_le_bytes(value[0..4].try_into().unwrap());
+    let (end, applied) =
+        ow_sim::modifiers::apply_property_records(&records, frame_id, property, start);
+    Ok((
+        format!("{:x}", u64::from(applied)),
+        vec![body, end.to_le_bytes().to_vec(), records],
+    ))
+}
+
+/// `FUN_140cb3b10` (`0x140cb3b10`): the four-lane record applier. `arg3` is the
+/// record array the body's `+0x960` names.
+fn mover_vector_records_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let body = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x1c00 => b,
+        _ => return Err("arg0 must be the mover body".into()),
+    };
+    let quad = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 16 => b,
+        _ => return Err("arg1 must be the 16-byte quad".into()),
+    };
+    let mode = match it.next() {
+        Some(Arg::U64(v)) => v as u32 as i32,
+        _ => return Err("arg2 must be the mode".into()),
+    };
+    let records = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg3 must be the record array".into()),
+    };
+    let frame_id = u32::from_le_bytes(body[0xe4..0xe8].try_into().unwrap());
+    let mut start = [0.0f32; 4];
+    for (i, lane) in start.iter_mut().enumerate() {
+        *lane = f32::from_le_bytes(quad[4 * i..4 * i + 4].try_into().unwrap());
+    }
+    let (end, applied) = ow_sim::modifiers::apply_vector_records(&records, frame_id, mode, start);
+    let mut out = Vec::with_capacity(16);
+    for lane in end {
+        out.extend_from_slice(&lane.to_le_bytes());
+    }
+    Ok((
+        format!("{:x}", u64::from(applied)),
+        vec![body, out, records],
+    ))
+}
+
+/// `FUN_140cb2220` (`0x140cb2220`): the per-frame vector resolve, phases 1-4
+/// plus the closing landing test. `arg1` is the 0x38-byte record array the
+/// body's `+0x870` names.
+///
+/// The fixture pins `body+0x968` (the 0x40-byte record count) to zero, which is
+/// what keeps the client out of phase 5 - the two record passes sit behind
+/// `if (n40 > 0) && (*body->vtable)[0xa8](body) != 2`. The transform block's
+/// world-space bit (`0x1000000`) is set, so both transform helpers take their
+/// direct-copy path and the stage reduces to the local law.
+fn mover_resolve_vector_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() < 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut body = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x1c00 => b,
+        _ => return Err("arg0 must be the mover body".into()),
+    };
+    let records = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg1 must be the record array".into()),
+    };
+    // The remaining arguments are the fake vtable and its stub: plumbing the
+    // client reads through `(*body->vtable)[0xa8]`, echoed back untouched so
+    // their channels stay equal.
+    let mut extras = Vec::new();
+    for arg in it {
+        match arg {
+            Arg::Ptr(b, r, g) if r.is_empty() && g.is_none() => extras.push(b),
+            _ => return Err("arg2+ must be the vtable and stub".into()),
+        }
+    }
+    let frame_id = u32::from_le_bytes(body[0xe4..0xe8].try_into().unwrap());
+    let quad = |body: &[u8], at: usize| -> [f32; 4] {
+        let mut out = [0.0f32; 4];
+        for (i, lane) in out.iter_mut().enumerate() {
+            *lane = f32::from_le_bytes(body[at + 4 * i..at + 4 * i + 4].try_into().unwrap());
+        }
+        out
+    };
+    let before = quad(&body, 0x1150);
+    let direction = quad(&body, 0xc0);
+    let cap = f32::from_le_bytes(body[0x60c..0x610].try_into().unwrap());
+    let after = {
+        let mut property = ow_sim::resolve::body_properties(&records, frame_id);
+        ow_sim::resolve::resolve_local(before, cap, &mut property)
+    };
+    for (i, lane) in after.iter().enumerate() {
+        body[0x1150 + 4 * i..0x1154 + 4 * i].copy_from_slice(&lane.to_le_bytes());
+    }
+    if ow_sim::resolve::landing_rise(before, after, direction) {
+        let t = ow_sim::jump::mover_on_landing(u32::from_le_bytes(
+            body[0x10d0..0x10d4].try_into().unwrap(),
+        ));
+        apply_transition(&mut body, t, frame_id);
+    }
+    let mut out = vec![body, records];
+    out.extend(extras);
+    Ok(("-".to_string(), out))
+}
+
+/// Write a state-file transition the way the client's mutators do: the flag
+/// word, the `+0x10e0` frame stamp when it applies, and the `+0x1a76` latch.
+fn apply_transition(body: &mut [u8], t: ow_sim::jump::Transition, frame_id: u32) {
+    body[0x10d0..0x10d4].copy_from_slice(&t.flags.to_le_bytes());
+    if t.stamp {
+        body[0x10e0..0x10e4].copy_from_slice(&frame_id.to_le_bytes());
+    }
+    if let Some(latch) = t.latch {
+        body[0x1a76] = u8::from(latch);
+    }
+}
+
+/// The four state-file mutators `0x140ca9120`, `0x140ca9150`, `0x140ca9190` and
+/// `0x140ca91e0`. The state channel is the whole body: each one writes the flag
+/// word, may stamp the frame id into `+0x10e0`, and may move the `+0x1a76`
+/// latch.
+fn mover_flag_op_entry(args: Vec<Arg>, op: FlagOp) -> Result<(String, Vec<Vec<u8>>), String> {
+    let expected = if op == FlagOp::Takeoff { 2 } else { 1 };
+    if args.len() != expected {
+        return Err(format!("expected {expected} args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut body = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x1c00 => b,
+        _ => return Err("arg0 must be the mover body".into()),
+    };
+    let alt = match it.next() {
+        Some(Arg::U64(v)) => v & 0xff != 0,
+        _ => false,
+    };
+    let flags = u32::from_le_bytes(body[0x10d0..0x10d4].try_into().unwrap());
+    let frame_id = u32::from_le_bytes(body[0xe4..0xe8].try_into().unwrap());
+    let t = match op {
+        FlagOp::Landing => ow_sim::jump::mover_on_landing(flags),
+        FlagOp::EnterAir => ow_sim::jump::mover_enter_air(flags),
+        FlagOp::Takeoff => ow_sim::jump::mover_on_takeoff(flags, alt),
+        FlagOp::Ground => ow_sim::jump::mover_on_ground(flags),
+    };
+    apply_transition(&mut body, t, frame_id);
+    Ok(("-".to_string(), vec![body]))
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum FlagOp {
+    Landing,
+    EnterAir,
+    Takeoff,
+    Ground,
+}
+
 /// `FUN_142cd4ff0` (`0x142cd4ff0`): resolve a character handle and return
 /// its position as four f32 lanes in XMM0.
 fn mover_character_position_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
@@ -1350,6 +1534,53 @@ fn mesh_sweep_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     Ok(("-".to_string(), vec![element, out_after, block, xform]))
 }
 
+/// `0x142caea70`: the fan refinement's triangle gather.
+///
+/// `arg0` is the object record followed by its whole mesh world, the same shape
+/// the `mesh_sweep` unit uses, so the record's three pointers are blob offsets.
+/// `arg1` is the caller's container: the client's header at
+/// `+0x200`/`+0x208`/`+0x20c` and the inline id array at `+0x210`. The probe
+/// writes the count and the ids and leaves the rest - the caller's prelude, the
+/// data pointer and the capacity - as the fixture set them, which is what the
+/// client does while the count stays below the capacity. `arg2` is the
+/// eight-float query box and `arg3` the layer mask, both taken as given.
+fn mesh_gather_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let object = match it.next() {
+        Some(Arg::Ptr(b, _, g)) if g.is_none() && b.len() > 0x50 => b,
+        _ => return Err("arg0 must be the record plus its world".into()),
+    };
+    let mut container = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x410 => b,
+        _ => return Err("arg1 must be the 0x410-byte container".into()),
+    };
+    let query = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 32 => b,
+        _ => return Err("arg2 must be the 32-byte query box".into()),
+    };
+    let mask = match it.next() {
+        Some(Arg::U64(v)) => v as u16,
+        _ => return Err("arg3 must be the layer mask".into()),
+    };
+    let world = ow_sim::collide::MeshWorld {
+        base: 0x50,
+        bytes: &object[0x50..],
+    };
+    let ids = ow_sim::collide::mesh_gather(&object[..0x50], &world, &query, mask);
+    container[0x20c..0x210].copy_from_slice(&(ids.len() as i32).to_le_bytes());
+    for (slot, id) in ids.iter().enumerate() {
+        let at = 0x210 + slot * 4;
+        if at + 4 > container.len() {
+            return Err("the gathered ids do not fit the inline container".into());
+        }
+        container[at..at + 4].copy_from_slice(&id.to_le_bytes());
+    }
+    Ok(("-".to_string(), vec![object, container, query]))
+}
+
 fn vec4_at(bytes: &[u8], offset: usize) -> [f32; 4] {
     let mut out = [0.0f32; 4];
     for (lane, value) in out.iter_mut().enumerate() {
@@ -1731,6 +1962,13 @@ fn handle_call(
         "mover_apply_settings" => mover_apply_settings_entry(args),
         "mover_apply_modifiers" => mover_apply_modifiers_entry(args),
         "mover_gate" => mover_gate_entry(args),
+        "mover_property_records" => mover_property_records_entry(args),
+        "mover_vector_records" => mover_vector_records_entry(args),
+        "mover_resolve_vector" => mover_resolve_vector_entry(args),
+        "mover_on_landing" => mover_flag_op_entry(args, FlagOp::Landing),
+        "mover_enter_air" => mover_flag_op_entry(args, FlagOp::EnterAir),
+        "mover_on_takeoff" => mover_flag_op_entry(args, FlagOp::Takeoff),
+        "mover_on_ground" => mover_flag_op_entry(args, FlagOp::Ground),
         "mover_character_position" => mover_character_position_entry(args),
         "mover_world_position" => mover_world_position_entry(args),
         "mover_rigid_position" => mover_rigid_position_entry(args),
@@ -1759,6 +1997,7 @@ fn handle_call(
         "gjk_closest" => gjk_closest_entry(args),
         "build_bvh" => build_bvh_entry(args),
         "mesh_sweep" => mesh_sweep_entry(args),
+        "mesh_gather" => mesh_gather_entry(args),
         "mover_variant_position" => mover_variant_position_entry(args),
         "mover_state_transform" => mover_state_entry(args),
         "mover_state_vector" => mover_state_vector_entry(args),

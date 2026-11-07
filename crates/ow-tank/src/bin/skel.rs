@@ -179,27 +179,32 @@ fn main() -> std::process::ExitCode {
         }
     }
 
-    // Vertex element semantics per mesh: which attributes the file carries and
-    // which the reader decodes (it knows 0 position, 1 normal, 8 colour,
-    // 9 texcoord; a skinned mesh must also carry bone indices and weights).
+    // Vertex elements per mesh: which attributes the file carries, read from
+    // the element records the client's own writer uses (semantics 1 normal,
+    // 3 tangent, 4 blend indices, 5 blend weights, 8 colour, 9 texcoord,
+    // 16 vertex index).
     if args.iter().any(|a| a == "--elements") {
-        match ow_tank::model::vertex_semantics(&bytes, &|g2| data.bytes_of(g2).ok()) {
-            Ok(sem) => {
-                println!("vertex attributes (semantic, index, format, submeshes):");
-                for (semantic, index, format, n) in sem {
-                    let name = match semantic {
+        match ow_tank::model::vertex_elements(&bytes) {
+            Ok(elements) => {
+                println!(
+                    "vertex elements (semantic, index, format, stream, offset, stride, buffers):"
+                );
+                for e in elements {
+                    let name = match e.semantic {
                         0 => "position",
                         1 => "normal",
+                        3 => "tangent",
+                        4 => "blend indices",
+                        5 => "blend weights",
                         8 => "colour",
                         9 => "texcoord",
-                        10 => "?10 (blend weights?)",
-                        11 => "?11 (blend indices?)",
-                        12 => "?12",
-                        13 => "?13",
-                        15 => "?15",
+                        16 => "vertex index",
                         _ => "?",
                     };
-                    println!("  semantic {semantic:3}  index {index}  format 0x{format:02x}  x{n}   {name}");
+                    println!(
+                        "  semantic {:3}  index {}  format 0x{:02x}  stream {}  +{:<2} stride {:<2}  x{}   {name}",
+                        e.semantic, e.index, e.format, e.stream, e.offset, e.stride, e.buffers
+                    );
                 }
             }
             Err(e) => println!("model parse: {e}"),

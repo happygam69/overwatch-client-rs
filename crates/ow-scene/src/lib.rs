@@ -2941,11 +2941,15 @@ impl Collider {
     }
 
     /// Highest triangle top under `(x, z)` below `from`, or the fallback floor.
+    ///
+    /// The fallback is only for a point with no triangle below `from`: seeding
+    /// the search with it would make every real floor lower than 2 m
+    /// unreachable, which is most of a map's ground.
     pub fn ground_at(&self, x: f32, z: f32, from: f32) -> f32 {
         const CELL: f32 = 4.0;
         let key = ((x / CELL).floor() as i32, (z / CELL).floor() as i32);
         const FALLBACK: f32 = 2.0;
-        let mut best = FALLBACK;
+        let mut best = f32::NEG_INFINITY;
         if let Some(tris) = self.cells.get(&key) {
             for tri in tris {
                 if let Some(h) = tri_top_y(tri, x, z) {
@@ -2956,7 +2960,11 @@ impl Collider {
                 }
             }
         }
-        best
+        if best == f32::NEG_INFINITY {
+            FALLBACK
+        } else {
+            best
+        }
     }
 
     /// Cells touched, for a load report.

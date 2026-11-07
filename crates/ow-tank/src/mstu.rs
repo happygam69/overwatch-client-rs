@@ -1,33 +1,41 @@
 //! The model's own structured data (`MSTU`).
 //!
 //! The chunk is a two-field header -- offset and size -- pointing at an STU
-//! blob inside the chunk's own payload. The reference reader
-//! (`teModelChunk_STU`) reads the header, then parses the slice as an STU
-//! `STUModel`; its chunk reader hands the chunk a stream sliced to the chunk's
-//! own bytes, so the header's offset is relative to the payload start.
+//! blob inside the chunk's own payload. **Read** from the current image
+//! (`0x141b5df70` load dispatcher -> `0x141b88df0`): the MSTU chunk version
+//! must be 2, the dispatcher rebases the payload's first qword (offset ->
+//! pointer), and `FUN_141b88df0` passes `*(int *)(payload + 8)` -- a **u32**
+//! length, not a qword -- with `*payload` to `FUN_1421d88c0`, the STU blob
+//! loader. A zero length stores a null STU and parses nothing.
 //!
-//! The install agrees: over 60 models carrying an MSTU payload, the STU blob
-//! parsed at `payload[offset..offset+size]` on all 60 and at
-//! `asset[offset..offset+size]` on none; `offset` was 16 (its own header) on
-//! all 60, while `size` left trailing bytes in 55 of them (5 had
+//! The install agrees with the offset's base: over 60 models carrying an MSTU
+//! payload, the STU blob parsed at `payload[offset..offset+size]` on all 60
+//! and at `asset[offset..offset+size]` on none; `offset` was 16 (its own
+//! header) on all 60, while `size` left trailing bytes in 55 of them (5 had
 //! `offset + size == payload length`).
 //!
-//! Evidence class: *install* (via `cargo test --test mstu_real -- --nocapture`)
-//! cross-checked against the *decompiled* reader. See `docs/formats/stu.md`.
+//! Evidence class: *read* for the header's width, base and version gate;
+//! *install* for the counts above. See `docs/formats/stu.md`.
 
 use std::fmt;
 
 pub const TAG: &[u8; 4] = b"MSTU";
+
+/// The MSTU chunk version both model dispatchers require (`0x141b5e1e0`,
+/// `0x141b5df70`: `*(u16*)(record + 0xe) == 2`).
+pub const VERSION: u16 = 2;
 
 /// Bytes of `{i64 offset, i64 size}` before the STU blob.
 const HEADER_SIZE: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MstuHeader {
-    /// Relative to the MSTU payload start; 16 on every model inspected.
+    /// `u64` at 0x00, relative to the MSTU payload start; 16 on every model
+    /// inspected. The client rebases it into a pointer before the STU load.
     pub offset: i64,
-    /// Length of the STU blob from `offset`; may leave trailing bytes.
-    pub size: i64,
+    /// `u32` at 0x08. The client reads four bytes, not eight: the four bytes
+    /// at 0x0c..0x10 are never read.
+    pub size: u32,
 }
 
 #[derive(Debug)]
@@ -59,7 +67,17 @@ impl From<ow_stu::Error> for Error {
 
 fn payload_of(asset: &[u8]) -> Result<&[u8], Error> {
     let chunks = crate::chunks::Chunks::parse(asset).map_err(|_| Error::NotAChunkedAsset)?;
-    chunks.payload(asset, TAG).ok_or(Error::MissingChunk)
+    let entry = chunks
+        .all_with_tag(TAG)
+        .first()
+        .copied()
+        .ok_or(Error::MissingChunk)?;
+    if entry.version != VERSION {
+        return Err(Error::Malformed("MSTU version is not 2"));
+    }
+    asset
+        .get(entry.offset..entry.offset + entry.size)
+        .ok_or(Error::Malformed("MSTU payload runs past the asset"))
 }
 
 fn read_header(payload: &[u8]) -> Result<MstuHeader, Error> {
@@ -68,7 +86,7 @@ fn read_header(payload: &[u8]) -> Result<MstuHeader, Error> {
     }
     Ok(MstuHeader {
         offset: i64::from_le_bytes(payload[0..8].try_into().unwrap()),
-        size: i64::from_le_bytes(payload[8..16].try_into().unwrap()),
+        size: u32::from_le_bytes(payload[8..12].try_into().unwrap()),
     })
 }
 
@@ -84,7 +102,7 @@ pub fn parse(asset: &[u8]) -> Result<ow_stu::Stu, Error> {
     let payload = payload_of(asset)?;
     let header = read_header(payload)?;
     let at = usize::try_from(header.offset).map_err(|_| Error::Malformed("negative STU offset"))?;
-    let size = usize::try_from(header.size).map_err(|_| Error::Malformed("negative STU size"))?;
+    let size = header.size as usize;
     let end = at
         .checked_add(size)
         .ok_or(Error::Malformed("STU slice runs past the chunk"))?;
@@ -112,15 +130,16 @@ mod tests {
         out.extend_from_slice(&(payload.len() as i32).to_le_bytes());
         out.extend_from_slice(&(payload.len() as i32).to_le_bytes());
         out.extend_from_slice(&SENTINEL.to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&VERSION.to_le_bytes());
         out.extend_from_slice(payload);
         out
     }
 
-    fn mstu_payload(offset: i64, size: i64, blob: &[u8]) -> Vec<u8> {
+    fn mstu_payload(offset: i64, size: u32, blob: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&offset.to_le_bytes());
         out.extend_from_slice(&size.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes()); // 0x0c..0x10 is never read
         out.extend_from_slice(blob);
         out
     }
@@ -136,7 +155,7 @@ mod tests {
     #[test]
     fn parses_a_synthetic_model() {
         let blob = minimal_stu();
-        let asset = synthetic_asset(TAG, &mstu_payload(16, blob.len() as i64, &blob));
+        let asset = synthetic_asset(TAG, &mstu_payload(16, blob.len() as u32, &blob));
 
         let header = parse_header(&asset).expect("header parses");
         assert_eq!(
@@ -201,7 +220,7 @@ mod tests {
     #[test]
     fn surfaces_stu_errors_from_the_blob() {
         let blob = [0xAAu8; 8];
-        let asset = synthetic_asset(TAG, &mstu_payload(16, blob.len() as i64, &blob));
+        let asset = synthetic_asset(TAG, &mstu_payload(16, blob.len() as u32, &blob));
         assert!(matches!(parse(&asset), Err(Error::Stu(_))));
     }
 }

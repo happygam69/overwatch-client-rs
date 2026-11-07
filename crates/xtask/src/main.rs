@@ -63,15 +63,13 @@ fn verify(fast: bool) -> bool {
         ],
         None,
     );
-    // The install-reading tests are the slow half; on the fast path only the
-    // active data libraries are checked. The parked runtime crates are not
-    // members until the CASC/map oracle passes.
+    // The install-reading tests are the slow half and they live in the
+    // integration targets (`tests/*.rs`), which skip themselves when no
+    // install is present. The fast path therefore keeps every library target
+    // in the workspace - including the verified math in `ow-sim` and the
+    // D3D11 units in `ow-render` - and drops the integration and doc targets.
     let suites: Vec<Vec<&str>> = if fast {
-        vec![
-            vec!["test", "--release", "-p", "ow-casc", "--lib"],
-            vec!["test", "--release", "-p", "ow-stu", "--lib"],
-            vec!["test", "--release", "-p", "ow-tank", "--lib"],
-        ]
+        vec![vec!["test", "--release", "--workspace", "--lib"]]
     } else {
         vec![vec!["test", "--release", "--workspace"]]
     };

@@ -354,6 +354,16 @@ fn texture_descriptor_size_walk_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec
         _ => return Err("arg1 must be u64".into()),
     };
     let descriptor = u64::from_le_bytes(object[0..8].try_into().unwrap());
+    // A bias past the descriptor's own mip field makes the unit's
+    // `wrapping_sub` ask for `2^32 - bias` levels, and the client's loop would
+    // spin that long before answering. No probe case can wait for it.
+    let field = ((descriptor >> 39) & 0xf) as u32;
+    if bias > field {
+        return Err(format!(
+            "bias {bias} is past the descriptor's {field}-mip field; the client would walk {} levels",
+            bias.wrapping_sub(field)
+        ));
+    }
     let flags = u32::from_le_bytes(object[8..12].try_into().unwrap());
     let format = object[0x60];
     let ret = ow_tank::texture::descriptor_size_walk(descriptor, flags, format, bias);
@@ -646,6 +656,101 @@ fn cell_bytes_fixup_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), Stri
     Ok(("-".to_string(), vec![block]))
 }
 
+/// `MrnmFixup` (`0x141b893e0`): `void (payload, base)`.
+///
+/// The client rebases the payload's offset slots in place. The fixture keeps
+/// the slots relative and passes the payload's arena base in the client's dead
+/// second argument slot, so both sides write the same absolute values and the
+/// comparison needs no masked pointer slots. The candidate is
+/// `ow_tank::mrnm::fixup`.
+fn mrnm_fixup_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut payload = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg0 must be the plain payload".into()),
+    };
+    let base = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg1 must be the payload base".into()),
+    };
+    ow_tank::mrnm::fixup(&mut payload, base).map_err(|e| format!("fixup-{e}"))?;
+    Ok(("-".to_string(), vec![payload]))
+}
+
+/// `MrnmRuntimeSize` (`0x141b89390`): `int (payload)`.
+fn mrnm_runtime_size_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 1 {
+        return Err(format!("expected 1 arg, got {}", args.len()));
+    }
+    let payload = match args.into_iter().next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg0 must be the plain payload".into()),
+    };
+    let size = ow_tank::mrnm::runtime_size(&payload).map_err(|e| format!("size-{e}"))?;
+    Ok((format!("{:x}", u64::from(size)), vec![payload]))
+}
+
+/// `MrnmHandler` (`0x141b88f10`): `void (payload, model, dst)`.
+///
+/// The payload pointee arrives with relative slots and a reloc list; the entry
+/// rebases them to `payload_base` exactly as the oracle does, then loads. The
+/// model object supplies its `+0xaa` default byte and receives the client's
+/// `*param_2 = param_3` store; the block is copied into the `dst` pointee.
+/// `payload_base` and `dst_base` are candidate-only values in the client's
+/// dead R9/stack slots; with them both sides write the same absolute pointers.
+fn mrnm_load_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 5 {
+        return Err(format!("expected 5 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let (mut payload, relocs) = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if g.is_none() => (b, r),
+        _ => return Err("arg0 must be the payload".into()),
+    };
+    let (mut model, model_relocs) = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if g.is_none() => (b, r),
+        _ => return Err("arg1 must be the model object".into()),
+    };
+    let (dst_in, dst_relocs) = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if g.is_none() => (b, r),
+        _ => return Err("arg2 must be the destination".into()),
+    };
+    if !model_relocs.is_empty() || !dst_relocs.is_empty() {
+        return Err("only the payload carries relocations".into());
+    }
+    let payload_base = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg3 must be the payload base".into()),
+    };
+    let dst_base = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg4 must the destination base".into()),
+    };
+    for off in relocs {
+        let bytes: [u8; 8] = payload
+            .get(off..off + 8)
+            .ok_or("reloc-out-of-range")?
+            .try_into()
+            .unwrap();
+        let absolute = payload_base.wrapping_add(u64::from_le_bytes(bytes));
+        payload[off..off + 8].copy_from_slice(&absolute.to_le_bytes());
+    }
+    let default_byte = *model.get(0xaa).ok_or("model-object-too-short")?;
+    let loaded = ow_tank::mrnm::load(&payload, default_byte, payload_base, dst_base)
+        .map_err(|e| format!("load-{e}"))?;
+    let block = loaded.block();
+    if block.len() > dst_in.len() {
+        return Err("destination-too-short".into());
+    }
+    let mut dst = dst_in;
+    dst[..block.len()].copy_from_slice(block);
+    model[0..8].copy_from_slice(&dst_base.to_le_bytes());
+    Ok(("-".to_string(), vec![payload, model, dst]))
+}
+
 fn handle_call(
     entry: &str,
     args: Vec<Arg>,
@@ -666,6 +771,10 @@ fn handle_call(
         "crc32_seeded" => crc32_seeded_entry(args),
         // crates/ow-tank/src/collision.rs
         "cell_bytes_fixup" => cell_bytes_fixup_entry(args),
+        // crates/ow-tank/src/mrnm.rs
+        "mrnm_fixup" => mrnm_fixup_entry(args),
+        "mrnm_runtime_size" => mrnm_runtime_size_entry(args),
+        "mrnm_load" => mrnm_load_entry(args),
         // crates/ow-tank/src/texture.rs
         "texture_request_count" => texture_request_count_entry(args),
         "texture_count_bits_shifted" => texture_count_bits_shifted_entry(args),

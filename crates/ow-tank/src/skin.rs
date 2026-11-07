@@ -56,6 +56,21 @@ pub struct Skin {
     /// behaviour is read from write [`UNBOUND_BONE`] there and skip the
     /// influence. Empty when the skeleton carries no table, in which case a raw
     /// index already is a bone.
+    ///
+    /// **The install proves the slot→bone direction, not just the shape.** On
+    /// all 7,328 skinned models the client's own reader parses (every model
+    /// asset in the install): the table is a permutation of `remap_count`
+    /// distinct bone indices, `remap_count` is the largest raw blend index plus
+    /// one on 7,308 of them (the other 20 leave spare slots at the end, none
+    /// overflows), the file stores the exact inverse at `mskl +88`
+    /// (`bone → slot`, `0xFFFF` for a bone no slot names), and the geometry
+    /// agrees: on Tracer's character mesh the dominant influence's bone sits a
+    /// median 0.122 m from its vertices through this table versus 0.591 m
+    /// through the raw index (`ow-tank --example bonemap_probe`).
+    ///
+    /// Two branches are **never exercised by this install**: no Lookup holds
+    /// `0xFFFF` and no raw index falls past the end, so the unbound rule is the
+    /// reference's, not a measured one.
     pub remap: Vec<u16>,
     /// Bones whose parent cloth's fake hierarchy rewrote (see
     /// [`Skin::from_skeleton_with_cloth`]); empty for a plain skeleton.
@@ -305,8 +320,11 @@ impl Skin {
 
 /// A Lookup entry that names no bone.
 ///
-/// The exporters write this for a raw index past the table and for a table
-/// hole alike, and skip the influence; [`remap_index`] reads the same rule.
+/// The reference's exporters write this for a raw index past the table and for
+/// a table hole alike, and skip the influence; [`remap_index`] reads the same
+/// rule. **No install Lookup contains it** — the `0xFFFF` occurrences in the
+/// data are in the *inverse* table at `mskl +88`, where they mark a bone no
+/// mesh slot names (30 of Tracer's 229 bones).
 pub const UNBOUND_BONE: u16 = 0xFFFF;
 
 /// Map one raw mesh index through the skeleton's Lookup table.

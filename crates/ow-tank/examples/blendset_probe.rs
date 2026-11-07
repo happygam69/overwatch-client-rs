@@ -450,26 +450,6 @@ fn main() -> std::process::ExitCode {
         }
     }
 
-    // The model's own MHRP hardpoints carry a full 4x4; the MSTU fields above
-    // may be an identity override. Print it to see which transform is real.
-    if let Ok(bytes) = data.bytes_of(parts.view_model) {
-        if let Ok(mhrp) = ow_tank::hardpoint::parse(&bytes) {
-            println!(
-                "MHRP hardpoints ({}): {:x?}",
-                mhrp.hardpoints.len(),
-                mhrp.hardpoints.iter().map(|h| h.guid).collect::<Vec<_>>()
-            );
-            for hp_guid in &parts.view_model_weapon_hardpoints {
-                if let Some(hp) = mhrp.hardpoints.iter().find(|h| h.guid == *hp_guid) {
-                    println!("MHRP hardpoint {hp_guid:#x}: parent 0x{:x}", hp.parent_bone);
-                    for row in hp.matrix.0 {
-                        println!("  {:?}", row);
-                    }
-                }
-            }
-        }
-    }
-
     let hardpoints = ow_tank::hardpoint::mstu_hardpoints_of_model(&data, parts.view_model);
     for hp_guid in &parts.view_model_weapon_hardpoints {
         if let Some(hp) = hardpoints.iter().find(|h| h.id == *hp_guid) {

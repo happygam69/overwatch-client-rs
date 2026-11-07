@@ -1,148 +1,25 @@
-//! Hardpoints attached to a model (`MHRP` chunk).
+//! Hardpoints attached to a model.
 //!
-//! A model can name places on itself where other assets attach: weapons on a
-//! hero's hands, accessories, effects. Each hardpoint carries a 4x4 matrix, a
-//! hardpoint GUID, the GUID of the bone it hangs off, and two unknown u64s.
-
-use std::fmt;
+//! A hardpoint is where an attachment sits on a model: a weapon on a hand, a
+//! spray on a shoulder. This build carries them as `STUModelHardPoint`
+//! (`0xBE9DDFDF`) instances inside the model's `MSTU` blob, and on a look's
+//! `m_hardPoints` array; that is what [`mstu_hardpoints_of_model`] and
+//! [`stu_hardpoints_of_look`] read.
+//!
+//! **There is no `MHRP` chunk in this build.** The reference reader
+//! (`TankLib/Chunks/teModelChunk_Hardpoint.cs`) describes a `{count, count,
+//! offset, offset}` header followed by 96-byte records, and an earlier version
+//! of this module ported it. Two measurements retire it: the four-byte tag id
+//! for `MHRP` occurs nowhere in the image, and a census of all 32,280 models on
+//! the reference install finds no `MHRP` chunk (the model tags are `MDLC`,
+//! `MSTU`, `MRNM`, `mskl`, `MESD`, `CLTH` and `MOCL`). A parser for a chunk the
+//! client cannot read is exactly the "close enough" the rule forbids, so it was
+//! deleted rather than kept. See `docs/formats/animation.md` and
+//! `docs/formats/model.md`.
 
 use glam::{Mat4, Quat, Vec3};
 
-use crate::chunks::Chunks;
 use crate::{guid, GameData};
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Matrix4x4(pub [[f32; 4]; 4]);
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct HardpointHeader {
-    pub hardpoint_count: i32,
-    pub unknown_count: i32,
-    pub hardpoint_offset: i64,
-    pub unknown_offset: i64,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Hardpoint {
-    pub matrix: Matrix4x4,
-    pub guid: u64,
-    pub parent_bone: u64,
-    pub unknown1: u64,
-    pub unknown2: u64,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Hardpoints {
-    pub header: HardpointHeader,
-    pub hardpoints: Vec<Hardpoint>,
-    pub unknown: Vec<u8>,
-}
-
-#[derive(Debug)]
-pub enum Error {
-    NotAChunkedAsset,
-    MissingChunk,
-    Malformed(&'static str),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::NotAChunkedAsset => write!(f, "not a chunked asset"),
-            Error::MissingChunk => write!(f, "model has no MHRP chunk"),
-            Error::Malformed(m) => write!(f, "malformed hardpoints: {m}"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
-type Result<T> = std::result::Result<T, Error>;
-
-fn u32_at(d: &[u8], at: usize) -> Option<u32> {
-    d.get(at..at + 4)
-        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-}
-fn i32_at(d: &[u8], at: usize) -> Option<i32> {
-    u32_at(d, at).map(|v| v as i32)
-}
-fn i64_at(d: &[u8], at: usize) -> Option<i64> {
-    d.get(at..at + 8)
-        .map(|b| i64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-}
-fn u64_at(d: &[u8], at: usize) -> Option<u64> {
-    d.get(at..at + 8)
-        .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-}
-fn f32_at(d: &[u8], at: usize) -> Option<f32> {
-    u32_at(d, at).map(f32::from_bits)
-}
-
-pub fn parse(asset: &[u8]) -> Result<Hardpoints> {
-    let chunks = Chunks::parse(asset).map_err(|_| Error::NotAChunkedAsset)?;
-    let payload = chunks.payload(asset, b"MHRP").ok_or(Error::MissingChunk)?;
-    parse_payload(payload)
-}
-
-pub fn parse_payload(payload: &[u8]) -> Result<Hardpoints> {
-    let mut out = Hardpoints::default();
-    if payload.len() < 32 {
-        return Err(Error::Malformed("truncated MHRP header"));
-    }
-    out.header = HardpointHeader {
-        hardpoint_count: i32_at(payload, 0).ok_or(Error::Malformed("header"))?,
-        unknown_count: i32_at(payload, 4).ok_or(Error::Malformed("header"))?,
-        hardpoint_offset: i64_at(payload, 8).ok_or(Error::Malformed("header"))?,
-        unknown_offset: i64_at(payload, 16).ok_or(Error::Malformed("header"))?,
-    };
-    let base = 0usize;
-    if out.header.hardpoint_offset > 0 {
-        let count = out.header.hardpoint_count.max(0) as usize;
-        let mut cursor = out.header.hardpoint_offset as usize;
-        // offsets in OWLib are relative to the chunk payload; treat as absolute
-        // within the payload when smaller than payload length, else absolute.
-        if cursor >= payload.len() {
-            cursor = out.header.hardpoint_offset as usize;
-        }
-        for _ in 0..count {
-            if cursor + 16 * 4 + 8 + 8 + 8 + 8 > payload.len() {
-                break;
-            }
-            // Matrix4x4 = 16 f32 = 64 bytes
-            let mut matrix = [[0.0f32; 4]; 4];
-            for r in 0..4 {
-                for c in 0..4 {
-                    matrix[r][c] = f32_at(payload, cursor + (r * 4 + c) * 4).unwrap_or(0.0);
-                }
-            }
-            cursor += 64;
-            let guid = u64_at(payload, cursor).unwrap_or(0);
-            cursor += 8;
-            let parent_bone = u64_at(payload, cursor).unwrap_or(0);
-            cursor += 8;
-            let unknown1 = u64_at(payload, cursor).unwrap_or(0);
-            cursor += 8;
-            let unknown2 = u64_at(payload, cursor).unwrap_or(0);
-            cursor += 8;
-            out.hardpoints.push(Hardpoint {
-                matrix: Matrix4x4(matrix),
-                guid,
-                parent_bone,
-                unknown1,
-                unknown2,
-            });
-        }
-        let _ = base;
-    }
-    if out.header.unknown_offset > 0 {
-        let off = out.header.unknown_offset as usize;
-        let count = out.header.unknown_count.max(0) as usize;
-        if off + count <= payload.len() {
-            out.unknown = payload[off..off + count].to_vec();
-        }
-    }
-    Ok(out)
-}
 
 /// The attachments a model or a look carries, as `STUModelHardPoint`
 /// (`0xBE9DDFDF`) instances: on the model's own `MSTU` blob (where this
@@ -326,14 +203,6 @@ pub fn mstu_hardpoints_of_model(data: &GameData, model: u64) -> Vec<StuHardpoint
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn empty_hardpoint_header_parses() {
-        let data = vec![0u8; 32];
-        // count 0, unknown 0, offsets 0
-        let h = parse_payload(&data).unwrap();
-        assert_eq!(h.hardpoints.len(), 0);
-    }
 
     #[test]
     fn a_bone_guid_matches_on_its_low_32_bits() {

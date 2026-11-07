@@ -18,10 +18,10 @@
 //! **What the query is, and what it is not.** `MeshTriangleTest` (`0x142cce430`)
 //! takes the read triangle path only when the query has **no support points**
 //! and every lane of its scaled expansion is at most `0.005`; every other state
-//! hands the triangle to `0x142cc9460`, which is not read. So this test drives
-//! the swept-point query, not a capsule: the block's support-point count is `0`
-//! and its expansion base is `0`. The capsule path is **open**
-//! (`docs/formats/static-collision.md`, check 16).
+//! hands the triangle to `0x142cc9460`, verified as `fn/ClosestPointGjk` but not
+//! called by this test. So this test drives the swept-point query, not a capsule:
+//! the block's support-point count is `0` and its expansion base is `0`. The
+//! capsule's support-point handoff into the solver is still **open** (`docs/formats/static-collision.md`, check 16).
 //!
 //! **What the query's mask is.** The layer mask is a runtime value in the client
 //! -- the mover's or shape's collision layer -- and is not model-asset data, so

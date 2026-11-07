@@ -1051,10 +1051,17 @@ impl Texture {
     }
 
     pub fn pixel(&self, x: usize, y: usize) -> [u8; 4] {
-        let at = (y * self.width as usize + x) * 4;
+        // `x`/`y` are caller-supplied and `width` comes from the asset, so the
+        // index arithmetic must not overflow before the bounds check runs.
+        let at = y
+            .checked_mul(self.width as usize)
+            .and_then(|row| row.checked_add(x))
+            .and_then(|index| index.checked_mul(4));
         let mut px = [0u8; 4];
-        if at + 4 <= self.rgba.len() {
-            px.copy_from_slice(&self.rgba[at..at + 4]);
+        if let Some(at) = at {
+            if let Some(bytes) = self.rgba.get(at..at + 4) {
+                px.copy_from_slice(bytes);
+            }
         }
         px
     }
@@ -1434,53 +1441,6 @@ pub fn parse(asset: &[u8]) -> Result<Texture> {
         BlockPlan::Payload(index) => return Err(Error::Level0InPayload(index)),
     };
     build_texture(header, format, surfaces, &[RunData { bytes: asset, run }])
-}
-
-/// Decode one explicit run as a single mip 0 / surface 0 texture.
-///
-/// Kept for callers that hold a payload's bytes but not its parent asset. The
-/// run is trimmed to one level ([`level_byte_size`]); the full asset-level
-/// entry points are [`parse`] and [`parse_asset`].
-pub fn decode(asset: &[u8], blocks_in: &[u8]) -> Result<Texture> {
-    let header = TextureHeader::parse(asset)?;
-    let (format, _id) = header.format();
-    check_decodable(format)?;
-    if header.is_volume() {
-        return Err(Error::UnsupportedLayout("volume"));
-    }
-    let width = header.width as u32;
-    let height = header.height as u32;
-    let size = level_byte_size(format, width, height);
-    let blocks = blocks_in.get(..size).ok_or(Error::Truncated("level 0"))?;
-    let (rgba, rgba16, r16_unorm) = decode_level(format, width as usize, height as usize, blocks)?;
-    let level = TextureLevel {
-        mip: 0,
-        surface: 0,
-        width: header.width,
-        height: header.height,
-        blocks: blocks.to_vec(),
-        rgba: rgba.clone(),
-        rgba16: rgba16.clone(),
-        r16_unorm: r16_unorm.clone(),
-        source: BlockSource::default(),
-        block_offset: 0,
-    };
-    Ok(Texture {
-        header,
-        width: header.width,
-        height: header.height,
-        mip_count: header.mip_count,
-        surfaces: header.surfaces,
-        format,
-        format_byte: header.format,
-        rgba,
-        rgba16,
-        r16_unorm,
-        source: BlockSource::default(),
-        block_offset: 0,
-        blocks: blocks.to_vec(),
-        levels: vec![level],
-    })
 }
 
 /// Decode one subresource's blocks. `blocks` is exactly one level of one

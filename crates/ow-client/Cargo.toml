@@ -11,6 +11,7 @@ description = "The single launchable client: the install's map and models, ready
 [dependencies]
 ow-tank.workspace = true
 ow-scene.workspace = true
+ow-sim.workspace = true
 ow-casc.workspace = true
 ow-stu.workspace = true
 ow-render.workspace = true

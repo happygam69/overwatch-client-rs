@@ -79,9 +79,7 @@ fn real_mstu_chunks_parse() {
         if header.offset == 16 {
             offset_16 += 1;
         }
-        if header.offset >= 0
-            && header.size >= 0
-            && (header.offset + header.size) as u64 <= payload.len() as u64
+        if header.offset >= 0 && (header.offset + header.size as i64) as u64 <= payload.len() as u64
         {
             in_bounds += 1;
         }

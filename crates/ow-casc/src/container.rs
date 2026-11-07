@@ -406,8 +406,27 @@ impl Store {
             )));
         }
 
+        // The index entry's size field is file data. The client allocates it
+        // and discovers a short read afterwards; this port checks the archive
+        // first, so a corrupt entry cannot ask for a multi-gigabyte allocation
+        // before the read fails.
+        let offset_in_archive = start & index::ARCHIVE_MASK;
+        if len != 0 {
+            let archive_len = {
+                let mut archives = self.archives.borrow_mut();
+                let file = open_archive(&mut archives, &self.install, archive)?;
+                file.metadata()?.len()
+            };
+            if offset_in_archive.saturating_add(u64::from(len)) > archive_len {
+                return Err(Error::Parse(format!(
+                    "key {}: {len}-byte payload at {offset_in_archive:#x} is past the {archive_len}-byte archive {archive}",
+                    hex(ekey)
+                )));
+            }
+        }
+
         let mut out = vec![0u8; len as usize];
-        let read = self.read_archive_span(archive, start & index::ARCHIVE_MASK, len, &mut out)?;
+        let read = self.read_archive_span(archive, offset_in_archive, len, &mut out)?;
         out.truncate(read as usize);
         Ok((location, out))
     }
@@ -1064,7 +1083,10 @@ impl IndexFooter {
                 self.page_count
             )));
         }
-        if self.key_bytes != 16 || self.size_bytes != 4 || self.offset_bytes > 6 {
+        if self.key_bytes != 16
+            || self.size_bytes != 4
+            || !matches!(self.offset_bytes, 0 | 4 | 5 | 6)
+        {
             return Err(Error::Parse(format!(
                 "unsupported index entry geometry (key {}, size {}, offset {})",
                 self.key_bytes, self.size_bytes, self.offset_bytes
@@ -1165,6 +1187,166 @@ pub fn parse_index_footer(data: &[u8], len: usize, total_len: u32, out: &mut [u8
     0
 }
 
+/// The page index a miss reports: the client's `CdnIndexPageSelect` leaves no
+/// page and its callers test `page == pageCount` (and `page < 0`).
+pub const PAGE_MISS: u32 = u32::MAX;
+
+/// The client's page selection: `CdnIndexPageSelect` (`0x1424da730`) up to the
+/// resident call, read operation for operation.
+///
+/// `last_keys` is the file's per-page last-key array (`pageCount * keyBytes`
+/// bytes), `key` the query and `key_len` its length, compared over
+/// `min(keyBytes, keyLen)` bytes — the clamp the client computes once, before
+/// the loop, and not the record scans' own clamp. The walk is a lower bound
+/// with an early equal exit:
+///
+/// ```text
+/// lo = 0; hi = pageCount; page = 0
+/// while (lo != hi) {
+///   mid = (hi + lo) / 2                    // 32-bit, truncating
+///   cmp = memcmp(lastKeys + mid*keyBytes, key, cmpLen)
+///   if (cmp < 0) lo = mid + 1
+///   else { hi = mid; if (cmp == 0) { page = mid; break; } }
+///   page = lo
+/// }
+/// ```
+///
+/// The client then returns status 6 when `page == pageCount` (which also covers
+/// `pageCount == 0`, where the loop does not run and `page` stays 0) or when
+/// `page < 0`; this function reports those as [`PAGE_MISS`]. The equal exit is
+/// an early exit, not a pure lower bound: with equal adjacent last keys it
+/// answers a later page than `lo` alone would. A miss is `pageCount`, so the
+/// early-exit page is never confused with it.
+///
+/// The client's arithmetic is 32-bit signed (`CDQ`/`SAR` for the midpoint,
+/// `IMUL` for the stride, `MOVSXD` for the record address). For every index an
+/// arena or a file can hold, `pageCount * keyBytes` is far below `0x7fff_ffff`,
+/// so the midpoint and the stride are non-negative and the unsigned arithmetic
+/// here is the same value — the sign-extension the client performs is the
+/// identity on them.
+pub fn select_page(
+    last_keys: &[u8],
+    page_count: u32,
+    key_bytes: u8,
+    key: &[u8],
+    key_len: u8,
+) -> u32 {
+    let cmp_len = usize::from(key_bytes.min(key_len));
+    let stride = u32::from(key_bytes);
+    let (mut lo, mut hi) = (0u32, page_count);
+    let mut page = 0u32;
+    while lo != hi {
+        let mid = lo + (hi - lo) / 2;
+        let at = mid.wrapping_mul(stride) as usize;
+        let cmp = last_keys[at..at + cmp_len].cmp(&key[..cmp_len]);
+        if cmp == std::cmp::Ordering::Less {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+            if cmp == std::cmp::Ordering::Equal {
+                page = mid;
+                break;
+            }
+        }
+        page = lo;
+    }
+    if page < page_count {
+        page
+    } else {
+        PAGE_MISS
+    }
+}
+
+/// One CDN index record as `CdnIndexPageSelect` decodes it: the client's
+/// `*out_size`, `*out_offset` and 16-byte key copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageRecord {
+    /// Big-endian size over `size_bytes` bytes, accumulated in 32 bits.
+    pub size: u32,
+    /// Big-endian offset over `offset_bytes` bytes, accumulated in 64 bits. For
+    /// a group index the field is the archive ordinal followed by the
+    /// in-archive offset, so the ordinal is `offset >> 32` and the offset its
+    /// low 32 bits.
+    pub offset: u64,
+    /// `min(keyBytes, 16)` bytes of the *record's* key, zero-filled to 16.
+    pub key16: [u8; 16],
+}
+
+/// The client's page scan and record decode: the tail of `CdnIndexPageSelect`
+/// (`0x1424da730`) after the resident call, read operation for operation.
+///
+/// `page_base` is the page the resident call made current — in whole-file mode
+/// `pageBodies + page*pageSize`, which the caller has already resolved into a
+/// slice. The scan is capped by the footer's element count so a partly-filled
+/// last page does not read padding:
+///
+/// ```text
+/// count = min(entriesPerPage, elementCount - entriesPerPage*page)   // 32-bit
+/// for i in 0..count:
+///   rec = pageBase + (u32)(entrySize*i)
+///   if memcmp(rec, key, min(keyBytes,keyLen)) == 0 -> found
+/// ```
+///
+/// The first record whose prefix matches wins; there is no equal-range
+/// expansion. On a hit the client copies `min(keyBytes,16)` bytes of the
+/// **record** (not of the query) into `out_key16` and zero-fills the rest, then
+/// writes the size and the offset. Returns `None` on a miss, and also when the
+/// supplied page body is shorter than the records the footer describes — the
+/// client reads past such a body; this port refuses instead of panicking.
+pub fn decode_page_record(
+    footer: &IndexFooter,
+    page: u32,
+    page_base: &[u8],
+    key: &[u8],
+    key_len: u8,
+) -> Option<PageRecord> {
+    let key_bytes = footer.key_bytes;
+    let cmp_len = usize::from(key_bytes.min(key_len));
+    let copy_len = usize::from(key_bytes.min(16));
+    let need = cmp_len.max(copy_len);
+    // The client computes `elementCount - entriesPerPage * page` in 32-bit
+    // wrapping arithmetic and takes the unsigned minimum; a page past the
+    // element count therefore scans the full page, and one with no elements
+    // left scans none.
+    let remaining = footer
+        .element_count
+        .wrapping_sub(footer.entries_per_page.wrapping_mul(page));
+    let count = footer.entries_per_page.min(remaining);
+    let entry_size = footer.entry_size();
+    for i in 0..count {
+        let at = entry_size.wrapping_mul(i) as usize;
+        let rec = page_base.get(at..)?;
+        if rec.len() < need {
+            return None;
+        }
+        if rec[..cmp_len] != key[..cmp_len] {
+            continue;
+        }
+        let mut key16 = [0u8; 16];
+        key16[..copy_len].copy_from_slice(&rec[..copy_len]);
+        let field = &rec[copy_len..];
+        let mut size = 0u32;
+        for k in 0..footer.size_bytes {
+            let shift = (u32::from(footer.size_bytes - 1 - k) * 8) & 63;
+            let byte = *field.get(usize::from(k))?;
+            size |= (u64::from(byte) << shift) as u32;
+        }
+        let after_size = field.get(usize::from(footer.size_bytes)..).unwrap_or(&[]);
+        let mut offset = 0u64;
+        for k in 0..footer.offset_bytes {
+            let shift = (u32::from(footer.offset_bytes - 1 - k) * 8) & 63;
+            let byte = *after_size.get(usize::from(k))?;
+            offset |= u64::from(byte) << shift;
+        }
+        return Some(PageRecord {
+            size,
+            offset,
+            key16,
+        });
+    }
+    None
+}
+
 /// One `indices/<hash>.index`, opened by the client's own layout.
 ///
 /// The client's handler reads the last 20 bytes first, parses the footer with
@@ -1219,7 +1401,51 @@ impl PageIndex {
         let footer = IndexFooter::parse(&footer_bytes, total_len)
             .map_err(|e| Error::Parse(format!("{}: {e}", path.display())))?;
 
+        // The entry geometry the page decoder relies on. The client's footer
+        // check (step 4 above) only requires a non-zero entry size, then the
+        // decoder reads a fixed 16-byte key, a fixed 4-byte size and an
+        // offset whose ordinal width is `offset - 4`. `offset_bytes` 1..=3
+        // would make the decoder read four bytes past a 21..23-byte stride.
+        // The client's selector (`CdnIndexPageSelect`) does support any
+        // `key_bytes` (it strides the last-key array by it), but
+        // `entries_in_page` decodes a 16-byte key, so this port refuses a
+        // width other than 16 rather than mix the two. The client faults on
+        // such a file; this port refuses it.
+        if footer.key_bytes != 16
+            || footer.size_bytes != 4
+            || !matches!(footer.offset_bytes, 0 | 4 | 5 | 6)
+        {
+            return Err(Error::Parse(format!(
+                "{}: unsupported index entry geometry (key {}, size {}, offset {})",
+                path.display(),
+                footer.key_bytes,
+                footer.size_bytes,
+                footer.offset_bytes
+            )));
+        }
+
+        // The footer's length check runs in the client's 32-bit arithmetic, so
+        // a wrapping `tail_len` can describe a tail the file cannot hold. The
+        // client allocates that length and reads; this port refuses it before
+        // the allocation.
+        let exact_tail = u64::from(footer.checksum_size)
+            + u64::from(footer.last_key_bytes)
+            + u64::from(footer.checksum_bytes);
         let tail_len = u64::from(footer.tail_len());
+        if exact_tail != tail_len {
+            return Err(Error::Parse(format!(
+                "{}: tail length wrapped in 32 bits ({} B exact, {tail_len} B declared)",
+                path.display(),
+                exact_tail
+            )));
+        }
+        let tail_start = footer.page_offset(footer.page_count);
+        if tail_start.saturating_add(tail_len) > u64::from(total_len) {
+            return Err(Error::Parse(format!(
+                "{}: {tail_len}-byte tail at {tail_start:#x} does not fit the {total_len}-byte file",
+                path.display()
+            )));
+        }
         if tail_len < u64::from(footer.checksum_size) {
             return Err(Error::Parse(format!(
                 "{}: tail shorter than its checksum",
@@ -1227,7 +1453,7 @@ impl PageIndex {
             )));
         }
         let mut tail = vec![0u8; tail_len as usize];
-        file.seek(SeekFrom::Start(footer.page_offset(footer.page_count)))?;
+        file.seek(SeekFrom::Start(tail_start))?;
         file.read_exact(&mut tail)?;
         let ck = footer.checksum_size as usize;
         let terminal = &tail[tail_len as usize - ck..];
@@ -1261,24 +1487,22 @@ impl PageIndex {
         })
     }
 
-    /// First page whose last key is `>= key`, over the last-key array.
+    /// First page whose last key is `>= key`: the client's page selection.
     ///
-    /// No client function that performs this selection was found in the
-    /// complete image; the handler reads and validates the index but no
-    /// consumer walks the last-key array. This search is reference-derived and
-    /// the row is open, unlike the footer/page math above.
+    /// `CdnIndexPageSelect` (`0x1424da730`) is [`select_page`], which carries
+    /// the lower bound, its early equal exit, and the miss. `key_bytes` and
+    /// the key length are both 16 in the supported geometry (`open_with_key`
+    /// refuses anything else), so the compare clamp is a no-op today; it is
+    /// kept so the comparison is the client's expression.
     fn find_page(&self, key: &[u8; 16]) -> Option<u32> {
-        let (mut lo, mut hi) = (0u32, self.footer.page_count);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let at = mid as usize * 16;
-            if self.last_keys[at..at + 16] < key[..] {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        (lo < self.footer.page_count).then_some(lo)
+        let page = select_page(
+            &self.last_keys,
+            self.footer.page_count,
+            self.footer.key_bytes,
+            key,
+            16,
+        );
+        (page != PAGE_MISS).then_some(page)
     }
 
     /// Page `page`, always `pageSize` bytes, at the client's `page * pageSize`.
@@ -1336,13 +1560,16 @@ impl PageIndex {
             return Ok(None);
         };
         let data = self.read_page(page)?;
-        for entry in self.footer.entries_in_page(page, &data)? {
-            if &entry.key != key {
-                continue;
-            }
-            return Ok(Some((entry.archive, u64::from(entry.offset), entry.size)));
-        }
-        Ok(None)
+        // The 6-byte field is the u16 archive ordinal followed by the 32-bit
+        // in-archive offset; the 5-byte one is the patch group's u8 ordinal.
+        let Some(record) = decode_page_record(&self.footer, page, &data, key, 16) else {
+            return Ok(None);
+        };
+        Ok(Some((
+            (record.offset >> 32) as u16,
+            record.offset & 0xffff_ffff,
+            record.size,
+        )))
     }
 
     /// Find a key in the loose-file index: its size.
@@ -1356,13 +1583,7 @@ impl PageIndex {
             return Ok(None);
         };
         let data = self.read_page(page)?;
-        for entry in self.footer.entries_in_page(page, &data)? {
-            if &entry.key != key {
-                continue;
-            }
-            return Ok(Some(entry.size));
-        }
-        Ok(None)
+        Ok(decode_page_record(&self.footer, page, &data, key, 16).map(|record| record.size))
     }
 }
 
@@ -1427,7 +1648,10 @@ pub fn inspect_index(path: &Path, expected: Option<&[u8; 16]>) -> Result<IndexSt
         entries_per_page: footer.entries_per_page,
         page_count: footer.page_count,
         first_page_entries: footer.page_entries(0),
-        last_page_entries: footer.page_entries(footer.page_count - 1),
+        last_page_entries: footer
+            .page_count
+            .checked_sub(1)
+            .map_or(0, |page| footer.page_entries(page)),
         first_last_key,
         final_last_key,
         page_checksums_ok: checksums_ok,
@@ -1645,6 +1869,25 @@ mod tests {
         }
         let absent = index.group_lookup(&key(200)).expect("lookup");
         assert!(absent.is_none(), "a key past the last entry must miss");
+        fs::remove_file(&path).ok();
+    }
+
+    /// Duplicate last keys: the client's search returns the `mid` whose last
+    /// key compares equal (the early exit), not the lowest equal page a pure
+    /// lower bound would return. Two full pages of the same key pin it: the
+    /// first probe is page 1, so page 1's first record is the answer.
+    #[test]
+    fn duplicate_last_keys_take_the_early_equal_page() {
+        let entries: Vec<([u8; 16], u32, u16, u32)> =
+            (0..78u32).map(|i| (key(7), 100 + i, 0u16, i)).collect();
+        let path = write_temp("duplicate-last-key", &build(&entries, 6));
+        let mut index = PageIndex::open(&path).expect("opens");
+        assert_eq!(index.footer.page_count, 2, "two full pages of 39 records");
+        assert_eq!(index.find_page(&key(7)), Some(1));
+        let (ordinal, offset, size) = index.group_lookup(&key(7)).unwrap().unwrap();
+        assert_eq!(ordinal, 0);
+        assert_eq!(offset, 39, "page 1's first record, not page 0's");
+        assert_eq!(size, 139);
         fs::remove_file(&path).ok();
     }
 
@@ -2032,5 +2275,42 @@ mod tests {
         }
         assert!(BucketIndex::open_dir(&dir).is_err());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An offset width of 1..=3 puts the 4-byte offset read at `20..24` on a
+    /// 21..23-byte stride. The decoder used to slice past the entry and panic;
+    /// the guard refuses the geometry instead.
+    #[test]
+    fn a_short_offset_width_is_refused_instead_of_read_past_the_stride() {
+        let footer = IndexFooter {
+            version: 0,
+            page_size: 4096,
+            offset_bytes: 2,
+            size_bytes: 4,
+            key_bytes: 16,
+            checksum_size: 0,
+            element_count: 1,
+            entries_per_page: 1,
+            page_count: 1,
+            last_key_bytes: 16,
+            checksum_bytes: 0,
+        };
+        // Stride 22, but the offset read needs bytes 20..24.
+        match footer.entries_in_page(0, &[0u8; 4096]) {
+            Err(Error::Parse(message)) => {
+                assert!(message.contains("unsupported index entry geometry"));
+            }
+            other => panic!("expected the short width to be refused, got {other:?}"),
+        }
+
+        // Offset 4 is decodable: ordinal width 0, the offset at 20..24 on a
+        // 24-byte stride, so the same page decodes to one entry.
+        let footer = IndexFooter {
+            offset_bytes: 4,
+            ..footer
+        };
+        let entries = footer.entries_in_page(0, &[0u8; 4096]).expect("decodes");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].offset, 0);
     }
 }

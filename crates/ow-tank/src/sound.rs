@@ -1407,7 +1407,19 @@ pub fn parse_wem(bytes: &[u8]) -> WemResult<WemHeader> {
         if header.loop_end == 0 {
             header.loop_end = header.sample_count;
         } else {
-            header.loop_end += 1;
+            // The stored value is a last-sample index and becomes a count. A
+            // `0xFFFF_FFFF` index has no count in a `u32`: the wrapping add
+            // would make it 0 and keep a loop that cannot exist, and the
+            // checked build would panic on a file. Drop the loop instead -
+            // that is what the out-of-range test below does to it anyway.
+            match header.loop_end.checked_add(1) {
+                Some(end) => header.loop_end = end,
+                None => {
+                    header.loop_start = 0;
+                    header.loop_end = 0;
+                    header.loop_count = 0;
+                }
+            }
         }
         if header.loop_start > header.loop_end {
             std::mem::swap(&mut header.loop_start, &mut header.loop_end);

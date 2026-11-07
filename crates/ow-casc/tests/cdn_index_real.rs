@@ -42,6 +42,21 @@ fn the_cdn_index_footer_and_page_layout_match_the_install() {
     let install = Install::open(&root).expect("open install");
     let config = install.cdn_config.as_ref().expect("CDN config");
 
+    // A staged patch makes the CDN config name an index that belongs to a build
+    // the install has not activated yet (the agent writes the new index before
+    // it swaps the executable). Comparing the pinned geometry against such an
+    // index would pin a build that is not installed, so the pinned values are
+    // only checked while the named indexes are no newer than the executable.
+    let exe_mtime = [
+        root.join("_retail_").join("Overwatch.exe"),
+        root.join("Overwatch.exe"),
+    ]
+    .iter()
+    .filter_map(|p| std::fs::metadata(p).ok())
+    .filter_map(|m| m.modified().ok())
+    .max();
+    let mut staged: Vec<String> = Vec::new();
+
     // (config key, expected geometry). The four index files the config names
     // are the group, the patch group and the two loose-file indexes.
     let cases = [
@@ -125,6 +140,18 @@ fn the_cdn_index_footer_and_page_layout_match_the_install() {
         let stats =
             inspect_index(&path, Some(&key(hex))).unwrap_or_else(|e| panic!("{config_key}: {e}"));
 
+        if let (Some(exe_mtime), Ok(meta)) = (exe_mtime, std::fs::metadata(&path)) {
+            if let Ok(index_mtime) = meta.modified() {
+                if index_mtime > exe_mtime {
+                    staged.push(format!(
+                        "{config_key} ({hex}) is newer than the executable: {index_mtime:?} > \
+                         {exe_mtime:?}"
+                    ));
+                    continue;
+                }
+            }
+        }
+
         assert_eq!(stats.file_len, file_len, "{config_key} file length");
         assert_eq!(
             stats.offset_bytes, offset_bytes,
@@ -167,6 +194,15 @@ fn the_cdn_index_footer_and_page_layout_match_the_install() {
             "{config_key}: {file_len} B, offsetBytes {offset_bytes}, pageSize {page_size}, \
              stride {entry_size}, {entries_per_page} entries/page, {page_count} pages, \
              {element_count} entries, last page {last_page_entries}"
+        );
+    }
+
+    if !staged.is_empty() {
+        eprintln!(
+            "note: the install is mid-patch; {} of the named indexes belong to a build that is \
+             not active yet, so their pinned geometry was not checked: {}",
+            staged.len(),
+            staged.join("; ")
         );
     }
 }

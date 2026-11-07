@@ -318,7 +318,8 @@ pub enum Unread {
 ///   splits at the array half and its axis is the largest face-box extent
 ///   (`0x142ccb314`). This path is implemented.
 /// - otherwise the face-bin split runs (`0x142ccb462`). Its binning is read but
-///   its cost expression is not, so this path returns [`Unread::BinCost`].
+///   its cost expression is not, so this path returns `Unread::BinCost` via the
+///   enum's `Unread` variant.
 pub fn build(faces: &[Face]) -> Result<(Vec<BuildNode>, Vec<Face>), Unread> {
     let mut faces = faces.to_vec();
     for (slot, face) in faces.iter_mut().enumerate() {

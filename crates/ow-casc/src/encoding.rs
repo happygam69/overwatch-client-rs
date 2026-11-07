@@ -101,6 +101,18 @@ pub enum Error {
     /// only the record walk here needs 16. This is the record reader's limit,
     /// not the client's.
     UnsupportedKeyWidth { ckey: u8, ekey: u8 },
+    /// A page count in the header, multiplied by its entry stride, wrapped to
+    /// zero, so the section that count sized is shorter than the index it has
+    /// to hold. The client's header parser never compares the two: it accepts
+    /// the header and reads past the end of the index on its first lookup. This
+    /// port refuses the layout, like `parse_index_footer` returns 8 where the
+    /// client would fault.
+    SectionCountMismatch {
+        section: SectionName,
+        pages: u32,
+        stride: u32,
+        size: u32,
+    },
 }
 
 impl fmt::Display for Error {
@@ -148,6 +160,17 @@ impl fmt::Display for Error {
                 f,
                 "encoding header names {ckey}/{ekey}-byte keys; this record reader is fixed at 16/16"
             ),
+            Error::SectionCountMismatch {
+                section,
+                pages,
+                stride,
+                size,
+            } => write!(
+                f,
+                "{} section is {size} B but {pages} pages of {stride} B need {} B (a 32-bit product wrapped)",
+                section.as_str(),
+                u64::from(*pages) * u64::from(*stride)
+            ),
         }
     }
 }
@@ -176,7 +199,8 @@ impl Error {
             Error::SectionOutOfRange { .. } => Some(3),
             Error::SectionSizeWrap { .. }
             | Error::BlobTooLarge
-            | Error::UnsupportedKeyWidth { .. } => None,
+            | Error::UnsupportedKeyWidth { .. }
+            | Error::SectionCountMismatch { .. } => None,
         }
     }
 
@@ -196,7 +220,8 @@ impl Error {
             Error::SectionOutOfRange { .. } => Some(3),
             Error::SectionSizeWrap { .. }
             | Error::BlobTooLarge
-            | Error::UnsupportedKeyWidth { .. } => None,
+            | Error::UnsupportedKeyWidth { .. }
+            | Error::SectionCountMismatch { .. } => None,
         }
     }
 }
@@ -659,6 +684,41 @@ impl<'a> EncodingFile<'a> {
                 ckey: header.ckey_width(),
                 ekey: header.ekey_width(),
             });
+        }
+
+        // A section's size is the page count times its entry stride, in 32-bit
+        // wrapping arithmetic. A header whose product wraps leaves a non-zero
+        // page count with a section too short to hold the index
+        // `page_index_search` walks; the client reads past the end of it then.
+        // The section lengths are those products' low 32 bits, so a mismatch
+        // means exactly that wrap, or a corrupt stream, and nothing else.
+        let ck_pages = header.ckey_to_ekey_page_count();
+        let es_pages = header.ekey_to_espec_page_count();
+        let ck_stride = u32::from(header.ckey_width()) + PAGE_HASH_SIZE as u32;
+        let es_stride = u32::from(header.ekey_width()) + PAGE_HASH_SIZE as u32;
+        for (section, pages, stride, slice) in [
+            (
+                SectionName::CkeyPageIndex,
+                ck_pages,
+                ck_stride,
+                sections.ckey_page_index,
+            ),
+            (
+                SectionName::EkeyPageIndex,
+                es_pages,
+                es_stride,
+                sections.ekey_page_index,
+            ),
+        ] {
+            let size = u32::try_from(slice.len()).unwrap_or(u32::MAX);
+            if u64::from(size) != u64::from(pages) * u64::from(stride) {
+                return Err(Error::SectionCountMismatch {
+                    section,
+                    pages,
+                    stride,
+                    size,
+                });
+            }
         }
 
         Ok(EncodingFile {
@@ -1166,6 +1226,52 @@ mod tests {
             layout.ckey_page_bodies.offset,
             1_484_529u32.wrapping_add(32u32.wrapping_mul(0xffff_ffff))
         );
+    }
+
+    /// A header whose page-count products wrap to zero leaves every section
+    /// empty while naming `0x0800_0000` pages. The client accepts that header
+    /// and reads past the empty index on its first page lookup; this port
+    /// refuses the layout instead.
+    #[test]
+    fn a_wrapped_page_count_is_refused_instead_of_read_out_of_bounds() {
+        // 44 bytes: 22 header, a 22-byte espec block, and every other section
+        // at the end of the stream with size 0.
+        let mut blob = vec![0u8; 0x2c];
+        blob[0] = b'E';
+        blob[1] = b'N';
+        blob[2] = 1;
+        blob[3] = 16;
+        blob[4] = 16;
+        blob[6] = 1;
+        blob[8] = 1;
+        blob[9..13].copy_from_slice(&0x0800_0000u32.to_be_bytes());
+        blob[13..17].copy_from_slice(&0x0800_0000u32.to_be_bytes());
+        blob[18..22].copy_from_slice(&0x16u32.to_be_bytes());
+
+        let mut fields = [0u8; HEADER_FIELDS_SIZE];
+        assert_eq!(write_header_fields(&blob, &mut fields), 0);
+        let layout = SectionLayout::of(&fields);
+        // 32 * 0x0800_0000 wraps to 0, so every section lands on 0x2c.
+        assert_eq!(layout.ckey_page_index.offset, 0x2c);
+        assert_eq!(layout.ckey_page_index.size, 0);
+        assert_eq!(layout.ekey_page_index.size, 0);
+        assert_eq!(layout.ckey_page_bodies.offset, 0x2c);
+        assert_eq!(layout.ekey_page_bodies.offset, 0x2c);
+
+        match EncodingFile::parse(&blob) {
+            Err(Error::SectionCountMismatch {
+                section,
+                pages,
+                stride,
+                size,
+            }) => {
+                assert_eq!(section, SectionName::CkeyPageIndex);
+                assert_eq!(pages, 0x0800_0000);
+                assert_eq!(stride, 32);
+                assert_eq!(size, 0);
+            }
+            other => panic!("expected a wrapped page count to be refused, got {other:?}"),
+        }
     }
 
     #[test]
