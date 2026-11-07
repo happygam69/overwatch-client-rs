@@ -53,6 +53,69 @@ audit page; nothing there needs the image recovered again.
 
 ## Current state
 
+**Effect chunks are read from the client, not from the reference.** An effect's
+root chunk is `EFCT`; the client's kind table at `0x143610490` (0x34
+`{u32 tag, u32 slot}` records) and the component builder `FUN_142e4a780` define
+which chunk tags become runtime components and which payload bytes each one
+copies. `ow-tank::effect` is that layer: `Effect::parse` walks the chunk tree,
+`Chunk` carries the tag, the kind slot and the version, and the seven components
+that name a GUID have typed accessors at the client's offsets — `ECMD` (model
+`0x00C`, look `0x01A`, animation `0x006`), `ECEF` (`0x00D`), `ECEN` (`0x003`),
+`ECEC` (animation `0x006`, identifier `0x01C` at `+0x10`), `ECSO` (`0x02C`),
+`ECVS` (`0x078`) and `ECRR` (`0x00C`). This replaced a port of OWLib's effect
+structs, which describe pre-2.x payloads — every one of the ten sizes it claims
+is short (`ECMD` 24 vs 32, `ECEN` 16 vs 80, `ECPR` 40 vs 112, ...). Five tags
+OWLib reads (`ECMP`, `ECSS`, `ECAT`, `ESHT`, `ECCV`) have **no read site** in
+the image: their tag ids occur nowhere in either byte order and they are absent
+from the kind table, so no 1:1 reader for them exists here and they stay raw.
+`tests/effect_real.rs` parses the six effect types and asserts every GUID type,
+payload size and version; `docs/formats/effects.md` is the page.
+
+**Two stale reference ports were retired in the same pass.** The model chunk
+table is `MOCL`/`CLTH`, not the `LCOM`/`HTLC` an earlier page wrote (the client
+compares `0x4d4f434c` and `0x434c5448`; `HTLC` occurs nowhere in the image and a
+census of all 32,280 models finds the seven tags `MDLC`, `MSTU`, `MRNM`, `mskl`,
+`MESD`, `CLTH`, `MOCL`). `MHRP` likewise has no tag constant and no model
+carries it, so the hardpoint chunk parser was deleted — this build's hardpoints
+are `STUModelHardPoint` instances in `MSTU`/look, which `hardpoint.rs` already
+reads.
+
+**The model layer's descriptors are verified against the client.** The chunk
+sizing and load dispatchers (`0x141b5e1e0`, `0x141b5df70`) and their per-tag
+version gate (`MDLC 0x165`, `MRNM 0x1f`, `MSTU 2`), `MDLC`'s material list
+(`MdlcMaterialRead` `0x141b88cb0`) and `MSTU`'s `{u64 offset; u32 size}` header
+are read. `MRNM` end to end -- the fixup `FUN_141b893e0`, the runtime size
+`FUN_141b89390` and the runtime-block load `MrnmHandler` `0x141b88f10` -- is
+`crates/ow-tank/src/mrnm.rs`, pinned by `fn/MrnmFixup` (7/7 mutants),
+`fn/MrnmRuntimeSize` (6/6) and `fn/MrnmHandler` (12/12), every channel
+compared. Reading it corrected three things in `model.rs`: there is no 4x4
+`MDLC` bounding box (the field was invented and is removed), the `MSTU` size is
+a `u32` at `+0x08` and not a `u64`, and the runtime vertex-buffer record
+**zeroes** in-chunk stream pointers (only a separate vertex-data asset keeps
+its two GUIDs). The *vertex-element decode* and the mesh assembly remain the
+viewer's own reading and are open, not claimed (`docs/formats/model.md`).
+
+**Bone indices are read on the file side and proven on the install.** The
+client's own `mskl` reader `MsklTableBuild` (`0x141b894d0`) is what sizes every
+table: 64-byte matrices, 48-byte poses, `bones_simple` ids, and the Lookup at
+payload `+80` as `remap_count` u16s — plus a `bones_abs` u16 table at `+88`
+that is the Lookup's exact inverse (`bone -> slot`, `0xFFFF` for a bone no slot
+names). `skin.rs` maps a vertex's raw blend index through the Lookup; the
+install says that direction is right and not just plausible: on all 7,328
+skinned model assets the Lookup is a permutation into `[0, bones_abs)` with no
+`0xFFFF` and no out-of-range entry, `remap_count` is the largest raw index plus
+one on 7,308 of them (the rest leave spare slots, none overflow), the table at
+`+88` is the exact inverse on all 7,328 with `0xFFFF` exactly on the unmapped
+bones, and the
+dominant influence's bone sits a median 0.122 m from its vertices through the
+Lookup versus 0.591 m through the raw index. `ow-tank example bonemap_probe`
+reproduces the numbers. Two things stay open: the client's *consumer* (whether
+it adds the submesh `BoneIdOffset` — always `0` here —, how it bounds the index,
+and whether `0xFFFF` means "unbound"; none is exercisable on this install), and
+the 454 models that declare a **second** four-wide blend-index set, whose
+eight weights sum to exactly 255 — `model.rs` reads only the first set, so the
+viewer drops those influences (`docs/ow-tank-1to1.md`).
+
 **The engine layer has its first read crate.** `crates/ow-engine` models the
 `0x470`-byte engine object at `[0x143b7f410]`: `WorldBaseCtor` `0x141c507c0`
 and `WorldCtor` `0x1405838c0` field for field, the six value codecs with their
@@ -85,12 +148,129 @@ scene map `0x080000000f69002e`. No chunk seed, capture or synthetic course is
 the default. This selection is a **viewer default**: the current image has no
 client-side mode→variation selector (see "Open").
 
-The client is a **viewer**. It makes no movement, combat or camera-behaviour
-claim. `ow-sim` holds the verified movement, Domino body and camera-basis
-arithmetic, the read per-frame velocity law (`ow-sim::frame`), the fan's
-composition and the type-3 mesh narrowphase. No frame can be stepped yet, and
-the reason is now singular: **the collision world the query walks is never
-filled**, because neither producer of its shapes is reachable end to end.
+**Hero selection is live as a declared viewer default.** The practice mode's own
+roster is read: its teams carry the empty marker, so every hero asset is
+selectable, and the asset's own fields are read on top of that — its display
+name (`STUHero.m_0EDCE350`, a type-`0x07C` string), its playable marker
+(`m_64DC571F`; the roster is **135 hero assets, 54 playable and 81 NPC**, and
+the range's `Training Bot` is a *named* NPC, so the marker and not the name
+filters), and its movement row through `m_gameplayEntity` (`MoverRow`: forward
+`19452F15`, side, back, crouch, terminal fall `B74245E8`). `ow-client
+--list-heroes` prints that roster with each hero's forward speed. On a live
+launch with a terminal the client prints the roster and reads one pick
+(`--hero <name|index>` skips the prompt, `--no-hero` skips it); the pick places
+the hero's **own first-person model and weapons** in the scene, uses the hero's
+forward base speed as the walk's wish magnitude (Tracer/Genji/Anran read 6.0
+m/s) and its terminal fall as the clamp. The pick itself is **not** claimed: the
+real client's pick is a CEF page value, and what binds runtime variable 940 and
+the spawn write are still open (`docs/formats/frontend-pipeline.md` sections
+4a-4c, `docs/open-questions.md` item 18). The view model is drawn at the
+camera's own transform each frame (pinned by a unit test) and the weapons by
+the FP skin's bind-pose bone frame; the first-person **animation** is not read,
+so the arms are in bind pose.
+
+The client **walks**. It runs the read per-frame velocity law over the map's own
+collision: the level collider only (`MAP_CHUNK_COLLISION`'s tail element:
+203,999 vertices, 236,957 BVH nodes, 343,474 triangles in the client's mesh
+record layout and world coordinates, `ow_tank::collision_level`, install test
+`collision_level_real`; `RangeWorld::level`). The per-model `STU_537E56E4`
+blocking volumes at the map chunk's 3,018 placements are **not** in the walk
+world: their read consumer is a query that writes nothing and their Domino body
+route hangs off a collision component whose attach is unread, and adding them
+was measured (2026-11-15) to cost `0.31` m of a `5.5` m walk, `0.461` m of drift
+and a `0.78` m climb in the flat spawn room
+(`docs/formats/character-controller.md`). `ow_sim::walk` sweeps the level body
+with the verified type-3 mesh leaf, and `ow-client`'s `walk::Walker` runs
+`MoverStateVector`, `MoverRampVector`, `frame::update_frame` and `MoverAdvance`
+each frame with the camera following the body. `--walk-test` is the numbers-only
+proof: `5.500` m forward in one second at 5.5 m/s, `0.000` m drift, the
+six-second tour within 1 mm of its starting height. Combat and camera behaviour make
+no claim yet. `ow-sim` holds the verified movement, Domino body and
+camera-basis arithmetic, the read per-frame velocity law (`ow-sim::frame`), the
+fan's composition and the type-3 mesh narrowphase.
+
+The four stages around that chain that are open, each declared and not
+substituted (item 1b of `docs/open-questions.md`): the input stage (buttons ->
+local wish), the character sweep's Domino aftermath (shape transform and pair
+lanes), the movement asset (speed/jump/gravity), and the player spawn selector.
+
+**Walls (2026-11-10).** The operator's report ("i can go through walls")
+reproduced and is fixed in the code this project owns: the slide's plane
+projection lifted the body off a wall whose normal carries `0.09` of up, and
+`snap_to_floor` lifted it onto surfaces the probe found *above* the centre
+(`0.15-0.19 m` in one frame). Now a contact steeper than
+`walk::WALKABLE_SLOPE` (`0.7`) cannot raise a walk, and the snap only lowers.
+`ow-client --walk-test` walks at five flat walls from the spawn: closest
+approach to the wall's plane `+0.005 m`, climb `+0.01 m` (before: `-0.245 m` and
+`+0.40 m`). `--wall-audit` is the map-wide version. `0.7` is our number - the
+client's slope limit is unread - and is open.
+
+**Corners (2026-11-15).** The operator's second report ("a corner lets me
+through, a flat wall does not") reproduced in a unit test: a diagonal push into
+a right-angle corner crossed the second wall by `3` cm on the first frame. The
+slide leaves the body exactly tangent to the second wall and the verified leaf
+reports nothing for a sweep that starts on or inside a surface, so the residual
+was applied in full. `ow_sim::walk` now uses the leaf's own "already inside"
+mode (`block+0x72`) at `radius - CONTACT_SKIN` as a penetration test
+(`World::overlap`), pushes the body out (`depenetrate`), and on a miss moves to
+the depenetrated target instead of applying the residual. Map-wide
+`--wall-audit` near-vertical tunnels: `174 -> 27` of `8,741` legs. The response
+stage is still the stand-in, so it stays open.
+
+**The jump is shipped** (2026-11-16). The earlier record
+("`FUN_140cc1440` is control-flow-flattened") is withdrawn: the function is read
+in full and is the jump / crouch stage, with no gravity or fall in it. Two read
+layers make the jump:
+
+- `ow_sim::jump` (16 tests) - the take-off: button bit 6 of `body+0xdc`, the
+  state file word `body+0x10d0` and its five transitions, the gate, and the
+  impulse `target = sum_i body[0x1150][i]*row_i + body[0x1510]`, `rise` along
+  `body+0xc0`, `body[0x1150] = (d0, d1, d2, d2)`. `rise` has two branches:
+  `(along + body[0x60c]) - along` when the body is airborne and rising, else
+  `body[0x60c] - along`; the lane sums are three-lane. The anchor `body+0x1510`
+  has no writer anywhere in `.text`, so on the ground the world lane becomes
+  `body+0x60c`; that value is the mover component's `0xEC289987`, `6.0` for all
+  55 playable heroes (`ow_tank::entity::mover_takeoff_lane_of`, install test on
+  the whole roster).
+- `ow_sim::air` (15 tests) - the arc: per airborne tick
+  `MoverApplyForces` (`0x140cb1990`) / `MoverGravityStage` (`0x140cb2b00`) runs
+  `MoverAirDrag` (`0x140cb2010`) and then adds
+  `dt * (-10.0 * body[0x610]) * up` into `body+0x1150` through
+  `MoverAccumulateWorldVector` (`0x140c993e0`). The `-10.0` is the image
+  constant at `0x1431161f8` behind the `.pdata`-less gate `0x14202fb00`; `up` is
+  `body+0xc0..0xcc`; `body+0x610` is component `+0xe8` (`0xC2C40969`, `1.75` for
+  all but Jetpack Cat's `0.30`), so the acceleration is `-17.5 m/s^2`. The drag
+  is the quadratic term on the up lane with the terminal from
+  `body+0x614`/`body+0x618` (rise terminal absent roster-wide, so the rise is a
+  clean parabola) and its time step is the body's own `0x140ca72b0`
+  (`(f32)(i64)body[0xe8] * 1e-6`), not the caller's `dt`.
+
+**Verified, 2026-11-16**: six differential units cover the jump's leaves -
+`fn/MoverOnTakeoff`, `fn/MoverOnLanding`, `fn/MoverOnGround`,
+`fn/MoverEnterAir`, `fn/MoverPropertyRecords` (`0x140cb3990`) and
+`fn/MoverVectorRecords` (`0x140cb3b10`), each at 100% branch coverage and 100%
+mutation kill. They found two real defects in the first cut (`NOT_ON_GROUND`
+wrongly held bit 19, and the take-off did not clear bit 10 when its flag was 0),
+both fixed. The whole of `FUN_140cc1440` is **not** a unit - its middle third is
+obfuscated dispatch and the impulse arithmetic is inline - so the take-off is
+transcribed and tested, not bit-exactly proved. The vertical law has no unit
+yet either (it is a five-lane transcribed expression, tested by the golden
+trace and by `--walk-test`).
+
+`--walk-test` on the practice range now lands the jump inside the read law's
+numbers: take-off `6.0` m/s, apex `0.979` m at frame 19 (law `0.979`), air
+`0.667` s (law `0.669`), back on the spawn floor. What is still open around the
+arc: `FUN_140cb2220`'s phase-5 plane projections (ground only, skeleton level),
+the bit-24-clear transform path, the 0x40-record producer (**runtime data** -
+filled from the body constructor's arguments, whose only other reference is a
+data pointer at `0x142fdbee8`), and the live position (the swept solve's
+contact-to-position rule; the walk's verified sweep and floor probe stand in).
+Anchors: `docs/open-questions.md` "The jump law",
+`docs/formats/character-controller.md` "The vertical law".
+The practice map ships no player spawn record, so `ow-client` starts the walker
+on the map's own spawn-room trigger volume (centre `(71.169, 0.948, 53.110)`,
+collision floor `-4.006`) as a declared viewer default; `--spawn x y z`
+overrides it. The selector itself is still unread.
 
 The **collision answer** is read end to end: the fan's candidate evaluator
 `0x1420328c0`, the handle dispatcher `0x142cc45a0`, the query driver
@@ -116,12 +296,21 @@ remaining reads are the triangle record `0x142cae760`, the point transform
 `docs/formats/character-controller.md`.
 
 The overlap test `0x142cd58a0` now has a lane-for-lane port
-(`ow_sim::collide::box_triangle_overlap`) and a differential unit that is
-**kept out of the gate**: it agrees on 346 of 349 fixture cases and diverges on
-three where the triangle only touches the box. That unit is at
-`dev/verify_harness/units/scaffolds/fn-BoxTriangleOverlap.json`; until all 349
-agree the port is unverified and nothing calls it. The rest of the refinement
-is read but not implemented.
+(`ow_sim::collide::box_triangle_overlap`) and it is **in the gate** as
+`fn/BoxTriangleOverlap`: 413 fixture cases on the whole return register, 100%
+of the collected branch sites, 12/12 mutants killed. The three divergences
+that held it back were three transcription errors in the edge blocks (the
+third edge's cross terms, and the second and third edges' support term), all
+found by the differential and then read back out of the instruction stream.
+
+The **gather that feeds it** is verified too: `0x142caea70` is `fn/MeshGather`
+(`ow_sim::collide::mesh_gather`), a box-BVH walk that compares the caller's
+container (capacity, count and the inline id array) byte for byte over 330
+cases, 90% of the collected branch sites with two dead edges declared and
+28/28 mutants killed. Its `.pdata` entry is truncated at `0x65` bytes while the
+body is `0x299`, so the unit declares the true extent. Nothing calls either
+port yet: the refinement `0x140cc2290` around them is read but not implemented,
+which is what keeps the mesh-face branch of the wish solver from running.
 
 * the brush route (node type 2 → model collision descriptor → brush → mesh) is
   read and implemented end to end — `ow_tank::brush`, `brush_mesh` and
@@ -230,10 +419,11 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
 
 ## Exact today
 
-- **CASC oracle:** eight verified units, `python dev/verify_harness/cli.py casc`
-  passes 8/8: `Salsa20Xor`, `Salsa20StateInit`, `DynamicIndexHash`,
-  `DynamicIndexKeyHash`, `EncodingHeaderParse`, `EncodingFindCKey`,
-  `EncodingFindEKey` and `CdnIndexFooterParse`. The oracle found and fixed
+- **CASC oracle:** eleven verified units, `python dev/verify_harness/cli.py casc`
+  passes 10/10: `Salsa20Xor`, `Salsa20StateInit`, `Md5Transform`,
+  `DynamicIndexHash`, `DynamicIndexKeyHash`, `EncodingHeaderParse`,
+  `EncodingFindCKey`, `EncodingFindEKey`, `EncodingPageIndexSearch` and
+  `CdnIndexFooterParse`. The oracle found and fixed
   the zero-length and trailing-twelve-byte index-hash defects.
 - **Build-154504 manifest:** `CmfKey154504` (`0x142e48a20`) and
   `CmfIv154504` (`0x142e48700`) use the table at `0x1436100c0`, read from the
@@ -339,6 +529,10 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
   0x44-byte hit and both walk counters (`collide::mesh_sweep`). The chunk
   cells become type-3 meshes, so this was the last unread query primitive the
   practice range needs (`crates/ow-sim/src/collide.rs`).
+  `fn/ClosestPointGjk` (`0x142cc9460`, 264 cases, 74.5% of the swept branch
+  sites with 12 declared, 12/12 mutants) proves the closest-point solver that
+  `MeshSweep` and the type-0/1 leaves hand support-point queries to; its
+  four-vertex body `0x142cc7740` is executed by the unit's tetrahedron cases.
   The wish spring proves the
   input copy, the `+0x10fc`/`+0x1100`
   spring, both state-id branches and the 1/1024 quantiser; the forward and
@@ -762,6 +956,14 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
 
 ## Open
 
+- **Model vertex elements:** `MRNM`'s descriptors and runtime block are
+  verified, but the client's consumer of the element array -- the function
+  that decodes semantic/format/packed-offset bytes and builds the D3D12 input
+  layout -- is **open** (R10 in `formats/renderer.md`). `ow-tank`'s decode and
+  its index remap/compacted vertex array are the viewer's, listed in
+  `ow-tank-1to1.md` section A. `MDLC` has no differential unit yet (its two
+  source pointers are absolute; the harness's relocation model only expresses
+  the payload base).
 - **Map variation choice:** the client has no mode→variation selector. The
   field hashes `0xD97BC44F`/`0x78715D57` occur only in the registration
   functions and the header class hash only in the asset-type descriptor init;
@@ -774,14 +976,17 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
   type-`0x09C` records; the client builds a directory blob in its content
   database (`FUN_141fd53a0`, `0x141fd53a0`). One non-1:1 stage remains.
 - **Streaming policy:** which chunks load when is not read.
-- **Gameplay:** no playable movement yet. The mover's arithmetic leaves are
-  ground-truth verified (above), including the wish spring and the state-lookup
-  leaf, and the live per-frame velocity law is read and implemented
-  (`ow-sim::frame`). What is still open is the wish producer
-  (`FUN_140cb86c0`'s fan evaluation and selection), the velocity→position
-  stage, the Domino velocity dispatch and collision. Combat, camera
-  application, view model, retarget, Pose2d VM and fire loop/damage remain
-  open. The old approximations are deleted.
+- **Gameplay:** movement is live (`--walk-test` is its proof); combat, camera
+  application, view model, retarget, Pose2d VM and the fire loop/damage remain
+  open. The mover's arithmetic leaves are ground-truth verified (above),
+  including the wish spring and the state-lookup leaf, and the live per-frame
+  velocity law is read and implemented (`ow-sim::frame`). What is still open
+  around the live walk: the wish producer
+  (`FUN_140cb86c0`'s fan evaluation and selection), the character sweep's
+  Domino aftermath, the movement asset (speed/jump/gravity) and the spawn
+  selector. The viewer default for the practice range is the map's spawn-room
+  trigger volume, floor `y = -4.006` (`docs/formats/maps.md`).
+  The old approximations are deleted.
 - **Materials:** the viewer is not the client's renderer; 55 placeholder draws
   remain diagnostics, not a finished material path. Texture parsing is now
   differentially verified, but the loader `0x141dacf00` and the chunk accessors
@@ -803,45 +1008,62 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
 - **CASC CDN index:** read and install-tested. `CdnIndexFooterParse`
   (`0x1424d9af0`) is a verified unit: fixed 20-byte footer, header MD5,
   `pageSize = footer[3] << 10`, `entrySize = offset + size + key`,
-  `pageCount = ceil(elements / entriesPerPage)`, exact total length.
-  `CdnIndexFileParse` (`0x1424d9c90`) checks the terminal
-  `MD5(last keys + checksums)` and `MD5(terminal + footer)` against the
-  index's own key; `CdnIndexPageChecksums` (`0x1424d9f20`) compares every
-  page MD5. All four config-named indexes match exactly: archive group
-  260,173,908 B / 63,149 pages / 9,914,328 entries, patch group 48,616,028 /
-  11,800 / 1,923,358, file index 576,828 / 140 / 28,374, patch file index
-  90,668 / 22 / 4,426. The CDN client reads the footer and tail by Range GET;
-  no per-page HTTP call site was found. **The last-key page-selection search is
-  not found in the image; the row is open.** Searches: every 16-byte `memcmp`
-  caller (317 functions, 25 with a loop), every function carrying the four
-  footer fields (`0x14`/`0x1c`/`0x20`/`0x24` → the parsers only), every
-  `SHL ...,4` function with a `0x24` reference, the handler classes at
-  `0x1424e7cb0`/`0x1424e8db0`/`0x1424d1f40`, and the index builder at
-  `0x1424f04f0`/`0x1424f0920`. The downloaded index goes to a callback
-  (`0x1424b0850` → `0x1424bbe60`) whose consumer was not found; the search may
-  live in the launcher/agent. The unit's final length-gate status is a declared
-  gap (client writes only `AL`).
-- **Remaining CASC units:** the CDN index page selection is the first read
-  item and is open; the read list is **not** empty. The archive page cache is
-  read and install-tested: 16 slots of `0x10000` bytes from the `.cmf` open
-  params, key `(archive ordinal, page-aligned archive offset)`, a
+  `pageCount = ceil(elements / entriesPerPage)`, exact total length. Its AL
+  status is compared through the harness's `u8` return kind (success 0, every
+  reject 8), so the final length gate is covered. `CdnIndexFileParse`
+  (`0x1424d9c90`) checks the terminal `MD5(last keys + checksums)` and
+  `MD5(terminal + footer)` against the index's own key; `CdnIndexPageChecksums`
+  (`0x1424d9f20`) compares every page MD5. All four config-named indexes match
+  the formula: archive group 260,173,908 B / 63,149 pages / 9,914,328 entries,
+  patch group 48,616,028 / 11,800 / 1,923,358, file index 576,828 / 140 /
+  28,374, patch file index 90,668 / 22 / 4,426 (the install is mid-patch, so
+  the install test currently skips the pinned geometry and says so).
+  **The last-key page selection is read and verified:** `CdnIndexPageSelect`
+  (`0x1424da730`) is a lower bound with an early equal exit over the last-key
+  array, a `page == pageCount` miss, a record scan capped by the element count,
+  and the size/offset decode by the footer widths; `CdnIndexPageResident`
+  (`0x1424da590`) is pointer arithmetic in whole-file mode, or an HTTP range
+  read with a full-page requirement and a per-page MD5 reject (status 8) in
+  streamed mode; `CdnResolveLocation` (`0x1424b0cc0`) splits the ordinal/offset
+  and falls back to the file index. `ow-casc::container::find_page` follows the
+  expression. A one-off install check walked all 63,149 + 11,800 last keys and
+  606 records; each selects its own page. The unit `fn/CdnIndexPageSelect` is
+  verified (14/14 mutants, whole-file mode; the duplicate-last-key early exit
+  is pinned by a committed unit test). Still open: the batch wrappers
+  `0x1424b0e50`/`0x1424b0ef0` are expression-level only, the config-to-slot
+  wiring is an inference, and the port reads whole files so the streamed
+  branch is read but not implemented.
+- **CASC byte census:** `cargo run --release -p ow-casc --bin census` walks
+  every salt-0 record (full stride-1 scan, frame headers and mode bytes only)
+  and measures 84,463,293,804 index bytes, 84,373,987,087 chunk bytes, split
+  N/Z/E = 10.50%/85.96%/3.54% of chunk bytes. The 43,061 `E` chunks (3.54% of
+  chunk bytes, 3.42% of decoded bytes) carry 11 key ids, none in the 63-key
+  keyring, so 22,506 records (1.96%) cannot be decoded at all. A `--stride N`
+  sample reproduces the committed `blte_real` figures, and the test asserts the
+  per-mode byte sum equals the frame headers' declared total.
+- **Remaining CASC units:** the page selection is no longer open. The archive
+  page cache is read and install-tested: 16 slots of `0x10000` bytes from the
+  `.cmf` open params, key `(archive ordinal, page-aligned archive offset)`, a
   head/whole-page-run/tail plan, minimum-stamp eviction, and short-read
-  zero-fill. The page-cache plan
-  (`PageReadPlan`, `0x1424faa20`)
-  passed 364 differential cases but cannot reach coverage: the
-  null handle the oracle can build leaves the three refcount branches
-  unexecuted (3/6), so it is not among the verified units. The encoding page
-  lookup is read and verified:
-  `EncodingPageIndexSearch` (`0x142498880`), `EncodingFindCKey`
-  (`0x142498540`), `EncodingFindEKey` (`0x142498610`) and `EncodingResolve`
-  (`0x142498700`). The search picks the last page whose first key is `<=` the
-  key; the ckey scan stops on a zero low count byte; the ekey scan stops on a
-  `0xFFFFFFFF` espec index; the resolve takes the ckey `u32` as the decoded
-  size and the ekey `u40` low 32 bits as the stored size. The read path does
-  **no** page-hash check. Units `fn/EncodingFindCKey` and
+  zero-fill. The page-table writer is read but not implemented (no read-path
+  caller; its type-3 calls write uninitialised stack bytes). The page-cache
+  plan (`PageReadPlan`, `0x1424faa20`) passed 364 differential cases but is not
+  a pure leaf: it takes the container lock twice and AddRefs the archive
+  handle, so the three refcount branches never execute under the null handle
+  the oracle can build (3/6); it is not among the verified units. The encoding
+  page lookup is read and verified: `EncodingPageIndexSearch` (`0x142498880`),
+  `EncodingFindCKey` (`0x142498540`) and `EncodingFindEKey` (`0x142498610`) are
+  three units; the search's fifth argument is a stack argument, which the
+  oracle supports. `EncodingResolve` (`0x142498700`) is read and has no
+  standalone unit; the two finds prove its parts. The search picks the last
+  page whose first key is `<=` the key; the ckey scan stops on a zero low count
+  byte; the ekey scan stops on a `0xFFFFFFFF` espec index; the resolve takes the
+  ckey `u32` as the decoded size and the ekey `u40` low 32 bits as the stored
+  size. The whole-file read path does **no** page-hash check; the streamed path
+  does, and the port takes the whole-file path. Units `fn/EncodingFindCKey` and
   `fn/EncodingFindEKey` are verified (100% coverage, 100% mutants);
-  `0x142498880` has no standalone unit because its fifth argument is on the
-  stack and the oracle supports four register arguments. The encoding section
+  `0x142498880` is the `fn/EncodingPageIndexSearch` unit; its fifth argument is
+  a stack argument, which the oracle supports. The encoding section
   read (`EncodingSectionsRead`, `0x1424d1c60`) is read and implemented: five
   sections in the client's order, the client's 32-bit wrapping arithmetic, the
   range gate with a status-14 short read, and the espec tail check plus NUL
@@ -873,6 +1095,48 @@ detail and the next anchors (`docs/open-questions.md` item 6, round 4).
   `docs/casc-1to1.md` is the register.
 
 ## Next
+
+0. **The frontend pipeline — the page<->engine contract is read in full; the
+   host's two doors are next.** The menu, mode selector, character selector and
+   custom-game browser are web pages in an embedded CEF browser, so there is no
+   native menu logic to port. The contract is `RouteBrowserMessage`
+   (`0x142ed1be0`, 4092 bytes, three `.pdata` fragments; the middle fragment's
+   function was created 2026-11-08 with the operator's approval): it parses the
+   JSON envelope, requires the integer `type` field and dispatches **50 numbered
+   messages** - service `0x00..0x1a` (host -> browser: create with `start_url`,
+   navigate, cookie, URL allow-list, register javascript variable, call
+   javascript callback, zoom, focus, scheme handler) and client `0x1b..0x31`
+   (browser -> host: `OnReady`, `OnPageLoadBegin`, `OnPageLoadCompleted`,
+   `OnDataPost` `0x21`, `OnRegisteredFunctionCalled` `0x23`,
+   `OnJavascriptDialog` `0x2e`, `OnJavascriptConsoleMessage` `0x2f`,
+   `OnSchemeLoadBegin` `0x30`). The dev overlay is **Dear ImGui, docking
+   branch**, shipped in the image (`imgui.ini`, `Debug##Default`,
+   `Click to break in debugger!`, the dock-node strings), its own labels encoded
+   with the CVar table. Mode/hero rules are the `CustomGame.proto` schema
+   (`0x1435f1767`: `CGGameRulesetTeam.heroesArrayIsWhitelist`/`heroGUIDs`/
+   `numTeamMembers`, `CGPregameOptions.enableHeroDraft*`). Native stages: map
+   start (`0x14054fbe0` -> `0x14055a0f0` -> `0x14055abc0`/`0x14055a8c0`) and the
+   player array (`0x14214dcc0`, 640 call sites).
+   **Open:** the producer of the host's `+0x218` (`onDataPost`) and `+0x238`
+   (`onRegisteredFunctionCalled`) slots - the front end's actual gameplay entry;
+   `0x14055abc0`/`0x14055a8c0`; the player array's write side (a store census,
+   not a caller list). The character selector's **roster is now read** (2026-11-09):
+   each mode team's `m_availableHeroes` (`0x59C86C8D`) is the empty marker
+   `STU_D1DC7C55` (every hero; Practice Range) or a whitelist `STU_3C14F504` /
+   `STU_C45DE560` whose `m_heroes` (`0x056D3E39`) names them (Mei's Snowball
+   Offensive = one hero); all four pool classes are runtime component types
+   (stubs `0x1402dc690`..`0x1402dc990`). Shipped as `ow_tank::hero_select`, tests
+   `crates/ow-tank/tests/hero_select_real.rs`. **The mode's applied hero is read
+   too** (2026-11-09): every team controller graph carries one
+   `STUStatescriptStateHero` (`0x91428992`) whose `hero` input is
+   `STUConfigVarDynamic` (`0x4B093107`) `m_identifier` **940** - 12 of the 13
+   hero nodes on the whole install read it, the thirteenth ("Assault") writes a
+   literal hero. Shipped as `ow_tank::graph::hero_states_of` +
+   `hero_select::mode_team_scripts`, 4 tests in
+   `crates/ow-tank/tests/hero_pick_real.rs`. **Still open: what binds runtime
+   variable 940** (the dynamic-variable table and its store - that store is the
+   pick), the pool component's consumer, the spawn write. Details:
+   `docs/formats/frontend-pipeline.md` sections 4a/4b, queue entry 18.
 
 0. **The engine object — read and modelled; its subsystems are not.**
    `crates/ow-engine` models the client's engine object: the `0x470`-byte
@@ -1187,6 +1451,12 @@ too** (2026-11-02): the `ADD`/`ROR 0x22` chain is a **pointer decode**, the far
 3. Then camera, animation retarget, combat and collision in that order.
 4. Renderer: `0x0c`/`0x0d` are implemented; next is the `0x16..0x1b` cache
    population, then the queued-SRV binder, the pass writer and the draw list.
+5. Model render-mesh consumer: read the function that consumes a runtime
+   vertex-buffer record (the element array it copies at `+0x1c`, the element's
+   packed offset/format) and builds the input layout -- the R10 row. Until
+   then `ow-tank`'s vertex decode stays declared open. A `MdlcMaterialRead`
+   differential unit needs the harness to express an absolute pointer inside
+   the fixture, which it cannot today.
 
 ## Key files
 

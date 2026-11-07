@@ -1,869 +1,928 @@
-program,address,doc_address,name,role,tag,prototype
+program,address,doc_address,name,role,tag,prototype,container
 
-Overwatch.exe,0x140064a30,0x140064a30,CacheFirstPersonFarPlane,Caches one tenth of the world far plane for first person,camera,
+Overwatch.exe,0x140064a30,0x140064a30,CacheFirstPersonFarPlane,Caches one tenth of the world far plane for first person,camera,,
 
-Overwatch.exe,0x140064a50,0x140064a50,CacheFirstPersonNearPlane,Caches one tenth of the world near plane for first person,camera,
+Overwatch.exe,0x140064a50,0x140064a50,CacheFirstPersonNearPlane,Caches one tenth of the world near plane for first person,camera,,
 
-Overwatch.exe,0x14017a680,0x14017a680,RegisterMoverComponent,"Registers STUCharacterMoverComponent: type hash 0x6EFDBD73, id 0x26, size 0x130",mover,
+Overwatch.exe,0x14017a680,0x14017a680,RegisterMoverComponent,"Registers STUCharacterMoverComponent: type hash 0x6EFDBD73, id 0x26, size 0x130",mover,,
 
-Overwatch.exe,0x1404bd630,0x1404bd630,RegisterHorizontalFov,Registers HorizontalFOV with its 103.0/70.0 limits,camera,
+Overwatch.exe,0x1404bd630,0x1404bd630,RegisterHorizontalFov,Registers HorizontalFOV with its 103.0/70.0 limits,camera,,
 
-Overwatch.exe,0x1404c2890,0x1404c2890,RegisterDefaultFarZ,Registers DefaultFarZ with its 16384.0 default and 100/20000 limits,camera,
+Overwatch.exe,0x1404c2890,0x1404c2890,RegisterDefaultFarZ,Registers DefaultFarZ with its 16384.0 default and 100/20000 limits,camera,,
 
-Overwatch.exe,0x1404c2980,0x1404c2980,RegisterDefaultNearZ,Registers DefaultNearZ,camera,
+Overwatch.exe,0x1404c2980,0x1404c2980,RegisterDefaultNearZ,Registers DefaultNearZ,camera,,
 
-Overwatch.exe,0x1404c2ab0,0x1404c2ab0,DecodeCameraNodeTypeNames,Decodes the 53 animation node type names,camera,
+Overwatch.exe,0x1404c2ab0,0x1404c2ab0,DecodeCameraNodeTypeNames,Decodes the 53 animation node type names,camera,,
 
-Overwatch.exe,0x14057a140,0x14057a140,SetCameraPlaneValue,Sets one camera projection plane (0 angle 1 near 2 far) and returns the previous value,camera,
+Overwatch.exe,0x14057a140,0x14057a140,SetCameraPlaneValue,Sets one camera projection plane (0 angle 1 near 2 far) and returns the previous value,camera,,
 
-Overwatch.exe,0x14059c350,0x14059c350,StopCameraAnimationState,Stops and clears the camera animation state,camera,
+Overwatch.exe,0x14059c350,0x14059c350,StopCameraAnimationState,Stops and clears the camera animation state,camera,,
 
-Overwatch.exe,0x14059c6e0,0x14059c6e0,UpdateCameraAnimationState,Per-frame camera animation update,camera,
+Overwatch.exe,0x14059c6e0,0x14059c6e0,UpdateCameraAnimationState,Per-frame camera animation update,camera,,
 
-Overwatch.exe,0x14059d730,0x14059d730,SampleCameraAnimationOffset,Samples the authored camera offset from the animation graph,camera,
+Overwatch.exe,0x14059d730,0x14059d730,SampleCameraAnimationOffset,Samples the authored camera offset from the animation graph,camera,,
 
-Overwatch.exe,0x1405a0e70,0x1405a0e70,RefreshCameraViewRect,Refreshes the view output rectangle from the viewport,camera,
+Overwatch.exe,0x1405a0e70,0x1405a0e70,RefreshCameraViewRect,Refreshes the view output rectangle from the viewport,camera,,
 
-Overwatch.exe,0x140609100,0x140609100,InputPollMouseAndGamepad,Polls the mouse and gamepad look counts timestamp and mouse scale,input,
+Overwatch.exe,0x140609100,0x140609100,InputPollMouseAndGamepad,Polls the mouse and gamepad look counts timestamp and mouse scale,input,,
 
-Overwatch.exe,0x14060a570,0x14060a570,EvaluateForceInputMode,Evaluates the input.ForceInputMode override and returns the selected input mode,input,
+Overwatch.exe,0x14060a570,0x14060a570,EvaluateForceInputMode,Evaluates the input.ForceInputMode override and returns the selected input mode,input,,
 
-Overwatch.exe,0x14060ada0,0x14060ada0,RegisterInputSettings,Registers the input settings group,input,
+Overwatch.exe,0x14060ada0,0x14060ada0,RegisterInputSettings,Registers the input settings group,input,,
 
-Overwatch.exe,0x1406796c0,0x1406796c0,RegisterFirstPersonSettings,Registers the firstPerson settings group,camera,
+Overwatch.exe,0x1406796c0,0x1406796c0,RegisterFirstPersonSettings,Registers the firstPerson settings group,camera,,
 
-Overwatch.exe,0x14067db60,0x14067db60,ApplyFirstPersonOffsetTransform,Applies the firstPerson Offset/rotation overrides to the first-person model transform,camera,
+Overwatch.exe,0x14067db60,0x14067db60,ApplyFirstPersonOffsetTransform,Applies the firstPerson Offset/rotation overrides to the first-person model transform,camera,,
 
-Overwatch.exe,0x14067f6e0,0x14067f6e0,RegisterLocalHitEffectsSettings,Registers the localhiteffects settings group,reflection,
+Overwatch.exe,0x14067f6e0,0x14067f6e0,RegisterLocalHitEffectsSettings,Registers the localhiteffects settings group,reflection,,
 
-Overwatch.exe,0x1406b7840,0x1406b7840,GetSequenceCameraViewActor,Returns the sequence camera view actor for the current thread,camera,
+Overwatch.exe,0x1406b7840,0x1406b7840,GetSequenceCameraViewActor,Returns the sequence camera view actor for the current thread,camera,,
 
-Overwatch.exe,0x1406b7cc0,0x1406b7cc0,ResetSequenceCameraViewState,Resets the sequence camera view state subobject,camera,
+Overwatch.exe,0x1406b7cc0,0x1406b7cc0,ResetSequenceCameraViewState,Resets the sequence camera view state subobject,camera,,
 
-Overwatch.exe,0x1406b81d0,0x1406b81d0,TickSequenceCameraView,Per-frame sequence camera view state machine,camera,
+Overwatch.exe,0x1406b81d0,0x1406b81d0,TickSequenceCameraView,Per-frame sequence camera view state machine,camera,,
 
-Overwatch.exe,0x1406b8660,0x1406b8660,ResetSequenceCameraViewList,Resets the sequence camera view list,camera,
+Overwatch.exe,0x1406b8660,0x1406b8660,ResetSequenceCameraViewList,Resets the sequence camera view list,camera,,
 
-Overwatch.exe,0x1406b8bd0,0x1406b8bd0,UpdateSequenceCameraViewMode4,Updates sequence camera view mode 4,camera,
+Overwatch.exe,0x1406b8bd0,0x1406b8bd0,UpdateSequenceCameraViewMode4,Updates sequence camera view mode 4,camera,,
 
-Overwatch.exe,0x1406b8d80,0x1406b8d80,UpdateSequenceCameraViewMode5,Updates sequence camera view mode 5,camera,
+Overwatch.exe,0x1406b8d80,0x1406b8d80,UpdateSequenceCameraViewMode5,Updates sequence camera view mode 5,camera,,
 
-Overwatch.exe,0x1406b9db0,0x1406b9db0,ResolveCameraModeComponent,Resolves the component for a camera mode from the mode table,camera,
+Overwatch.exe,0x1406b9db0,0x1406b9db0,ResolveCameraModeComponent,Resolves the component for a camera mode from the mode table,camera,,
 
-Overwatch.exe,0x1406b9f30,0x1406b9f30,GetSpecialSequenceCameraEntity,Returns the special camera entity for the current thread,camera,
+Overwatch.exe,0x1406b9f30,0x1406b9f30,GetSpecialSequenceCameraEntity,Returns the special camera entity for the current thread,camera,,
 
-Overwatch.exe,0x1406ba170,0x1406ba170,UpdateSequenceCameraViewState3,Updates sequence camera view state 3,camera,
+Overwatch.exe,0x1406ba170,0x1406ba170,UpdateSequenceCameraViewState3,Updates sequence camera view state 3,camera,,
 
-Overwatch.exe,0x1406ba460,0x1406ba460,BeginSequenceCameraViewTransition,Copies a request into the committed sequence camera fields,camera,
+Overwatch.exe,0x1406ba460,0x1406ba460,BeginSequenceCameraViewTransition,Copies a request into the committed sequence camera fields,camera,,
 
-Overwatch.exe,0x1406baf30,0x1406baf30,UpdateSequenceCameraViewFrameCounter,Updates the sequence camera view frame counter,camera,
+Overwatch.exe,0x1406baf30,0x1406baf30,UpdateSequenceCameraViewFrameCounter,Updates the sequence camera view frame counter,camera,,
 
-Overwatch.exe,0x1406bbe90,0x1406bbe90,StopSequenceCameraView,Stops the sequence camera view and releases its targets,camera,
+Overwatch.exe,0x1406bbe90,0x1406bbe90,StopSequenceCameraView,Stops the sequence camera view and releases its targets,camera,,
 
-Overwatch.exe,0x1406bc160,0x1406bc160,UpdateSequenceCameraViewState6,Updates sequence camera view state 6,camera,
+Overwatch.exe,0x1406bc160,0x1406bc160,UpdateSequenceCameraViewState6,Updates sequence camera view state 6,camera,,
 
-Overwatch.exe,0x1406bc420,0x1406bc420,UpdateSequenceCameraViewState7,Updates sequence camera view state 7,camera,
+Overwatch.exe,0x1406bc420,0x1406bc420,UpdateSequenceCameraViewState7,Updates sequence camera view state 7,camera,,
 
-Overwatch.exe,0x1406bc790,0x1406bc790,UpdateSequenceCameraViewState8,Updates sequence camera view state 8,camera,
+Overwatch.exe,0x1406bc790,0x1406bc790,UpdateSequenceCameraViewState8,Updates sequence camera view state 8,camera,,
 
-Overwatch.exe,0x1406bcc10,0x1406bcc10,UpdateSequenceCameraViewTarget,Resolves the target and updates the sequence camera view,camera,
+Overwatch.exe,0x1406bcc10,0x1406bcc10,UpdateSequenceCameraViewTarget,Resolves the target and updates the sequence camera view,camera,,
 
-Overwatch.exe,0x1406bd310,0x1406bd310,CreateSequenceCameraViewTarget,Creates and polls the sequence camera target,camera,
+Overwatch.exe,0x1406bd310,0x1406bd310,CreateSequenceCameraViewTarget,Creates and polls the sequence camera target,camera,,
 
-Overwatch.exe,0x1406bd560,0x1406bd560,UpdateSequenceCameraViewState5,Updates sequence camera view state 5,camera,
+Overwatch.exe,0x1406bd560,0x1406bd560,UpdateSequenceCameraViewState5,Updates sequence camera view state 5,camera,,
 
-Overwatch.exe,0x1406bdd40,0x1406bdd40,UpdateSequenceCameraViewState4,Updates sequence camera view state 4,camera,
+Overwatch.exe,0x1406bdd40,0x1406bdd40,UpdateSequenceCameraViewState4,Updates sequence camera view state 4,camera,,
 
-Overwatch.exe,0x1406be230,0x1406be230,LookupSequenceCameraViewSequence,Looks up the sequence id for the current target,camera,
+Overwatch.exe,0x1406be230,0x1406be230,LookupSequenceCameraViewSequence,Looks up the sequence id for the current target,camera,,
 
-Overwatch.exe,0x1406d2610,0x1406d2610,ApplyCameraTransform,Applies a camera basis and position to the view matrices,camera,
+Overwatch.exe,0x1406d2610,0x1406d2610,ApplyCameraTransform,Applies a camera basis and position to the view matrices,camera,,
 
-Overwatch.exe,0x14079a450,0x14079a450,ComputeMouseLookDelta,Converts scaled mouse counts into yaw/pitch deltas with the invert-pitch sign,camera,
+Overwatch.exe,0x14079a450,0x14079a450,ComputeMouseLookDelta,Converts scaled mouse counts into yaw/pitch deltas with the invert-pitch sign,camera,,
 
-Overwatch.exe,0x14079b900,0x14079b900,ComputeAimAssistedLookDelta,Computes the look delta and adds the view-target aim-assist delta,camera,
+Overwatch.exe,0x14079b900,0x14079b900,ComputeAimAssistedLookDelta,Computes the look delta and adds the view-target aim-assist delta,camera,,
 
-Overwatch.exe,0x14079ff00,0x14079ff00,ApplyInputSettingsToState,Applies sensitivity and invert and aim-assist settings to the input state,input,
+Overwatch.exe,0x14079ff00,0x14079ff00,ApplyInputSettingsToState,Applies sensitivity and invert and aim-assist settings to the input state,input,,
 
-Overwatch.exe,0x1407dcd50,0x1407dcd50,DestroySequenceViewTable,Destroys the sequence view table member,camera,
+Overwatch.exe,0x1407dcd50,0x1407dcd50,DestroySequenceViewTable,Destroys the sequence view table member,camera,,
 
-Overwatch.exe,0x1407dcdc0,0x1407dcdc0,DestroySequenceCameraView,Destroys the sequence camera view,camera,
+Overwatch.exe,0x1407dcdc0,0x1407dcdc0,DestroySequenceCameraView,Destroys the sequence camera view,camera,,
 
-Overwatch.exe,0x1407dced0,0x1407dced0,ConstructSequenceCameraView,Constructs the sequence camera view object,camera,
+Overwatch.exe,0x1407dced0,0x1407dced0,ConstructSequenceCameraView,Constructs the sequence camera view object,camera,,
 
-Overwatch.exe,0x1407dd390,0x1407dd390,AllocateSequenceCameraView,Allocates and constructs the sequence camera view,camera,
+Overwatch.exe,0x1407dd390,0x1407dd390,AllocateSequenceCameraView,Allocates and constructs the sequence camera view,camera,,
 
-Overwatch.exe,0x1407dd3c0,0x1407dd3c0,GetActiveSequenceCameraView,Returns the active sequence camera view under the spinlock,camera,
+Overwatch.exe,0x1407dd3c0,0x1407dd3c0,GetActiveSequenceCameraView,Returns the active sequence camera view under the spinlock,camera,,
 
-Overwatch.exe,0x1407dd410,0x1407dd410,LookupSequenceViewTableSlot,Looks up a sequence view table slot by handle,camera,
+Overwatch.exe,0x1407dd410,0x1407dd410,LookupSequenceViewTableSlot,Looks up a sequence view table slot by handle,camera,,
 
-Overwatch.exe,0x1407dd760,0x1407dd760,AdvanceSequenceCameraViewState,Advances the sequence camera view state,camera,
+Overwatch.exe,0x1407dd760,0x1407dd760,AdvanceSequenceCameraViewState,Advances the sequence camera view state,camera,,
 
-Overwatch.exe,0x1407dd790,0x1407dd790,GetSequenceCameraViewSlotIndex,Returns the sequence camera view world slot index,camera,
+Overwatch.exe,0x1407dd790,0x1407dd790,GetSequenceCameraViewSlotIndex,Returns the sequence camera view world slot index,camera,,
 
-Overwatch.exe,0x1407dd800,0x1407dd800,ReleaseSequenceCameraViewObserver,Releases the sequence camera view observer slot,camera,
+Overwatch.exe,0x1407dd800,0x1407dd800,ReleaseSequenceCameraViewObserver,Releases the sequence camera view observer slot,camera,,
 
-Overwatch.exe,0x1407ff270,0x1407ff270,DestructMoverBody,Frees the 0x1c00-byte character body,mover,
+Overwatch.exe,0x1407ff270,0x1407ff270,DestructMoverBody,Frees the 0x1c00-byte character body,mover,,
 
-Overwatch.exe,0x1407ffc50,0x1407ffc50,MoverInvoker,"Calls the advance, stores the new position at +0x1b80 and dispatches contact normals",mover,"void MoverInvoker(MoverBody *mover, float *out_pos, float *wish, float *pos, float scale_a, float scale_b, void *step_state, void *world)"
+Overwatch.exe,0x1407ffc50,0x1407ffc50,MoverInvoker,"Calls the advance, stores the new position at +0x1b80 and dispatches contact normals",mover,"void MoverInvoker(MoverBody *mover, float *out_pos, float *wish, float *pos, float scale_a, float scale_b, void *step_state, void *world)",
 
-Overwatch.exe,0x14096bef0,0x14096bef0,SelectFirstPersonCamera,Chooses and attaches the first-person camera component from the candidate lists,camera,
+Overwatch.exe,0x14096bef0,0x14096bef0,SelectFirstPersonCamera,Chooses and attaches the first-person camera component from the candidate lists,camera,,
 
-Overwatch.exe,0x14096c290,0x14096c290,RegisterFirstPersonClipPlanes,Registers camera.FirstPersonNearZ/FarZ at one tenth of the world clip planes,camera,
+Overwatch.exe,0x14096c290,0x14096c290,RegisterFirstPersonClipPlanes,Registers camera.FirstPersonNearZ/FarZ at one tenth of the world clip planes,camera,,
 
-Overwatch.exe,0x14096c5b0,0x14096c5b0,ApplyFirstPersonCamera,Per-frame first-person view apply: FOV blend and clip planes and pose matrix,camera,
+Overwatch.exe,0x14096c5b0,0x14096c5b0,ApplyFirstPersonCamera,Per-frame first-person view apply: FOV blend and clip planes and pose matrix,camera,,
 
-Overwatch.exe,0x14096cb30,0x14096cb30,EvaluateFirstPersonCameraAnimation,Evaluates the FP animation and writes the three camera offset values,camera,
+Overwatch.exe,0x14096cb30,0x14096cb30,EvaluateFirstPersonCameraAnimation,Evaluates the FP animation and writes the three camera offset values,camera,,
 
-Overwatch.exe,0x14096eab0,0x14096eab0,DispatchFpCameraSlotTime,Dispatches the first-person camera slot event by round(time*1000),camera,
+Overwatch.exe,0x14096eab0,0x14096eab0,DispatchFpCameraSlotTime,Dispatches the first-person camera slot event by round(time*1000),camera,,
 
-Overwatch.exe,0x140997640,0x140997640,ConstructFirstPersonCamera,Constructs the level-1 first-person camera component,camera,
+Overwatch.exe,0x140997640,0x140997640,ConstructFirstPersonCamera,Constructs the level-1 first-person camera component,camera,,
 
-Overwatch.exe,0x140997840,0x140997840,GetFirstPersonCameraDeltaTime,Returns the first-person camera delta time,camera,
+Overwatch.exe,0x140997840,0x140997840,GetFirstPersonCameraDeltaTime,Returns the first-person camera delta time,camera,,
 
-Overwatch.exe,0x140997940,0x140997940,IsFirstPersonCameraActive,Returns whether the first-person camera owner is active,camera,
+Overwatch.exe,0x140997940,0x140997940,IsFirstPersonCameraActive,Returns whether the first-person camera owner is active,camera,,
 
-Overwatch.exe,0x140997b90,0x140997b90,UpdateFirstPersonCameraPose,Builds the first-person camera pose and near clip and FOV from the owner,camera,
+Overwatch.exe,0x140997b90,0x140997b90,UpdateFirstPersonCameraPose,Builds the first-person camera pose and near clip and FOV from the owner,camera,,
 
-Overwatch.exe,0x140997c90,0x140997c90,BuildFirstPersonCameraVariant,Constructs the level-2 first-person camera component,camera,
+Overwatch.exe,0x140997c90,0x140997c90,BuildFirstPersonCameraVariant,Constructs the level-2 first-person camera component,camera,,
 
-Overwatch.exe,0x1409e1b50,0x1409e1b50,BuildLocalHitEffectEntry,Builds a local hit-effect render entry,,
+Overwatch.exe,0x1409e1b50,0x1409e1b50,BuildLocalHitEffectEntry,Builds a local hit-effect render entry,,,
 
-Overwatch.exe,0x1409e20c0,0x1409e20c0,UpdateLocalHitEffectEnable,Updates the local hit-effect enable flag,,
+Overwatch.exe,0x1409e20c0,0x1409e20c0,UpdateLocalHitEffectEnable,Updates the local hit-effect enable flag,,,
 
-Overwatch.exe,0x140a264c0,0x140a264c0,StatescriptDriveWalk,The per-frame script walk: slot 100 (+0x320) of the host class; walks the script-instance array and runs element slots 43/44 around a parameter push,statescript,
+Overwatch.exe,0x140a264c0,0x140a264c0,StatescriptDriveWalk,The per-frame script walk: slot 100 (+0x320) of the host class; walks the script-instance array and runs element slots 43/44 around a parameter push,statescript,,
 
-Overwatch.exe,0x140a9ba70,0x140a9ba70,StatescriptSlot43Executor,Element vtable slot 43 (+0x158): the executor step that sets the busy counter,statescript,
+Overwatch.exe,0x140a9ba70,0x140a9ba70,StatescriptSlot43Executor,Element vtable slot 43 (+0x158): the executor step that sets the busy counter,statescript,,
 
-Overwatch.exe,0x140ab3110,0x140ab3110,PlayerCameraControllerUpdate,Reads the player camera component and distance then sets the camera mode and view,camera,
+Overwatch.exe,0x140ab3110,0x140ab3110,PlayerCameraControllerUpdate,Reads the player camera component and distance then sets the camera mode and view,camera,,
 
-Overwatch.exe,0x140adea00,0x140adea00,EvaluateFirstPersonAnimationNode,Applies the FP animation weight to an animation node,anim,
+Overwatch.exe,0x140adea00,0x140adea00,EvaluateFirstPersonAnimationNode,Applies the FP animation weight to an animation node,anim,,
 
-Overwatch.exe,0x140b909d0,0x140b909d0,CurveKeySampleDual,The shared curve pipeline's dual (two-source) sample stage feeding blend/replace,anim,
+Overwatch.exe,0x140b909d0,0x140b909d0,CurveKeySampleDual,The shared curve pipeline's dual (two-source) sample stage feeding blend/replace,anim,,
 
-Overwatch.exe,0x140be3700,0x140be3700,LobbyLog,"The shared lobby logger entry: (client, level, message, system-name string)",,
+Overwatch.exe,0x140be3700,0x140be3700,LobbyLog,"The shared lobby logger entry: (client, level, message, system-name string)",,,
 
-Overwatch.exe,0x140ca37d0,0x140ca37d0,ConstructMoverBase,Builds the 0x1b70-byte mover base subobject and installs the base vtable 0x1431101e8,mover,
+Overwatch.exe,0x140ca37d0,0x140ca37d0,ConstructMoverBase,Builds the 0x1b70-byte mover base subobject and installs the base vtable 0x1431101e8,mover,,
 
-Overwatch.exe,0x140ca5940,0x140ca5940,MoverWishUpdate,"The wish-vector update wrapper: reads +0x1140, converts through the frame-conversion helper, applies the difference",mover,
+Overwatch.exe,0x140ca5940,0x140ca5940,MoverWishUpdate,"The wish-vector update wrapper: reads +0x1140, converts through the frame-conversion helper, applies the difference",mover,,
 
-Overwatch.exe,0x140ca7570,0x140ca7570,MoverRampScalarOffset,"The scalar ramp with the +0x10fc offset: minss(timer,1) * scale + body[0x10fc]",mover,
+Overwatch.exe,0x140ca7570,0x140ca7570,MoverRampScalarOffset,"The scalar ramp with the +0x10fc offset: minss(timer,1) * scale + body[0x10fc]",mover,,
 
-Overwatch.exe,0x140ca75b0,0x140ca75b0,MoverRampVector,"The four-lane ramp: (minss(timer,1) * scale + body[0x10fc]) * body[0xc0..0xcc], scale selected by body[0x10d0] bit 1",mover,
+Overwatch.exe,0x140ca75b0,0x140ca75b0,MoverRampVector,"The four-lane ramp: (minss(timer,1) * scale + body[0x10fc]) * body[0xc0..0xcc], scale selected by body[0x10d0] bit 1",mover,,
 
-Overwatch.exe,0x140ca75f0,0x140ca75f0,MoverRampScalar,"The scalar ramp: minss(timer,1) * scale, scale selected by body[0x10d0] bit 1",mover,
+Overwatch.exe,0x140ca75f0,0x140ca75f0,MoverRampScalar,"The scalar ramp: minss(timer,1) * scale, scale selected by body[0x10d0] bit 1",mover,,
 
-Overwatch.exe,0x140ca7f30,0x140ca7f30,MoverAdvance,The per-frame position integrator: integrates the static local offset at +0xc0 with the wish vector and transform,mover,"void MoverAdvance(MoverBody *mover, float *out_pos, float *wish, float *pos, float scale_a, float scale_b, void *step_state, void *world)"
+Overwatch.exe,0x140ca7f30,0x140ca7f30,MoverAdvance,The per-frame position integrator: integrates the static local offset at +0xc0 with the wish vector and transform,mover,"void MoverAdvance(MoverBody *mover, float *out_pos, float *wish, float *pos, float scale_a, float scale_b, void *step_state, void *world)",
 
-Overwatch.exe,0x140ca9730,0x140ca9730,ConstructMoverBody,Looks up component id 0x26 and binds the mover component to the character body,mover,
+Overwatch.exe,0x140ca9730,0x140ca9730,ConstructMoverBody,Looks up component id 0x26 and binds the mover component to the character body,mover,,
 
-Overwatch.exe,0x140cb74a0,0x140cb74a0,BuildMoverPhysicsCommand,Builds the mover command flags from the body state and the movement gate,mover,
+Overwatch.exe,0x140cb74a0,0x140cb74a0,BuildMoverPhysicsCommand,Builds the mover command flags from the body state and the movement gate,mover,,
 
-Overwatch.exe,0x140cbacc0,0x140cbacc0,MoverStateMachine,"The per-frame character state machine: flags, timer, state id, the +0x1a79 state byte, the local vector and the ground probe",mover,
+Overwatch.exe,0x140cbacc0,0x140cbacc0,MoverStateMachine,"The per-frame character state machine: flags, timer, state id, the +0x1a79 state byte, the local vector and the ground probe",mover,,
 
-Overwatch.exe,0x140cbcbe0,0x140cbcbe0,ApplyStateModifiers,Per-frame state-modifier evaluator: applies the mover body 0x38-byte records at +0x870 to the movement parameter block at +0x5d0..+0x67c,mover,
+Overwatch.exe,0x140cbcbe0,0x140cbcbe0,ApplyStateModifiers,Per-frame state-modifier evaluator: applies the mover body 0x38-byte records at +0x870 to the movement parameter block at +0x5d0..+0x67c,mover,,
 
-Overwatch.exe,0x140cc03d0,0x140cc03d0,SubmitMoverPhysicsCommand,Builds the mover command and dispatches through FUN_1420163b0; the controller velocity is set by MoverUpdateFrame/MoverUpdateCommand,mover,
+Overwatch.exe,0x140cc03d0,0x140cc03d0,SubmitMoverPhysicsCommand,Builds the mover command and dispatches through FUN_1420163b0; the controller velocity is set by MoverUpdateFrame/MoverUpdateCommand,mover,,
 
-Overwatch.exe,0x140cbb260,0x140cbb260,MoverUpdateFrame,"The per-frame body update: modifiers, submit, input build, wish spring, then direct SetCharacterControllerVelocity",mover,
+Overwatch.exe,0x140cbb260,0x140cbb260,MoverUpdateFrame,"The per-frame body update: modifiers, submit, input build, wish spring, then direct SetCharacterControllerVelocity",mover,,
 
-Overwatch.exe,0x140cb5760,0x140cb5760,MoverUpdateCommand,The command-driven body update: input build, wish spring, direct velocity,mover,
+Overwatch.exe,0x140cb5760,0x140cb5760,MoverUpdateCommand,"The command-driven body update: input build, wish spring, direct velocity",mover,,
 
-Overwatch.exe,0x140cc0dc0,0x140cc0dc0,MoverWishSpring,The wish copy and +0x10fc/+0x1100 spring inside the mover update,mover,
+Overwatch.exe,0x140cc0dc0,0x140cc0dc0,MoverWishSpring,The wish copy and +0x10fc/+0x1100 spring inside the mover update,mover,,
 
-Overwatch.exe,0x140654530,0x140654530,FirstPersonCommandUpdateEntry,The first-person view object's +0x250 slot entry; tail-jumps to the command producer,mover,
+Overwatch.exe,0x140654530,0x140654530,FirstPersonCommandUpdateEntry,The first-person view object's +0x250 slot entry; tail-jumps to the command producer,mover,,
 
-Overwatch.exe,0x140654730,0x140654730,FirstPersonCommandUpdate,Writes the 0x14-byte actor command record at +0x1210 and pushes the 0x1c-byte usercmd ring entry,mover,
+Overwatch.exe,0x140654730,0x140654730,FirstPersonCommandUpdate,Writes the 0x14-byte actor command record at +0x1210 and pushes the 0x1c-byte usercmd ring entry,mover,,
 
-Overwatch.exe,0x140cb86c0,0x140cb86c0,MoverWishWriter,Writes the mover source struct +0x00 wish/+0x10 secondary/+0x40 gate,mover,
+Overwatch.exe,0x140cb86c0,0x140cb86c0,MoverWishWriter,Writes the mover source struct +0x00 wish/+0x10 secondary/+0x40 gate,mover,,
 
-Overwatch.exe,0x140cb5510,0x140cb5510,MoverWishForward,Forward 4x4 column-major affine transform of the wish vector,mover,
+Overwatch.exe,0x140cb5510,0x140cb5510,MoverWishForward,Forward 4x4 column-major affine transform of the wish vector,mover,,
 
-Overwatch.exe,0x140cb5350,0x140cb5350,MoverWishInverse,Inverse 4x4 affine transform of the wish vector with cross products and rcpps,mover,
+Overwatch.exe,0x140cb5350,0x140cb5350,MoverWishInverse,Inverse 4x4 affine transform of the wish vector with cross products and rcpps,mover,,
 
-Overwatch.exe,0x140ca5b90,0x140ca5b90,MoverWishTransform,Builds and rotates the mover wish input vector through the state block,mover,
+Overwatch.exe,0x140ca5b90,0x140ca5b90,MoverWishTransform,Builds and rotates the mover wish input vector through the state block,mover,,
 
-Overwatch.exe,0x140d27410,0x140d27410,FpViewmodelEventSort,Sorts the 0x50-byte event records by their short priority,anim,
+Overwatch.exe,0x140d27410,0x140d27410,FpViewmodelEventSort,Sorts the 0x50-byte event records by their short priority,anim,,
 
-Overwatch.exe,0x140d29c60,0x140d29c60,FpViewmodelEventPlayer,The animation event/state player: dispatches event masks against the slot's event list,anim,
+Overwatch.exe,0x140d29c60,0x140d29c60,FpViewmodelEventPlayer,The animation event/state player: dispatches event masks against the slot's event list,anim,,
 
-Overwatch.exe,0x140d2a250,0x140d2a250,AnimEventMaskDispatch,Current-build animation event player helper: dispatches event masks 0x100/0x200/0x400/0x800 against the slot's event list (RVA 0xd2a250),anim,
+Overwatch.exe,0x140d2a250,0x140d2a250,AnimEventMaskDispatch,Current-build animation event player helper: dispatches event masks 0x100/0x200/0x400/0x800 against the slot's event list (RVA 0xd2a250),anim,,
 
-Overwatch.exe,0x140d2f060,0x140d2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; checks it against the type descriptor; resolves the view-model entity and its model; calls the bind; registers the first-person config vars,anim,
+Overwatch.exe,0x140d2f060,0x140d2f060,FpViewmodelConsumer,Reads the type-0x35 first-person component; checks it against the type descriptor; resolves the view-model entity and its model; calls the bind; registers the first-person config vars,anim,,
 
-Overwatch.exe,0x140d2faa0,0x140d2faa0,FpViewmodelBind,The bind: stores the view-model entity and model references and resets the view-model state; it does not read m_position or the four scalars,anim,
+Overwatch.exe,0x140d2faa0,0x140d2faa0,FpViewmodelBind,The bind: stores the view-model entity and model references and resets the view-model state; it does not read m_position or the four scalars,anim,,
 
-Overwatch.exe,0x140d31bf0,0x140d31bf0,FpViewmodelUpdateA,Per-frame update (view-model vtable slot +0xe0): walks the six 0x110-stride animation slots and runs the event player on each,anim,
+Overwatch.exe,0x140d31bf0,0x140d31bf0,FpViewmodelUpdateA,Per-frame update (view-model vtable slot +0xe0): walks the six 0x110-stride animation slots and runs the event player on each,anim,,
 
-Overwatch.exe,0x140d322f0,0x140d322f0,FpViewmodelUpdateB,Per-frame update (view-model vtable slot +0xe8): the second of the two per-frame slots,anim,
+Overwatch.exe,0x140d322f0,0x140d322f0,FpViewmodelUpdateB,Per-frame update (view-model vtable slot +0xe8): the second of the two per-frame slots,anim,,
 
-Overwatch.exe,0x140d3a020,0x140d3a020,FpViewmodelEventPlayerB,Current-build: the second event/state player the per-frame view-model updates call (RVA 0xd3a020),anim,
+Overwatch.exe,0x140d3a020,0x140d3a020,FpViewmodelEventPlayerB,Current-build: the second event/state player the per-frame view-model updates call (RVA 0xd3a020),anim,,
 
-Overwatch.exe,0x140f44ed0,0x140f44ed0,MergeReplayCameraViewTelemetry,MergeFrom for the ReplayCameraView ProTelemetry message; not the in-game replay camera,camera,
+Overwatch.exe,0x140f44ed0,0x140f44ed0,MergeReplayCameraViewTelemetry,MergeFrom for the ReplayCameraView ProTelemetry message; not the in-game replay camera,camera,,
 
-Overwatch.exe,0x14130d0b0,0x14130d0b0,ConstructFirstPersonComponent,Constructs the first-person STU component,camera,
+Overwatch.exe,0x14130d0b0,0x14130d0b0,ConstructFirstPersonComponent,Constructs the first-person STU component,camera,,
 
-Overwatch.exe,0x141312f30,0x141312f30,FirstPersonComponentFieldDefault,Returns the first-person component field default,anim,
+Overwatch.exe,0x141312f30,0x141312f30,FirstPersonComponentFieldDefault,Returns the first-person component field default,anim,,
 
-Overwatch.exe,0x141943290,0x141943290,TypeIndexByHash,Maps the first-person component's class hash 0x9d28963f to type index 0x35,reflection,
+Overwatch.exe,0x141943290,0x141943290,TypeIndexByHash,Maps the first-person component's class hash 0x9d28963f to type index 0x35,reflection,,
 
-Overwatch.exe,0x141b30fc0,0x141b30fc0,GetHorizontalFov,Returns the HorizontalFOV setting,camera,
+Overwatch.exe,0x141b30fc0,0x141b30fc0,GetHorizontalFov,Returns the HorizontalFOV setting,camera,,
 
-Overwatch.exe,0x141b4cba0,0x141b4cba0,GetDefaultFarZ,Reads the DefaultFarZ settings variable and falls back to 16384.0 when disabled,camera,
+Overwatch.exe,0x141b4cba0,0x141b4cba0,GetDefaultFarZ,Reads the DefaultFarZ settings variable and falls back to 16384.0 when disabled,camera,,
 
-Overwatch.exe,0x141b4cbc0,0x141b4cbc0,GetDefaultNearZ,Reads the DefaultNearZ settings variable and falls back to 0.1 when disabled,camera,
+Overwatch.exe,0x141b4cbc0,0x141b4cbc0,GetDefaultNearZ,Reads the DefaultNearZ settings variable and falls back to 0.1 when disabled,camera,,
 
-Overwatch.exe,0x141b7b9d0,0x141b7b9d0,MaterialAssetLookup,"The material-asset lookup (registry, keyA, keyB); falls into the no-return assert path on a miss",material,
+Overwatch.exe,0x141b7b9d0,0x141b7b9d0,MaterialAssetLookup,"The material-asset lookup (registry, keyA, keyB); falls into the no-return assert path on a miss",material,,
 
-Overwatch.exe,0x141b839b0,0x141b839b0,MaterialKeyBind,The u64-array material binding: resolves keys -> indices clamped by the u64-value count,material,
+Overwatch.exe,0x141b839b0,0x141b839b0,MaterialKeyBind,The u64-array material binding: resolves keys -> indices clamped by the u64-value count,material,,
 
-Overwatch.exe,0x141b88cb0,0x141b88cb0,MdlcMaterialRead,"The MDLC chunk deserializer: the material list (copies the header, memcpy's the material values)",material,
+Overwatch.exe,0x141b88cb0,0x141b88cb0,MdlcMaterialRead,"The MDLC chunk deserializer: the material list (copies the header, memcpy's the material values)",material,,
 
-Overwatch.exe,0x141b88e50,0x141b88e50,MoclRead,The MOCL chunk deserializer: the occlusion/limits table,casc,
+Overwatch.exe,0x141b88e50,0x141b88e50,MoclRead,The MOCL chunk deserializer: the occlusion/limits table,casc,,
 
-Overwatch.exe,0x141b88f10,0x141b88f10,MrnmHandler,"The MRNM chunk handler and its deserializer are one function: copies the header and copies the material values (materials.md) while building the runtime parent-indexed tables (0xA0/0xF8/0x18 strides, used-bone mask, roots at -1) (animation.md)",material,
+Overwatch.exe,0x141b88f10,0x141b88f10,MrnmHandler,"The MRNM chunk deserializer: copies the header, then builds the runtime block - submesh 0xA0, vertex-buffer 0xF8 and index-buffer 0x18 records, the -1 roots, the +0x7b default byte and the OR of every submesh +0x28 into +0x00. Verified as fn/MrnmHandler (formats/model.md)",material,,
 
-Overwatch.exe,0x141b894d0,0x141b894d0,MsklTableBuild,The mskl chunk deserializer: packs the 6-byte chain records into the table blob,anim,
+Overwatch.exe,0x141b894d0,0x141b894d0,MsklTableBuild,The mskl chunk deserializer: packs the chain matrix pose id Lookup and inverse tables into one block at model+0x08 and sizes each from the header counts,anim,,
 
-Overwatch.exe,0x141b8a1d0,0x141b8a1d0,MaterialSlotBind,The slot binder: sets the container's slot count and binds each material through the record's u16 at +4,material,
+Overwatch.exe,0x141b8a1d0,0x141b8a1d0,MaterialSlotBind,The slot binder: sets the container's slot count and binds each material through the record's u16 at +4,material,,
 
-Overwatch.exe,0x141b8ca70,0x141b8ca70,MaterialParamApply,"The material-parameter applier: resolves the material descriptor, scans the model's key/value records, stores the min/max times",material,
+Overwatch.exe,0x141b8ca70,0x141b8ca70,MaterialParamApply,"The material-parameter applier: resolves the material descriptor, scans the model's key/value records, stores the min/max times",material,,
 
-Overwatch.exe,0x141c25110,0x141c25110,RegisterStaticValueObject,Registers a static value object,reflection,
+Overwatch.exe,0x141c25110,0x141c25110,RegisterStaticValueObject,Registers a static value object,reflection,,
 
-Overwatch.exe,0x141c5bfc0,0x141c5bfc0,RegisterFloatValueRecord,Registers a float value record,reflection,
+Overwatch.exe,0x141c5bfc0,0x141c5bfc0,RegisterFloatValueRecord,Registers a float value record,reflection,,
 
-Overwatch.exe,0x141c5f5e0,0x141c5f5e0,TypeRegistrationCore,The type-registration core: allocates the per-flag registration tables,reflection,
+Overwatch.exe,0x141c5f5e0,0x141c5f5e0,TypeRegistrationCore,The type-registration core: allocates the per-flag registration tables,reflection,,
 
-Overwatch.exe,0x141d2ea50,0x141d2ea50,PsoDebugPanelDraw,The draw callback of the PSO debug panel object,camera,
+Overwatch.exe,0x141d2ea50,0x141d2ea50,PsoDebugPanelDraw,The draw callback of the PSO debug panel object,camera,,
 
-Overwatch.exe,0x141e2d5c0,0x141e2d5c0,ClipRuntimeConstruct,The clip runtime record's constructor,anim,
+Overwatch.exe,0x141e2d5c0,0x141e2d5c0,ClipRuntimeConstruct,The clip runtime record's constructor,anim,,
 
-Overwatch.exe,0x142028370,0x142028370,AddCameraView,Appends a view to the camera manager view array,camera,
+Overwatch.exe,0x142028370,0x142028370,AddCameraView,Appends a view to the camera manager view array,camera,,
 
-Overwatch.exe,0x142032060,0x142032060,DispatchCameraRequest,Dispatches a camera-system request,camera,
+Overwatch.exe,0x142032060,0x142032060,DispatchCameraRequest,Dispatches a camera-system request,camera,,
 
-Overwatch.exe,0x14203c4e0,0x14203c4e0,UpdateCameraSystem,Runs the camera system update stage,camera,
+Overwatch.exe,0x14203c4e0,0x14203c4e0,UpdateCameraSystem,Runs the camera system update stage,camera,,
 
-Overwatch.exe,0x14203cc30,0x14203cc30,AdvanceCameraSystemStage2,Runs the second camera system update stage,camera,
+Overwatch.exe,0x14203cc30,0x14203cc30,AdvanceCameraSystemStage2,Runs the second camera system update stage,camera,,
 
-Overwatch.exe,0x142040b40,0x142040b40,TickRegisteredCameraViews,Calls every registered view apply slot with the manager delta time,camera,
+Overwatch.exe,0x142040b40,0x142040b40,TickRegisteredCameraViews,Calls every registered view apply slot with the manager delta time,camera,,
 
-Overwatch.exe,0x142069710,0x142069710,InitCameraViewParams,Initialises a camera view struct with vtable matrices 35 deg half-FOV and near/far,camera,
+Overwatch.exe,0x142069710,0x142069710,InitCameraViewParams,Initialises a camera view struct with vtable matrices 35 deg half-FOV and near/far,camera,,
 
-Overwatch.exe,0x142069a20,0x142069a20,ValidateAndNormalizeCameraDescriptor,Normalizes and validates the camera basis and FOV,camera,
+Overwatch.exe,0x142069a20,0x142069a20,ValidateAndNormalizeCameraDescriptor,Normalizes and validates the camera basis and FOV,camera,,
 
-Overwatch.exe,0x142069c60,0x142069c60,OrthonormalizeCameraBasis,Orthonormalizes the camera basis rows,camera,
+Overwatch.exe,0x142069c60,0x142069c60,OrthonormalizeCameraBasis,Orthonormalizes the camera basis rows,camera,,
 
-Overwatch.exe,0x14206a2b0,0x14206a2b0,SetPerspectiveViewRect,Sets the view rectangle and enables perspective projection,camera,
+Overwatch.exe,0x14206a2b0,0x14206a2b0,SetPerspectiveViewRect,Sets the view rectangle and enables perspective projection,camera,,
 
-Overwatch.exe,0x14206a4a0,0x14206a4a0,RebuildProjection,Rebuilds the projection after a view parameter change,camera,
+Overwatch.exe,0x14206a4a0,0x14206a4a0,RebuildProjection,Rebuilds the projection after a view parameter change,camera,,
 
-Overwatch.exe,0x14206a5f0,0x14206a5f0,SetViewRectFromInts,Sets the view output rectangle from integer bounds,camera,
+Overwatch.exe,0x14206a5f0,0x14206a5f0,SetViewRectFromInts,Sets the view output rectangle from integer bounds,camera,,
 
-Overwatch.exe,0x14206afb0,0x14206afb0,SetViewOutputRect,Sets the view output rectangle,camera,
+Overwatch.exe,0x14206afb0,0x14206afb0,SetViewOutputRect,Sets the view output rectangle,camera,,
 
-Overwatch.exe,0x14206afe0,0x14206afe0,BuildViewMatricesFromCameraDescriptor,Builds the camera-to-world and world-to-view matrices,camera,
+Overwatch.exe,0x14206afe0,0x14206afe0,BuildViewMatricesFromCameraDescriptor,Builds the camera-to-world and world-to-view matrices,camera,,
 
-Overwatch.exe,0x14206b2d0,0x14206b2d0,SetViewHalfFovs,Sets the view half-FOV pair,camera,
+Overwatch.exe,0x14206b2d0,0x14206b2d0,SetViewHalfFovs,Sets the view half-FOV pair,camera,,
 
-Overwatch.exe,0x14206b4a0,0x14206b4a0,SetVerticalFovFull,Sets the vertical full FOV and rebuilds projection,camera,
+Overwatch.exe,0x14206b4a0,0x14206b4a0,SetVerticalFovFull,Sets the vertical full FOV and rebuilds projection,camera,,
 
-Overwatch.exe,0x14206b500,0x14206b500,ProjectWorldPoint,Projects a world point through the view and projection matrices,camera,
+Overwatch.exe,0x14206b500,0x14206b500,ProjectWorldPoint,Projects a world point through the view and projection matrices,camera,,
 
-Overwatch.exe,0x14206cfd0,0x14206cfd0,GetCameraComponent,Returns the camera component attached to a view,camera,
+Overwatch.exe,0x14206cfd0,0x14206cfd0,GetCameraComponent,Returns the camera component attached to a view,camera,,
 
-Overwatch.exe,0x14206d0f0,0x14206d0f0,PushCameraModifier,Appends a camera modifier record to the view,camera,
+Overwatch.exe,0x14206d0f0,0x14206d0f0,PushCameraModifier,Appends a camera modifier record to the view,camera,,
 
-Overwatch.exe,0x14206d250,0x14206d250,SetCameraScreenOffset,Stores the camera screen offset,camera,
+Overwatch.exe,0x14206d250,0x14206d250,SetCameraScreenOffset,Stores the camera screen offset,camera,,
 
-Overwatch.exe,0x14206d2c0,0x14206d2c0,ResetCameraAnimationOwner,Clears the camera animation owner,camera,
+Overwatch.exe,0x14206d2c0,0x14206d2c0,ResetCameraAnimationOwner,Clears the camera animation owner,camera,,
 
-Overwatch.exe,0x14206d310,0x14206d310,ComputeCameraPositionFromComponent,Computes the camera position from the component position and forward offset,camera,
+Overwatch.exe,0x14206d310,0x14206d310,ComputeCameraPositionFromComponent,Computes the camera position from the component position and forward offset,camera,,
 
-Overwatch.exe,0x14206d3c0,0x14206d3c0,AttachCameraComponent,Attaches a camera component to a view and copies the view snapshot,camera,
+Overwatch.exe,0x14206d3c0,0x14206d3c0,AttachCameraComponent,Attaches a camera component to a view and copies the view snapshot,camera,,
 
-Overwatch.exe,0x14206d840,0x14206d840,SetCameraTransform,Applies the camera transform subobject,camera,
+Overwatch.exe,0x14206d840,0x14206d840,SetCameraTransform,Applies the camera transform subobject,camera,,
 
-Overwatch.exe,0x14206db20,0x14206db20,UpdateCameraView,Per-frame base view update: transition and component update and modifiers and final descriptor,camera,
+Overwatch.exe,0x14206db20,0x14206db20,UpdateCameraView,Per-frame base view update: transition and component update and modifiers and final descriptor,camera,,
 
-Overwatch.exe,0x14206e0a0,0x14206e0a0,ApplyThirdPersonCameraTrace,Copies the third-person descriptor and runs the collision trace,camera,
+Overwatch.exe,0x14206e0a0,0x14206e0a0,ApplyThirdPersonCameraTrace,Copies the third-person descriptor and runs the collision trace,camera,,
 
-Overwatch.exe,0x14206e1a0,0x14206e1a0,TraceThirdPersonCamera,Tests the third-person camera against the world and applies the pull-in correction,camera,
+Overwatch.exe,0x14206e1a0,0x14206e1a0,TraceThirdPersonCamera,Tests the third-person camera against the world and applies the pull-in correction,camera,,
 
-Overwatch.exe,0x14206e400,0x14206e400,BuildThirdPersonCameraPose,Computes the third-person eye from the pivot and distance and forward axis,camera,
+Overwatch.exe,0x14206e400,0x14206e400,BuildThirdPersonCameraPose,Computes the third-person eye from the pivot and distance and forward axis,camera,,
 
-Overwatch.exe,0x14206ea60,0x14206ea60,UpdateCameraModifiers,Iterates the view modifier records and writes the final camera descriptor,camera,
+Overwatch.exe,0x14206ea60,0x14206ea60,UpdateCameraModifiers,Iterates the view modifier records and writes the final camera descriptor,camera,,
 
-Overwatch.exe,0x14206eee0,0x14206eee0,ApplyCameraViewOffset,Applies the camera shake and positional offset to the view,camera,
+Overwatch.exe,0x14206eee0,0x14206eee0,ApplyCameraViewOffset,Applies the camera shake and positional offset to the view,camera,,
 
-Overwatch.exe,0x142075230,0x142075230,InitProjectionDescriptor,Initializes the projection descriptor,camera,
+Overwatch.exe,0x142075230,0x142075230,InitProjectionDescriptor,Initializes the projection descriptor,camera,,
 
-Overwatch.exe,0x142075270,0x142075270,BuildFrustumPlanes,Builds the projection frustum planes,camera,
+Overwatch.exe,0x142075270,0x142075270,BuildFrustumPlanes,Builds the projection frustum planes,camera,,
 
-Overwatch.exe,0x1420754a0,0x1420754a0,SetExplicitBoundsProjection,Sets an explicit-bounds projection,camera,
+Overwatch.exe,0x1420754a0,0x1420754a0,SetExplicitBoundsProjection,Sets an explicit-bounds projection,camera,,
 
-Overwatch.exe,0x142075550,0x142075550,SetOrthoProjection,Sets an orthographic projection,camera,
+Overwatch.exe,0x142075550,0x142075550,SetOrthoProjection,Sets an orthographic projection,camera,,
 
-Overwatch.exe,0x142075630,0x142075630,SetPerspectiveProjection,Sets the perspective projection from the view rectangle and half FOVs,camera,
+Overwatch.exe,0x142075630,0x142075630,SetPerspectiveProjection,Sets the perspective projection from the view rectangle and half FOVs,camera,,
 
-Overwatch.exe,0x142075a70,0x142075a70,BuildPerspectiveMatrix,Builds the left-handed row-major perspective matrix,camera,
+Overwatch.exe,0x142075a70,0x142075a70,BuildPerspectiveMatrix,Builds the left-handed row-major perspective matrix,camera,,
 
-Overwatch.exe,0x14208c070,0x14208c070,DmTickKeeper,"The tick's keeper: zeroes the pending budget, clears the pending flag, recurses into children whose time is behind",domino,
+Overwatch.exe,0x14208c070,0x14208c070,DmTickKeeper,"The tick's keeper: zeroes the pending budget, clears the pending flag, recurses into children whose time is behind",domino,,
 
-Overwatch.exe,0x1420a3340,0x1420a3340,ConstructCameraComponent,Constructs the base camera component with the 70 degree default FOV,camera,
+Overwatch.exe,0x1420a3340,0x1420a3340,ConstructCameraComponent,Constructs the base camera component with the 70 degree default FOV,camera,,
 
-Overwatch.exe,0x1420a39c0,0x1420a39c0,InterpolateCameraTransition,Blends position and orientation and distance and FOV over the transition timer,camera,
+Overwatch.exe,0x1420a39c0,0x1420a39c0,InterpolateCameraTransition,Blends position and orientation and distance and FOV over the transition timer,camera,,
 
-Overwatch.exe,0x1420a4b90,0x1420a4b90,ResetCameraComponent,Resets the camera component state,camera,
+Overwatch.exe,0x1420a4b90,0x1420a4b90,ResetCameraComponent,Resets the camera component state,camera,,
 
-Overwatch.exe,0x1420a4bb0,0x1420a4bb0,UpdateCameraComponent,Applies the camera component FOV and mode update and shake state,camera,
+Overwatch.exe,0x1420a4bb0,0x1420a4bb0,UpdateCameraComponent,Applies the camera component FOV and mode update and shake state,camera,,
 
-Overwatch.exe,0x1420a50c0,0x1420a50c0,SetCameraFov,Stores the camera component vertical FOV,camera,
+Overwatch.exe,0x1420a50c0,0x1420a50c0,SetCameraFov,Stores the camera component vertical FOV,camera,,
 
-Overwatch.exe,0x1420a50d0,0x1420a50d0,SetCameraMode,Selects the new camera mode and stores the FP/3P blend,camera,
+Overwatch.exe,0x1420a50d0,0x1420a50d0,SetCameraMode,Selects the new camera mode and stores the FP/3P blend,camera,,
 
-Overwatch.exe,0x1420a52a0,0x1420a52a0,SetCameraView,Stores the view on the camera component,camera,
+Overwatch.exe,0x1420a52a0,0x1420a52a0,SetCameraView,Stores the view on the camera component,camera,,
 
-Overwatch.exe,0x1420a53c0,0x1420a53c0,UpdateCameraRecord,Runs the camera record pose builder for one update,camera,
+Overwatch.exe,0x1420a53c0,0x1420a53c0,UpdateCameraRecord,Runs the camera record pose builder for one update,camera,,
 
-Overwatch.exe,0x1420a5410,0x1420a5410,SelectCameraMode,Resolves the camera mode transition from the distance and current mode,camera,
+Overwatch.exe,0x1420a5410,0x1420a5410,SelectCameraMode,Resolves the camera mode transition from the distance and current mode,camera,,
 
-Overwatch.exe,0x1420b0a80,0x1420b0a80,ProjectPointThroughBasis,Projects a point through a constructed camera basis,camera,
+Overwatch.exe,0x1420b0a80,0x1420b0a80,ProjectPointThroughBasis,Projects a point through a constructed camera basis,camera,,
 
-Overwatch.exe,0x1420b0b20,0x1420b0b20,ProjectPointThroughView,Projects a point through a view,camera,
+Overwatch.exe,0x1420b0b20,0x1420b0b20,ProjectPointThroughView,Projects a point through a view,camera,,
 
-Overwatch.exe,0x1420b0f40,0x1420b0f40,SolveThirdPersonCameraCollision,Four-ray near-plane cast that clamps the third-person distance,camera,
+Overwatch.exe,0x1420b0f40,0x1420b0f40,SolveThirdPersonCameraCollision,Four-ray near-plane cast that clamps the third-person distance,camera,,
 
-Overwatch.exe,0x1420e4aa0,0x1420e4aa0,ConstructThirdPersonSpringCamera,Constructs the third-person spring camera,camera,
+Overwatch.exe,0x1420e4aa0,0x1420e4aa0,ConstructThirdPersonSpringCamera,Constructs the third-person spring camera,camera,,
 
-Overwatch.exe,0x1420feca0,0x1420feca0,AnimSamplerRule,The per-child sampler gate: vec4 lanes; winner-take-all above weight 0.5,anim,
+Overwatch.exe,0x1420feca0,0x1420feca0,AnimSamplerRule,The per-child sampler gate: vec4 lanes; winner-take-all above weight 0.5,anim,,
 
-Overwatch.exe,0x1421318b0,0x1421318b0,AddVerticalFovOffset,Adds the vertical FOV offset to the camera descriptor,camera,
+Overwatch.exe,0x1421318b0,0x1421318b0,AddVerticalFovOffset,Adds the vertical FOV offset to the camera descriptor,camera,,
 
-Overwatch.exe,0x142141f70,0x142141f70,StatescriptNodePush,The parameter push: walks the element list and dispatches by node type index through the trampoline,statescript,
+Overwatch.exe,0x142141f70,0x142141f70,StatescriptNodePush,The parameter push: walks the element list and dispatches by node type index through the trampoline,statescript,,
 
-Overwatch.exe,0x14214dcc0,0x14214dcc0,GetPlayerComponentByIndex,Returns a player component from the indexed component array,reflection,
+Overwatch.exe,0x14214dcc0,0x14214dcc0,GetPlayerComponentByIndex,Returns a player component from the indexed component array,reflection,,
 
-Overwatch.exe,0x1421530b0,0x1421530b0,StatescriptVarPoolConstruct,Constructs the runtime variable pool (pool 0x68 -> holder 0x240 with the 16x0x20 slot table -> instance >=0x15B0),statescript,
+Overwatch.exe,0x1421530b0,0x1421530b0,StatescriptVarPoolConstruct,Constructs the runtime variable pool (pool 0x68 -> holder 0x240 with the 16x0x20 slot table -> instance >=0x15B0),statescript,,
 
-Overwatch.exe,0x142155280,0x142155280,StatescriptApplyPass,The apply pass: walks the instance's elements and applies each record's default,statescript,
+Overwatch.exe,0x142155280,0x142155280,StatescriptApplyPass,The apply pass: walks the instance's elements and applies each record's default,statescript,,
 
-Overwatch.exe,0x142157910,0x142157910,StatescriptSlotResolve,Resolves an element by its id in the runtime,statescript,
+Overwatch.exe,0x142157910,0x142157910,StatescriptSlotResolve,Resolves an element by its id in the runtime,statescript,,
 
-Overwatch.exe,0x1421cd360,0x1421cd360,RegisterComponentTypeDescriptor,Registers a component type descriptor,reflection,
+Overwatch.exe,0x1421cd360,0x1421cd360,RegisterComponentTypeDescriptor,Registers a component type descriptor,reflection,,
 
-Overwatch.exe,0x1421ea960,0x1421ea960,WorldQueryByClass,"The world query a resolved reference lands in (world, u16 class id, 0x9e)",domino,
+Overwatch.exe,0x1421ea960,0x1421ea960,WorldQueryByClass,"The world query a resolved reference lands in (world, u16 class id, 0x9e)",domino,,
 
-Overwatch.exe,0x1421f6ae0,0x1421f6ae0,StatescriptGraphMaterialize,"The graph materializer: walks the 0x10-byte node records {key, flags, kind, target} in order",material,
+Overwatch.exe,0x1421f6ae0,0x1421f6ae0,StatescriptGraphMaterialize,"The graph materializer: walks the 0x10-byte node records {key, flags, kind, target} in order",material,,
 
-Overwatch.exe,0x14248efd0,0x14248efd0,ParseHexKey,Parses 32 hex digits into a 16-byte key in written byte order,casc,
+Overwatch.exe,0x14248efd0,0x14248efd0,ParseHexKey,Parses 32 hex digits into a 16-byte key in written byte order,casc,,
 
-Overwatch.exe,0x14248f040,0x14248f040,ParseHexKeyId,Parses 16 hex digits into an 8-byte key id in written byte order,casc,
+Overwatch.exe,0x14248f040,0x14248f040,ParseHexKeyId,Parses 16 hex digits into an 8-byte key id in written byte order,casc,,
 
-Overwatch.exe,0x14248f2a0,0x14248f2a0,BuildInfoLoadFromInstall,"Builds the .build.info path, loads it and selects the row for .flavor.info's Product Flavor",casc,
+Overwatch.exe,0x14248f2a0,0x14248f2a0,BuildInfoLoadFromInstall,"Builds the .build.info path, loads it and selects the row for .flavor.info's Product Flavor",casc,,
 
-Overwatch.exe,0x142498540,0x142498540,EncodingFindCKey,"Finds a content key's page record: min-length page search, low-byte count terminator, returns the record address or 6",casc,
+Overwatch.exe,0x142498540,0x142498540,EncodingFindCKey,"Finds a content key's page record: min-length page search, low-byte count terminator, returns the record address or 6",casc,,
 
-Overwatch.exe,0x142498610,0x142498610,EncodingFindEKey,"Finds an encoding key's espec record: full-length page search, min-length record scan, 0xFFFFFFFF terminator",casc,
+Overwatch.exe,0x142498610,0x142498610,EncodingFindEKey,"Finds an encoding key's espec record: full-length page search, min-length record scan, 0xFFFFFFFF terminator",casc,,
 
-Overwatch.exe,0x142498700,0x142498700,EncodingResolve,"Resolves a content key to decoded size, first ekey, stored size and espec string pointer; status 1 not ready, 6 not found, 7 multi-ekey",casc,
+Overwatch.exe,0x142498700,0x142498700,EncodingResolve,"Resolves a content key to decoded size, first ekey, stored size and espec string pointer; status 1 not ready, 6 not found, 7 multi-ekey",casc,,
 
-Overwatch.exe,0x142498880,0x142498880,EncodingPageIndexSearch,"Page-index binary search: width+0x10 stride, lower-middle mid, exact-equal hit, else the last page whose first key is <= the key; 0xFFFFFFFF below page 0",casc,
+Overwatch.exe,0x142498880,0x142498880,EncodingPageIndexSearch,"Page-index binary search: width+0x10 stride, lower-middle mid, exact-equal hit, else the last page whose first key is <= the key; 0xFFFFFFFF below page 0",casc,,
 
-Overwatch.exe,0x142498920,0x142498920,EncodingHeaderParse,"Parses the 22-byte EN header: key widths, page sizes and counts, and espec block size",casc,
+Overwatch.exe,0x142498920,0x142498920,EncodingHeaderParse,"Parses the 22-byte EN header: key widths, page sizes and counts, and espec block size",casc,,
 
-Overwatch.exe,0x1424a90e0,0x1424a90e0,BlteFrameHeaderParse,"Validates a BLTE frame header (type 0x0f or 0x10) and its MD5, and decodes the per-chunk stored and decoded sizes",casc,
+Overwatch.exe,0x1424a90e0,0x1424a90e0,BlteFrameHeaderParse,"Validates a BLTE frame header (type 0x0f or 0x10) and its MD5, and decodes the per-chunk stored and decoded sizes",casc,,
 
-Overwatch.exe,0x1424a9590,0x1424a9590,BlteFrameHeaderOpen,Wrapper that opens a BLTE frame header from a buffer,casc,
+Overwatch.exe,0x1424a9590,0x1424a9590,BlteFrameHeaderOpen,Wrapper that opens a BLTE frame header from a buffer,casc,,
 
-Overwatch.exe,0x1424a9670,0x1424a9670,BlteFrameHeaderOpenEx,Wrapper that opens a BLTE frame header from an explicit buffer and error flag,casc,
+Overwatch.exe,0x1424a9670,0x1424a9670,BlteFrameHeaderOpenEx,Wrapper that opens a BLTE frame header from an explicit buffer and error flag,casc,,
 
-Overwatch.exe,0x1424ae6c0,0x1424ae6c0,BuildInfoParseField,Parses one build-info field into its row offset using the descriptor's parser,casc,
+Overwatch.exe,0x1424ae6c0,0x1424ae6c0,BuildInfoParseField,Parses one build-info field into its row offset using the descriptor's parser,casc,,
 
-Overwatch.exe,0x1424aead0,0x1424aead0,BuildInfoCreate,Creates and loads a .build.info object,casc,
+Overwatch.exe,0x1424aead0,0x1424aead0,BuildInfoCreate,Creates and loads a .build.info object,casc,,
 
-Overwatch.exe,0x1424aec30,0x1424aec30,BuildInfoSelectRow,Selects the active .build.info row by its first field (the flavor); with no flavor it returns the last active row,casc,
+Overwatch.exe,0x1424aec30,0x1424aec30,BuildInfoSelectRow,Selects the active .build.info row by its first field (the flavor); with no flavor it returns the last active row,casc,,
 
-Overwatch.exe,0x1424af8b0,0x1424af8b0,FlavorInfoCreate,Creates and loads the .flavor.info table,,
+Overwatch.exe,0x1424af8b0,0x1424af8b0,FlavorInfoCreate,Creates and loads the .flavor.info table,,,
 
-Overwatch.exe,0x1424b0130,0x1424b0130,CdnPathFormat,"Formats data/, patch/ or config/ plus a key and .index into a CDN path",casc,
+Overwatch.exe,0x1424b0130,0x1424b0130,CdnPathFormat,"Formats data/, patch/ or config/ plus a key and .index into a CDN path",casc,,
 
-Overwatch.exe,0x1424ccc00,0x1424ccc00,BuildConfigParse,"Parses the build config's typed keys, including the two 16-byte encoding keys",casc,
+Overwatch.exe,0x1424ccc00,0x1424ccc00,BuildConfigParse,"Parses the build config's typed keys, including the two 16-byte encoding keys",casc,,
 
-Overwatch.exe,0x1424ce680,0x1424ce680,CdnConfigParse,"Parses the CDN config's archives, groups, file indexes and patch variants",casc,
+Overwatch.exe,0x1424ce680,0x1424ce680,CdnConfigParse,"Parses the CDN config's archives, groups, file indexes and patch variants",casc,,
 
-Overwatch.exe,0x1424cebd0,0x1424cebd0,ConfigKeyEntryParse,Handles a config line whose key starts with key-: creates an 8-byte id and 16-byte key entry,casc,
+Overwatch.exe,0x1424cebd0,0x1424cebd0,ConfigKeyEntryParse,Handles a config line whose key starts with key-: creates an 8-byte id and 16-byte key entry,casc,,
 
-Overwatch.exe,0x1424d0120,0x1424d0120,IndexDirectoryScan,Scans a directory of 32-hex .index files into a 9-byte-key hash table,casc,
+Overwatch.exe,0x1424d0120,0x1424d0120,IndexDirectoryScan,Scans a directory of 32-hex .index files into a 9-byte-key hash table,casc,,
 
-Overwatch.exe,0x1424d1b40,0x1424d1b40,EncodingHeaderRead,Reads and parses the 22-byte encoding header from the storage stream,casc,
+Overwatch.exe,0x1424d1b40,0x1424d1b40,EncodingHeaderRead,Reads and parses the 22-byte encoding header from the storage stream,casc,,
 
-Overwatch.exe,0x1424d1c60,0x1424d1c60,EncodingSectionsRead,"Reads the espec block, both page indexes and both page-body arrays in the reference order",casc,
+Overwatch.exe,0x1424d1c60,0x1424d1c60,EncodingSectionsRead,"Reads the espec block, both page indexes and both page-body arrays in the reference order",casc,,
 
-Overwatch.exe,0x1424d61b0,0x1424d61b0,BlteBlockRead,"Reads one BLTE block: decrypts E, then dispatches the plaintext mode to N, Z or LZ4",casc,
+Overwatch.exe,0x1424d61b0,0x1424d61b0,BlteBlockRead,"Reads one BLTE block: decrypts E, then dispatches the plaintext mode to N, Z or LZ4",casc,,
 
-Overwatch.exe,0x1424d68a0,0x1424d68a0,BlteChunkDecrypt,"Decrypts one E block with Salsa20, XORing the chunk ordinal into the IV",casc,
+Overwatch.exe,0x1424d68a0,0x1424d68a0,BlteChunkDecrypt,"Decrypts one E block with Salsa20, XORing the chunk ordinal into the IV",casc,,
 
-Overwatch.exe,0x1424d6e50,0x1424d6e50,BlteBlockReadLz4,"BLTE 4 block reader: 11-byte header, block-size exponent, stateless LZ4 decompression",casc,
+Overwatch.exe,0x1424d6e50,0x1424d6e50,BlteBlockReadLz4,"BLTE 4 block reader: 11-byte header, block-size exponent, stateless LZ4 decompression",casc,,
 
-Overwatch.exe,0x1424d7850,0x1424d7850,BlteBlockReadStored,BLTE N block reader: copies the stored bytes,casc,
+Overwatch.exe,0x1424d7850,0x1424d7850,BlteBlockReadStored,BLTE N block reader: copies the stored bytes,casc,,
 
-Overwatch.exe,0x1424d7ca0,0x1424d7ca0,BlteBlockReadZlib,BLTE Z block reader: inflates after the mode byte,casc,
+Overwatch.exe,0x1424d7ca0,0x1424d7ca0,BlteBlockReadZlib,BLTE Z block reader: inflates after the mode byte,casc,,
 
-Overwatch.exe,0x1424d8720,0x1424d8720,BlteIsDirectContainer,"True only for BLTE magic with a zero frame-header size, the single implicit-chunk form",casc,
+Overwatch.exe,0x1424d8720,0x1424d8720,BlteIsDirectContainer,"True only for BLTE magic with a zero frame-header size, the single implicit-chunk form",casc,,
 
-Overwatch.exe,0x1424d8770,0x1424d8770,BlteWriteDirectHeader,Writes the BLTE magic and a zero frame-header size,casc,
+Overwatch.exe,0x1424d8770,0x1424d8770,BlteWriteDirectHeader,Writes the BLTE magic and a zero frame-header size,casc,,
 
-Overwatch.exe,0x1424d8800,0x1424d8800,ParseBoolString,"Boolean config parser: 1/true/yes/on/enable/enabled are true, case-insensitive",,
+Overwatch.exe,0x1424d8800,0x1424d8800,ParseBoolString,"Boolean config parser: 1/true/yes/on/enable/enabled are true, case-insensitive",,,
 
-Overwatch.exe,0x1424d9af0,0x1424d9af0,CdnIndexFooterParse,"Parses the 20-byte CDN index footer: header MD5, version/checksum gates, page size, entry stride, entries per page, page count and exact file length",casc,
+Overwatch.exe,0x1424d9af0,0x1424d9af0,CdnIndexFooterParse,"Parses the 20-byte CDN index footer: header MD5, version/checksum gates, page size, entry stride, entries per page, page count and exact file length",casc,,
 
-Overwatch.exe,0x1424d9c90,0x1424d9c90,CdnIndexFileParse,"Validates a whole CDN index: footer, terminal MD5(last keys + checksums), length and MD5(terminal + footer) against the index key",casc,
+Overwatch.exe,0x1424d9c90,0x1424d9c90,CdnIndexFileParse,"Validates a whole CDN index: footer, terminal MD5(last keys + checksums), length and MD5(terminal + footer) against the index key",casc,,
 
-Overwatch.exe,0x1424d9f20,0x1424d9f20,CdnIndexPageChecksums,Compares each CDN index page body's MD5 with its stored per-page checksum; mismatches are ignored,casc,
+Overwatch.exe,0x1424d9f20,0x1424d9f20,CdnIndexPageChecksums,Compares each CDN index page body's MD5 with its stored per-page checksum; mismatches are ignored,casc,,
 
-Overwatch.exe,0x1424da4c0,0x1424da4c0,CdnIndexBufferStore,Stores a downloaded index buffer and parses it with the whole-file validator,casc,
+Overwatch.exe,0x1424da4c0,0x1424da4c0,CdnIndexBufferStore,Stores a downloaded index buffer and parses it with the whole-file validator,casc,,
 
-Overwatch.exe,0x1424dabb0,0x1424dabb0,CdnIndexFooterLoad,"Reads the 20-byte footer, derives the layout and reads the last-key/checksum tail",casc,
+Overwatch.exe,0x1424dabb0,0x1424dabb0,CdnIndexFooterLoad,"Reads the 20-byte footer, derives the layout and reads the last-key/checksum tail",casc,,
 
-Overwatch.exe,0x1424dad20,0x1424dad20,CdnIndexFileLoad,Completion that validates a whole downloaded CDN index buffer,casc,
+Overwatch.exe,0x1424dad20,0x1424dad20,CdnIndexFileLoad,Completion that validates a whole downloaded CDN index buffer,casc,,
+Overwatch.exe,0x1424da730,0x1424da730,CdnIndexPageSelect,"CDN index page selection: lower-bound the last-key array with min(keyLen,keyBytes) and an early equal exit, make the page resident, scan the page records and decode size/offset by the footer widths",casc,,
+Overwatch.exe,0x1424da590,0x1424da590,CdnIndexPageResident,"Make one CDN index page current: whole-file pointer arithmetic, or an HTTP range read with a full-page requirement and a per-page MD5 reject",casc,,
+Overwatch.exe,0x1424da910,0x1424da910,CdnIndexPageSelectBatch,"Batch form of the CDN index page selection: advance the page monotonically over sorted lookup keys and decode each found record",casc,,
+Overwatch.exe,0x1424b0cc0,0x1424b0cc0,CdnResolveLocation,"Resolve a content key through the archive-group index (ordinal/offset split and archive record copy) then the file-index fallback",casc,,
+Overwatch.exe,0x1424b0c50,0x1424b0c50,CdnResolveComplete,"Completion wrapper that calls the CDN location resolver",casc,,
+Overwatch.exe,0x1424b0970,0x1424b0970,CdnClientCtor,"Build the CDN client: four embedded index objects at +0x48/+0x118/+0x1e8/+0x290 and the archive record tables",casc,,
+Overwatch.exe,0x1424b0a90,0x1424b0a90,CdnClientDtor,"Destroy the CDN client object and its embedded index objects",casc,,
+Overwatch.exe,0x1424db020,0x1424db020,CdnIndexBufferAdopt,"Adopt a downloaded whole CDN index blob: buffer/length, last-key base and loaded flag",casc,,
+Overwatch.exe,0x1424da340,0x1424da340,CdnIndexInit,"Initialise one CDN index object; current page is 0xffffffff",casc,,
+Overwatch.exe,0x1424e8f20,0x1424e8f20,CdnIndexFetchState,"CDN index fetch state machine: CdnPathFormat then the buffer-adopt completion",casc,,
+Overwatch.exe,0x142521d70,0x142521d70,WinHttpReadData,"Issue the WinHTTP read for the CDN page fetch; ERROR_IO_PENDING is 0x3e5",casc,,
 
-Overwatch.exe,0x1426201c0,0x1426201c0,Lz4ContextCreate,Allocates and zeroes the 32-byte LZ4 context,casc,
+Overwatch.exe,0x1426201c0,0x1426201c0,Lz4ContextCreate,Allocates and zeroes the 32-byte LZ4 context,casc,,
 
-Overwatch.exe,0x1426201d0,0x1426201d0,Lz4DecompressSafe,Stateless LZ4 block decompressor used by the BLTE 4 reader,casc,
+Overwatch.exe,0x1426201d0,0x1426201d0,Lz4DecompressSafe,Stateless LZ4 block decompressor used by the BLTE 4 reader,casc,,
 
-Overwatch.exe,0x1426207f0,0x1426207f0,Lz4Decompress,LZ4 wrapper; the BLTE path passes a zeroed context and takes the stateless branch,casc,
+Overwatch.exe,0x1426207f0,0x1426207f0,Lz4Decompress,LZ4 wrapper; the BLTE path passes a zeroed context and takes the stateless branch,casc,,
 
-Overwatch.exe,0x1426a4f40,0x1426a4f40,Md5Update,Buffers input and advances the MD5 byte count,casc,
+Overwatch.exe,0x1426a4f40,0x1426a4f40,Md5Update,Buffers input and advances the MD5 byte count,casc,,
 
-Overwatch.exe,0x1426a5010,0x1426a5010,Md5Final,"Appends MD5 padding and the little-endian bit length, then emits the digest",casc,
+Overwatch.exe,0x1426a5010,0x1426a5010,Md5Final,"Appends MD5 padding and the little-endian bit length, then emits the digest",casc,,
 
-Overwatch.exe,0x1426a5100,0x1426a5100,Md5Init,Writes the four RFC 1321 MD5 init words,casc,
+Overwatch.exe,0x1426a5100,0x1426a5100,Md5Init,Writes the four RFC 1321 MD5 init words,casc,,
 
-Overwatch.exe,0x1426ab530,0x1426ab530,Md5Transform,The 64-round MD5 block transform,casc,
+Overwatch.exe,0x1426ab530,0x1426ab530,Md5Transform,The 64-round MD5 block transform,casc,,
 
-Overwatch.exe,0x1424e3230,0x1424e3230,Salsa20StateInit,"Fills the 64-byte Salsa20/20 state (expand 16-byte k) from a 16-byte key, an 8-byte nonce and a 64-bit block counter",casc,
+Overwatch.exe,0x1424e3230,0x1424e3230,Salsa20StateInit,"Fills the 64-byte Salsa20/20 state (expand 16-byte k) from a 16-byte key, an 8-byte nonce and a 64-bit block counter",casc,,
 
-Overwatch.exe,0x1424e32c0,0x1424e32c0,Salsa20Xor,XORs a buffer with the Salsa20 keystream; dispatches to the 256-byte and 64-byte block loops,casc,
+Overwatch.exe,0x1424e32c0,0x1424e32c0,Salsa20Xor,XORs a buffer with the Salsa20 keystream; dispatches to the 256-byte and 64-byte block loops,casc,,
 
-Overwatch.exe,0x1424e3370,0x1424e3370,Salsa20XorBlocks256,"Salsa20 block loop for 256 bytes or more, four blocks per iteration",casc,
+Overwatch.exe,0x1424e3370,0x1424e3370,Salsa20XorBlocks256,"Salsa20 block loop for 256 bytes or more, four blocks per iteration",casc,,
 
-Overwatch.exe,0x1424e3e20,0x1424e3e20,Salsa20XorBlocks64,Salsa20 block loop for 64..255 bytes,casc,
+Overwatch.exe,0x1424e3e20,0x1424e3e20,Salsa20XorBlocks64,Salsa20 block loop for 64..255 bytes,casc,,
 
-Overwatch.exe,0x1424f48d0,0x1424f48d0,DynamicContainerRead,"Resolves a 16-byte key to a stored range, skips the 30-byte data header and reads the bytes",casc,
+Overwatch.exe,0x1424f48d0,0x1424f48d0,DynamicContainerRead,"Resolves a 16-byte key to a stored range, skips the 30-byte data header and reads the bytes",casc,,
 
-Overwatch.exe,0x1424f8790,0x1424f8790,PageCacheInit,"Builds the reader's fixed page table: slot count, page size, slot array and per-slot whole-page buffers",casc,
+Overwatch.exe,0x1424f8790,0x1424f8790,PageCacheInit,"Builds the reader's fixed page table: slot count, page size, slot array and per-slot whole-page buffers",casc,,
 
-Overwatch.exe,0x1424f9bf0,0x1424f9bf0,PageSlotPublish,"Completes a page load: stores the byte count, copies each waiting fragment, zero-fills the short tail and clears the busy flag",casc,
+Overwatch.exe,0x1424f9bf0,0x1424f9bf0,PageSlotPublish,"Completes a page load: stores the byte count, copies each waiting fragment, zero-fills the short tail and clears the busy flag",casc,,
 
-Overwatch.exe,0x1424f9eb0,0x1424f9eb0,PageCacheClose,Marks the page table closed and invalidates every populated slot,casc,
+Overwatch.exe,0x1424f9eb0,0x1424f9eb0,PageCacheClose,Marks the page table closed and invalidates every populated slot,casc,,
 
-Overwatch.exe,0x1424f9f90,0x1424f9f90,PageCacheReopen,Clears the page table's closed flag,casc,
+Overwatch.exe,0x1424f9f90,0x1424f9f90,PageCacheReopen,Clears the page table's closed flag,casc,,
 
-Overwatch.exe,0x1424fa440,0x1424fa440,PageSlotFind,Finds a covering page slot or returns the usable slot with the smallest last-use stamp,casc,
+Overwatch.exe,0x1424fa440,0x1424fa440,PageSlotFind,Finds a covering page slot or returns the usable slot with the smallest last-use stamp,casc,,
 
-Overwatch.exe,0x1424fa540,0x1424fa540,PageLoad,Loads one whole page into its slot and serves the waiting fragment,casc,
+Overwatch.exe,0x1424fa540,0x1424fa540,PageLoad,Loads one whole page into its slot and serves the waiting fragment,casc,,
 
-Overwatch.exe,0x1424faa20,0x1424faa20,PageReadPlan,"Splits an archive range into a head fragment, a run of whole pages and a tail fragment",casc,
+Overwatch.exe,0x1424faa20,0x1424faa20,PageReadPlan,"Splits an archive range into a head fragment, a run of whole pages and a tail fragment",casc,,
 
-Overwatch.exe,0x1424fab50,0x1424fab50,PageCacheInvalidateAll,Invalidates every populated page slot without changing the closed flag,casc,
+Overwatch.exe,0x1424fab50,0x1424fab50,PageCacheInvalidateAll,Invalidates every populated page slot without changing the closed flag,casc,,
 
-Overwatch.exe,0x1424fabd0,0x1424fabd0,PageCacheInvalidateRange,Invalidates the page slots whose page overlaps an archive range,casc,
+Overwatch.exe,0x1424fabd0,0x1424fabd0,PageCacheInvalidateRange,Invalidates the page slots whose page overlaps an archive range,casc,,
 
-Overwatch.exe,0x1424fadf0,0x1424fadf0,PageLoadComplete,Publishes a page load's byte count to every waiting request and signals the slot,casc,
+Overwatch.exe,0x1424fadf0,0x1424fadf0,PageLoadComplete,Publishes a page load's byte count to every waiting request and signals the slot,casc,,
 
-Overwatch.exe,0x1424fb1c0,0x1424fb1c0,PageCacheRead,"Serves an unaligned archive range from the page cache: head page, direct whole-page run and tail page",casc,
+Overwatch.exe,0x1424fb1c0,0x1424fb1c0,PageCacheRead,"Serves an unaligned archive range from the page cache: head page, direct whole-page run and tail page",casc,,
 
-Overwatch.exe,0x1424fbf00,0x1424fbf00,ContainerReaderInit,"Builds the container's archive reader: page cache, shift/mask, archive-handle map and base path",casc,
+Overwatch.exe,0x1424fbf00,0x1424fbf00,ContainerReaderInit,"Builds the container's archive reader: page cache, shift/mask, archive-handle map and base path",casc,,
 
-Overwatch.exe,0x1424fcc80,0x1424fcc80,ArchiveSetContains,Looks an archive number up in the reader's open-archive set,casc,
+Overwatch.exe,0x1424fcc80,0x1424fcc80,ArchiveSetContains,Looks an archive number up in the reader's open-archive set,casc,,
 
-Overwatch.exe,0x1424fcd20,0x1424fcd20,DynamicContainerReadPage,Reads one page-aligned range through the archive page cache,casc,
+Overwatch.exe,0x1424fcd20,0x1424fcd20,DynamicContainerReadPage,Reads one page-aligned range through the archive page cache,casc,,
 
-Overwatch.exe,0x1424fffe0,0x1424fffe0,DynamicIndexRebuild,Groups a key list by the salt-free bucket fold and writes one new index segment per non-empty bucket,casc,
+Overwatch.exe,0x1424fffe0,0x1424fffe0,DynamicIndexRebuild,Groups a key list by the salt-free bucket fold and writes one new index segment per non-empty bucket,casc,,
 
-Overwatch.exe,0x142501b40,0x142501b40,DynamicKeyStateLookup,Computes the 9-byte bucket hash and looks the key up in the key state,casc,
+Overwatch.exe,0x142501b40,0x142501b40,DynamicKeyStateLookup,Computes the 9-byte bucket hash and looks the key up in the key state,casc,,
 
-Overwatch.exe,0x142503000,0x142503000,DynamicContainerOpenIndex,"Opens a container's dynamic index: initializes it, scans or opens the 16 bucket segments, then loads each",casc,
+Overwatch.exe,0x142503000,0x142503000,DynamicContainerOpenIndex,"Opens a container's dynamic index: initializes it, scans or opens the 16 bucket segments, then loads each",casc,,
 
-Overwatch.exe,0x1425032d0,0x1425032d0,DynamicIndexKeyInsert,"Inserts one key into a bucket's key state, creating the next segment number when the bucket has none",casc,
+Overwatch.exe,0x1425032d0,0x1425032d0,DynamicIndexKeyInsert,"Inserts one key into a bucket's key state, creating the next segment number when the bucket has none",casc,,
 
-Overwatch.exe,0x14250c8f0,0x14250c8f0,DynamicContainerOpenArchive,Opens data.%03d for an archive number taken from the virtual offset,casc,
+Overwatch.exe,0x14250c8f0,0x14250c8f0,DynamicContainerOpenArchive,Opens data.%03d for an archive number taken from the virtual offset,casc,,
 
-Overwatch.exe,0x14250e100,0x14250e100,DynamicIndexOpen,Opens the 16 bucket segments from cached segment numbers or a directory scan and caches the selected numbers,casc,
+Overwatch.exe,0x14250e100,0x14250e100,DynamicIndexOpen,Opens the 16 bucket segments from cached segment numbers or a directory scan and caches the selected numbers,casc,,
 
-Overwatch.exe,0x14250e2d0,0x14250e2d0,DynamicIndexSegmentOpenSlot,Opens one bucket's <bucket><segment>.idx into its 16-byte slot,casc,
+Overwatch.exe,0x14250e2d0,0x14250e2d0,DynamicIndexSegmentOpenSlot,Opens one bucket's <bucket><segment>.idx into its 16-byte slot,casc,,
 
-Overwatch.exe,0x14250e400,0x14250e400,DynamicIndexSegmentOpen,Opens one data/0X........idx segment for a bucket and segment number,casc,
+Overwatch.exe,0x14250e400,0x14250e400,DynamicIndexSegmentOpen,Opens one data/0X........idx segment for a bucket and segment number,casc,,
 
-Overwatch.exe,0x14250e720,0x14250e720,DynamicIndexScanSegments,"Scans the data directory for <bucket><segment>.idx names, keeping the highest segment per bucket and deleting lower or temporary files in read-write mode",casc,
+Overwatch.exe,0x14250e720,0x14250e720,DynamicIndexScanSegments,"Scans the data directory for <bucket><segment>.idx names, keeping the highest segment per bucket and deleting lower or temporary files in read-write mode",casc,,
 
-Overwatch.exe,0x14250fc60,0x14250fc60,DynamicIndexSegmentLoad,"Loads one bucket segment synchronously: mode-2 buffered read or read-only mapped view, then the shared parse",casc,
+Overwatch.exe,0x14250fc60,0x14250fc60,DynamicIndexSegmentLoad,"Loads one bucket segment synchronously: mode-2 buffered read or read-only mapped view, then the shared parse",casc,,
 
-Overwatch.exe,0x14250fcf0,0x14250fcf0,DynamicIndexSegmentParse,"Parses a dynamic index segment: section and file headers, entry block and key-to-entry table",casc,
+Overwatch.exe,0x14250fcf0,0x14250fcf0,DynamicIndexSegmentParse,"Parses a dynamic index segment: section and file headers, entry block and key-to-entry table",casc,,
 
-Overwatch.exe,0x142511100,0x142511100,DynamicIndexGetEntry,Returns the chosen 16-byte location/size entry for a key,casc,
+Overwatch.exe,0x142511100,0x142511100,DynamicIndexGetEntry,Returns the chosen 16-byte location/size entry for a key,casc,,
 
-Overwatch.exe,0x1425111a0,0x1425111a0,DynamicIndexFindEntry,Binary-searches the 18-byte entries by their 9-byte key and expands the equal range,casc,
+Overwatch.exe,0x1425111a0,0x1425111a0,DynamicIndexFindEntry,Binary-searches the 18-byte entries by their 9-byte key and expands the equal range,casc,,
 
-Overwatch.exe,0x142511540,0x142511540,DynamicIndexResolveKeyRange,Resolves a key's requested range through DynamicIndexResolveRange and records the retry metric,casc,
+Overwatch.exe,0x142511540,0x142511540,DynamicIndexResolveKeyRange,Resolves a key's requested range through DynamicIndexResolveRange and records the retry metric,casc,,
 
-Overwatch.exe,0x1425115d0,0x1425115d0,DynamicIndexResolveRange,Resolves a requested range against a key state's resident intervals,casc,
+Overwatch.exe,0x1425115d0,0x1425115d0,DynamicIndexResolveRange,Resolves a requested range against a key state's resident intervals,casc,,
 
-Overwatch.exe,0x142511d20,0x142511d20,DynamicIndexPageInsert,"Appends a resolved key range to the first zero page-table slot and stores DynamicIndexKeyHash(payload, 0x13, 0) | 0x80000000",casc,
+Overwatch.exe,0x142511d20,0x142511d20,DynamicIndexPageInsert,"Appends a resolved key range to the first zero page-table slot and stores DynamicIndexKeyHash(payload, 0x13, 0) | 0x80000000",casc,,
 
-Overwatch.exe,0x142512c60,0x142512c60,DynamicIndexHash,32-bit file-header and rolling entry-block hash of a dynamic index segment; called by DynamicIndexSegmentParse,casc,
+Overwatch.exe,0x142512c60,0x142512c60,DynamicIndexHash,32-bit file-header and rolling entry-block hash of a dynamic index segment; called by DynamicIndexSegmentParse,casc,,
 
-Overwatch.exe,0x142513230,0x142513230,DynamicIndexKeyHash,"32-bit hash of a page record's 19-byte payload, compared with the record's first word | 0x80000000",casc,
+Overwatch.exe,0x142513230,0x142513230,DynamicIndexKeyHash,"32-bit hash of a page record's 19-byte payload, compared with the record's first word | 0x80000000",casc,,
 
-Overwatch.exe,0x142520520,0x142520520,DynamicIndexFindContextInit,Initializes the find/resolve context and its inline interval buffer,casc,
+Overwatch.exe,0x142520520,0x142520520,DynamicIndexFindContextInit,Initializes the find/resolve context and its inline interval buffer,casc,,
 
-Overwatch.exe,0x142520570,0x142520570,DynamicIndexFindContextFree,Frees the find/resolve context's interval buffer when it grew,casc,
+Overwatch.exe,0x142520570,0x142520570,DynamicIndexFindContextFree,Frees the find/resolve context's interval buffer when it grew,casc,,
 
-Overwatch.exe,0x142520590,0x142520590,DynamicIndexEntrySink,Stores the first equal entry as the chosen location and appends later entries as intervals,casc,
+Overwatch.exe,0x142520590,0x142520590,DynamicIndexEntrySink,Stores the first equal entry as the chosen location and appends later entries as intervals,casc,,
 
-Overwatch.exe,0x142520700,0x142520700,DynamicIndexAppendInterval,Adds an entry range pair to the key state's update buffer,casc,
+Overwatch.exe,0x142520700,0x142520700,DynamicIndexAppendInterval,Adds an entry range pair to the key state's update buffer,casc,,
 
-Overwatch.exe,0x1425208d0,0x1425208d0,DynamicIndexNormalizeIntervals,Merges adjacent intervals and writes the key state's interval count,casc,
+Overwatch.exe,0x1425208d0,0x1425208d0,DynamicIndexNormalizeIntervals,Merges adjacent intervals and writes the key state's interval count,casc,,
 
-Overwatch.exe,0x1425209a0,0x1425209a0,DynamicIndexDecodeEntries,"Decodes entry payloads: 5-byte big-endian location, 4-byte little-endian size",casc,
+Overwatch.exe,0x1425209a0,0x1425209a0,DynamicIndexDecodeEntries,"Decodes entry payloads: 5-byte big-endian location, 4-byte little-endian size",casc,,
 
-Overwatch.exe,0x142520c60,0x142520c60,DynamicIndexRangeIsResident,Tests whether a requested range lies inside one resident interval,casc,
+Overwatch.exe,0x142520c60,0x142520c60,DynamicIndexRangeIsResident,Tests whether a requested range lies inside one resident interval,casc,,
 
-Overwatch.exe,0x142520cc0,0x142520cc0,DynamicIndexInsertRangeCheck,Validates a page-table insert against the chosen entry and reports whether the requested residency state already holds,casc,
+Overwatch.exe,0x142520cc0,0x142520cc0,DynamicIndexInsertRangeCheck,Validates a page-table insert against the chosen entry and reports whether the requested residency state already holds,casc,,
 
-Overwatch.exe,0x1426a8ce0,0x1426a8ce0,IndexViewFlush,Flushes a 4 KiB span of a mapped index view with an optional file-handle flush fallback,casc,
+Overwatch.exe,0x1426a8ce0,0x1426a8ce0,IndexViewFlush,Flushes a 4 KiB span of a mapped index view with an optional file-handle flush fallback,casc,,
 
-Overwatch.exe,0x142cbcee0,0x142cbcee0,RunCharacterControllerSweep,Runs the character controller collision sweep for the desired position,mover,
+Overwatch.exe,0x142cbcee0,0x142cbcee0,RunCharacterControllerSweep,Runs the character controller collision sweep for the desired position,mover,,
 
-Overwatch.exe,0x142cbd1b0,0x142cbd1b0,SetCharacterControllerVelocity,Forwards a 4-float velocity to the character controller,mover,
+Overwatch.exe,0x142cbd1b0,0x142cbd1b0,SetCharacterControllerVelocity,Forwards a 4-float velocity to the character controller,mover,,
 
-Overwatch.exe,0x142cbdc60,0x142cbdc60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0),domino,
+Overwatch.exe,0x142cbdc60,0x142cbdc60,DmBroadphaseReinit,Re-initialises the broadphase (world+0x1b0),domino,,
 
-Overwatch.exe,0x142cbeb70,0x142cbeb70,DmWorldConstruct,The dmWorld constructor,domino,
+Overwatch.exe,0x142cbeb70,0x142cbeb70,DmWorldConstruct,The dmWorld constructor,domino,,
 
-Overwatch.exe,0x142cc3050,0x142cc3050,DmWorldInvDt0Writer,The writer of dmWorld.m_inv_dt0 (+0x198),domino,
+Overwatch.exe,0x142cc3050,0x142cc3050,DmWorldInvDt0Writer,The writer of dmWorld.m_inv_dt0 (+0x198),domino,,
 
-Overwatch.exe,0x142cc3630,0x142cc3630,DmWorldSubstepDriver,The substep driver of the solver chain,domino,
+Overwatch.exe,0x142cc3630,0x142cc3630,DmWorldSubstepDriver,The substep driver of the solver chain,domino,,
 
-Overwatch.exe,0x142cd9c90,0x142cd9c90,ConstraintDispatch,The per-constraint dispatcher (cases 1-9) inside the solve,domino,
+Overwatch.exe,0x142cd9c90,0x142cd9c90,ConstraintDispatch,The per-constraint dispatcher (cases 1-9) inside the solve,domino,,
 
-Overwatch.exe,0x142cdf710,0x142cdf710,DmResidualQuery,The residual query the step entry loops on (threshold 0.5 at DAT_7ff7c7d0c068),domino,
+Overwatch.exe,0x142cdf710,0x142cdf710,DmResidualQuery,The residual query the step entry loops on (threshold 0.5 at DAT_7ff7c7d0c068),domino,,
 
-Overwatch.exe,0x142cf5770,0x142cf5770,SubmitCharacterControllerCommand,Submits a command to every controller bound to the handle,mover,
+Overwatch.exe,0x142cf5770,0x142cf5770,SubmitCharacterControllerCommand,Submits a command to every controller bound to the handle,mover,,
 
-Overwatch.exe,0x142d07170,0x142d07170,RotationInertiaSolve,A 4x4 rotation-inertia solver in the conditioned sweep (verified not the integrator),domino,
+Overwatch.exe,0x142d07170,0x142d07170,RotationInertiaSolve,A 4x4 rotation-inertia solver in the conditioned sweep (verified not the integrator),domino,,
 
-Overwatch.exe,0x142e48a20,0x142e48a20,CmfKey154504,"Derives the 32-byte AES key for build 154504 from the 512-byte table at 0x1436100c0 (seed table[0x120], step 3)",casc,
+Overwatch.exe,0x142e48a20,0x142e48a20,CmfKey154504,"Derives the 32-byte AES key for build 154504 from the 512-byte table at 0x1436100c0 (seed table[0x120], step 3)",casc,,
 
-Overwatch.exe,0x142e48700,0x142e48700,CmfIv154504,"Derives the 16-byte IV for build 154504 from SHA-1(name), 16*build, the data count and the same table",casc,
+Overwatch.exe,0x142e48700,0x142e48700,CmfIv154504,"Derives the 16-byte IV for build 154504 from SHA-1(name), 16*build, the data count and the same table",casc,,
 
-Overwatch.exe,0x141feee80,0x141feee80,CmfCryptoInit,"Reads the clear CMF header, accepts format version 27 and builds the AES-256-CBC key/IV through the two routines above",casc,
+Overwatch.exe,0x141feee80,0x141feee80,CmfCryptoInit,"Reads the clear CMF header, accepts format version 27 and builds the AES-256-CBC key/IV through the two routines above",casc,,
 
-Overwatch.exe,0x141fd4a50,0x141fd4a50,AssetRequestBundleAware,"Requests an asset; a bundle-hosted record (query flag 0x200) goes to the bundle directory, everything else to the encoded store",casc,
+Overwatch.exe,0x141fd4a50,0x141fd4a50,AssetRequestBundleAware,"Requests an asset; a bundle-hosted record (query flag 0x200) goes to the bundle directory, everything else to the encoded store",casc,,
 
-Overwatch.exe,0x141fd5160,0x141fd5160,BundleDirectoryLookup,"Finds the bundle holding a GUID in the per-type directory: type block, group sorted-GUID binary search, then the group's bundle request handle",casc,
+Overwatch.exe,0x141fd5160,0x141fd5160,BundleDirectoryLookup,"Finds the bundle holding a GUID in the per-type directory: type block, group sorted-GUID binary search, then the group's bundle request handle",casc,,
 
-Overwatch.exe,0x141fd53a0,0x141fd53a0,BundleDirectoryRequestAssets,"Walks the bundle directory's groups, relocating its base-relative pointers and requesting every asset each group lists",casc,
+Overwatch.exe,0x141fd53a0,0x141fd53a0,BundleDirectoryRequestAssets,"Walks the bundle directory's groups, relocating its base-relative pointers and requesting every asset each group lists",casc,,
 
-Overwatch.exe,0x141fd5820,0x141fd5820,BundleEntryLookup,"Reads a bundle's entry table (i32 count, u8 width, GUID-sorted u64 GUID plus a width-byte offset) and returns payload+offset; offset 0 is absent",casc,
+Overwatch.exe,0x141fd5820,0x141fd5820,BundleEntryLookup,"Reads a bundle's entry table (i32 count, u8 width, GUID-sorted u64 GUID plus a width-byte offset) and returns payload+offset; offset 0 is absent",casc,,
 
-Overwatch.exe,0x141fef610,0x141fef610,ManifestQueryAsset,"Answers a GUID query with size, class byte, flags (bit 9 = bundle-hosted), content key and manifest, mapping in-memory flag bit 16 to result bit 9",casc,
+Overwatch.exe,0x141fef610,0x141fef610,ManifestQueryAsset,"Answers a GUID query with size, class byte, flags (bit 9 = bundle-hosted), content key and manifest, mapping in-memory flag bit 16 to result bit 9",casc,,
 
-Overwatch.exe,0x141feff80,0x141feff80,ManifestApplyPatchRecords,Merges patch records into the manifest and copies the raw record byte's bit 7 to in-memory flag bit 16,casc,
+Overwatch.exe,0x141feff80,0x141feff80,ManifestApplyPatchRecords,Merges patch records into the manifest and copies the raw record byte's bit 7 to in-memory flag bit 16,casc,,
 
-Overwatch.exe,0x14031c580,0x14031c580,RegisterStuMapHeader,"Registers STUMapHeader: class 0x02514B6A, size 0x240, 29 fields, at 0x143eebf70",map,
+Overwatch.exe,0x14031c580,0x14031c580,RegisterStuMapHeader,"Registers STUMapHeader: class 0x02514B6A, size 0x240, 29 fields, at 0x143eebf70",map,,
 
-Overwatch.exe,0x14143b5c0,0x14143b5c0,RegisterStuMapHeaderFields,"Registers STUMapHeader's field offsets: m_map +0xA0, m_supportedGameModes +0xD0, m_C0CA4671 +0xE0, m_D97BC44F +0xF0, m_53DFAF05 +0x100, m_78715D57 +0x110, m_364ADD04 +0x150, m_mapName +0x170",map,
+Overwatch.exe,0x14143b5c0,0x14143b5c0,RegisterStuMapHeaderFields,"Registers STUMapHeader's field offsets: m_map +0xA0, m_supportedGameModes +0xD0, m_C0CA4671 +0xE0, m_D97BC44F +0xF0, m_53DFAF05 +0x100, m_78715D57 +0x110, m_364ADD04 +0x150, m_mapName +0x170",map,,0x14143b480
 
-Overwatch.exe,0x14143bbe5,0x14143bbe5,RegisterStuMapHeaderTail,Registers the remaining STUMapHeader fields (m_9289BADC +0x120 through m_44D13CC2 +0x238),map,
+Overwatch.exe,0x14143bbe5,0x14143bbe5,RegisterStuMapHeaderTail,Registers the remaining STUMapHeader fields (m_9289BADC +0x120 through m_44D13CC2 +0x238),map,,0x14143b480
 
-Overwatch.exe,0x14142dbf0,0x14142dbf0,RegisterStuMapVariation,"Registers STU_7FB10A24: m_2A9103F4 +0xB0, m_364ADD04 +0xC0, m_BF231F12 +0xD0 (the variation's scene map)",map,
+Overwatch.exe,0x14142dbf0,0x14142dbf0,RegisterStuMapVariation,"Registers STU_7FB10A24: m_2A9103F4 +0xB0, m_364ADD04 +0xC0, m_BF231F12 +0xD0 (the variation's scene map)",map,,0x14142d920
 
-Overwatch.exe,0x14142ee0c,0x14142ee0c,RegisterStuMapVariationMode,"Registers STU_71B2D30A, the per-mode variation entry: m_gameMode +0x8, m_A9253C68 +0x38",map,
+Overwatch.exe,0x14142ee0c,0x14142ee0c,RegisterStuMapVariationMode,"Registers STU_71B2D30A, the per-mode variation entry: m_gameMode +0x8, m_A9253C68 +0x38",map,,0x14142e910
 
-Overwatch.exe,0x141ff33f0,0x141ff33f0,RegisterMapAssetJobs,Registers the type-0x002 map-asset job template and the type-0x0BC chunk-asset job template,map,
+Overwatch.exe,0x141ff33f0,0x141ff33f0,RegisterMapAssetJobs,Registers the type-0x002 map-asset job template and the type-0x0BC chunk-asset job template,map,,
 
-Overwatch.exe,0x141ff5c80,0x141ff5c80,LoadMapAssetChunks,"Map-asset job: requests +0x1B8, the +0x1B0/+0x1B4 GUID list, +0x1C0, +0x1C8, then chunk-table slots 0x1F, 0x20, 0x23 and 1..=0x1C",map,
+Overwatch.exe,0x141ff5c80,0x141ff5c80,LoadMapAssetChunks,"Map-asset job: requests +0x1B8, the +0x1B0/+0x1B4 GUID list, +0x1C0, +0x1C8, then chunk-table slots 0x1F, 0x20, 0x23 and 1..=0x1C",map,,
 
-Overwatch.exe,0x141ff54e0,0x141ff54e0,FinishMapChunkAsset,"Chunk-asset completion: dispatches on the GUID's chunk-table slot, including the stored kinds 0x10, 0x11, 0x12 and 0x23",map,
+Overwatch.exe,0x141ff54e0,0x141ff54e0,FinishMapChunkAsset,"Chunk-asset completion: dispatches on the GUID's chunk-table slot, including the stored kinds 0x10, 0x11, 0x12 and 0x23",map,,
 
-Overwatch.exe,0x141ff58b0,0x141ff58b0,ReleaseMapAssetChunks,Releases the map asset's stored and synthesised chunk handles,map,
+Overwatch.exe,0x141ff58b0,0x141ff58b0,ReleaseMapAssetChunks,Releases the map asset's stored and synthesised chunk handles,map,,
 
-Overwatch.exe,0x142e48da0,0x142e48da0,MapAssetDependencies,Builds the type-0x002 map asset's dependency/type list,map,
+Overwatch.exe,0x142e48da0,0x142e48da0,MapAssetDependencies,Builds the type-0x002 map asset's dependency/type list,map,,
 
-Overwatch.exe,0x141b32e70,0x141b32e70,ChunkSlotForGuid,Maps a chunk GUID's kind byte to its slot in the 0x24-entry chunk-kind table,casc,
+Overwatch.exe,0x141b32e70,0x141b32e70,ChunkSlotForGuid,Maps a chunk GUID's kind byte to its slot in the 0x24-entry chunk-kind table,casc,,
 
-Overwatch.exe,0x141b32e20,0x141b32e20,MapChunkGuid,Synthesises a chunk GUID: 0x0DD0000000000000 | (kind << 32) | (map & 0xFFFFFFFF),casc,
+Overwatch.exe,0x141b32e20,0x141b32e20,MapChunkGuid,Synthesises a chunk GUID: 0x0DD0000000000000 | (kind << 32) | (map & 0xFFFFFFFF),casc,,
 
-Overwatch.exe,0x14063b3f0,0x14063b3f0,JamMessageDispatch,Dispatches a Jam message by opcode 0x5014..0x5021; 0x501B is the map/asset preload message,map,
+Overwatch.exe,0x14063b3f0,0x14063b3f0,JamMessageDispatch,Dispatches a Jam message by opcode 0x5014..0x5021; 0x501B is the map/asset preload message,map,,
 
-Overwatch.exe,0x140618b30,0x140618b30,MapPreloadMessageApply,"Copies the 0x501B message's four GUID vectors (+0x78, +0x90, +0xA8, +0xC0) and calls MapPreloadAssets",map,
+Overwatch.exe,0x140618b30,0x140618b30,MapPreloadMessageApply,"Copies the 0x501B message's four GUID vectors (+0x78, +0x90, +0xA8, +0xC0) and calls MapPreloadAssets",map,,
 
-Overwatch.exe,0x14077b7d0,0x14077b7d0,MapPreloadAssets,"Registers the preload GUID lists, requests the asset lists and opens the map catalog",map,
+Overwatch.exe,0x14077b7d0,0x14077b7d0,MapPreloadAssets,"Registers the preload GUID lists, requests the asset lists and opens the map catalog",map,,
 
-Overwatch.exe,0x14077c8a0,0x14077c8a0,MapCatalogOpen,Lazily opens the map catalog asset 0x01c0000000000041,map,
+Overwatch.exe,0x14077c8a0,0x14077c8a0,MapCatalogOpen,Lazily opens the map catalog asset 0x01c0000000000041,map,,
 
-Overwatch.exe,0x141dabee0,0x141dabee0,TexturePayloadUpload,Uploads an arriving streamed payload's levels from its chunk data,texture,
+Overwatch.exe,0x141dabee0,0x141dabee0,TexturePayloadUpload,Uploads an arriving streamed payload's levels from its chunk data,texture,,
 
-Overwatch.exe,0x141dac400,0x141dac400,TextureCreateInitial,Creates the initial texture from the embedded chunk or the raw run,texture,
+Overwatch.exe,0x141dac400,0x141dac400,TextureCreateInitial,Creates the initial texture from the embedded chunk or the raw run,texture,,
 
-Overwatch.exe,0x141dac720,0x141dac720,TextureResidentRebuild,Rebuilds the resident resource at a lower base mip and copies the existing tail,texture,
+Overwatch.exe,0x141dac720,0x141dac720,TextureResidentRebuild,Rebuilds the resident resource at a lower base mip and copies the existing tail,texture,,
 
-Overwatch.exe,0x141e29210,0x141e29210,TextureLevelSourceSelect,Chooses the raw run or the chunk/payload runs and builds their subresource records,texture,
+Overwatch.exe,0x141e29210,0x141e29210,TextureLevelSourceSelect,Chooses the raw run or the chunk/payload runs and builds their subresource records,texture,,
 
-Overwatch.exe,0x141e296a0,0x141e296a0,TextureSubresourceRecords,"Builds 0x18-byte subresource records: array/face outer, mip ascending, data pointer walks the run",texture,
+Overwatch.exe,0x141e296a0,0x141e296a0,TextureSubresourceRecords,"Builds 0x18-byte subresource records: array/face outer, mip ascending, data pointer walks the run",texture,,
 
-Overwatch.exe,0x141e29820,0x141e29820,TextureRunRange,Dispatches a chunk's mip range to the shared-resource path (+0x318) or the local record builder,texture,
+Overwatch.exe,0x141e29820,0x141e29820,TextureRunRange,Dispatches a chunk's mip range to the shared-resource path (+0x318) or the local record builder,texture,,
 
-Overwatch.exe,0x141e298e0,0x141e298e0,TextureTypeIsCube,True for renderer texture types 4 and 7 (cube/cube array),texture,
+Overwatch.exe,0x141e298e0,0x141e298e0,TextureTypeIsCube,True for renderer texture types 4 and 7 (cube/cube array),texture,,
 
-Overwatch.exe,0x141e7ba50,0x141e7ba50,TextureRendererDesc,Builds the renderer texture descriptor; shifts dimensions and mip count by the resident base,texture,
+Overwatch.exe,0x141e7ba50,0x141e7ba50,TextureRendererDesc,Builds the renderer texture descriptor; shifts dimensions and mip count by the resident base,texture,,
 
-Overwatch.exe,0x141f0a000,0x141f0a000,TextureCreateCopyLoop,Creates the texture resource and copies every subresource record; record flag bit 1 selects surface-major indexing,texture,
+Overwatch.exe,0x141f0a000,0x141f0a000,TextureCreateCopyLoop,Creates the texture resource and copies every subresource record; record flag bit 1 selects surface-major indexing,texture,,
 
-Overwatch.exe,0x141f11b60,0x141f11b60,TextureSubresourceCopy,Copies one 0x18-byte subresource record into the destination,texture,
+Overwatch.exe,0x141f11b60,0x141f11b60,TextureSubresourceCopy,Copies one 0x18-byte subresource record into the destination,texture,,
 
-Overwatch.exe,0x142255e10,0x142255e10,TextureChunkLevelCount,Returns the chunk header's +0x04 level count,texture,
+Overwatch.exe,0x142255e10,0x142255e10,TextureChunkLevelCount,Returns the chunk header's +0x04 level count,texture,,
 
-Overwatch.exe,0x1426545d0,0x1426545d0,TextureResourceDesc,"Fills the D3D12 resource desc: kinds 0/1 1D, 2..7 2D, 8 3D; cube kinds 6/7 layers*6",texture,
+Overwatch.exe,0x1426545d0,0x1426545d0,TextureResourceDesc,"Fills the D3D12 resource desc: kinds 0/1 1D, 2..7 2D, 8 3D; cube kinds 6/7 layers*6",texture,,
 
-Overwatch.exe,0x142e2db00,0x142e2db00,TextureBaseMips,Returns descriptor bits 51..54 (base_mips),texture,
+Overwatch.exe,0x142e2db00,0x142e2db00,TextureBaseMips,Returns descriptor bits 51..54 (base_mips),texture,,
 
-Overwatch.exe,0x142e2db10,0x142e2db10,TextureDepthAtLevel,"Depth at a mip level, clamped at 1",texture,
+Overwatch.exe,0x142e2db10,0x142e2db10,TextureDepthAtLevel,"Depth at a mip level, clamped at 1",texture,,
 
-Overwatch.exe,0x142e2db50,0x142e2db50,TextureHeightAtLevel,"Height at a mip level: max(height >> level, 1)",texture,
+Overwatch.exe,0x142e2db50,0x142e2db50,TextureHeightAtLevel,"Height at a mip level: max(height >> level, 1)",texture,,
 
-Overwatch.exe,0x142e2db70,0x142e2db70,TextureWidthAtLevel,"Width at a mip level: max(width >> level, 1)",texture,
+Overwatch.exe,0x142e2db70,0x142e2db70,TextureWidthAtLevel,"Width at a mip level: max(width >> level, 1)",texture,,
 
-Overwatch.exe,0x142e2dc70,0x142e2dc70,TextureResourceKind,Descriptor flags to resource kind 0..6 (bit 6 selects the variant),texture,
+Overwatch.exe,0x142e2dc70,0x142e2dc70,TextureResourceKind,Descriptor flags to resource kind 0..6 (bit 6 selects the variant),texture,,
 
-Overwatch.exe,0x142e36e40,0x142e36e40,TextureSubresourceCount,Total subresources: mips * arrays * 6 for cube kinds,texture,
+Overwatch.exe,0x142e36e40,0x142e36e40,TextureSubresourceCount,Total subresources: mips * arrays * 6 for cube kinds,texture,,
 
-Overwatch.exe,0x142e36e80,0x142e36e80,TextureSubresourceIndex,D3D12 subresource index: (array*faces + face)*mip_count + mip,texture,
+Overwatch.exe,0x142e36e80,0x142e36e80,TextureSubresourceIndex,D3D12 subresource index: (array*faces + face)*mip_count + mip,texture,,
 
-Overwatch.exe,0x142e36ec0,0x142e36ec0,TextureLevelPitch,"Fills per-level row pitch, slice pitch and stored size (block ceil)",texture,
+Overwatch.exe,0x142e36ec0,0x142e36ec0,TextureLevelPitch,"Fills per-level row pitch, slice pitch and stored size (block ceil)",texture,,
 
-Overwatch.exe,0x142e38730,0x142e38730,TextureChunkData,Chunk data pointer: chunk + header_size (+0x0c),texture,
+Overwatch.exe,0x142e38730,0x142e38730,TextureChunkData,Chunk data pointer: chunk + header_size (+0x0c),texture,,
 
-Overwatch.exe,0x142e38740,0x142e38740,TextureChunkFirstFromSmallest,Returns the chunk header's +0x00 first_from_smallest,texture,
+Overwatch.exe,0x142e38740,0x142e38740,TextureChunkFirstFromSmallest,Returns the chunk header's +0x00 first_from_smallest,texture,,
 
-Overwatch.exe,0x142e38750,0x142e38750,TextureChunkImageSize,Returns the chunk header's +0x08 image_size,texture,
+Overwatch.exe,0x142e38750,0x142e38750,TextureChunkImageSize,Returns the chunk header's +0x08 image_size,texture,,
 
-Overwatch.exe,0x14266a060,0x14266a060,CreateSwapChainResources,Creates the back-buffer texture and its RTV optional SRV and optional UAV from the swap chain,d3d11,
+Overwatch.exe,0x142667be0,0x142667be0,CreateRenderPipeline,"Builds the D3D11 input layout from the pipeline's prebuilt element list (engine format byte via 0x1434965d0) and creates the blend, rasterizer and depth states",d3d11,,
 
-Overwatch.exe,0x14266bd90,0x14266bd90,ReleaseSwapChainResources,Releases the back-buffer texture then the RTV then the SRV then the UAV,d3d11,
+Overwatch.exe,0x14266a060,0x14266a060,CreateSwapChainResources,Creates the back-buffer texture and its RTV optional SRV and optional UAV from the swap chain,d3d11,,
 
-Overwatch.exe,0x14265ff80,0x14265ff80,RecreateSwapChainResources,UpdateSwapChain recreate callback that calls CreateSwapChainResources,d3d11,
+Overwatch.exe,0x14266bd90,0x14266bd90,ReleaseSwapChainResources,Releases the back-buffer texture then the RTV then the SRV then the UAV,d3d11,,
 
-Overwatch.exe,0x142679780,0x142679780,UpdateSwapChainWithResources,UpdateSwapChain with the read release and recreate callbacks under the instance lock,d3d11,
+Overwatch.exe,0x14265ff80,0x14265ff80,RecreateSwapChainResources,UpdateSwapChain recreate callback that calls CreateSwapChainResources,d3d11,,
 
-Overwatch.exe,0x1426320f0,0x1426320f0,UpdateSwapChain,Compares the description and resizes the swap chain in the read release resize recreate order,d3d11,
+Overwatch.exe,0x142679780,0x142679780,UpdateSwapChainWithResources,UpdateSwapChain with the read release and recreate callbacks under the instance lock,d3d11,,
 
-Overwatch.exe,0x142650340,0x142650340,CmdQueueFinish,Flushes the queue and waits on the fence to complete,d3d11,
+Overwatch.exe,0x1426320f0,0x1426320f0,UpdateSwapChain,Compares the description and resizes the swap chain in the read release resize recreate order,d3d11,,
 
-Overwatch.exe,0x142650430,0x142650430,CmdQueueFinishInternal,Flush then signal fence SetEventOnCompletion and blocking wait,d3d11,
+Overwatch.exe,0x142650340,0x142650340,CmdQueueFinish,Flushes the queue and waits on the fence to complete,d3d11,,
 
-Overwatch.exe,0x142652600,0x142652600,CmdQueueFlushInternal,Executes pending lists signals the fence and releases deferred resources,d3d11,
+Overwatch.exe,0x142650430,0x142650430,CmdQueueFinishInternal,Flush then signal fence SetEventOnCompletion and blocking wait,d3d11,,
 
-Overwatch.exe,0x14265adf0,0x14265adf0,WaitForFenceValue,Waits on the pm fence object completed value with an event and timeout,d3d11,
+Overwatch.exe,0x142652600,0x142652600,CmdQueueFlushInternal,Executes pending lists signals the fence and releases deferred resources,d3d11,,
 
-Overwatch.exe,0x14265e8f0,0x14265e8f0,PresentWithFlush,Flushes the queue then calls the pm_dxgi present,d3d11,
+Overwatch.exe,0x14265adf0,0x14265adf0,WaitForFenceValue,Waits on the pm fence object completed value with an event and timeout,d3d11,,
 
-Overwatch.exe,0x142630790,0x142630790,DxgiPresent,Calls IDXGISwapChain Present with the read sync interval and tearing flag expression,d3d11,
+Overwatch.exe,0x14265e8f0,0x14265e8f0,PresentWithFlush,Flushes the queue then calls the pm_dxgi present,d3d11,,
 
-Overwatch.exe,0x141ef0600,0x141ef0600,RendererFrameBegin,Shared frame begin slot 129 pending submit swap-chain update and resource release,d3d11,
+Overwatch.exe,0x142630790,0x142630790,DxgiPresent,Calls IDXGISwapChain Present with the read sync interval and tearing flag expression,d3d11,,
 
-Overwatch.exe,0x141ef9c80,0x141ef9c80,RendererFrameWait,Shared GPU wait and pacing slot 130,d3d11,
+Overwatch.exe,0x141ef0600,0x141ef0600,RendererFrameBegin,Shared frame begin slot 129 pending submit swap-chain update and resource release,d3d11,,
 
-Overwatch.exe,0x141ef0800,0x141ef0800,RendererFrameEnd,Shared frame end slot 131 composite blit batches submit and present,d3d11,
+Overwatch.exe,0x141ef9c80,0x141ef9c80,RendererFrameWait,Shared GPU wait and pacing slot 130,d3d11,,
 
-Overwatch.exe,0x141f0caa0,0x141f0caa0,RendererSubmitView,Per-view submit emits records flushes the queue and waits on the fence,d3d11,
+Overwatch.exe,0x141ef0800,0x141ef0800,RendererFrameEnd,Shared frame end slot 131 composite blit batches submit and present,d3d11,,
 
-Overwatch.exe,0x141ef8140,0x141ef8140,RendererPrepareScene,Per-frame buffer update resource transitions and record emission ending in queue finish,d3d11,
+Overwatch.exe,0x141f0caa0,0x141f0caa0,RendererSubmitView,Per-view submit emits records flushes the queue and waits on the fence,d3d11,,
 
-Overwatch.exe,0x141efa380,0x141efa380,AdvanceFrameAndFlushBatches,Shared slot 132 advances the frame index and flushes the batch A upload and batch B readback,d3d11,
+Overwatch.exe,0x141ef8140,0x141ef8140,RendererPrepareScene,Per-frame buffer update resource transitions and record emission ending in queue finish,d3d11,,
 
-Overwatch.exe,0x14266c690,0x14266c690,ExecuteReplay,Executes the 64-opcode D3D11 command replay from the flat command-list stream,d3d11,
+Overwatch.exe,0x141efa380,0x141efa380,AdvanceFrameAndFlushBatches,Shared slot 132 advances the frame index and flushes the batch A upload and batch B readback,d3d11,,
 
-Overwatch.exe,0x142674980,0x142674980,ApplyDrawStateCaches,Per-draw UAV and constant-buffer and shader-resource state-cache apply called before draws and descriptor operations,d3d11,
+Overwatch.exe,0x14266c690,0x14266c690,ExecuteReplay,Executes the 64-opcode D3D11 command replay from the flat command-list stream,d3d11,,
 
-Overwatch.exe,0x142672970,0x142672970,BindUavGroups,Binds runs of UAV slots through OMSetRenderTargetsAndUnorderedAccessViews with NumViews minus one,d3d11,
+Overwatch.exe,0x142674980,0x142674980,ApplyDrawStateCaches,Per-draw UAV and constant-buffer and shader-resource state-cache apply called before draws and descriptor operations,d3d11,,
 
-Overwatch.exe,0x142679440,0x142679440,UnbindStaleUavs,Unbinds bound UAV slots that are absent from the current group list,d3d11,
+Overwatch.exe,0x142672970,0x142672970,BindUavGroups,Binds runs of UAV slots through OMSetRenderTargetsAndUnorderedAccessViews with NumViews minus one,d3d11,,
 
-Overwatch.exe,0x14265fc90,0x14265fc90,FlushStageCaches,Flushes one stage's constant-buffer and shader-resource caches through the setter tables,d3d11,
+Overwatch.exe,0x142679440,0x142679440,UnbindStaleUavs,Unbinds bound UAV slots that are absent from the current group list,d3d11,,
 
-Overwatch.exe,0x14265fb90,0x14265fb90,TestViewAlias,Tests whether a shader-resource view aliases a render-target or depth view by key mip and array ranges and underlying resource,d3d11,
+Overwatch.exe,0x14265fc90,0x14265fc90,FlushStageCaches,Flushes one stage's constant-buffer and shader-resource caches through the setter tables,d3d11,,
 
-Overwatch.exe,0x1426781b0,0x1426781b0,CacheStageShaderResources,Caches one stage's shader-resource descriptors from the record and defers the bind to the stage flush,d3d11,
+Overwatch.exe,0x14265fb90,0x14265fb90,TestViewAlias,Tests whether a shader-resource view aliases a render-target or depth view by key mip and array ranges and underlying resource,d3d11,,
 
-Overwatch.exe,0x142676130,0x142676130,CacheStageConstantBuffers,Caches one stage's constant-buffer descriptors from the record and defers the bind to the end-record flush,d3d11,
+Overwatch.exe,0x1426781b0,0x1426781b0,CacheStageShaderResources,Caches one stage's shader-resource descriptors from the record and defers the bind to the stage flush,d3d11,,
 
-Overwatch.exe,0x141f02b10,0x141f02b10,AppendBatch387Record,Writes the 0x387 batch record with base frame slot and count,d3d11,
+Overwatch.exe,0x142676130,0x142676130,CacheStageConstantBuffers,Caches one stage's constant-buffer descriptors from the record and defers the bind to the end-record flush,d3d11,,
 
-Overwatch.exe,0x141f03a80,0x141f03a80,AppendViewReferenceRecord,Writes the 0x60 object-reference record with a tag byte,d3d11,
+Overwatch.exe,0x141f02b10,0x141f02b10,AppendBatch387Record,Writes the 0x387 batch record with base frame slot and count,d3d11,,
 
-Overwatch.exe,0x141f0edd0,0x141f0edd0,UploadBatchAItems,Uploads count 16-byte batch A items and marks each copied item ready,d3d11,
+Overwatch.exe,0x141f03a80,0x141f03a80,AppendViewReferenceRecord,Writes the 0x60 object-reference record with a tag byte,d3d11,,
 
-Overwatch.exe,0x141f0e5f0,0x141f0e5f0,ReadbackBatchBItems,Reads back count 8-byte batch B items whose state is pending and marks them ready,d3d11,
+Overwatch.exe,0x141f0edd0,0x141f0edd0,UploadBatchAItems,Uploads count 16-byte batch A items and marks each copied item ready,d3d11,,
 
-Overwatch.exe,0x141efbcb0,0x141efbcb0,QueryBatchBItem,Returns a batch B item answer and flushes an older frame when the item is pending,d3d11,
+Overwatch.exe,0x141f0e5f0,0x141f0e5f0,ReadbackBatchBItems,Reads back count 8-byte batch B items whose state is pending and marks them ready,d3d11,,
 
-Overwatch.exe,0x142677dc0,0x142677dc0,CmdQueueSubmit,pm_dx11 submit immediate replay under the device lock or deferred FinishCommandList,d3d11,
+Overwatch.exe,0x141efbcb0,0x141efbcb0,QueryBatchBItem,Returns a batch B item answer and flushes an older frame when the item is pending,d3d11,,
 
-Overwatch.exe,0x142677da0,0x142677da0,CmdQueueSubmitWrapper,Thunk forwarding to CmdQueueSubmit,d3d11,
+Overwatch.exe,0x142677dc0,0x142677dc0,CmdQueueSubmit,pm_dx11 submit immediate replay under the device lock or deferred FinishCommandList,d3d11,,
 
-Overwatch.exe,0x142cbcec0,0x142cbcec0,WorldHandlePosition,Reads the body world slot and returns the variant position in XMM0,mover,
-Overwatch.exe,0x142cb4770,0x142cb4770,RigidHandlePosition,Resolves a rigid handle and returns its position in XMM0,mover,
-Overwatch.exe,0x142cd4ff0,0x142cd4ff0,CharacterHandlePosition,Resolves a character handle and returns its position in XMM0,mover,
-Overwatch.exe,0x142cf5630,0x142cf5630,VariantPosition,Dispatches a world variant tag to the rigid or character position leaf,mover,
-Overwatch.exe,0x142cd4bc0,0x142cd4bc0,MoveCharacterController,Normalises the entry quaternion and publishes the new velocity,mover,
-Overwatch.exe,0x142cd5370,0x142cd5370,ApplyCharacterControllerMove,Validates a character velocity and applies the controller move,mover,
-Overwatch.exe,0x142ccd410,0x142ccd410,ShapeSphereBounds,Computes the transformed sphere lower and upper bounds,mover,
-Overwatch.exe,0x142ccd380,0x142ccd380,ShapeCapsuleBounds,Computes the transformed capsule lower and upper bounds,mover,
-Overwatch.exe,0x142ccf460,0x142ccf460,ShapeBoxBounds,Computes the transformed box lower and upper bounds,mover,
-Overwatch.exe,0x142cd3720,0x142cd3720,ShapePointCloudBounds,Computes the transformed point-cloud lower and upper bounds,mover,
-Overwatch.exe,0x142cb9030,0x142cb9030,ShapeBoundsDispatch,Selects a shape record by type and copies its bounds into the record,mover,
-Overwatch.exe,0x142cc45a0,0x142cc45a0,CollisionHandleDispatch,Resolves a u16 handle to a domino record and builds the sweep descriptor and query block,mover,
-Overwatch.exe,0x142cbd510,0x142cbd510,CollisionQueryDriver,Sweeps the local support points against one island's shape list in four passes,mover,
-Overwatch.exe,0x142cd5540,0x142cd5540,CollisionSweepBounds,Builds the sweep start end and expansion from the local support points,mover,
-Overwatch.exe,0x142cc1610,0x142cc1610,ShapeNarrowphase,Transforms and filters one shape entry then runs its narrowphase,mover,
-Overwatch.exe,0x142cb8b80,0x142cb8b80,ShapeWorldTransform,Builds a shape entry's world quaternion from its own rotation or its owner pose,mover,
-Overwatch.exe,0x142cbb350,0x142cbb350,ShapeQueryFilter,Tests a shape's collision layer words against the query's filter words,mover,
-Overwatch.exe,0x140d24b60,0x140d24b60,CollisionWorklistPush,Appends a shape index to the query worklist and grows its array,mover,
+Overwatch.exe,0x142677da0,0x142677da0,CmdQueueSubmitWrapper,Thunk forwarding to CmdQueueSubmit,d3d11,,
 
-Overwatch.exe,0x142cbe130,0x142cbe130,DmWorldClear,Resets every pool record of a dmWorld to empty (count 0 capacity 0 free head -1),domino,
+Overwatch.exe,0x142cbcec0,0x142cbcec0,WorldHandlePosition,Reads the body world slot and returns the variant position in XMM0,mover,,
+Overwatch.exe,0x142cb4770,0x142cb4770,RigidHandlePosition,Resolves a rigid handle and returns its position in XMM0,mover,,
+Overwatch.exe,0x142cd4ff0,0x142cd4ff0,CharacterHandlePosition,Resolves a character handle and returns its position in XMM0,mover,,
+Overwatch.exe,0x142cf5630,0x142cf5630,VariantPosition,Dispatches a world variant tag to the rigid or character position leaf,mover,,
+Overwatch.exe,0x142cd4bc0,0x142cd4bc0,MoveCharacterController,Normalises the entry quaternion and publishes the new velocity,mover,,
+Overwatch.exe,0x142cd5370,0x142cd5370,ApplyCharacterControllerMove,Validates a character velocity and applies the controller move,mover,,
+Overwatch.exe,0x142ccd410,0x142ccd410,ShapeSphereBounds,Computes the transformed sphere lower and upper bounds,mover,,
+Overwatch.exe,0x142ccd380,0x142ccd380,ShapeCapsuleBounds,Computes the transformed capsule lower and upper bounds,mover,,
+Overwatch.exe,0x142ccf460,0x142ccf460,ShapeBoxBounds,Computes the transformed box lower and upper bounds,mover,,
+Overwatch.exe,0x142cd3720,0x142cd3720,ShapePointCloudBounds,Computes the transformed point-cloud lower and upper bounds,mover,,
+Overwatch.exe,0x142cb9030,0x142cb9030,ShapeBoundsDispatch,Selects a shape record by type and copies its bounds into the record,mover,,
+Overwatch.exe,0x142cc45a0,0x142cc45a0,CollisionHandleDispatch,Resolves a u16 handle to a domino record and builds the sweep descriptor and query block,mover,,
+Overwatch.exe,0x142cbd510,0x142cbd510,CollisionQueryDriver,Sweeps the local support points against one island's shape list in four passes,mover,,
+Overwatch.exe,0x142cd5540,0x142cd5540,CollisionSweepBounds,Builds the sweep start end and expansion from the local support points,mover,,
+Overwatch.exe,0x142cc1610,0x142cc1610,ShapeNarrowphase,Transforms and filters one shape entry then runs its narrowphase,mover,,
+Overwatch.exe,0x142cc9460,0x142cc9460,ClosestPointGjk,Walks the cached simplex toward the origin and publishes the contact normal and residual (the type-3 triangle test's slow path and the support-point path),mover,,
+Overwatch.exe,0x142cb8b80,0x142cb8b80,ShapeWorldTransform,Builds a shape entry's world quaternion from its own rotation or its owner pose,mover,,
+Overwatch.exe,0x142cbb350,0x142cbb350,ShapeQueryFilter,Tests a shape's collision layer words against the query's filter words,mover,,
+Overwatch.exe,0x140d24b60,0x140d24b60,CollisionWorklistPush,Appends a shape index to the query worklist and grows its array,mover,,
 
-Overwatch.exe,0x142cb00c0,0x142cb00c0,ShapePoolAlloc,Pops one index from a pool record's free list (or grows it by cap/2+cap) and bumps the used count and high-water mark,domino,
+Overwatch.exe,0x142cbe130,0x142cbe130,DmWorldClear,Resets every pool record of a dmWorld to empty (count 0 capacity 0 free head -1),domino,,
 
-Overwatch.exe,0x142cb7f10,0x142cb7f10,ShapeEntryFromDescriptor,Copies a shape source descriptor into a 0xc0-byte world entry and allocates its per-type pool record by the type byte at source+0x67,domino,
+Overwatch.exe,0x142cb00c0,0x142cb00c0,ShapePoolAlloc,Pops one index from a pool record's free list (or grows it by cap/2+cap) and bumps the used count and high-water mark,domino,,
 
-Overwatch.exe,0x142cb3940,0x142cb3940,ShapeAddToBody,Adds a shape descriptor to a body handle and returns the new entry handle,domino,
+Overwatch.exe,0x142cb7f10,0x142cb7f10,ShapeEntryFromDescriptor,Copies a shape source descriptor into a 0xc0-byte world entry and allocates its per-type pool record by the type byte at source+0x67,domino,,
 
-Overwatch.exe,0x142cd4ef0,0x142cd4ef0,ShapeAddToOwner,Adds a shape descriptor to an owner (island) handle and returns the new entry handle,domino,
+Overwatch.exe,0x142cb3940,0x142cb3940,ShapeAddToBody,Adds a shape descriptor to a body handle and returns the new entry handle,domino,,
 
-Overwatch.exe,0x142cb5e80,0x142cb5e80,ShapePoolAllocType1,Allocates a type-1 shape record from the pool at record+0x2e8,domino,
+Overwatch.exe,0x142cd4ef0,0x142cd4ef0,ShapeAddToOwner,Adds a shape descriptor to an owner (island) handle and returns the new entry handle,domino,,
 
-Overwatch.exe,0x142cb6100,0x142cb6100,ShapePoolAllocType2,Allocates a type-2 shape record from the pool at record+0x300,domino,
+Overwatch.exe,0x142cb5e80,0x142cb5e80,ShapePoolAllocType1,Allocates a type-1 shape record from the pool at record+0x2e8,domino,,
 
-Overwatch.exe,0x142cb6290,0x142cb6290,ShapePoolAllocType3,Allocates a type-3 shape record from the pool at record+0x318,domino,
+Overwatch.exe,0x142cb6100,0x142cb6100,ShapePoolAllocType2,Allocates a type-2 shape record from the pool at record+0x300,domino,,
 
-Overwatch.exe,0x142cb5fc0,0x142cb5fc0,ShapePoolAllocType4,Allocates a type-4+ shape record from the pool at record+0x330,domino,
+Overwatch.exe,0x142cb6290,0x142cb6290,ShapePoolAllocType3,Allocates a type-3 shape record from the pool at record+0x318,domino,,
 
-Overwatch.exe,0x142cae540,0x142cae540,MeshShapeFill,Builds a type-3 mesh shape record from two source buffers,domino,
+Overwatch.exe,0x142cb5fc0,0x142cb5fc0,ShapePoolAllocType4,Allocates a type-4+ shape record from the pool at record+0x330,domino,,
 
-Overwatch.exe,0x142ccf330,0x142ccf330,ShapeFillType4,Fills a type-4+ shape pool record from a source buffer and a u16,domino,
+Overwatch.exe,0x142cae540,0x142cae540,MeshShapeFill,Builds a type-3 mesh shape record from two source buffers,domino,,
 
-Overwatch.exe,0x142cd31f0,0x142cd31f0,ShapeFillType2,Fills a type-2 shape pool record from a source buffer,domino,
+Overwatch.exe,0x142ccf330,0x142ccf330,ShapeFillType4,Fills a type-4+ shape pool record from a source buffer and a u16,domino,,
 
-Overwatch.exe,0x1400fdcb0,0x1400fdcb0,RegisterCollisionChunkComponent,Registers the collision-chunk STU component type 0x9199BF6B (size 0x78) with the class registry,map,
+Overwatch.exe,0x142cd31f0,0x142cd31f0,ShapeFillType2,Fills a type-2 shape pool record from a source buffer,domino,,
 
-Overwatch.exe,0x140f91550,0x140f91550,CollisionChunkComponentCtor,Constructs the 0x78-byte collision-chunk component (vtable 0x14314acc8 four fields),map,
+Overwatch.exe,0x1400fdcb0,0x1400fdcb0,RegisterCollisionChunkComponent,Registers the collision-chunk STU component type 0x9199BF6B (size 0x78) with the class registry,map,,
 
-Overwatch.exe,0x140f8f310,0x140f8f310,CollisionChunkComponentDtor,Destroys the 0x78-byte collision-chunk component's four sub-objects and frees it,map,
+Overwatch.exe,0x140f91550,0x140f91550,CollisionChunkComponentCtor,Constructs the 0x78-byte collision-chunk component (vtable 0x14314acc8 four fields),map,,
 
-Overwatch.exe,0x1421cdb90,0x1421cdb90,TypeDescriptorFinalize,Sorts and finalises a type descriptor's 0x38-stride field table (desc+0x28 count desc+0x98),reflection,
+Overwatch.exe,0x140f8f310,0x140f8f310,CollisionChunkComponentDtor,Destroys the 0x78-byte collision-chunk component's four sub-objects and frees it,map,,
 
-Overwatch.exe,0x1421cdfd0,0x1421cdfd0,TypeDescriptorVisitFields,Walks a descriptor's field table and calls each field type's visit slot with object+offset,reflection,
+Overwatch.exe,0x1421cdb90,0x1421cdb90,TypeDescriptorFinalize,Sorts and finalises a type descriptor's 0x38-stride field table (desc+0x28 count desc+0x98),reflection,,
 
-Overwatch.exe,0x141c4b050,0x141c4b050,RegisterTypeWithSize,Registers a type with a size alignment and build id through TypeRegistrationCore,reflection,
+Overwatch.exe,0x1421cdfd0,0x1421cdfd0,TypeDescriptorVisitFields,Walks a descriptor's field table and calls each field type's visit slot with object+offset,reflection,,
 
-Overwatch.exe,0x1404f6e10,0x1404f6e10,RegisterNodeType2,Registers the node factory 0x142029f00 as node type 2 in the registry at 0x1441ba618,reflection,
+Overwatch.exe,0x141c4b050,0x141c4b050,RegisterTypeWithSize,Registers a type with a size alignment and build id through TypeRegistrationCore,reflection,,
 
-Overwatch.exe,0x142029f00,0x142029f00,NodeType2Factory,Builds a 0x30-byte type descriptor (vtable 0x1433654a0) and registers a 0x910-byte class,reflection,
+Overwatch.exe,0x1404f6e10,0x1404f6e10,RegisterNodeType2,Registers the node factory 0x142029f00 as node type 2 in the registry at 0x1441ba618,reflection,,
 
-Overwatch.exe,0x1407803f0,0x1407803f0,ReleaseTypeInstance,"Returns a reflected instance to its allocation strategy: calls the instance's first vtable entry when the class flag 0x10 is set, then the strategy's slot 0x58 (0x141c5f420, a per-block free-list return); the allocator is slot 1 (0x1420266d0) and the same strategy's slot 0x50 (0x141c5ef30)",reflection,
+Overwatch.exe,0x142029f00,0x142029f00,NodeType2Factory,Builds a 0x30-byte type descriptor (vtable 0x1433654a0) and registers a 0x910-byte class,reflection,,
 
-Overwatch.exe,0x1420271d0,0x1420271d0,WorldBaseCtor,Constructs the 0x3160-byte world base (vtable 0x143367630) with its 128-slot table and four pools,domino,
+Overwatch.exe,0x1407803f0,0x1407803f0,ReleaseTypeInstance,"Returns a reflected instance to its allocation strategy: calls the instance's first vtable entry when the class flag 0x10 is set, then the strategy's slot 0x58 (0x141c5f420, a per-block free-list return); the allocator is slot 1 (0x1420266d0) and the same strategy's slot 0x50 (0x141c5ef30)",reflection,,
 
-Overwatch.exe,0x1420266d0,0x1420266d0,WorldBaseTypeAlloc,Allocates the world base from its per-type pool and inlines WorldBaseCtor,domino,
+Overwatch.exe,0x1420271d0,0x1420271d0,WorldBaseCtor,Constructs the 0x3160-byte world base (vtable 0x143367630) with its 128-slot table and four pools,domino,,
 
-Overwatch.exe,0x14209a8f0,0x14209a8f0,GeometryBaseCtor,Initialises the 0x3160-byte geometry base: 128 slots at +0x60 and four 0x100 pools,mover,
+Overwatch.exe,0x1420266d0,0x1420266d0,WorldBaseTypeAlloc,Allocates the world base from its per-type pool and inlines WorldBaseCtor,domino,,
 
-Overwatch.exe,0x14209ae30,0x14209ae30,GeometryRegister,Registers a geometry object with its world handle and sets its +0x50,mover,
+Overwatch.exe,0x14209a8f0,0x14209a8f0,GeometryBaseCtor,Initialises the 0x3160-byte geometry base: 128 slots at +0x60 and four 0x100 pools,mover,,
 
-Overwatch.exe,0x1421d26d0,0x1421d26d0,StuLoadSubAssets,Loads a STUD container's sub-records: class-hash lookup construction in place and the field pass,map,
+Overwatch.exe,0x14209ae30,0x14209ae30,GeometryRegister,Registers a geometry object with its world handle and sets its +0x50,mover,,
 
-Overwatch.exe,0x1421d3c10,0x1421d3c10,StuResolveFields,Iterates a class and its bases and resolves each field's offsets,map,
+Overwatch.exe,0x1421d26d0,0x1421d26d0,StuLoadSubAssets,Loads a STUD container's sub-records: class-hash lookup construction in place and the field pass,map,,
 
-Overwatch.exe,0x1421d3710,0x1421d3710,StuResolveField,Per-field type switch that turns self-relative offsets into pointers (arrays nested instances hash maps strings),map,
+Overwatch.exe,0x1421d3c10,0x1421d3c10,StuResolveFields,Iterates a class and its bases and resolves each field's offsets,map,,
 
-Overwatch.exe,0x1421c14f0,0x1421c14f0,TypeHashLookup,Looks up an asset class by 32-bit hash in the map anchored at 0x143aa6be0,map,
+Overwatch.exe,0x1421d3710,0x1421d3710,StuResolveField,Per-field type switch that turns self-relative offsets into pointers (arrays nested instances hash maps strings),map,,
 
-Overwatch.exe,0x141ff51a0,0x141ff51a0,MapChunkCellBytesFixup,Fixes 17 self-relative pointers in each cellBytes record of a collision chunk,map,
+Overwatch.exe,0x1421c14f0,0x1421c14f0,TypeHashLookup,Looks up an asset class by 32-bit hash in the map anchored at 0x143aa6be0,map,,
 
-Overwatch.exe,0x14213d0b0,0x14213d0b0,GeometryFinalize,Builds the transform pool and per-cell bodies and shapes for the geometry object,map,
+Overwatch.exe,0x141ff51a0,0x141ff51a0,MapChunkCellBytesFixup,Fixes 17 self-relative pointers in each cellBytes record of a collision chunk,map,,
 
-Overwatch.exe,0x142cc3d90,0x142cc3d90,OwnerCreateBody,Creates a body in an owner's world from a two-quad float config and returns its handle,map,
+Overwatch.exe,0x14213d0b0,0x14213d0b0,GeometryFinalize,Builds the transform pool and per-cell bodies and shapes for the geometry object,map,,
 
-Overwatch.exe,0x142e49360,0x142e49360,MapChunkHeaderFixup,Converts the three self-relative offsets of a map chunk's header record,map,
+Overwatch.exe,0x142cc3d90,0x142cc3d90,OwnerCreateBody,Creates a body in an owner's world from a two-quad float config and returns its handle,map,,
 
-Overwatch.exe,0x141baff30,0x141baff30,Alloc,The size-and-flags allocator (flags bit 0 align 16 bit 1 minimum size); Ghidra treated it as noreturn which truncated every caller,runtime,"void * Alloc(unsigned long long size, unsigned int flags)"
+Overwatch.exe,0x142e49360,0x142e49360,MapChunkHeaderFixup,Converts the three self-relative offsets of a map chunk's header record,map,,
 
-Overwatch.exe,0x1421384e0,0x1421384e0,GeometryClear,Frees and resets the geometry object's arrays and pools (cell entries with stride 0x60 and 0x100 transform pool 0x50 record pools 0xb0) and clears its world handle,map,
+Overwatch.exe,0x141baff30,0x141baff30,Alloc,The size-and-flags allocator (flags bit 0 align 16 bit 1 minimum size); Ghidra treated it as noreturn which truncated every caller,runtime,"void * Alloc(unsigned long long size, unsigned int flags)",
 
-Overwatch.exe,0x14213c440,0x14213c440,GeometryBuild,The node-type-2 build: copies collision params converts the model's brush tree to a mesh thickens it into a cell entry creates the body and finalises,map,
+Overwatch.exe,0x1421384e0,0x1421384e0,GeometryClear,Frees and resets the geometry object's arrays and pools (cell entries with stride 0x60 and 0x100 transform pool 0x50 record pools 0xb0) and clears its world handle,map,,
 
-Overwatch.exe,0x142132cf0,0x142132cf0,GeometryCopyParams,Copies and scales the collision parameters (radii heights steps tolerances and the rotation basis) into the geometry object's config block,map,
+Overwatch.exe,0x14213c440,0x14213c440,GeometryBuild,The node-type-2 build: copies collision params converts the model's brush tree to a mesh thickens it into a cell entry creates the body and finalises,map,,
 
-Overwatch.exe,0x142cf2010,0x142cf2010,MeshToColliderFaces,Thickens a triangle mesh into a closed double-sided collider (2x vertices 2x 0x14-byte faces open edges closed),map,
+Overwatch.exe,0x142132cf0,0x142132cf0,GeometryCopyParams,Copies and scales the collision parameters (radii heights steps tolerances and the rotation basis) into the geometry object's config block,map,,
 
-Overwatch.exe,0x142cf23c0,0x142cf23c0,BrushTreeToMesh,Walks a brush CSG tree (ops 0..5 over 0x60-byte hulls) and emits a triangle mesh,map,
-Overwatch.exe,0x142caed10,0x142caed10,MeshSweepEntry,Forwards a shape sweep to the type-3 BVH walk (shape entry then pool element at +0x48),domino,
+Overwatch.exe,0x142cf2010,0x142cf2010,MeshToColliderFaces,Thickens a triangle mesh into a closed double-sided collider (2x vertices 2x 0x14-byte faces open edges closed),map,,
 
-Overwatch.exe,0x142caed30,0x142caed30,MeshSweep,Walks the type-3 BVH (0x20-byte nodes AABB then swept hull) and tests each leaf triangle publishing the 0x44-byte hit,domino,
+Overwatch.exe,0x142cf23c0,0x142cf23c0,BrushTreeToMesh,Walks a brush CSG tree (ops 0..5 over 0x60-byte hulls) and emits a triangle mesh,map,,
+Overwatch.exe,0x142caed10,0x142caed10,MeshSweepEntry,Forwards a shape sweep to the type-3 BVH walk (shape entry then pool element at +0x48),domino,,
 
-Overwatch.exe,0x142cce430,0x142cce430,MeshTriangleTest,Plane and barycentric test of one quad against a swept point with 0xFF-separated index runs (fast path when the expansion is small),domino,
+Overwatch.exe,0x142caed30,0x142caed30,MeshSweep,Walks the type-3 BVH (0x20-byte nodes AABB then swept hull) and tests each leaf triangle publishing the 0x44-byte hit,domino,,
+Overwatch.exe,0x142caea70,0x142caea70,MeshGather,"Walks the collider mesh BVH against an 8-float box (adjacent child first, 0x20-byte nodes, layer masks) and appends every triangle the 0x142cd58a0 accept takes to the caller's index container",domino,,
 
+Overwatch.exe,0x142cce430,0x142cce430,MeshTriangleTest,Plane and barycentric test of one quad against a swept point with 0xFF-separated index runs (fast path when the expansion is small),domino,,
 
-Overwatch.exe,0x142cd56e0,0x142cd56e0,ColliderTriangleDegenerate,Says whether one collider mesh triangle must be skipped: a non-finite corner, a box extent over 1e6, an edge shorter than 0.0025, or a cross length under 2.5e-5,domino,
 
-Overwatch.exe,0x142cf2010,0x142cf2010,MeshToColliderFaces,Converts one source mesh (0x20 vertices, 0x18+8*idx triangles) into collider faces (0x80 corners, 0x30 indices), skipping degenerate triangles and flattening a repeated last vertex,domino,
+Overwatch.exe,0x142cd56e0,0x142cd56e0,ColliderTriangleDegenerate,"Says whether one collider mesh triangle must be skipped: a non-finite corner, a box extent over 1e6, an edge shorter than 0.0025, or a cross length under 2.5e-5",domino,,
 
-Overwatch.exe,0x142cca460,0x142cca460,ColliderFaceAppend,Appends one collider face from up to four indexed vertices, de-duplicating by the last corner and taking corners from the output face array,domino,
+Overwatch.exe,0x142cf2010,0x142cf2010,MeshToColliderFaces,"Converts one source mesh (0x20 vertices, 0x18+8*idx triangles) into collider faces (0x80 corners, 0x30 indices), skipping degenerate triangles and flattening a repeated last vertex",domino,,
 
-Overwatch.exe,0x142ccc120,0x142ccc120,ColliderMeshEmit,Walks one mesh source's faces and vertices, runs MeshToColliderFaces, skips degenerate output triangles and appends the faces into the pool record,domino,
+Overwatch.exe,0x142cca460,0x142cca460,ColliderFaceAppend,"Appends one collider face from up to four indexed vertices, de-duplicating by the last corner and taking corners from the output face array",domino,,
 
-Overwatch.exe,0x140c9e670,0x140c9e670,MoverWishWorldPoint,"Transforms the block +0x70 wish through the state matrix at +0x3f0; the copy stands when the id or the +0x40 flag says no",mover,
-Overwatch.exe,0x140c9e740,0x140c9e740,MoverStateBlockMatrix,"Resolves the 4x4 at the block +0x3f0 gated by the id at +0x450 and the byte at +0x40",mover,
-Overwatch.exe,0x140a01560,0x140a01560,CandidateQueryClone,"Clones the 0x4a5-byte collision query object: header and three inline vectors and the two segment points and the tail flags",mover,
-Overwatch.exe,0x140cc1870,0x140cc1870,MoverWishQueryCached,"Memoised candidate query keyed by the state id and the two segment points within 0.004",mover,
-Overwatch.exe,0x14202bc90,0x14202bc90,CandidateHitPolicy,"The hit policy behind the argument-rotating thunk at 0x14202c580: gates on the record world and a layer/exclusion filter, dedupes by a decoded geometry key, then fills the 0x50-byte answer record (mode 1) or classifies through hit[0] (mode >= 2); returns 1 no hit, 2 accepted, 3 rejected",mover,
-Overwatch.exe,0x1420af950,0x1420af950,FilterHitLayers,"Accepts a hit when its required mask meets the world mask, its forbidden mask does not, and the world is absent from its exclusion list",mover,
-Overwatch.exe,0x142018990,0x142018990,WriteIndexConstants,"Constant-injection stub: stores 0x10, 0xf, 4 and 0 through four pointer arguments so the caller appears to receive computed out-params",obfuscation,
-Overwatch.exe,0x140543440,0x140543440,DecodeKeyInPlace,"Junk-prefixed leaf (live code at 0x140543481) that decodes the qword at its argument in place with a rotate/xor/subtract constant chain",obfuscation,
-Overwatch.exe,0x14213a510,0x14213a510,AppendCollisionEntryFromBrushSource,"Snapshots a brush source into a 0x28-byte record (vertices nodes counts), meshes it with BrushTreeToMesh, applies the leaf or chord-scale area test, then appends one 0x100 entry to geometry+0x118 (via 0x1421360a0) and fills it through +0xf0; the 0x60 entries are GeometryBuild's, into geometry+0x108",map,
-Overwatch.exe,0x14055a0f0,0x14055a0f0,RunMapLoadEntry,"Map-load entry: registers the debug.showMapLoadAfterMS CVar (description ""Show map load status after some number of milliseconds"", default 0xea60), initialises the node class table (0x141c57c40 then 0x141c57970), calls the engine subsystem constructor 0x140554220, then builds the camera-view world when a global object's vtable+0x20 returns true; stored in the project image truncated by the false noreturn 0x141bb8d40",map,
-Overwatch.exe,0x140be1570,0x140be1570,CreateCameraViewWorld,"Allocates a 0x910 WorldBase (0x1420271d0) and a 0x2ad0 camera-view object (0x14206bcb0), links the child into the parent's +0x610 vector and +0x278 back-pointer, and sets the camera animation owner (0x14206d2c0); the only E8 caller of WorldBaseCtor",map,
-Overwatch.exe,0x142090e00,0x142090e00,BuildStreamingWorldBody,"Creates the Domino world and body for one streaming owner: builds a stack world description from the owner's +0x168..+0x180 fields and the counted +0x70 layer records, calls 0x142cdf8e0 or 0x142cdf930, stores the world at owner+0x40, creates the body with OwnerCreateBody at owner+0x50, sets the world record's +0x19b byte to 0xff, then walks holders with mode +0x2a == 4; 13 contiguous .pdata entries 0x142090e00..0x142094d34, stored as a 186-byte stub",domino,
-Overwatch.exe,0x142cde350,0x142cde350,ConstructDominoWorld,"Constructs a Domino world from the caller's description: reads the quaternion at +0x10..+0x1c, count at +0x20, scalars at +0x80/+0x88, +0x90..+0xa4, bytes at +0xa8/+0xb0, pointers at +0xc0..+0xf0, child head +0x140 and child count +0x160, and allocates the world slot through 0x142cc3c80",domino,
-Overwatch.exe,0x142cdf8e0,0x142cdf8e0,CreateDominoWorld,Allocates a 0x170-byte Domino world and calls ConstructDominoWorld with a null parent; one of exactly two E8 callers of 0x142cde350,domino,
-Overwatch.exe,0x142cdf930,0x142cdf930,CreateChildDominoWorld,Allocates a 0x170-byte Domino world and calls ConstructDominoWorld with the caller's parent argument; one of exactly two E8 callers of 0x142cde350,domino,
-Overwatch.exe,0x142cdfc40,0x142cdfc40,GetDominoWorldId,Returns the u16 world id at world+0x58,domino,
-Overwatch.exe,0x140554220,0x140554220,ConstructEngineSubsystems,"Allocates 65 engine subsystems into the object at _DAT_143b7f410: 61 inline Alloc(size,0)+constructor blocks (31 sharing the 28-byte stub 0x141c578c0), two factory returns (0x140594090, 0x1406cc990), the decoded pointer at 0x220 (0x1405437f0 over [[world+0x330]+0x60]) and the 0x68-byte adjustor at 0x448; stores each into +0x220..+0x448, five offsets never written (0x228, 0x230, 0x350, 0x418, 0x440), registers through 0x141c52d10 (84 calls, 20 for objects that never reach a slot), then re-attaches 21 stored subsystems at +0x10 through 0x140bc7590; decoded row by row by dev/eng_verify_schedule.py, its one E8 caller is the map-load entry 0x14055a0f0",engine,
-Overwatch.exe,0x141c52d10,0x141c52d10,RegisterWorldInterface,"Registers a subsystem into the engine object: appends it to the array at +0x188, sets the back-pointer subsystem[1] = engine, then walks the subsystem interface chain ([interface+0x90]) and files each interface in the hash map at +0x198",engine,
-Overwatch.exe,0x140544de0,0x140544de0,ConstructPreloadContext,"Initialises the 0xf8-byte preload state object: three GUID maps at +0x88/+0x90/+0x98, a lock at +0x28, the total at +0x68, the done count at +0x6c, the catalog sub-object at +0xb8, and the encoded service pointer at +0x78",map,
-Overwatch.exe,0x141fe0580,0x141fe0580,CheckPreloadComplete,"Increments the done count at +0x6c; when it reaches the total at +0x68 and the started byte at +0x08 is clear, sets that byte and calls [[service]+0x38](service) -- the all-preloads-done callback",map,
-Overwatch.exe,0x14077c2e0,0x14077c2e0,InsertPreloadGuid,"Inserts one GUID list into the preload state map selected by kind: 0x75 -> +0x88, 0xc5 -> +0x90, 0x77 -> +0x98; a new key takes a free slot or grows the map",map,
-Overwatch.exe,0x14077afa0,0x14077afa0,DestroyPreloadService,Deleting destructor of the 0xf8-byte preload service (vtable 0x142f8d970): clears the three GUID maps and frees the object when the delete flag is set,map,
-Overwatch.exe,0x141fe0f80,0x141fe0f80,SetPreloadLoaded,Preload service vtable +0x38 callback: sets the loaded byte at +0x78 and clears the pending pointer at +0x70 when all preloads complete,map,
-Overwatch.exe,0x14202c660,0x14202c660,WorldBaseInitFromRecord,"WorldBase slot 8: reads the creation record's flags (+0x10), its Domino settings description (+0x18) and the state-record fields; stores the flags at +0x454, copies the description's rotation to +0x630, allocates two worlds from it and creates the node's body; flag 0x20 creates the 0x300 state record, flag 0x200 the geometry and the worlds",domino
-Overwatch.exe,0x141c57970,0x141c57970,NodeTypeRegistryLookup,Walks the node-type list at 0x144188170 and stores each entry's factory at [obj+0x10][u16 type],domino
-Overwatch.exe,0x141c5ff40,0x141c5ff40,RegisterNodeType,"Push-front insert into the node-type list at 0x144188170; copies the u16 type, the factory and the build id into the new entry",domino
-Overwatch.exe,0x142026e20,0x142026e20,NodeStateRecordCtor,"Constructs the node's 0x300-byte state record (no vtable): field defaults include the FLT_MAX bound pairs, 1.0 scales, 0.1/25/50/60/-10000 and a zeroed +0x170; WorldBaseInitFromRecord calls it when the record's flags bit 0x20 is set",domino
-Overwatch.exe,0x140585220,0x140585220,CreateWorldObject,"Allocates the 0x470-byte engine object, calls WorldCtor 0x1405838c0, publishes it in [0x143b7f410] (the image's only store to that global), then runs 0x141c52fc0, the stack debug pair 0x141b33e20/0x141c61a80, the 0x141c51cc0 lookup whose result's dword +0x138 becomes world+0x468, and 0x141c56970; called once, from RunMapLoadEntry 0x14055a0f0 at 0x14055a205, immediately before ConstructEngineSubsystems",engine,
-Overwatch.exe,0x1405838c0,0x1405838c0,WorldCtor,"Derived engine-object constructor: calls WorldBaseCtor 0x141c507c0 then writes +0x1c8..+0x46c, installing the intermediate vtable 0x142f81090 and the final 0x142f83aa0; writes +0x460 twice (the address codec at 0, then on the address of the 0x1b8-byte object built by 0x140be33c0 which it drops); copies the u32 at 0x1441880e8 into +0x468; ends at 0x140583c41",engine,
-Overwatch.exe,0x141c507c0,0x141c507c0,WorldBaseCtor,"Base engine-object constructor: vtable 0x14328c990, flag at +0x08 from (arg5 == 0), magic 0x389aae49b6cecf17 at +0x18, +0x2c = 0x400, three codec-encoded seeds (+0x38, +0x58, +0xb0), everything else zeroed",engine,
-Overwatch.exe,0x141c52d10,0x141c52d10,RegisterWorldInterface,"Appends one transformed pointer to the world interface array at world+0x188; the transform is inline (xor 0x238e31e8cd062f58, ror 0x31, add 0x34b5f414245bf6ef) and its encoding of 0 is 0x4daa5a973c0808b6, the value WorldBaseCtor stores at world+0x058",engine,
-Overwatch.exe,0x140767da0,0x140767da0,WorldInterfaceArrayGrow,"Grows the u64 interface array at world+0x188 to max(capacity + capacity/2, length + requested); bit 31 of the capacity word marks a borrowed buffer, which is copied instead of reallocated",engine,
-Overwatch.exe,0x141c553a0,0x141c553a0,WorldInterfaceMapInit,"Builds the world interface array's pointer-to-index map at world+0x198 with three buckets",engine,
-Overwatch.exe,0x141c56fb0,0x141c56fb0,WorldInterfaceInsert,"Inserts a pointer into the world interface array's pointer-to-index map at world+0x198 and stores the encoded engine back pointer at subsystem+0x008 (mov [rdx+8], rax at 0x141c56fd1) using xor 0xd6c0ac78d0e44481 then add 0x9dd46acd84d192e2",engine,
-Overwatch.exe,0x1405838a0,0x1405838a0,EncodeAddressB,"In-place 64-bit address codec on the qword at rcx: sub 0x574da7a34c106b16 then ror 3; the inverse is not a separate function in the image (0x1405838d0 lies inside WorldCtor 0x1405838c0), it is derived by Codec::inverse in crates/ow-engine/src/codec.rs",engine,
-Overwatch.exe,0x140543a40,0x140543a40,EncodeSeed38,"In-place 64-bit codec on the qword at rcx: sub 0x274e2f82e6194a03 then xor 0x45ef9e20123f172f; WorldBaseCtor 0x141c507c0 calls it at 0x141c50839 on the stack seed 0x627dce6e1d5603a4 and xors the result with 0xd674a580a443b55e for world+0x38; Ghidra had no function at this address, created from the direct call site in this pass",engine,
-Overwatch.exe,0x1405674e0,0x1405674e0,EncodeSeedB0,"In-place 64-bit codec on the qword at rcx: xor 0xd6a9bd8714cc2178 then sub 0x416ff37b1ad4aa2f; WorldBaseCtor 0x141c507c0 calls it at 0x141c508a7 with the stack seed cleared to 0, and the result feeds world+0xb0 at 0x141c508d1; Ghidra had no function at this address, created from the direct call site in this pass",engine,
-Overwatch.exe,0x140be33c0,0x140be33c0,Sub460ObjectCtor,"Fills a 0x1b8-byte object with four copies of a six-dword descriptor (0x1442a31d0..0x1442a31dc plus 0x143870e48) tagged 1..4, and returns its own argument; WorldCtor builds it, encodes its address into world+0x460 and drops the pointer",engine,
-Overwatch.exe,0x141c578c0,0x141c578c0,SubsystemStubCtor,"28-byte base constructor shared by 31 of the 65 engine subsystem slots: stores vtable 0x142f7d778 at [rcx] and the cookie 0x7495174655b5d763 at [rcx+8], returns rcx; every caller overwrites [obj] with its own vtable, so 0x142f7d778 never survives a construction. Ghidra had no function at this address; created from the subsystem census",engine,
-Overwatch.exe,0x1405437f0,0x1405437f0,DecodeEnginePtr220,"In-place 64-bit codec on the qword at rcx: ror 0xf, xor 0x5a1b63795b8475ea, sub 0x4998612e34f258d3, ror 0x1e; ConstructEngineSubsystems 0x140554220 calls it at 0x140555325 on the qword taken from [world+0x330]+0x60 (null-checked at 0x140555310, then +0x60), applies the same inline chain WorldCtor uses for that field (xor 0x6e, add 0x6c5df24a0815916e, xor 0x3c1986ede8c2b44a, ror 0x10, xor 0xc2300451bcb9e837, add 0x5c04429ca265e813) and stores into world+0x220 at 0x140555372, so slot 0x220 is a decoded pointer rather than an allocation. Ghidra had no function at this address; created from that call site",engine,
-Overwatch.exe,0x142003720,0x142003720,SceneComponentApplyInstanceData,"The placed scene component's vtable+0x20 slot (vtable 0x1433632e0 slot 4): reads the component's instance data through the accessor at vtable+0x10 with id 1, copies three quads from *(result+0x10) into the component at +0x160 (position), +0x150 (scale) and +0x140 (quaternion), then calls SceneComponentSetLocalTransform 0x142000620 with them; a non-zero byte at instance data +0x30 sets bit 0x800 at component+0x248 and notifies component+0x258. This is the writer the collision builder's +0xd0/+0xf0 transform comes from",map,
-Overwatch.exe,0x142000620,0x142000620,SceneComponentSetLocalTransform,"Takes a scene component and three quads (quaternion, position, scale). With component+0x298 (the parent) null it accepts each quad only when it differs from the current value - the quaternion when q.q_new < 0.9999999, the position and scale when the squared distance exceeds 1e-8 - builds the 3x3 rotation at +0x60/+0x70/+0x80 from the quaternion, and writes +0xd0 the quaternion, +0xe0 the scale and +0xf0 the position, then notifies children. With a parent it hands over to 0x141ffab90, which composes +0xd0/+0xf0 with +0x298. These are exactly the fields the placed-model collision builder reads",map,
+Overwatch.exe,0x142ccc120,0x142ccc120,ColliderMeshEmit,"Walks one mesh source's faces and vertices, runs MeshToColliderFaces, skips degenerate output triangles and appends the faces into the pool record",domino,,
+
+Overwatch.exe,0x140c9e670,0x140c9e670,MoverWishWorldPoint,Transforms the block +0x70 wish through the state matrix at +0x3f0; the copy stands when the id or the +0x40 flag says no,mover,,
+Overwatch.exe,0x140c9e740,0x140c9e740,MoverStateBlockMatrix,Resolves the 4x4 at the block +0x3f0 gated by the id at +0x450 and the byte at +0x40,mover,,
+Overwatch.exe,0x140a01560,0x140a01560,CandidateQueryClone,Clones the 0x4a5-byte collision query object: header and three inline vectors and the two segment points and the tail flags,mover,,
+Overwatch.exe,0x140cc1870,0x140cc1870,MoverWishQueryCached,Memoised candidate query keyed by the state id and the two segment points within 0.004,mover,,
+Overwatch.exe,0x14202bc90,0x14202bc90,CandidateHitPolicy,"The hit policy behind the argument-rotating thunk at 0x14202c580: gates on the record world and a layer/exclusion filter, dedupes by a decoded geometry key, then fills the 0x50-byte answer record (mode 1) or classifies through hit[0] (mode >= 2); returns 1 no hit, 2 accepted, 3 rejected",mover,,
+Overwatch.exe,0x1420af950,0x1420af950,FilterHitLayers,"Accepts a hit when its required mask meets the world mask, its forbidden mask does not, and the world is absent from its exclusion list",mover,,
+Overwatch.exe,0x142018990,0x142018990,WriteIndexConstants,"Constant-injection stub: stores 0x10, 0xf, 4 and 0 through four pointer arguments so the caller appears to receive computed out-params",obfuscation,,
+Overwatch.exe,0x140543440,0x140543440,DecodeKeyInPlace,Junk-prefixed leaf (live code at 0x140543481) that decodes the qword at its argument in place with a rotate/xor/subtract constant chain,obfuscation,,
+Overwatch.exe,0x14213a510,0x14213a510,AppendCollisionEntryFromBrushSource,"Snapshots a brush source into a 0x28-byte record (vertices nodes counts), meshes it with BrushTreeToMesh, applies the leaf or chord-scale area test, then appends one 0x100 entry to geometry+0x118 (via 0x1421360a0) and fills it through +0xf0; the 0x60 entries are GeometryBuild's, into geometry+0x108",map,,
+Overwatch.exe,0x14055a0f0,0x14055a0f0,RunMapLoadEntry,"Map-load entry: registers the debug.showMapLoadAfterMS CVar (description ""Show map load status after some number of milliseconds"", default 0xea60), initialises the node class table (0x141c57c40 then 0x141c57970), calls the engine subsystem constructor 0x140554220, then builds the camera-view world when a global object's vtable+0x20 returns true; stored in the project image truncated by the false noreturn 0x141bb8d40",map,,
+Overwatch.exe,0x140be1570,0x140be1570,CreateCameraViewWorld,"Allocates a 0x910 WorldBase (0x1420271d0) and a 0x2ad0 camera-view object (0x14206bcb0), links the child into the parent's +0x610 vector and +0x278 back-pointer, and sets the camera animation owner (0x14206d2c0); the only E8 caller of WorldBaseCtor",map,,
+Overwatch.exe,0x142090e00,0x142090e00,BuildStreamingWorldBody,"Creates the Domino world and body for one streaming owner: builds a stack world description from the owner's +0x168..+0x180 fields and the counted +0x70 layer records, calls 0x142cdf8e0 or 0x142cdf930, stores the world at owner+0x40, creates the body with OwnerCreateBody at owner+0x50, sets the world record's +0x19b byte to 0xff, then walks holders with mode +0x2a == 4; 13 contiguous .pdata entries 0x142090e00..0x142094d34, stored as a 186-byte stub",domino,,
+Overwatch.exe,0x142cde350,0x142cde350,ConstructDominoWorld,"Constructs a Domino world from the caller's description: reads the quaternion at +0x10..+0x1c, count at +0x20, scalars at +0x80/+0x88, +0x90..+0xa4, bytes at +0xa8/+0xb0, pointers at +0xc0..+0xf0, child head +0x140 and child count +0x160, and allocates the world slot through 0x142cc3c80",domino,,
+Overwatch.exe,0x142cdf8e0,0x142cdf8e0,CreateDominoWorld,Allocates a 0x170-byte Domino world and calls ConstructDominoWorld with a null parent; one of exactly two E8 callers of 0x142cde350,domino,,
+Overwatch.exe,0x142cdf930,0x142cdf930,CreateChildDominoWorld,Allocates a 0x170-byte Domino world and calls ConstructDominoWorld with the caller's parent argument; one of exactly two E8 callers of 0x142cde350,domino,,
+Overwatch.exe,0x142cdfc40,0x142cdfc40,GetDominoWorldId,Returns the u16 world id at world+0x58,domino,,
+Overwatch.exe,0x140554220,0x140554220,ConstructEngineSubsystems,"Allocates 65 engine subsystems into the object at _DAT_143b7f410: 61 inline Alloc(size,0)+constructor blocks (31 sharing the 28-byte stub 0x141c578c0), two factory returns (0x140594090, 0x1406cc990), the decoded pointer at 0x220 (0x1405437f0 over [[world+0x330]+0x60]) and the 0x68-byte adjustor at 0x448; stores each into +0x220..+0x448, five offsets never written (0x228, 0x230, 0x350, 0x418, 0x440), registers through 0x141c52d10 (84 calls, 20 for objects that never reach a slot), then re-attaches 21 stored subsystems at +0x10 through 0x140bc7590; decoded row by row by dev/eng_verify_schedule.py, its one E8 caller is the map-load entry 0x14055a0f0",engine,,
+Overwatch.exe,0x141c52d10,0x141c52d10,RegisterWorldInterface,"Registers a subsystem into the engine object: appends it to the array at +0x188, sets the back-pointer subsystem[1] = engine, then walks the subsystem interface chain ([interface+0x90]) and files each interface in the hash map at +0x198",engine,,
+Overwatch.exe,0x140544de0,0x140544de0,ConstructPreloadContext,"Initialises the 0xf8-byte preload state object: three GUID maps at +0x88/+0x90/+0x98, a lock at +0x28, the total at +0x68, the done count at +0x6c, the catalog sub-object at +0xb8, and the encoded service pointer at +0x78",map,,
+Overwatch.exe,0x141fe0580,0x141fe0580,CheckPreloadComplete,"Increments the done count at +0x6c; when it reaches the total at +0x68 and the started byte at +0x08 is clear, sets that byte and calls [[service]+0x38](service) -- the all-preloads-done callback",map,,
+Overwatch.exe,0x14077c2e0,0x14077c2e0,InsertPreloadGuid,"Inserts one GUID list into the preload state map selected by kind: 0x75 -> +0x88, 0xc5 -> +0x90, 0x77 -> +0x98; a new key takes a free slot or grows the map",map,,
+Overwatch.exe,0x14077afa0,0x14077afa0,DestroyPreloadService,Deleting destructor of the 0xf8-byte preload service (vtable 0x142f8d970): clears the three GUID maps and frees the object when the delete flag is set,map,,
+Overwatch.exe,0x141fe0f80,0x141fe0f80,SetPreloadLoaded,Preload service vtable +0x38 callback: sets the loaded byte at +0x78 and clears the pending pointer at +0x70 when all preloads complete,map,,
+Overwatch.exe,0x14202c660,0x14202c660,WorldBaseInitFromRecord,"WorldBase slot 8: reads the creation record's flags (+0x10), its Domino settings description (+0x18) and the state-record fields; stores the flags at +0x454, copies the description's rotation to +0x630, allocates two worlds from it and creates the node's body; flag 0x20 creates the 0x300 state record, flag 0x200 the geometry and the worlds",domino,,
+Overwatch.exe,0x141c57970,0x141c57970,NodeTypeRegistryLookup,Walks the node-type list at 0x144188170 and stores each entry's factory at [obj+0x10][u16 type],domino,,
+Overwatch.exe,0x141c5ff40,0x141c5ff40,RegisterNodeType,"Push-front insert into the node-type list at 0x144188170; copies the u16 type, the factory and the build id into the new entry",domino,,
+Overwatch.exe,0x142026e20,0x142026e20,NodeStateRecordCtor,"Constructs the node's 0x300-byte state record (no vtable): field defaults include the FLT_MAX bound pairs, 1.0 scales, 0.1/25/50/60/-10000 and a zeroed +0x170; WorldBaseInitFromRecord calls it when the record's flags bit 0x20 is set",domino,,
+Overwatch.exe,0x140585220,0x140585220,CreateWorldObject,"Allocates the 0x470-byte engine object, calls WorldCtor 0x1405838c0, publishes it in [0x143b7f410] (the image's only store to that global), then runs 0x141c52fc0, the stack debug pair 0x141b33e20/0x141c61a80, the 0x141c51cc0 lookup whose result's dword +0x138 becomes world+0x468, and 0x141c56970; called once, from RunMapLoadEntry 0x14055a0f0 at 0x14055a205, immediately before ConstructEngineSubsystems",engine,,
+Overwatch.exe,0x1405838c0,0x1405838c0,WorldCtor,"Derived engine-object constructor: calls WorldBaseCtor 0x141c507c0 then writes +0x1c8..+0x46c, installing the intermediate vtable 0x142f81090 and the final 0x142f83aa0; writes +0x460 twice (the address codec at 0, then on the address of the 0x1b8-byte object built by 0x140be33c0 which it drops); copies the u32 at 0x1441880e8 into +0x468; ends at 0x140583c41",engine,,
+Overwatch.exe,0x141c507c0,0x141c507c0,WorldBaseCtor,"Base engine-object constructor: vtable 0x14328c990, flag at +0x08 from (arg5 == 0), magic 0x389aae49b6cecf17 at +0x18, +0x2c = 0x400, three codec-encoded seeds (+0x38, +0x58, +0xb0), everything else zeroed",engine,,
+Overwatch.exe,0x141c52d10,0x141c52d10,RegisterWorldInterface,"Appends one transformed pointer to the world interface array at world+0x188; the transform is inline (xor 0x238e31e8cd062f58, ror 0x31, add 0x34b5f414245bf6ef) and its encoding of 0 is 0x4daa5a973c0808b6, the value WorldBaseCtor stores at world+0x058",engine,,
+Overwatch.exe,0x140767da0,0x140767da0,WorldInterfaceArrayGrow,"Grows the u64 interface array at world+0x188 to max(capacity + capacity/2, length + requested); bit 31 of the capacity word marks a borrowed buffer, which is copied instead of reallocated",engine,,
+Overwatch.exe,0x141c553a0,0x141c553a0,WorldInterfaceMapInit,Builds the world interface array's pointer-to-index map at world+0x198 with three buckets,engine,,
+Overwatch.exe,0x141c56fb0,0x141c56fb0,WorldInterfaceInsert,"Inserts a pointer into the world interface array's pointer-to-index map at world+0x198 and stores the encoded engine back pointer at subsystem+0x008 (mov [rdx+8], rax at 0x141c56fd1) using xor 0xd6c0ac78d0e44481 then add 0x9dd46acd84d192e2",engine,,
+Overwatch.exe,0x1405838a0,0x1405838a0,EncodeAddressB,"In-place 64-bit address codec on the qword at rcx: sub 0x574da7a34c106b16 then ror 3; the inverse is not a separate function in the image (0x1405838d0 lies inside WorldCtor 0x1405838c0), it is derived by Codec::inverse in crates/ow-engine/src/codec.rs",engine,,
+Overwatch.exe,0x140543a40,0x140543a40,EncodeSeed38,"In-place 64-bit codec on the qword at rcx: sub 0x274e2f82e6194a03 then xor 0x45ef9e20123f172f; WorldBaseCtor 0x141c507c0 calls it at 0x141c50839 on the stack seed 0x627dce6e1d5603a4 and xors the result with 0xd674a580a443b55e for world+0x38; Ghidra had no function at this address, created from the direct call site in this pass",engine,,
+Overwatch.exe,0x1405674e0,0x1405674e0,EncodeSeedB0,"In-place 64-bit codec on the qword at rcx: xor 0xd6a9bd8714cc2178 then sub 0x416ff37b1ad4aa2f; WorldBaseCtor 0x141c507c0 calls it at 0x141c508a7 with the stack seed cleared to 0, and the result feeds world+0xb0 at 0x141c508d1; Ghidra had no function at this address, created from the direct call site in this pass",engine,,
+Overwatch.exe,0x140be33c0,0x140be33c0,Sub460ObjectCtor,"Fills a 0x1b8-byte object with four copies of a six-dword descriptor (0x1442a31d0..0x1442a31dc plus 0x143870e48) tagged 1..4, and returns its own argument; WorldCtor builds it, encodes its address into world+0x460 and drops the pointer",engine,,
+Overwatch.exe,0x141c578c0,0x141c578c0,SubsystemStubCtor,"28-byte base constructor shared by 31 of the 65 engine subsystem slots: stores vtable 0x142f7d778 at [rcx] and the cookie 0x7495174655b5d763 at [rcx+8], returns rcx; every caller overwrites [obj] with its own vtable, so 0x142f7d778 never survives a construction. Ghidra had no function at this address; created from the subsystem census",engine,,
+Overwatch.exe,0x1405437f0,0x1405437f0,DecodeEnginePtr220,"In-place 64-bit codec on the qword at rcx: ror 0xf, xor 0x5a1b63795b8475ea, sub 0x4998612e34f258d3, ror 0x1e; ConstructEngineSubsystems 0x140554220 calls it at 0x140555325 on the qword taken from [world+0x330]+0x60 (null-checked at 0x140555310, then +0x60), applies the same inline chain WorldCtor uses for that field (xor 0x6e, add 0x6c5df24a0815916e, xor 0x3c1986ede8c2b44a, ror 0x10, xor 0xc2300451bcb9e837, add 0x5c04429ca265e813) and stores into world+0x220 at 0x140555372, so slot 0x220 is a decoded pointer rather than an allocation. Ghidra had no function at this address; created from that call site",engine,,
+Overwatch.exe,0x142003720,0x142003720,SceneComponentApplyInstanceData,"The placed scene component's vtable+0x20 slot (vtable 0x1433632e0 slot 4): reads the component's instance data through the accessor at vtable+0x10 with id 1, copies three quads from *(result+0x10) into the component at +0x160 (position), +0x150 (scale) and +0x140 (quaternion), then calls SceneComponentSetLocalTransform 0x142000620 with them; a non-zero byte at instance data +0x30 sets bit 0x800 at component+0x248 and notifies component+0x258. This is the writer the collision builder's +0xd0/+0xf0 transform comes from",map,,
+Overwatch.exe,0x142000620,0x142000620,SceneComponentSetLocalTransform,"Takes a scene component and three quads (quaternion, position, scale). With component+0x298 (the parent) null it accepts each quad only when it differs from the current value - the quaternion when q.q_new < 0.9999999, the position and scale when the squared distance exceeds 1e-8 - builds the 3x3 rotation at +0x60/+0x70/+0x80 from the quaternion, and writes +0xd0 the quaternion, +0xe0 the scale and +0xf0 the position, then notifies children. With a parent it hands over to 0x141ffab90, which composes +0xd0/+0xf0 with +0x298. These are exactly the fields the placed-model collision builder reads",map,,
+
+Overwatch.exe,0x141b5e1e0,0x141b5e1e0,ModelChunkSize,"The model asset's sizing pass: per-tag version gate (MDLC 0x165, MRNM 0x1f, mskl 0x20, LCOM 0x14, MESD 2, HTLC 0x18, MSTU 2), returns 7/6 on a mismatch and the chunk's runtime size",model,,
+
+Overwatch.exe,0x141b5df70,0x141b5df70,ModelChunkLoad,"The model asset's load pass in chunk order MDLC, MRNM, mskl, LCOM, MESD, HTLC, MSTU, each behind the same version gate; builds the model object at param_1[0xd]",model,,
+
+Overwatch.exe,0x141b893e0,0x141b893e0,MrnmFixup,"The MRNM in-place offset->pointer fixup: header +0x00/+0x08/+0x10, per vertex buffer +0x10 and (only when flags bit 0x10 is clear) +0x50/+0x58, per index buffer +0x08. Verified as fn/MrnmFixup",model,,
+
+Overwatch.exe,0x141b89390,0x141b89390,MrnmRuntimeSize,"The MRNM runtime-block size: submeshes*0xa0 + 0xc0 + vertex_buffers*0xf8 + index_buffers*0x18, 32-bit. Verified as fn/MrnmRuntimeSize",model,,
+
+Overwatch.exe,0x141b88df0,0x141b88df0,LoadMstuChunk,"The MSTU chunk load: a zero u32 at +8 stores a null STU, else the STU v2 loader gets the pointer at +0 and the u32 length at +8",model,,
+
+Overwatch.exe,0x1421d88c0,0x1421d88c0,LoadStuBlob,"The STU v2 blob loader: CRC64 over the 36-byte header, the type-hash bags and the instance layout",stu,,
+
+Overwatch.exe,0x14210c450,0x14210c450,BuildModelRuntimeRecord,"Writes one runtime mesh record (0xe8 teaser, 0x1c element blocks, the a8/b0/b8 arrays, the 0x50 tail); each element is {u8 semantic,u8 index,u8 format,u8 stream,u32 offset<<12|stride<<22}",model,,
+Overwatch.exe,0x142ec6cb0,0x142ec6cb0,ValidateBrowserCallbackTable,"Checks a browser callback config against the client's own table: onConnected and onDisconnect required, the optional names accepted, the deprecated ones allowed, every name logged by itself",browser,
+
+Overwatch.exe,0x142ed1be0,0x142ed1be0,RouteBrowserMessage,"Parses the browser JSON envelope, requires the integer 'type' field, and dispatches service codes 0x00..0x1a (host to browser) or client codes 0x1b..0x31 (browser to host), each handler reading its own named fields",browser,
+
+Overwatch.exe,0x142ed5180,0x142ed5180,CallJavascriptCallbackMessage,"Service type 0x0c: reads callback_id and args and calls the page function by id",browser,
+
+Overwatch.exe,0x142ed6180,0x142ed6180,CreateBrowserFromMessage,"Service type 0x00: builds the browser from the page config (start_url, cache_path, user agent, storage/plugin/console switches, background colour, acceleration, process rate)",browser,
+
+Overwatch.exe,0x142ed8160,0x142ed8160,DecodeJavascriptConsoleMessage,"Client type 0x2f: decodes source, line, message and method and fires the console-message callback",browser,
+
+Overwatch.exe,0x142eda0d0,0x142eda0d0,RegisterJavascriptVariableMessage,"Service type 0x0b: reads scope and value and registers a javascript variable in the page",browser,
+
+Overwatch.exe,0x1402dc690,0x1402dc690,RegisterAvailableHeroesBase,"Registers the available-heroes restriction component (STU_5427ADC1, type hash 0x5427ADC1, size 0x58)",hero,,
+
+Overwatch.exe,0x1402dc790,0x1402dc790,RegisterAvailableHeroesAll,"Registers the empty available-heroes component (STU_D1DC7C55: no restriction, every hero; size 0x58)",hero,,
+
+Overwatch.exe,0x1402dc890,0x1402dc890,RegisterAvailableHeroesWhitelist,"Registers the available-heroes whitelist component (STU_3C14F504: m_heroes at +0x58; size 0x68)",hero,,
+
+Overwatch.exe,0x1402dc990,0x1402dc990,RegisterAvailableHeroesWhitelistAlt,"Registers the second available-heroes whitelist component (STU_C45DE560: m_heroes at +0x58, the class every mode team uses; size 0x68)",hero,,
+
+Overwatch.exe,0x140c993e0,0x140c993e0,MoverAccumulateWorldVector,"Adds a world-space vector into the local movement vector body+0x1150: rotated by the state rows unless body+0x10d0 bit 24, then four ADDS lanes",mover,,
+
+Overwatch.exe,0x140ca72d0,0x140ca72d0,MoverGravityVector,"The world gravity vector: (gate * body[0x610]) along body[0xc0..0xcc], the gate read from 0x14202fb00 (constant -10.0 at 0x1431161f8, or 0.0)",mover,,
+
+Overwatch.exe,0x140cb2010,0x140cb2010,MoverAirDrag,"The airborne terminal drag: delta = drag_dt * -abs(gate*body[0x610]/terminal^2 * up_lane) * (up_lane * axis), terminal from body[0x614]/body[0x618] by the sign of the up lane, clamped so it cannot reverse the vector",mover,,
+
+Overwatch.exe,0x140cb2b00,0x140cb2b00,MoverGravityStage,"The gravity arm: accumulate dt*gravity into body+0x1500..0x150c and add it into body+0x1150 through the state rows; the on-ground arm is a surface drag on body[0x61c]/body[0x620]",mover,,
+
+Overwatch.exe,0x140cb1990,0x140cb1990,MoverApplyForces,"Per-tick force stage: air drag, the on-ground move, three vector stages, then gravity (airborne) or the surface drag (on ground)",mover,,
+

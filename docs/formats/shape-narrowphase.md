@@ -59,9 +59,9 @@ every element indexed by the entry's `+0x24` (a signed dword):
 |---|---|---|---|
 | `0` | `record+0x2d0` | `0x20` | `0x142ccdf40` sphere (`fn/CollisionSphere`) |
 | `1` | `record+0x2e8` | `0x30` | `0x142ccd7b0` capsule (`fn/CollisionCapsule`) |
-| `2` | `record+0x300` | `0x50` | `0x142cd3c80` — unread |
+| `2` | `record+0x300` | `0x50` | `0x142cd3c80` — read, not implemented |
 | `3` | `record+0x318` | `0x50` | `0x142caed10` `MeshSweepEntry`, which forwards to `0x142caed30` (`fn/MeshSweep`) |
-| any other value (4 and up, and negative) | `record+0x330` | `0x50` | `0x142cd0ae0` — unread |
+| any other value (4 and up, and negative) | `record+0x330` | `0x50` | `0x142cd0ae0` — read, not implemented |
 
 The type byte is compared as `0, 1, 2, 3` in that order and the last arm
 catches everything else, so a negative type and type `4` share the
@@ -274,6 +274,13 @@ wrapper.
 
 The unit drives the wrapper directly, with a world assembled from one arena
 blob and the sink left null, so:
+
+**The solver is verified separately.** `0x142cc9460`, the closest-point GJK the
+triangle test hands support-point and large-expansion queries to, is
+`fn/ClosestPointGjk`: 264 cases through the real body, the whole `0x40`-byte
+output and the `AL` return, 74.5% branch coverage, 12/12 mutants killed. The
+wrapper's corpus also places type-3 leaves, so the dispatch and the solver are
+two gated leaves rather than one untested chain.
 
 - **Not verified: the sink push** `0x142cc1450` and the sink record's layout.
   It is the reason all four declared dead edges are dead.

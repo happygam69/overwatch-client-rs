@@ -115,6 +115,78 @@ Reader: `ow-tank::mapchunk` (`Kind::from_type_id`,
 `MapChunk::parse` takes the declared kind). The per-kind numbers are pinned by
 `crates/ow-tank/tests/mapchunk_kinds.rs`.
 
+### The entity component vocabulary is data (2026-11-03)
+
+An entity placeable's body is a table of component-instance-data records, each
+`{u32 component id, u32 relative offset}` (`ow_tank::mapchunk::InstanceDataRef`).
+The word is **not** an STU class hash: it is a small component id, and the STU
+asset at `record offset` is the component's data, whose **root instance hash
+names the class**. `crates/ow-tank/examples/map_entity_probe.rs` reads the
+practice range this way: 34 chunks, **550 entity placeables, 644 records, 13
+distinct ids**, 475 of the entities carrying the model component.
+
+| id | root class hash | class | entities |
+|---|---|---|---|
+| `0x02` | `0x02DEEEA0` | `STUModelComponentInstanceData` | 475 |
+| `0x03` | `0x75526BC2` | `STUStatescriptComponentInstanceData` | 47 |
+| `0x06` | `0xB1B9C667` | `STUWaypointInstanceData` | 10 |
+| `0x09` | `0x83DEC8C7` | `STU_83DEC8C7` (unnamed) | 6 |
+| `0x0b` | `0x64100592` | `STUTargetTagInstanceData` | 49 |
+| `0x0d` | `0x0993C1FE` | `STU_0993C1FE` (unnamed) | 4 |
+| `0x0f` | `0x50CC8187` | `STU_50CC8187` (unnamed) | 8 |
+| `0x10` | `0x99257985` | `STUECAISpawnerInstanceData` | 1 |
+| `0x11` | `0xF199249B` | `STUECHintPointInstanceData` | 30 |
+| `0x17` | `0x5AD3B86B` | `STU_5AD3B86B` (unnamed) | 4 |
+| `0x1a` | `0xA53894DC` | `STU_A53894DC` (unnamed) | 4 |
+| `0x1e` | `0x139CCB2F` | `STU_139CCB2F` (unnamed) | 4 |
+| `0x20` | `0x7D175935` | `STU_7D175935` (unnamed) | 2 |
+
+The classes are the reference checkout's names for the data; nothing in this
+table is shipped here. Every named component's stream parses as a full STU v2
+asset at its offset, so the map's component data is readable in place — the
+engine class behind each component id is the remaining link, and
+`docs/formats/static-collision.md` now ties the collision builder's second
+argument (the 0x300-byte scene component) to the model component hypothesis.
+
+## Spawn records and the practice range's spawn room (2026-11-09)
+
+**Data: read. Selector: open.** The map's spawn-bearing chunks are kinds
+`0x16` (`MAP_PLACEABLE_TYPE_SPAWN_GROUP`), `0x19`
+(`MAP_PLACEABLE_SPAWN_VOLUME`), `0x1E`
+(`MAP_PLACEABLE_TYPE_DYNAMIC_SPAWN_POINT`) and `0x1B`
+(`MAP_CHUNK_DYNAMIC_SPAWN_GROUPS`). On the practice variation
+(`0x080000000F69002E`, map id `0x0F69002E`) the spawn-volume, dynamic-point and
+dynamic-group chunks are the empty 16-byte header, and the 25 kind-`0x16`
+records are all AI bot groups (`Enemy Sniper Bot`, `Friendly Firing Bot`, ...).
+**The practice map ships no player spawn record.**
+
+The map's two `teMAP_PLACEABLE_TYPE_TRIGGER_VOLUME` (kind `0x17`) placeables
+are readable. Each begins with an STU blob at `+0x64` (a 4-byte payload length,
+then `STUD`), followed by an oriented box at `+0xA0`:
+
+| offset | type | meaning |
+|---|---|---|
+| `+0xA0` | `f32[3]` | unit yaw axis `(x, 0, z)` |
+| `+0xAC` | `f32[3]` | box centre, world space |
+| `+0xB8` | `f32[3]` | half extents `(x, y, z)` |
+
+The practice volumes are `(71.169, 0.948, 53.110)` with half extents
+`(11.861, 5.179, 7.608)` and `(58.663, 15.800, -22.654)` with half extents
+`(3.500, 9.000, 9.250)`. The first centre lies inside the
+`MAP_PLACEABLE_AREA` box centred `(70.546, 0.498, 53.797)` (half extents
+`(12.663, 6.326, 8.184)`); the second lies inside none. The first volume is the
+hero-select room: it contains the `Change Hero` (`(66.913, -0.937, 45.648)`),
+`Settings` (`(80.274, -2.139, 53.563)`), `Reset` (`(78.632, -2.139, 55.879)`)
+and `Activate` (`(68.149, -4.000, 56.987)`) text placeables, and the collision
+floor under its centre is `y = -4.006` (the box's own bottom is `-4.231`).
+
+`ow-tank::mapresolve::spawn_room` reads that volume (the trigger-volume centre
+inside an area box), `ow_tank::range_world::RangeWorld` carries it, and
+`ow-client` starts its walker on the floor under the volume centre. `--spawn x
+y z` overrides the point. This is a **declared viewer default** for the open
+spawn-selection stage, not a read of the client's selector. Install test
+`spawn_room_real` pins the volume.
+
 ## The model and look join
 
 A placement carries two references:
@@ -208,6 +280,43 @@ A stored value of zero is the client's "nothing here" (`FUN_141fd3950`,
 have fixed fields and can also appear in the list. `ow-tank::mapresolve` reads
 this layout and reproduces the loader's order; `tests/map_resolve_real.rs`
 walks the practice range's 34 chunks.
+
+### The loader's runtime fields in the map blob
+
+The map asset is a **plain binary** (type `0x002`), and the loader writes its
+runtime state into the same buffer beyond the shipped fields. `0x141ff5c80`
+stores one asset **handle** per requested chunk in the blob:
+
+| handle | source |
+|---|---|
+| `+0x1D0` | `+0x1B8` (kind `0x11`, collision) |
+| `+0x1D8` | `+0x1C0` (kind `0x12`, pathing) |
+| `+0x1E0` | `+0x1C8` (kind `0x23` on every map seen) |
+| `+0x1F0` | slot `0x1F` (kind `0x13`, sound area) |
+| `+0x1E8` | slot `0x20` (kind `0x1B`, dynamic spawn groups) |
+| `+0x1F8` | slot `0x23` (kind `0x27`, streaming) |
+| `+0x208 + 8*i` | slot `1..=0x1C` (the scene/placeable chunks) |
+| `+0x2E8` | the `+0x1B0`/`+0x1B4` extra-GUID list |
+
+The chunk completion `0x142e49400` (registered on each request through
+`0x140550660(handle, callback, map, 0)`) then decodes every handle
+(`handle & ~0x3f`, the tag check `^ [block+8] & 0x3f`, payload at `[block]`)
+and writes the **payload pointers** into the blob:
+
+| payload field | chunk |
+|---|---|
+| `+0x2F8` | kind `0x11` collision |
+| `+0x300` | kind `0x12` pathing |
+| `+0x308` | kind `0x23` streaming/sub-asset |
+| `+0x310` | slot `0x20` |
+| `+0x318` | slot `0x1F` |
+| `+0x320` | slot `0x23` |
+| `+0x2F0` | the extra-chunk payload array (one per `+0x2E8` GUID) |
+
+`+0x410` is set when the map is loaded (the predicate `0x141ff5bd0` tests it and
+runs `0x142e48c50` -> `0x142e49400` when it is still zero). The chunk payloads
+are therefore reachable from the map blob without any further asset lookup, and
+`+0x2F8` is the collision chunk's handoff point to its consumer.
 
 Proof against the install: the map asset `0x0800000000F47508` (type `0x002`,
 2928 bytes) is readable, and the manifest holds exactly the 31 chunk GUIDs the

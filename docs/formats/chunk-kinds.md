@@ -279,6 +279,51 @@ payloads cannot be confused again.
 runs the same fixup and is therefore expected to carry the same header; no
 kind-`0x10` chunk was opened, so that is expected, not read.
 
+## 4b. The tail element is the level's collision mesh (2026-11-08)
+
+The container's tail array holds **one** element, and that element is the map's
+whole static collider. Reading the payload against it closes exactly:
+
+```text
+tail +0x00  u64  node array      0x031CE30   count +0x18  236,957  stride 0x20
+tail +0x08  u64  vertex array    0x0000040   count +0x1c  203,999  stride 0x10
+tail +0x10  u64  triangle array  0x0A581D0   count +0x20  343,474  stride 0x20
+tail +0x18..    the three counts, then 30, a float (745095.6 here), and 0x1FFF
+```
+
+The three runs tile the body between the `0x38` header and the sector array
+(`0x14D3810`) with no slack: `0x40 + 203,999*0x10 = 0x31CE30`,
+`0x31CE30 + 236,957*0x20 = 0xA581D0`, `0xA581D0 + 343,474*0x20 = 0x14D3810`.
+Note the tail's field order is not the memory order: the vertices come first in
+the body and the nodes second.
+
+Those strides are the client's own mesh record strides (`mesh_world`:
+`VERTEX_LEN 0x10`, `NODE_LEN 0x20`, `TRIANGLE_LEN 0x20`), and the elements decode
+as those records:
+
+- the first node's box is `(-103.469, -38.510, -161.028) .. (206.159, 51.071,
+  148.317)` - the level's own extent - with second child `62,684`, mask
+  `0x1FFF`, split axis `0` and leaf count `0`;
+- the first triangle's three corners are `120319, 120323, 120317` (all below the
+  vertex count), followed by three adjacency words, two ids (`181`) and the mask
+  `0x1FFF`;
+- every node's mask is a subset of the tail's `0x1FFF`, and the tree is a
+  **full binary tree**: 118,478 internal nodes and 118,479 leaves.
+
+So the body is a prebuilt `MeshArrays` in the client's exact layout, in world
+coordinates, with its BVH already built. **The consumer function is still not
+read** - what is read is the container, the client's record layout, and the
+arithmetic above; the interpretation (a world-space triangle mesh swept by the
+type-3 leaf `0x142caed30`) is the one the data supports, and it is confirmed by
+the result: sweeping it reproduces the surfaces the render shows, and the walk
+in `ow-client` stands on the map's floors (`ow-tank::collision_level`,
+`crates/ow-tank/tests/collision_level_real.rs`).
+
+Before this, the movement world carried only the per-model `STU_537E56E4`
+holder meshes - the coarse blocking volumes of props (a tower model's collider
+is 12 triangles) - so most of a map's floors, walls and stairs had no collision
+at all.
+
 ## 5. What is implemented, and how it is proven
 
 `crates/ow-tank/src/chunkkind.rs` (new):

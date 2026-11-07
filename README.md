@@ -22,7 +22,9 @@ modify it. See [CREDITS.md](CREDITS.md).
 - **Behaviour** comes from one place: the complete `Overwatch.exe` Ghidra
   image (base `0x140000000`, every `.text` page, the install's plaintext
   `.pdata`). Findings are recorded as an address and a conclusion, never as
-  disassembly. `docs/ghidra-project.md` is the entry point.
+  disassembly. `docs/ghidra-project.md` is the entry point, and
+  `docs/ghidra-image-audit.md` states how far the analysis is trusted (the
+  bytes are exact; three analysis defects are measured and listed for repair).
 - **Data** comes from the operator's installation: formats, registries,
   geometry, values. Findings live in `docs/formats/` and are checked by tests
   that read the install.
@@ -44,8 +46,27 @@ client-side mode→variation selector.
   tick driver, the camera surface and projection builders, the FP camera pose
   path, the animation sampler and clip runtime, the statescript executor, the
   manifest's bundle flag and bundle entry lookup, and the map-to-chunk loader.
+- **Hero selection, as a declared viewer default:** the practice mode's own
+  roster is read (its teams carry the empty marker, so every hero asset is
+  offered), and the hero asset's own display name (`STUHero.m_0EDCE350`, type
+  `0x07C`), playable marker (`m_64DC571F`; 135 hero assets, 54 playable and 81
+  NPC) and movement row (`ow_tank::entity::MoverRow`) are read.
+  `ow-client --list-heroes` prints them with forward speeds. A live launch with
+  a terminal asks for a pick (`--hero <name|index>`, `--no-hero`); the pick
+  places the hero's own first-person model and weapons, uses its forward speed
+  as the wish magnitude and its terminal fall as the clamp. The real pick is
+  still a CEF page value (`docs/formats/frontend-pipeline.md` 4c).
 - **Working today:** the map header → variation → scene map → chunk resolver
-  (`ow-tank::mapresolve`), and the default client rendering the practice range.
+  (`ow-tank::mapresolve`), the default client rendering the practice range, and
+  **the character walking in it**: the map's own level collider (the
+  `MAP_CHUNK_COLLISION` body: 203,999 vertices, 236,957 BVH nodes, 343,474
+  triangles, world coordinates, `ow-tank::collision_level`), swept by the
+  verified type-3 mesh leaf (`ow-sim::walk`) under the read per-frame velocity
+  law (`ow-sim::frame`). The per-model blocking volumes (`ow-tank::range_world`)
+  are not in the walk world: their read consumer is a query and their component
+  route is unread, and adding them was measured to drift and climb
+  (`docs/formats/character-controller.md`). `--walk-test` prints and asserts the
+  numbers.
   The practice scene requests and opens 34/34 chunks, walks 1,358 placeables
   (229 model-group references, 550 entity references), and places 2,449 model
   instances from the model groups' 304 groups.
@@ -70,7 +91,11 @@ client-side mode→variation selector.
   analytic path (`fn/CollisionSphere`, `0x142ccdf40`) and the query's layer
   filter (`fn/CollisionShapeFilter`, `0x142cbb350`) and the type-1 capsule
   (`fn/CollisionCapsule`, `0x142ccd7b0`), the type-3 mesh narrowphase
-  (`fn/MeshSweep`, `0x142caed30`) and the collision chunk's runtime
+  (`fn/MeshSweep`, `0x142caed30`), the mesh gather's per-triangle accept
+  (`fn/BoxTriangleOverlap`, `0x142cd58a0`), the box-BVH gather that feeds it
+  (`fn/MeshGather`, `0x142caea70`), the closest-point solver the triangle
+  test falls into on the live walk (`fn/ClosestPointGjk`, `0x142cc9460`)
+  and the collision chunk's runtime
   17-pointer cell fixup (`fn/MapChunkCellBytesFixup`, `0x141ff51a0`) are
   differential units against the client's bytes, and the chunk's container
   (220 cells, 17 arrays each) is parsed and pinned on the install
@@ -87,10 +112,26 @@ client-side mode→variation selector.
   type-0/1/2/4 dispatch, and walks the shape list on the contact-id `-1`
   path. The live per-frame law is read and implemented in `ow-sim::frame`:
   both update paths publish `state_transform(wish) + ramp_vector(body)` to the
-  controller, and the two `ADDPS` operand orders are pinned. They do **not**
-  make movement playable: the wish producer, the meaning of the published
-  value (`entry+0x10`, which the client's get/set pair share) and collision
-  are open. The collision side moved: the **placeable transform is read** (the
+  controller, and the two `ADDPS` operand orders are pinned. With the range's
+  collision assembled from its own model meshes, this law **is** the live walk
+  in `ow-client`; what stays open around it is the wish producer, the character
+  sweep's Domino aftermath, the movement asset (speed, jump, gravity) and the
+  player spawn selector (`docs/open-questions.md` item 1b), the hero pick's
+  binding (runtime variable 940) and the spawn write that consumes it. **Walls stop the
+  walk**: the slide cannot climb a contact steeper than 45.6 degrees and the
+  floor snap only ever lowers the body, proven against the range's own level
+  collider (`ow-client --walk-test`, `--wall-audit`). **Jump works**: the
+  take-off is read and shipped (`ow_sim::jump`: button bit 6, the state file
+  word `body+0x10d0` and its five transitions, the gate, and the impulse
+  `local.y := body+0x60c` = component `0xEC289987` = `6.0` roster-wide) and so
+  is the arc (`ow_sim::air`: per airborne tick the terminal drag
+  `MoverAirDrag` `0x140cb2010`, then `body+0x1150 += dt * (-10.0 *
+  body[0x610]) * up` - `-17.5 m/s^2` from the read gravity scale `1.75` -
+  through `MoverAccumulateWorldVector` `0x140c993e0`). `--walk-test` asserts the
+  arc against the law's own numbers. What is still open around it is the
+  **ground** vector resolve through the `body+0x960` record table and the swept
+  solve's contact-to-position rule (`docs/open-questions.md`, "The jump law"). The practice range's
+  viewer default is the map's own spawn-room volume, not a scene centroid. The collision side moved: the **placeable transform is read** (the
   scene component's vtable `+0x20` slot `0x142003720` copies the component's
   instance data and `0x142000620` writes the local `+0xd0` quaternion /
   `+0xf0` position, which `OwnerCreateBody` `0x142cc3d90` takes as the shape's
@@ -119,15 +160,28 @@ client-side mode→variation selector.
   transform, the Domino velocity dispatch and the per-frame camera look, the FP
   retarget, the Pose2d VM, the weapon fire loop, damage application and the
   client material application (55 placeholder draws remain diagnostics).
-- **Data-side reads:** CASC/BLTE, the CDN index footer and page layout,
+- **Data-side reads:** CASC/BLTE, the CDN index footer, page layout, page
+  selection and per-page read, the install-wide chunk-mode byte census,
   STU v2, entities and health pools,
-  model/skeleton/clip decoding, weapon graphs, map chunks, and the
+  the model chunk table and its version gate, `MDLC`'s material list, `MRNM`'s
+  descriptor layer (fixup, runtime size and runtime-block load are three
+  differential units), `MSTU`'s header, skeleton and clip decoding (the
+  `mskl` Lookup is the mesh slot → bone map: proven on all 7,328 skinned
+  install models, with the client's own table sizes read from `MsklTableBuild`;
+  the join's client consumer and the 454 models with a second blend-index set
+  stay open), weapon
+  graphs, map chunks, effect chunks (the `EFCT` root, the client's 0x34-entry
+  kind table at `0x143610490` and the per-tag component layouts the builder
+  `FUN_142e4a780` copies; the reference's effect structs are pre-2.x and every
+  one of them is short), and the
   bundle-aware material/texture chain (the texture format switch, descriptor
   builder and descriptor size walk are differential-verified against the
   current image; R16_UNORM keeps its exact words and uploads as `R16Unorm`
   where the adapter exposes `TEXTURE_FORMAT_16BIT_NORM`). All 305 map headers
   are readable: 42 from the encoded store
-  and 263 from bundles, as the client reads them.
+  and 263 from bundles, as the client reads them. The model *vertex-element
+  decode* and mesh assembly are the viewer's own reading; they are listed as
+  open, not as client behaviour.
 
 The rebuild order is [`docs/rebuild-plan.md`](docs/rebuild-plan.md).
 
@@ -164,7 +218,10 @@ export OW_SUPPORT_KEYRING='path/to/Overwatch.keyring'   # optional
 cargo xtask verify                                      # fmt, clippy, tests, index, deviations, addresses
 cargo xtask verify --fast                               # without the install-reading tests
 
-cargo run --release -p ow-client                        # the practice range (wgpu viewer)
+cargo run --release -p ow-client                        # the practice range; WASD walks
+cargo run --release -p ow-client -- --walk-test         # the movement trace and its assertions
+cargo run --release -p ow-client -- --free-cam          # the old free camera
+cargo run --release -p ow-client -- --walk-column X Z --render-column   # every floor in one column, collision vs render
 cargo run --release -p ow-client -- --list-maps         # headers and variation modes
 cargo run --release -p ow-client -- --shot out.png --width 1280 --height 720
 cargo run --release -p ow-client -- --tour out --count 4

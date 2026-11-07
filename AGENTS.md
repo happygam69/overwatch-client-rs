@@ -74,12 +74,31 @@ may be added**; `cargo xtask verify` fails on one.
     the client's own path (map header or loader), never by a proximity seed or
     a hand-picked GUID list. A seed that renders overlapping maps is a bug, not
     a map. If the path is not read, the content is open.
+12. **Nothing is built on an invention (1 to 1).** If the stage a feature needs
+    is a declared stand-in, the feature is open too. Do not extend a stand-in
+    and do not add a read feature on top of one — replace or delete the stand-in
+    first.
+13. **Fix a wrong doc on sight.** When you are certain a recorded address,
+    conclusion or state is wrong, correct it in the same change; a stale page
+    costs the next session hours.
 
 ## How to work
 
 - **One thing at a time.** Every step should be revertable separately.
 - **Read before writing.** If the client's code has not been read, the answer
   is "open", not a guess.
+- **A zero read from the image is not a value.** `.data` declares
+  `VirtualSize 0x0CC43BC` but only `0x0333600` raw bytes, so RVA
+  `0x03B79600..0x0450A3BC` (**10,030,524 bytes**, 13.25% of the image) is a BSS
+  tail: no bytes in the file, zeros mapped by the loader, filled by the client
+  at startup (all 7,956 component-type descriptors are built there). A table or
+  vtable slot in that range always reads zero - read the
+  `RegisterComponentTypeDescriptor` (`0x1421cd360`) call site instead. Full
+  measurements: `docs/ghidra-image-audit.md` section 2.1; short version:
+  `docs/ghidra-project.md`. `python dev/pe_layout.py --addr <addr>` classifies
+  an address (`raw` / `zero-fill` / `unmapped`); `dev/callers.py` and
+  `dev/rip_refs.py` find the site that writes it. The disk `.text` is
+  ciphertext, so only the recovered image is a code source.
 - **Keep notes as you go.** Add the address and conclusion to the relevant
   `docs/formats/<system>.md` immediately.
 - **Name what you understand.** When a function's role is settled, add a row
@@ -114,6 +133,7 @@ may be added**; `cargo xtask verify` fails on one.
 | `ow-client`, `ow-scene` | the one launchable client and map assembly; default practice range through `mapresolve` | `crates/ow-client/`, `crates/ow-scene/` |
 | `ow-sim` | parked reference; not built until a read gameplay layer needs it | `crates/ow-sim/` |
 | `dev/verify_harness/` | differential proof that a Rust function equals the client's bytes | `dev/verify_harness/` |
+| `dev/pe_layout.py` | is an address raw, zero-fill (BSS, runtime-only) or unmapped | `dev/pe_layout.py` |
 | `docs/function-names.csv` | the name ↔ current address table | `docs/` |
 
 ## Keep these files updated

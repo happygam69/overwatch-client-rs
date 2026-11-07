@@ -146,12 +146,75 @@ The install's four config-named indexes, read with this formula:
 
 All four match the length formula exactly, the footer hash validates, the
 terminal hash matches, and every page MD5 matches its stored checksum
-(`crates/ow-casc/tests/cdn_index_real.rs`). The CDN client reads the 20-byte
-footer and the tail by Range GET (`CdnPathFormat` mode 1, the downloader's
-`Range: bytes=<start>-<end>`); no decompiled call site for a per-page HTTP
-request was found, so `fetch_index_page` is the layout's page span, not an
-observed request shape. The last-key binary search that chooses a page is not
-read; the array and its location are.
+(`crates/ow-casc/tests/cdn_index_real.rs`).
+
+### Page selection and the per-page read
+
+The last-key array is walked by `CdnIndexPageSelect` (`0x1424da730`, 469 B),
+a method of the index object whose footer fields sit at `index + 0x58`. The
+selection is a lower bound with an early equal exit, and the record scan
+follows in the same call:
+
+```text
+keyBytes  = *(u8 *)(index+0x5e)      pageCount = *(i32 *)(index+0x78)
+lo = 0; hi = pageCount; page = 0
+while (lo != hi) {
+  mid = (hi + lo) / 2
+  cmp = memcmp(*(u64 *)(index+0x88) + mid*keyBytes, key, min(keyLen,keyBytes))
+  if (cmp < 0) lo = mid + 1
+  else { hi = mid; if (cmp == 0) { page = mid; break; } }
+  page = lo
+}
+if (page == pageCount) return 6                  // also pageCount == 0
+status = CdnIndexPageResident(index, page); if (status) return status
+entriesPerPage = *(i32 *)(index+0x74)            elementCount = *(i32 *)(index+0x60)
+count = min(entriesPerPage, elementCount - entriesPerPage*page)
+for i in 0..count:
+  rec = (*(u64 *)(index+0x98)) + entrySize*i
+  if memcmp(rec, key, min(keyLen,keyBytes)) == 0 -> found
+size   = BE(rec + keyBytes,  *(u8 *)(index+0x5d))   accumulated in 32 bits
+offset = BE(after size,     *(u8 *)(index+0x5c))   accumulated in 64 bits
+if (out_key16) copy min(keyBytes,16), zero-fill to 16
+return 0
+```
+
+The return is `AL` only: 0 found, 6 not found, otherwise the page-resident
+status. The early equal exit can return a later page than a pure lower bound
+when adjacent last keys are equal; on this install's two group indexes no
+adjacent last keys are equal (74,949 checked by a one-off scan, not a committed
+test), so the two agree there. The
+first record whose `min(keyLen,keyBytes)` prefix matches wins; there is no
+equal-range expansion.
+
+`CdnIndexPageResident` (`0x1424da590`) makes one page current. In whole-file
+mode (`index+0x38 == 0`) the page pointer is `*(u64 *)(index+0x50) +
+page*pageSize`, with no MD5 check. In the footer-only/streamed mode it reads
+the page by HTTP range (`0x142522870` builds the request; the WinHTTP read is
+`0x142521d70`), requires the full `pageSize`, and rejects the page with status
+8 when `MD5(page)[..checksumSize]` differs from the stored per-page checksum
+at `index+0x88 + lastKeyBytes + page*checksumSize`. The scratch page is the
+extra `pageSize` bytes after the tail. **This is the per-page HTTP request the
+earlier note said was not found**; it is reached only in the footer-only mode.
+`ow-casc` reads whole index files, so it takes the whole-file branch; the
+streamed branch is read and documented but not implemented by the port.
+
+`CdnResolveLocation` (`0x1424b0cc0`) is the caller: it tries the archive-group
+index at `client+0x48` (patch `+0x118`), splits the 6-byte offset into
+`ordinal = off >> (shift*8)` and `off & mask`, and copies the 16-byte archive
+record from `client+0x108` (patch `+0x1d8`); a miss or a non-load status falls
+back to the file index at `client+0x1e8` (patch `+0x290`) with the 16-byte
+result key. The batch form `CdnIndexPageSelectBatch` (`0x1424da910`) advances
+the page monotonically over sorted keys. The batch wrappers `0x1424b0e50` and
+`0x1424b0ef0` are not Ghidra functions; they are read at the expression level
+only. The slot-to-config-key mapping (`+0x48` archive group, `+0x118` patch
+group, `+0x1e8` file index, `+0x290` patch file index) is a structural
+inference, not a read of the config wiring.
+
+Still not read: which function writes the archive shift/mask/count/array
+(`client+0xf0..+0x110` and `+0x1c0..+0x1e0`) from the CDN config, and the batch
+wrappers operation for operation. The CDN transport itself remains a TACTLib
+port with no real endpoint test, but the request shape (range offset and
+length, full-page requirement, checksum reject) is now read.
 
 ## Keyring
 
@@ -831,7 +894,12 @@ loops while `lo < hi`. The miss is `lo - 1` with 32-bit wrap, which is
 whose first key is the greatest one `<= key`; it is **not** the first page
 whose first key is `>= key`. An exact first key returns its own page, and a key
 between pages `N-1` and `N` returns `N-1`. The caller compares the return with
-`-1`.
+`-1`. The search is verified by `fn/EncodingPageIndexSearch`: its four
+conditional branches (`pages != 0`, the equal compare, `lo = mid + 1` and
+`lo < hi`) are all measured at 100%, the return is compared zero-extended, and
+the index and key buffers prove it writes nothing. The entry offset is a
+32-bit product, so a page count high enough to wrap it is outside what the
+arena can represent and is declared open there.
 
 `EncodingFindCKey` (`0x142498540`) uses that search with
 `min(key_len, ckey_width)` as the comparison length, then starts the page body
@@ -936,7 +1004,15 @@ MD5 is standard: `Md5Init` (`0x1426a5100`) writes the four RFC 1321 init
 words, `Md5Update` (`0x1426a4f40`) updates the byte count and buffers input,
 `Md5Final` (`0x1426a5010`) appends `0x80`, zeroes to 56 mod 64, writes the bit
 length little-endian and emits the four state words little-endian, and
-`Md5Transform` (`0x1426ab530`) is the 64-round block transform.
+`Md5Transform` (`0x1426ab530`) is the 64-round block transform. The transform
+loads the four state words, adds each round's message word from the 64-byte
+block, and adds each accumulator back into the word it came from; the block is
+read only, so the state is the whole output. Its Ghidra function listing stops
+after the first 64 bytes and the rest of the straight-line body belongs to no
+function, while the code continues at instruction boundaries to the return
+(`0x1426ab530..0x1426abca9`, 1913 bytes, no conditional branch anywhere). It
+is verified by `fn/Md5Transform`, which calls the shipped
+`ow_casc::blte::md5_transform`.
 
 Salsa20 is the standard 20-round cipher; `Salsa20StateInit`
 (`0x1424e3230`), `Salsa20Xor` (`0x1424e32c0`) and the block helpers match the
@@ -955,9 +1031,24 @@ install test samples every 32nd unique salt-0 key (35,822 containers, 54,490
 chunks) and decodes 34 records in full. Type `0x10` and LZ4 therefore have
 synthetic coverage only; no observed outer `4` block exercises LZ4 here.
 
+The byte census (`cargo run --release -p ow-casc --bin census`, full stride-1
+scan, read-only: frame headers and chunk mode bytes only, no payload decoded)
+measures the share those chunk counts carry. Of the 1,146,326 records' index
+sizes (84,463,293,804 bytes), 84,373,987,087 bytes are chunk bytes; the
+remaining 89,306,717 bytes (0.11%) are the 30-byte data headers, the BLTE
+frame headers and the one non-BLTE record. The modes split `N`/`Z`/`E` =
+8,858,748,676/72,530,821,791/2,984,416,620 stored bytes, 10.50%/85.96%/3.54%,
+and their declared decoded sizes are 8,858,463,798/163,035,566,718/
+6,079,055,245 bytes. The 43,061 `E` chunks (2.51% of chunks, 3.54% of chunk
+bytes, 3.42% of decoded bytes) carry 11 distinct key ids, none in the
+keyring, so 22,506 records (1.96%) cannot be decoded at all until a key is
+supplied. `--stride N` reproduces a sample; `cargo test --release -p ow-casc
+--test blte_real` asserts that the bytes classified across modes equal the
+frame headers' declared total.
+
 ## Oracle
 
-Seven CASC units run under `dev/verify_harness/`. The oracle is the current
+Eleven CASC units run under `dev/verify_harness/`. The oracle is the current
 build's code: the installed `Overwatch.exe` PE with its `.text` decrypted by
 `dev/offline_page_recover.py` into `module_offline.bin` (same PE headers and
 timestamp; `.rdata`, `.data`, `.pdata`, `.rsrc` and `.reloc` are byte-identical
@@ -978,7 +1069,10 @@ any one of them is not verified.
 | `EncodingHeaderParse` | `0x142498920` | `ow_casc::encoding::write_header_fields` | `fn/EncodingHeaderParse` |
 | `EncodingFindCKey` | `0x142498540` | `ow_casc::encoding::find_ckey_record` | `fn/EncodingFindCKey` |
 | `EncodingFindEKey` | `0x142498610` | `ow_casc::encoding::find_ekey_record` | `fn/EncodingFindEKey` |
-| `EncodingPageIndexSearch` | `0x142498880` | `ow_casc::encoding::page_index_search` | no standalone unit: its fifth argument is on the stack; the two find units compare its results |
+| `CdnIndexFooterParse` | `0x1424d9af0` | `ow_casc::container::parse_index_footer` | `fn/CdnIndexFooterParse` |
+| `EncodingPageIndexSearch` | `0x142498880` | `ow_casc::encoding::page_index_search` | `fn/EncodingPageIndexSearch` |
+| `Md5Transform` | `0x1426ab530` | `ow_casc::blte::md5_transform` | `fn/Md5Transform` |
+| `CdnIndexPageSelect` | `0x1424da730` | `ow_casc::container::select_page` + `decode_page_record` | `fn/CdnIndexPageSelect` |
 | `EncodingResolve` | `0x142498700` | `ow_casc::encoding::EncodingFile` (sizes + `ekeys_for_ckey`) | no standalone unit: it composes the two finds and the espec table; the find units prove the parts |
 
 `Salsa20Xor`:
@@ -1248,24 +1342,43 @@ This reproduces the published `types.txt` table and lands on known landmarks
 
 ## Gaps
 
-- **The CDN index page selection is not read.** The handler reads and
-  validates `indices/<hash>.index` and stops after the footer/tail checks; no
-  function in the complete image was found that chooses a page from the
-  `pageCount * keyBytes` last-key array for a lookup key. Searched: every
-  caller of the 16-byte `memcmp` (317 functions, 25 with a loop), every
-  function containing all four footer fields (`0x14`, `0x1c`, `0x20`, `0x24` —
-  the parsers only), every `SHL ..., 4` function with a `0x24` reference, the
-  index handler classes at `0x1424e7cb0`, `0x1424e8db0` and `0x1424d1f40`, and
-  the index builder at `0x1424f04f0`/`0x1424f0920`. The downloaded index is
-  handed to a callback (`0x1424b0850` → `0x1424bbe60`) whose consumer was not
-  found; the search may live in the launcher/agent rather than
-  `Overwatch.exe`. `ow-casc`'s page selection remains reference-derived and is
-  an open read item.
-- The CDN HTTP transport itself is a TACTLib port and has no real endpoint
-  test.
+- **The CDN index page selection is read** (2026-11-05). `CdnIndexPageSelect`
+  (`0x1424da730`) walks the `pageCount * keyBytes` last-key array, and
+  `CdnIndexPageResident` (`0x1424da590`) is the per-page read. `ow-casc`'s
+  `find_page` now follows the client's expression. Why the earlier search
+  missed it: it reads the footer fields at `index+0x6c/0x70/0x74/0x78/0x7c`
+  (base `+0x58`), not at `0x14/0x1c/0x20/0x24`; its `memcmp` length is a
+  register (`min(keyLen,keyBytes)`), so no immediate 16 appears; the stride
+  is a runtime `IMUL`, not `SHL`; and one caller lives in code Ghidra did not
+  promote to a function. Still open: the batch wrappers
+  `0x1424b0e50`/`0x1424b0ef0` are read only at the expression level, and the
+  config-to-slot wiring is an inference.
+- The CDN HTTP transport itself is still a TACTLib port and has no real
+  endpoint test, but the page request shape (range offset/length, full-page
+  requirement, per-page checksum reject) is now read from the client.
 - All 305 type-`0x09F` map headers now open: 42 from the encoded store and
   263 from bundles. See `formats/maps.md`.
 - The record byte's low seven bits are read as a class, not as a meaning.
+
+## What the port refuses that the client would fault on (2026-11-06)
+
+Four input checks exist because the client has none and would read past the end
+of its own buffers, which in Rust is either a panic or an allocation sized by a
+file. Each one is a documented divergence, the same kind as
+`parse_index_footer` returning 8 where the client has no divide-by-zero guard
+after its entry-size step.
+
+| input | client | port |
+|---|---|---|
+| `.idx` entry geometry: key width 16, size width 4, offset width 0/4/5/6 | the footer check only requires a non-zero entry size; the decoder then reads `entry[20..24]` on a 21..23-byte stride | `PageIndex::open_with_key` and `IndexFooter::entries_in_page` return `unsupported index entry geometry` |
+| `.idx` tail longer than the file, or a `tail_len` that wrapped in 32 bits | allocates `tail_len`, seeks past the end | `open_with_key` refuses before the allocation (the tail is `checksum + last keys + checksums`) |
+| encoding page count whose `(width + 16) * pages` product wrapped to zero | accepts the header, then reads past an empty page index on the first lookup | `EncodingFile::parse` returns `Error::SectionCountMismatch` |
+| a record size in a bucket entry larger than its archive | allocates the size, reads, then reports a short read | `Store::data` sizes the archive first |
+
+None of these can fire on a well-formed install: the section sizes the real
+headers carry are the products' low 32 bits, so the checks are inert unless
+the product wrapped. `cargo test --release -p ow-casc` covers the geometry and
+wrapped-count cases.
 
 ## Verification
 

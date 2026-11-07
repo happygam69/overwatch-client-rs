@@ -297,30 +297,123 @@ movement units that must stay green while this lands: `fn/MoverWishForward`,
 `fn/MoverStateVector`, `fn/MoverRampVector`, `fn/MoverRampScalar`,
 `fn/MoverAdvance`, `fn/MoveCharacterController`, `fn/CollisionShapeFilter`,
 `fn/CollisionSphere`, `fn/CollisionCapsule`, `fn/CollisionSweepBounds`,
-`fn/MapChunkCellBytesFixup`.
+`fn/MapChunkCellBytesFixup`, and the live walk's own units:
+`walk::tests::a_wall_stops_the_normal_and_keeps_the_tangent`,
+`walk::tests::a_downward_step_lands_grounded`,
+`walk::tests::the_shape_transform_rotates_the_query_into_the_shape`,
+plus the install test `range_world_real` in the full gate.
 
-**What is implementable now:** items 1–3 against a synthetic world — the whole
-producer loop runs, deterministically, with no map. **What is not:** any
-scored candidate on a real map, which is item 5 alone.
+**Implementable now, and implemented:** items 1-3 run against the range's own
+collision (the last section of this file). **What is still not:** the wish
+producer's scored candidate on a real map (item 5), and the character sweep's
+Domino aftermath.
 
-## What goes into `ow-client` when the reads land
+## What landed in `ow-client` (2026-11-08)
 
-The client already has the frame loop, the map and the scene. Movement adds:
+Movement is live. The default launch builds the practice range's own collision
+world, stands a character on it, and runs the read frame law every frame:
 
-1. `ow-sim::frame::update_frame` (already implemented) — the velocity/position
-   law from a body slice, a flags block and the resolved state matrix.
-2. `ow-sim::fan` (already implemented) — the candidate generation and
-   acceptance. It needs the evaluator as an injected closure so the collision
-   query can be swapped in once it is read: `fan::select(candidates, |c|
-   query(c))`.
-3. A `CharacterState` in `ow-client`: the body slice (`+0xc0`, `+0x5a8`,
-   `+0x5b4`, `+0x5c0`, `+0x5c4`, `+0x5cc`, `+0x5d0..`, `+0x688`, `+0x68c`,
-   `+0x10d0`, `+0x10ec`, `+0x10fc`, `+0x1140`), the state record, and the
-   geometry handle.
-4. The input source: the usercmd from the window (already read in
-   `formats/camera.md`), fed into the fan once the command producer is read.
-5. A test harness: a golden per-step timeline — the same body, the same input,
-   N frames, compared first-divergence against the emulated client chain.
+1. **The world**, from two producers, both the install's own data:
+   - **the map's level collider**, which is what a character actually walks on:
+     the `MAP_CHUNK_COLLISION` body's single tail element names a vertex array
+     (203,999 x `0x10`), a node array (236,957 x `0x20`) and a triangle array
+     (343,474 x `0x20`), in the client's own mesh record layout and already in
+     world coordinates (`ow_tank::collision_level`; evidence and the exact
+     tiling in `formats/chunk-kinds.md` section 4b; install test
+     `collision_level_real`). This is the piece whose absence made most floors
+     pass-through.
+   - **the per-model blocking volumes**: the holder filter of `0x14201ae60`
+     (`ow_tank::model_body`), the `STU_537E56E4` meshes (272 shapes over 161
+     models) and the map chunk's per-entry `(translation, scale, rotation)`,
+     which is the map's local transform and therefore the shape's world
+     transform (`fn/ShapeWorldTransform`). Install test `range_world_real`
+     (273 shapes, 3,018 placed instances, 32/32 downward sweeps). The
+     placement's rotation is handed to the sweep as the conjugate, because the
+     leaf rotates the query *into* the shape
+     (`walk::tests::the_shape_transform_rotates_the_query_into_the_shape`).
+2. **The step** - `ow_sim::walk::World` is one call per shape to the verified
+   type-3 mesh leaf (`fn/MeshSweep`, `0x142caed30`) over the verified query
+   block (`fn/CollisionSweepBounds`, `0x142cd5540`), with a uniform grid over
+   the shapes' world boxes as the broadphase, the driver's fold (travel the hit
+   fraction, re-seat, and stop after the fixed count), and a slide that
+   projects the residual off the contact normal.
+3. **The frame** - `ow-client`'s `walk::Walker` writes the local wish at the
+   client's own offset (`body+0x1140`) and calls `ow_sim::frame::update_frame`,
+   which is `ADDPS(state_vector, ramp)`: `MoverStateVector` under the character's
+   rotation, `MoverRampVector` from `+0x5a8`/`+0x5b4`/`+0x10fc`/`+0x10ec`, and
+   then `MoverAdvance`'s `(state + ramp) * dt + pos`. The camera follows the
+   body's eye.
 
-The client stays a viewer until every row above is read; a movement step with
-an invented wish or an invented geometry is exactly what the project forbids.
+`--walk-test` is the numbers-only proof: a scripted trace (walk, idle, strafe, a
+six-second walk with the view turning, then a twenty-metre drop) that prints
+what it does and asserts forward travel, zero idle drift, strafe travel,
+finiteness, that the six-second walk never drops more than six metres, and that
+the drop lands. `--free-cam` keeps the old
+viewer camera; `--chunks` (a per-chunk diagnostic view) always does.
+
+### What is declared open, not faked
+
+- **The input stage.** Nothing in this image's read paths turns buttons into a
+  local wish vector; the read code starts at `body+0x1140`. The `ow-client`
+  input is therefore the input source, exactly as the agent's was, with the
+  command magnitude in metres per second (`--speed`, default 5.5).
+- **The sweep's aftermath.** `RunCharacterControllerSweep`'s body
+  (`0x142cf3f80`) is read: it walks the shape pool, tests `+0x24`/`+0x28`
+  against the record's layer and mask, transform-tests and dispatches. What is
+  not ported is its Domino bookkeeping - writing the character's shape
+  position/transform back and the pair contact lanes. The slide is therefore
+  the minimal projection, not the client's iterative loop.
+- **The movement asset.** The walk's default speed is the read forward base
+  speed (`0x19452F15`, 5.5 in the install-wide common case) and its fall is
+  clamped by the read terminal fall (`0xB74245E8`, 30.0). With a picked hero
+  (the viewer's select stage, `docs/formats/frontend-pipeline.md` 4c) both come
+  from that hero's own `MoverRow` instead. The jump is read and shipped end to
+  end: `ow_sim::jump` is the take-off (`0x140cbb260` splits command bits 6 and
+  7 out of `body+0xdc`, `FUN_140cc1060` -> `FUN_140cc1440` gate it on the state
+  file word `body+0x10d0` and write `body+0x60c` = component `0xEC289987` into
+  the vertical lane of `body+0x1150`), and `ow_sim::air` is the arc (per
+  airborne tick `MoverApplyForces` `0x140cb1990`: the drag `MoverAirDrag`
+  `0x140cb2010`, then `body+0x1150 += dt * (-10.0 * body[0x610]) * up` through
+  `MoverAccumulateWorldVector` `0x140c993e0`; the `-10.0` is the image constant
+  at `0x1431161f8`, so gravity is `-17.5 m/s^2` for the install's `1.75`). The
+  free-fall stand-in `walk::GRAVITY = -9.80665` is gone. Still open around it:
+  the **ground** vector resolve `FUN_140cb2220` through the 0x40-byte record
+  table at `body+0x960`, whose producer is runtime data
+  (`docs/open-questions.md`, "The jump law"; `formats/character-controller.md`,
+  "The vertical law").
+- **The slide's height rule (2026-11-07).** The slide is ours, and it had two
+  height leaks that made a wall climbable: the contact *plane* lifted the body
+  (the practice range's walls report normals up to `0.09` off vertical, which is
+  a ramp to a plane projection), and `snap_to_floor` lifted the body onto any
+  up-facing surface within its reach - the probe's own contact can sit *above*
+  the centre when the sphere starts inside the surface's expansion, which
+  raised the body `0.15-0.19 m` in a single frame on the range's 48-degree
+  bevels. The fix has no new constant: a contact steeper than
+  `walk::WALKABLE_SLOPE` (`0.7`, 45.6 degrees) may not lift a walk, and the
+  floor snap only ever lowers the body. Proven by
+  `walk::tests::a_horizontal_walk_cannot_climb_a_tilted_wall` and by
+  `ow-client --walk-test`, which walks at five flat walls from the spawn: before
+  the fix one wall lifted the body `0.40 m` and the walk ended `0.245 m` past
+  its plane, after it the climb is `+0.01 m` and the closest approach to the
+  plane is `+0.005 m` (`--walk-log` reports the same in the window). `0.7` is
+  our number, not the client's: the client's slope limit is unread, so the
+  constant is open in `docs/open-questions.md`.
+- **Spawn choice.** The client's selector is unread, and the practice map ships
+  no player spawn record: the spawn-volume (kind `0x19`), dynamic-point and
+  dynamic-group chunks are empty, and the only kind-`0x16` records are AI bot
+  groups. `walk::find_spawn` stands on the highest standable floor below the
+  point it is given, so the viewer feeds it the map's own spawn-room trigger
+  volume (kind `0x17`; centre `(71.169, 0.948, 53.110)`, floor `-4.006`),
+  selected as the trigger volume whose centre lies inside a
+  `MAP_PLACEABLE_AREA` box. `--spawn x y z` overrides the point. This is a
+  declared viewer default, not the map's own spawn point.
+- **The cell route.** Unchanged and still open (items 5a/5b above): the
+  movement does not depend on it, because the range's static collision is the
+  per-model Domino body route.
+
+## The client's viewer fallbacks
+
+1. `--free-cam`: the previous inspector camera (WASD fly, no collision).
+2. `--chunks`: one section's chunks at a time, no coherent range; always free
+   camera.
+3. `--shot`/`--tour`: the headless image dump and the camera tour, unchanged.

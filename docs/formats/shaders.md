@@ -58,9 +58,12 @@ checked.
 ## Instance (`0x086`)
 
 The layout in `shader.rs` (108-byte header, then optional tables) is a port of
-the reference reader and is **not tested against real data**: no type-`0x086`
-asset exists in this build. The module's synthetic tests pin the read order and
-gating.
+the reference reader and is **not tested against real data**. This build does
+not merely lack assets: it registers no loader for the type. The asset-type job
+table at `0x143a7c3a0` maps type `0x085` (group) to job 23 and `0x087` (code) to
+25, and type `0x086` to **0** — no job — while the registry holds zero type-`0x086`
+assets. The module's synthetic tests pin the read order and gating, nothing
+more.
 
 ## Open
 

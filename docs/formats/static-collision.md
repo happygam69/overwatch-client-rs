@@ -2431,6 +2431,20 @@ fraction, not a unit vector. A rejection writes nothing, except that a rejection
 after the first completed iteration leaves the counter at `+0x30` behind - the
 client stores it inside its loop.
 
+**The verified unit (2026-11-05).** `fn/ClosestPointGjk` runs the real
+`0x142cc9460` against `ow_sim::collide::closest_point` through the
+`dev/verify_harness` probe entry `gjk_closest`: 264 cases (the walk's own
+descriptor, the 0.01 radius floors, the `0.00125` addend boundary, an exact
+`distance_sq == radius_sq` equality, both four-vertex flags, the slope and
+motion rejections, duplicate support pairs and 200 seeded descriptors), the
+whole `0x40`-byte output block plus the `AL` return, 74.5% of the 47 swept
+branch sites and 12/12 mutants killed, with a coverage gate of 70. The unit
+declares the block's `.pdata` extent (`0xb8b` bytes) as its coverage window.
+The 12 sites without both edges are recorded in the unit's acknowledged gaps,
+not declared unreachable. The sub-simplex bodies keep their own dev
+differentials (`dev/gjk_simplex_diff.py`), and `0x142cc7740` is nevertheless
+executed inside the unit by the two tetrahedron cases.
+
 ### The sub-simplex bodies
 
 Both take the simplex block by pointer - `0x50`-byte records at `+0x00` `dw`,
@@ -2454,22 +2468,72 @@ directions are the double cross product `rot3(rot3(e)*S - rot3(S)*e)` applied
 twice with `S` the surviving pair's sum - the same expression the output's
 normal is built from.
 
-`0x142cc7740` (4-simplex, `0x142cc7740..0x142cc8d72`, `0x1632` bytes) is **open**.
-Read of it: it takes the same block and output, and its first act is an
-orientation fix-up that swaps two vertices when the tetrahedron is negatively
-oriented (`0x142cc7807`). It then runs the same region family one dimension up -
-four vertex regions (count `1`, at `0x142cc8026`, `0x142cc8091`, `0x142cc812e`,
-`0x142cc81cf`), six edge regions (count `2`), face regions (count `3`) and an
-interior case (count `4`, `0x142cc8ce5`) that spreads `1/sum(lambda)` over all
-four vertices - over the tetrahedron's six edge dots and four plane terms. Its
-lambda slots, its per-region copy order and its direction terms are not
-transcribed, so `ow_sim::collide::simplex4` returns the miss the type-3
-narrowphase reported before this change. The branch is reached only when a
-fourth support point puts the origin inside the tetrahedron: **zero** of the 18
-differenced queries reach it, while 10 of 120 seeded descriptors in
-`dev/gjk_closest_diff.py` do - that is exactly where the remaining divergence
-sits (7 of 120 with the default seed). Everything the mesh walk can witness is exact; the penetration state is
-open rather than guessed.
+`0x142cc7740` (4-simplex, `0x142cc7740..0x142cc8d72`, `0x1632` bytes) is
+implemented as `ow_sim::collide::simplex4`, read region by region. It takes the
+same block and output. With `a`, `b`, `c`, `d` the four `dw` points it first
+fixes orientation: when
+`dot(rot3(rot3(c-a)*(b-a) - rot3(b-a)*(c-a)), a - d)` is negative in every lane
+it swaps vertices 1 and 2, and every later read uses the swapped order. It then
+derives the six edges `b-a`, `c-a`, `d-a`, `c-b`, `d-b`, `d-c` and twelve scalar
+dots - six negated (`-dot(b-a,a)`, `-dot(c-a,a)`, `-dot(d-a,a)`,
+`-dot(c-b,b)`, `-dot(d-b,b)`, `-dot(d-c,c)`) and six plain (`dot(b-a,b)`,
+`dot(c-a,c)`, `dot(d-a,d)`, `dot(c-b,c)`, `dot(d-b,d)`, `dot(d-c,d)`) - plus
+four face vectors of the same double-rotation form the three-vertex body calls
+`x`: `n_bcd = rot3(rot3(c-b)*(d-b) - rot3(d-b)*(c-b))`, `n_acd` over
+`(d-a, c-a)`, `n_abd` over `(d-a, b-a)`, `n_abc` over `(c-a, b-a)`. Twelve
+weights are the triple products of the vertex pairs against their face vector
+(`(b,c)`, `(c,d)`, `(d,b)` against `n_bcd`; `(a,d)`, `(d,c)`, `(c,a)` against
+`n_acd`; `(a,b)`, `(b,d)`, `(d,a)` against `n_abd`; `(a,c)`, `(c,b)`, `(b,a)`
+against `n_abc`), and four plane terms are `dot((b+c)+d, n_bcd)`,
+`dot((a+c)+d, n_acd)`, `dot((a+d)+b, n_abd)`, `dot((a+b)+c, n_abc)`. Every test
+needs all four lanes to agree (`cmp eax, 0xf`), so a NaN lane drops through.
+
+The regions run in this order, each writing its survivors and its count:
+
+1. **vertex `a`**: the three negated dots at or below zero, count `1`,
+   direction `-a`.
+2. **vertex `b`**: `dot(b-a,b)`, `-dot(c-b,b)`, `-dot(d-b,b)` at or below
+   zero, count `1`, record copied into slot 0, direction `-b`.
+3. **vertex `c`**, then **vertex `d`**: the same shape with their own edge
+   dots, count `1`, record copied into slot 0, direction `-c` / `-d`.
+4. **edge `a`-`b`**: `dot(b-a,b) > 0`, `-dot(b-a,a) > 0`, and the triple
+   products of `(b,a)` against `n_abc` and of `(a,b)` against the `abd` test
+   vector at or below zero. Count `2`, barycentrics `(-dot(b-a,a),
+   dot(b-a,b)) / sum`, direction the double rotation of `a+b` about `b-a`.
+5. **edge `a`-`c`** (`c`'s record into slot 1), **edge `a`-`d`** (`d`'s into
+   slot 1), **edge `b`-`c`** (`c`'s into slot 0, so the pair reads `(c, b)`),
+   **edge `b`-`d`** (`d`'s into slot 0).
+6. **edge `c`-`d`**: both records move (slots 0 and 1), and the direction is
+   built from the edge term `rot3(rot3(d-c)*(d+c) - rot3(d+c)*(d-c))` rotated
+   once more about `d-c`.
+7. **face `b`-`c`-`d`** (opposite `a`): its plane term at or below zero and its
+   three weights above zero. Count `3`, weights over their sum, `d`'s record
+   into slot 0, direction `n_bcd` or `-n_bcd` - whichever faces the origin.
+8. **face `a`-`c`-`d`** (opposite `b`): the same shape, `d`'s record into
+   slot 1.
+9. **face `a`-`b`-`d`** (opposite `c`): `d`'s record into slot 2. This is the
+   one place where the client's stored vector and its own guard disagree in
+   sign: the guard and the three weights are dot products against
+   `rot3(rot3(b-a)*(d-a) - rot3(d-a)*(b-a))`, i.e. `-n_abd`, and the fourth lane
+   then lands as `-0.0` where the client has `+0.0`. The implementation keeps
+   one vector and sign-flips that guard and its lambda.
+10. **face `a`-`b`-`c`** (opposite `d`): no record moves, count `3`, and the
+    interior case is additionally guarded by a second copy of this face's plane
+    test - the only control-flow quirk in the body.
+11. **interior**: the four face terms are the lambdas; when their sum is above
+    zero `count` becomes `4`, each vertex takes `lambda / sum` (`bcd`, `acd`,
+    `abd`, `abc` in that order) and the direction is zero. When the sum is at or
+    below zero nothing is written and the sub-simplex reports the degenerate
+    face (`AL = 0`), leaving `count` as the caller set it.
+
+The differential `dev/gjk_simplex_diff.py` runs seeded descriptor quadruples
+through the client's bytes and through `ow_sim::collide::simplex4`; every region
+is hit, and on the 60-case run the block, the count and the barycentrics agree
+exactly in all 60 with the four-vertex direction inside one ULP on its low
+lanes. The 18 mesh queries never reach the branch; 7 of 120 seeded
+`dev/gjk_closest_diff.py` descriptors do, which is where the remaining last-bit
+divergence sits. Not tested: a penetration simplex built by the real
+narrowphase - none of the 18 queries produces one.
 
 The differential (`dev/mesh_support_diff.py`) pins the hull's **reach**
 (`centre + step` on x) to the last bit: two three-rung ladders sit one ULP apart
@@ -2551,10 +2615,11 @@ line, the union of all 272 root boxes (`-28.35, -14.51, -14.01` to
 
 1. **The capsule (support-point) contact.** `0x142caed30`'s hull branch is read
    and shipped (see "The support-point hull" above), so the walk is the client's;
-   but the triangle test it hands each candidate to, `0x142cc9460`, is not
-   implemented, so a real capsule-vs-mesh *contact* still cannot be stated. A
-   support-point query therefore reports a miss where the client's triangle test
-   accepts.
+   the triangle test it hands each candidate to, `0x142cc9460`, is now
+   implemented **and verified** as `fn/ClosestPointGjk` (2026-11-05: 264 cases,
+   every channel, 12/12 mutants). The earlier verdict that a support-point query
+   reports a miss where the client accepts is superseded; what remains open is
+   the type-0/type-1 leaves' own handoff to the solver, not the solver.
 2. **The scene's placement transform.** The model meshes are in their own local
    frames; the chain from a placeable's parsed translation/rotation/scale to the
    shape's world transform runs through `OwnerCreateBody`'s `0x30`-byte config and
@@ -2831,7 +2896,7 @@ builders' work.
 | the record's flag word (`+0x10`, bit `0x200`) | **open, narrowed (2026-11-03, check 18)**: the record map is read field by field (`+0x00` id, `+0x10` flags, `+0x18` Domino settings description, `+0x28`..`+0x90` state-record fields, `+0x50` decoded asset ref). `+0x18` is a **settings template** (pool counts, rotation, layer count, children) read by `DmWorldConstruct`/`ConstructDominoWorld`, not map geometry, and the node's own body is created with no shape source. The dispatch form is `call [WorldBase_vtable+0x40]`; checks 13 and 14 count every encoding (492 + 31 memory/tail, 109 register-indirect) and none of the sites read carries a creation record, so the record's **producer** is still the anchor -- now a writer that must supply a settings description, not a placement |
 | the mesh record's node / triangle / vertex layout | **read (check 16)**: `0x142caed30` gives node stride `0x20` (adjacent child `+0x20`, second child `i32` at `+0x18` times `0x20`), triangle stride `0x20`, vertex stride `0x10`, node box `+0x00`/`+0x0c`, mask `+0x1c`, axis `+0x1e`, leaf count `+0x1f`; the block's own `nodeCount` and `0x38B71436` word agree on 272 of 272 |
 | the range's collision as one addressable world | **assembled and swept (check 16)**: 272 shapes from 161 models in one 4,797,872-byte buffer, every record addressing its own arrays; the pinned block's sweep hits `(0.9950001, 4.0, 0.9950001)` at fraction `0x3e8051b8`, triangle `7` |
-| the capsule (support-point) narrowphase | **shipped and exact on every witness**: the hull branch of `0x142caed30` (`0x142caef15..0x142caf1a5`), the walk it feeds, the triangle test's slow path (`0x142cc9460`) and its three-vertex body (`0x142cc8d80`) are implemented and differenced against the client's bytes on 18 queries (`dev/mesh_support_diff.py`, 18 agreements, 0 failures) and on 17 captured plus 120 seeded descriptors (`dev/gjk_closest_diff.py`). **One branch stays open**: the four-vertex body `0x142cc7740`, reached only when a fourth support point puts the origin inside the tetrahedron (0 of the 18 queries, 7 of 120 seeded descriptors) |
+| the capsule (support-point) narrowphase | **shipped and exact on every witness**: the hull branch of `0x142caed30` (`0x142caef15..0x142caf1a5`), the walk it feeds, the triangle test's slow path (`0x142cc9460`) and its three-vertex body (`0x142cc8d80`) are implemented and differenced against the client's bytes on 18 queries (`dev/mesh_support_diff.py`, 18 agreements, 0 failures) and on 17 captured plus 120 seeded descriptors (`dev/gjk_closest_diff.py`), and the solver body is now a gated unit (`fn/ClosestPointGjk`, 264 cases, every channel, 12/12 mutants). the four-vertex body `0x142cc7740` is implemented and differenced too (`dev/gjk_simplex_diff.py`: block, count and barycentrics exact on every region, four-vertex direction inside one ULP on its low lanes), and the unit executes it on its two tetrahedron cases
 | the scene's placement transform | **open, narrowed (2026-11-03, check 18)**: the builder's body config is the second argument's `+0xd0` (quaternion) and `+0xf0` (position) (`0x14201b21b`/`0x14201b223` -> `0x14201b52e`/`0x14201b532`). The argument is the 0x300-byte scene component `0x141ff90e0` (kind `0x14`, factory `0x141ff90a0`, name `Unknown`, vtables `0x1433632e0`/`0x143363320`), which attaches itself to `[node+0x520]`/`[node+0x52c]`; its update `0x142003720` resolves the node from the object's `+0x8` handle (same decode chain as the query) and writes `+0x140`..`+0x16c`, but the writer of `+0xd0`/`+0xf0` for a placed map entity is still unread, so no range sweep names a map location yet |
 
 Ordered next reads (the per-model route):
@@ -2951,7 +3016,7 @@ Ordered next reads (the per-model route):
 | the mesh layout is the walk's, not a guess | check 16: `0x142caed30` (node stride `0x20`, triangle stride `0x20`, vertex stride `0x10`, node/triangle field offsets) and the block's own words (`288 / 9`, and `0x38B71436 * 0x20` = the triangle bytes on 272 of 272 blocks) |
 | the support-point hull is the client's, bit for bit | `collide::tests::the_support_hull_affine_is_the_read_map`, `the_support_hull_folds_two_points_into_the_walk_hull` (golden bit patterns from a second float32 transcription of the branch), `an_identity_block_quaternion_is_the_identity_rotation`, `a_support_point_hull_reaches_the_client_walk`, `a_support_point_hull_beside_the_mesh_clears_the_leaves`, `the_support_point_step_decides_the_leaf_reach` |
 | the hull is the client's on the real walk | `dev/mesh_support_diff.py`: 18 support-point queries through the real `0x142caed30` and through `ow_sim::collide::mesh_sweep`; 0 failures, 18 exact agreements (including the ladder rungs one ULP apart and the seven that reach the closest-point solver) |
-| the closest-point solver is the client's | `dev/gjk_closest_diff.py`: the 17 descriptors the real narrowphase builds, plus 120 seeded ones (and three further seeded runs of 80 with other seeds), run through `0x142cc9460` and through `ow_sim::collide::closest_point`; every live descriptor agrees (output block and flag) and every seeded one agrees except the four-vertex cases, which are counted as open |
+| the closest-point solver is the client's | `fn/ClosestPointGjk` (gated): 264 cases through the real `0x142cc9460` and `ow_sim::collide::closest_point`, the whole `0x40`-byte output and the `AL` return, 74.5% branch coverage, 12/12 mutants. Supporting dev differential: `dev/gjk_closest_diff.py` - the 17 descriptors the real narrowphase builds, plus 120 seeded ones (and three further seeded runs of 80 with other seeds); every live descriptor agrees (output block and flag) and every seeded one agrees except the four-vertex cases, where the direction's low lanes can differ by one ULP |
 | the three-vertex body is the client's | `dev/gjk_simplex_diff.py --only 3`: 100 seeded 3-simplices through `0x142cc8d80` and `ow_sim::collide::simplex3`, block and direction byte for byte, 0 failures |
 | the pinned translated contact | `collide::tests::the_pinned_translated_support_point_contact_is_reproduced` |
 | the capsule contact on the walk | `collide::tests::a_support_point_hull_reaches_the_client_walk` |
@@ -2959,7 +3024,7 @@ Ordered next reads (the per-model route):
 | the pinned block's sweep, bit-exact | `mesh_world_real::the_pinned_model_mesh_sweeps_to_an_exact_hit`: point `(0.9950001, 4.0, 0.9950001, 0)`, normal `(0,1,0,0)`, fraction `0x3e8051b8` x4, triangle `7`, ids `[0x8000, 0]`, 4 internal nodes, 1 leaf |
 | the range's 272 shapes in one world | `mesh_world_real::the_ranges_mesh_shapes_assemble_into_one_world`: 229 models, 161 with a shape, 279 holders, 272 shapes, 4,797,872 bytes, every record addresses its own arrays, first shape round-trips byte for byte |
 | the range's first hit, by model identity | same test: 3 of 272 shapes hit by one line through the unplaced assembly; nearest is shape 49, model `0x0d000000000010f5`, point `(-13.212505, 100.0, 2.619999, 0)`, fraction `0x3c8aedfa`, triangle `14` |
-| a capsule against the mesh | **the walk and the contact are the client's**: `mesh_sweep` builds the read hull, runs the client's walk and calls the read closest-point solver, and all 18 differenced queries agree byte for byte through the real `0x142caed30` (`dev/mesh_support_diff.py`: 0 failures, 0 open handoffs), including the seven that the triangle test accepts; the pinned translated contact (triangle `1`, ids `0x12`/`0x22`, point `(0.75, 0.9, 3.01)`, normal `(0, 0, 1)`, fraction `0x3df5c290`) is a unit test. The one state not compared is a four-vertex penetration simplex (`0x142cc7740`, open) |
+| a capsule against the mesh | **the walk and the contact are the client's**: `mesh_sweep` builds the read hull, runs the client's walk and calls the read closest-point solver, and all 18 differenced queries agree byte for byte through the real `0x142caed30` (`dev/mesh_support_diff.py`: 0 failures, 0 open handoffs), including the seven that the triangle test accepts; the pinned translated contact (triangle `1`, ids `0x12`/`0x22`, point `(0.75, 0.9, 3.01)`, normal `(0, 0, 1)`, fraction `0x3df5c290`) is a unit test. The one state this corpus never builds is a four-vertex penetration simplex; `0x142cc7740` is implemented, differenced on seeded quadruples and executed by the `fn/ClosestPointGjk` unit's tetrahedron cases |
 | a placed mesh in map coordinates | **not tested / open**: the placement transform chain is unread, so every assembled shape stays in its own local frame (check 16) |
 | the class static descriptor's slot 2 is a release, not an instantiate | check 17: the strategy at type-object `+0x20` (type-info `+0x10`) has slot `0x50` = alloc (`0x141c5ef30`, reached by `0x141c4b270`) and slot `0x58` = free-list return (`0x141c5f420`, reached by `0x141c4b290`); `0x1407803f0` calls the instance's first vtable entry then slot `0x58` with the instance handle |
 | the only `E8` caller of `WorldBaseCtor` is the map-load entry's camera-view builder | check 17: `dev/callers.py 0x1420271d0` -> one `E8` at `0x140be1591` in `0x140be1570`; `0x14055a0f0` registers the decoded CVar `debug.showMapLoadAfterMS`, calls `0x140554220`, then calls `0x140be1570` |

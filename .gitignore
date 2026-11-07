@@ -37,8 +37,12 @@
 !/dev/*.py
 !/dev/*.ps1
 !/dev/*.md
-!/dev/*.txt
 !/dev/*.jsonl
+
+# No `/dev/*.txt`: that extension is where the address, register and table
+# scans write (`dev/eng_blocks.txt` and friends). Those are raw read output,
+# not conclusions, and AGENTS.md rules 2 and 7 keep them on this machine.
+# A note belongs in `dev/*.md`; a tool belongs in `dev/*.py`.
 
 # dev/'s sub-folders are ignored, except dev/verify_harness/ (the
 # differential-verification harness, original work). dev/ghidra_run/ is the

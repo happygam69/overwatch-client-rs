@@ -34,14 +34,103 @@ character model. `STUModelComponent` also carries `m_animBlendTreeSet`
 (hierarchy, matrices, inverse matrices, bind pose, deltas, ids, names, remap, a
 second hierarchy), an `i32`, five `u16` counts. Hierarchy entries are 6 bytes
 (`i16` parent, `-1` at the root); the bind pose is 48-byte records; bone ids are
-`u32` hashes; the remap maps the model's bones to the clip's bone set.
+`u32` hashes.
 
 Measured: Reaper character 229 bones / 71 FP; Tracer 200 / 79. The FP rig's
 neck sits at the same `y = 1.7104 m` as the character's.
 
-`MrnmHandler` (`0x141b88f10`) builds runtime parent-indexed tables from the
-model payload: `0xA0`-stride nodes, `0xF8`-stride hierarchy, `0x18`-stride
-auxiliary table, used-bone mask. `mskl` and `MRNM` feed the same hierarchy.
+`MrnmHandler` (`0x141b88f10`) builds the render-mesh runtime block from the
+model payload -- `0xA0`-stride submesh, `0xF8`-stride vertex-buffer and
+`0x18`-stride index-buffer records, plus a `0x00` qword that is the OR of each
+submesh's `+0x28` -- and is verified as `fn/MrnmHandler`
+(`formats/model.md`). It is **not** a skinning hierarchy: the earlier
+"parent-indexed tables / used-bone mask" reading does not survive the verified
+offsets. `mskl` is the skeleton; how its tables relate to `MRNM`'s block is
+unread.
+
+## Bone indices (read, 2026-11-05)
+
+The chain from a mesh vertex to a bone is three steps: a raw **blend index** in
+the vertex stream, a **Lookup** table in `mskl`, and a bone index in
+`[0, bones_abs)`. An earlier version of this page said the Lookup "maps the
+model's bones to the clip's bone set" — that is wrong, and the data says so.
+
+**The file side.** A vertex element with semantic 4 is the four blend indices
+(format `0x07`, four `u16`); semantic 5 is the four weights (u8, summing to
+`255`). A census over all 32,280 model assets finds 8,761 semantic-4 element
+records: 8,307 at `index 0` and **454 at `index 1`** — a second four-wide set,
+always format `0x07`, and on those models the eight weights still sum to
+exactly `255` on every vertex (measured on all 454) and the second set's raw
+indices are inside the Lookup on all 454. No other semantic index occurs.
+
+**The client side, `MsklTableBuild` (`0x141b894d0`).** `ModelChunkLoad`
+(`0x141b5df70`) calls it for the `mskl` chunk (version `0x20`) and stores the
+returned block at **model `+0x08`**. The function copies the payload's arrays
+into one block and, in doing so, fixes each table's element size:
+
+| runtime | source | element | count |
+|---|---|---|---|
+| `+0x00` | `mskl +0` | 6 B chain record | `bones_abs` (108) |
+| `+0x08` | `mskl +8` | 64 B matrix | `bones_abs` |
+| `+0x10` | `mskl +16` | 64 B inverse matrix | `bones_abs` |
+| `+0x18` | `mskl +24` | 48 B bind pose | `bones_abs` |
+| `+0x20` | `mskl +32` | 48 B delta | `bones_abs` |
+| `+0x28` | `mskl +40` | 32 B | `bones_abs` |
+| `+0x30` | `mskl +48` | 4 B, or null | `bones_abs` |
+| `+0x38` | `mskl +56` | 4 B id | **`bones_simple` (110)** |
+| `+0x40` | `mskl +72` | 2 B | payload `+130` |
+| `+0x48` | `mskl +80` | 2 B | `remap_count` (114) |
+| `+0x50` | `mskl +88` | 2 B | `bones_abs` |
+| `+0x58` | `mskl +96` | 8 B | `remap_count` |
+
+It also stores the counts at `+0x64` (`bones_abs`), `+0x66` (`bones_simple`),
+`+0x68` (`bones_cloth`) and `+0x6a` (`remap_count`), and copies payload
+`116..130` verbatim to `+0x6c` (seven `u16`s the client does not read again).
+Three consequences for a reader: the **id array is `bones_simple` long** (the
+reference calls its count `IDCount` at 116; the two agree on every install
+model), the **Lookup is `remap_count` `u16`s at offset 80**, and the array at
+offset 88 is a *second* table of `bones_abs` `u16`s.
+
+**What the tables are.** The Lookup at `+80` is the **mesh slot → bone** map:
+load it, and a vertex's raw blend index names a slot, not a bone. The array at
+`+88` is its **exact inverse** — for every bone, the slot that names it, or
+`0xFFFF` for a bone no slot names (on Tracer's character `bones_simple` +
+`bones_cloth` = `bones_abs`, 130 + 99 = 229, and 30 bones have no slot). The
+array at `+96` is `remap_count` 8-byte records and is all `0xFFFFFFFF` on the
+four pinned rigs; nothing here consumes it.
+
+**Measured over every model asset in the install** (`ow-tank --example
+bonemap_probe -- --all`; 32,280 assets, 7,359 parsed, 7,328 with skinned
+meshes and a Lookup):
+
+- the Lookup is a **permutation** on all 7,328 — distinct, in
+  `[0, bones_abs)`, no `0xFFFF`; 815 of them are the identity;
+- `remap_count` is the largest raw blend index over **every weighted lane**
+  plus one on 7,308 models, and the other 20 sit lower (spare slots at the
+  end, none overflowing) — so **no raw index ever falls past the table**, and
+  the two unbound branches are unexercised: over `96,140,954` dominant-
+  influence vertices, `0` name no bone through the raw index and `0` through
+  the Lookup;
+- the inverse table at `+88` is the **exact inverse** on all 7,328 models and
+  holds `0xFFFF` exactly on the `bones_abs - remap_count` bones no slot names
+  (Tracer: 30 of 229); `0xFFFF` appears there and in no Lookup;
+- every submesh of every model carries **`BoneIdOffset` = 0** (payload `+0x6a`,
+  runtime `+0x82`), so the reference's `raw + BoneIdOffset` and a bare `raw`
+  are indistinguishable in this install;
+- the geometry agrees: the dominant influence's bone sits a median `0.122 m`
+  from its vertices through the Lookup versus `0.591 m` through the raw index
+  on Tracer's character mesh (`0.0529` vs `0.3417` on the FP rig, `0.0511` vs
+  `0.4040` on a view model, and `0.0743` vs `0.0828` on the 10-bone pistol,
+  where the permutation is nearly the identity).
+
+**Still open.** The consumer is not read: the file's own tables are read here
+and the rule is proven by the data, but no client function that joins a mesh
+index to a bone (CPU-side or as an uploaded remap buffer) has been found, so
+whether it adds `BoneIdOffset`, how it bounds the index, and whether it treats
+`0xFFFF` as "unbound" stay the reference's rules — all three unexercisable on
+this install. And the viewer reads only the **first** four-wide set: the 454
+models with a second `semantic 4 / index 1` element lose those four influences
+(`ow-tank-1to1.md`).
 
 ## Clip container
 
@@ -166,6 +255,60 @@ Weapon attachments:
 - Pistol model `0x0d00000000000413` (10 bones, 5,366 weighted vertices, two
   textured submeshes) is drawn rigid in its own bind at palette slot 0.
 
+### Hardpoints: the class, not the chunk, and no consumer
+
+**There is no `MHRP` chunk in this image, and the model load would refuse
+one.** `ModelChunkLoad` (`0x141b5df70`) gates exactly seven tags (`MDLC`
+`0x165`, `MRNM` `0x1f`, `mskl` `0x20`, `MOCL` `0x14`, `MESD` `2`, `CLTH`
+`0x18`, `MSTU` `2`); `ModelChunkSize` (`0x141b5e1e0`) returns `6` for any other
+tag and `7` on a version mismatch, and the load pass runs only when the size
+pass returns `0`, so a model carrying an `MHRP` chunk fails to load. The
+literal `MHRP` also occurs **zero** times in the 75,726,848-byte image in
+either byte order, while the control tags occur 2-3 times.
+
+**The class.** A hardpoint is a `STUModel` instance-array element. Class
+`0xBE9DDFDF` registers at `0x14034ba50` through
+`RegisterComponentTypeDescriptor` (`0x1421cd360`) with size `0x58`,
+align `8`, and its parent is `0xF0E34581` (the class descriptor's `+0x20` is
+set to the base descriptor by `0x1403501f0`; the base registers at
+`0x14034d940` with the same size, the same five fields and a 16-byte `m_name`
+at `+0x08`). The five own fields are registered by the block at
+`0x14150d6b0`, each `0x1421d4f30` call carrying the hash in `r8d` and the
+runtime offset on the stack:
+
+| hash | offset | field |
+|---|---|---|
+| `0x888BCD8B` | `+0x18` | bone-label asset ref (16 B) |
+| `0xEDF0511C` | `+0x28` | id (`u64`) |
+| `0xFF592924` | `+0x30` | bone guid (`u64`) |
+| `0xAF9D3A0C` | `+0x38` | rotation (quat, 16 B) |
+| `0x7DC1550F` | `+0x48` | position (vec3, 12 B) |
+
+The setter `0x14151e580` writes `(0, 0, 0, 1)` for `0xAF9D3A0C` and the getter
+`0x14151a160` compares against it, so identity is the client's own default.
+`STUModel` (`0x871BD3D0`) registers `m_hardPoints` `0xC45F5F6F` at `+0x130`
+with **no type argument**, while its `0xFD232466` array is typed
+`STU_F0E34581[]`; the hardpoint array's element class is not declared. The
+sibling `0xCB79EE74` (size `0x60`, same parent, one extra field) is a second
+subclass.
+
+**No consumer.** Every occurrence of `0xC45F5F6F`, `0xEDF0511C`, `0xFF592924`,
+`0xAF9D3A0C` or `0x7DC1550F` in `.text` is either a field registration
+(`mov r8d, imm32`) or a `cmp edx/ecx, imm32` inside the two shared accessors;
+there is no third kind, and the class hashes occur only in their registrations
+and descriptor plumbing. So this image never reads a hardpoint: the
+composition (rotation then translation, then the bone's world, then decompose)
+and the bone rule (match the guid's low 32 bits against the skeleton ids, `0`
+= unbound) are the reference tooling's conventions, consistent with the
+install but **not** client behaviour.
+
+Install census: FP model `0x0d000000000000f1` carries 135 instances
+(`0xBE9DDFDF` 44, `0xCB79EE74` 90), Tracer's character model
+`0x0d000000000002b1` carries 384 (`0xBE9DDFDF` 50, `0xCB79EE74` 215); the base
+class itself never appears. `ow-tank::hardpoint` collects by class, so it sees
+the 44/50 and not the siblings; the reference reads the array, so the two
+readers differ on everything outside `0xBE9DDFDF`.
+
 The unresolved stage is the **reference skeleton**. The card's shoulder rows
 (ids 13/54) carry `P = 2.395x` the model bind in the same direction in c50,
 c65 and c71; every other row is within 1% of bind. No installed model carries
@@ -197,13 +340,24 @@ Read values:
 
 ## Open
 
-1. **Reference-skeleton retarget.** Read `anim.EnableProxyRetarget` and
+1. **Bone-index consumer.** The `mskl` Lookup is the mesh slot → bone map and
+   the install proves it (permutation, size fit, stored inverse, geometry), but
+   the client code that joins a vertex's blend index to a bone is not read:
+   whether it adds the submesh `BoneIdOffset`, how it bounds the index and
+   whether a `0xFFFF` entry means "unbound" are the reference's rules. All
+   three are unexercisable on this install (every offset is `0`, no Lookup
+   holes), so nothing here can settle them by measurement.
+2. **Second blend-index set.** 454 model assets declare `semantic 4 / index 1`
+   as well as `index 0`, and the eight weights sum to exactly 255 on every
+   vertex of those models; `ow-tank::model` reads only the first set, so the
+   viewer drops those influences. `ow-tank-1to1.md` records the gap.
+3. **Reference-skeleton retarget.** Read `anim.EnableProxyRetarget` and
    `anim.EnableFinalRetarget`; then apply the final stage.
-2. **Pose2d dataflow VM.** Read the driver inputs, category and layer weights.
-3. **FP component consumer.** Read the type-`0x35` system that applies
+4. **Pose2d dataflow VM.** Read the driver inputs, category and layer weights.
+5. **FP component consumer.** Read the type-`0x35` system that applies
    `m_position` and the four scalars.
-4. **FP spring target.** Read the writer of the `+0x1350`/`+0x1370` target.
-5. **View-model event timelines.** The six `0x110` slots are event/state
+6. **FP spring target.** Read the writer of the `+0x1350`/`+0x1370` target.
+7. **View-model event timelines.** The six `0x110` slots are event/state
    timelines; the viewer has no events. They do not write bone transforms.
 
 ## Verification
@@ -211,6 +365,8 @@ Read values:
 ```text
 cargo test --release -p ow-tank
 cargo run -p ow-tank --example blendset_probe -- 3
+cargo run -p ow-tank --example bonemap_probe              # the four pinned rigs
+cargo run -p ow-tank --example bonemap_probe -- --all     # every model asset
 ```
 
 `ow-client` is built and draws the resolved practice range; it does not claim

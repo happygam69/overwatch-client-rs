@@ -174,7 +174,10 @@ truncates the far end of that decompile. The whole function is a sphere-vs-mesh 
 `0x80`-entry container, and `0x142cb44c0` (named `ResolveBodyLocalPoint` in the
 project) turning the query point into the body's frame. The gather itself is
 read: `0x142caea70` is a box-BVH walk whose accept is `0x142cd58a0`, a
-box-vs-triangle separating-axis test with a `0.005` tolerance, and the ids it
+box-vs-triangle separating-axis test with a `0.005` tolerance; both are
+**verified** (`fn/BoxTriangleOverlap`: 413 cases, the whole return register,
+coverage 100%, 12/12 mutants; `fn/MeshGather`: 330 cases, the container
+included, coverage 90%, 28/28 mutants), and the ids it
 collects are triangle indices. Five single-function reads are the next anchors:
 `0x142cae760` (the triangle record), `0x142cc5bc0` (closest point),
 `0x142cb4a30` (the point transform), and the handle accessors
@@ -513,6 +516,193 @@ mutation; a per-case state overlay is still the remaining fixture limitation
 
 ---
 
+## 1b. The live walk in `ow-client`: the four stages it does not have
+
+**State.** The client walks (`docs/movement-plan.md`, last section; MODLOG
+2026-11-08) and jumps (MODLOG 2026-11-16). The world is the range's own
+collision (`ow_tank::range_world` + `ow_sim::walk`), the step is the verified
+mesh leaf, the frame is the read law, and the airborne arc is the read vertical
+law (`ow_sim::air`). Four stages around that chain are open, and each is
+declared rather than substituted:
+
+- **The input stage.** No read path in this image turns buttons into a local
+  wish vector; the read chain begins at `body+0x1140`. The client's WASD input
+  therefore *is* the input source, with its magnitude in metres per second
+  (`--speed`). Its default is the *read* value: the mover component's forward
+  base speed, field hash `0x19452F15`, whose install-wide common value is 5.5
+  (`formats/character-controller.md`). `ow-client` now replaces it with the
+  picked hero's own row (2026-11-14; the pick is a declared viewer default and
+  the roster and row are read, the wish producer is not). Next anchor: the
+  character mover component's input publish path (`MoverUpdateCommand`
+  `0x140cb5760` and the actor-side writer `0x140cb86c0` were read; neither
+  builds the local wish).
+- **The walk's world (2026-11-15).** The walk now collides with the map's own
+  `MAP_CHUNK_COLLISION` bodies only (`RangeWorld::level`, `ow-client::walk_world`).
+  The per-model `STU_537E56E4` holder meshes were in the world and are not the
+  static collision: their read consumer is a query that writes nothing
+  (`FUN_14210bac0` -> `0x142caf6c0`), their Domino body route hangs off the
+  collision component whose attach is unread, and adding them cost `0.31` m of a
+  `5.5` m walk, `0.461` m of drift and a `0.78` m climb in the flat spawn room
+  (measurement: `formats/character-controller.md`). What is still open is the
+  *entity* route: which nodes carry the collision component, so a dynamic prop's
+  holder body can be added back for entities only.
+- **The vertical stage (2026-11-15).** The floor snap is a stand-in and it is
+  measured: its "only down" guard was taken from the probe origin (`body + 0.2`),
+  so it lifted the body up to `0.2` m per frame (`+0.118`, `+0.229`, `+0.165` m
+  in three consecutive frames, `0.78` m total) and it teleports down by up to the
+  `2.5` m reach in one frame. It is also load-bearing for the landing, because
+  the verified leaf reports nothing for a sweep that starts on or inside a
+  surface, so a sweep-based fall cannot land by itself. **The corner clip is
+  fixed inside the stand-in** (2026-11-15): `World::overlap` asks the leaf's own
+  "already inside" mode (`block+0x72`) at `radius - CONTACT_SKIN`, `depenetrate`
+  pushes the body out, and a miss now moves to the depenetrated target instead
+  of applying the residual - a right-angle corner that carried the body `3` cm
+  through the second wall now stops it (unit test
+  `a_corner_stops_the_body_at_both_walls`; `--wall-audit`'s near-vertical
+  tunnelled frames `174 -> 27` of 8,741). Next anchor: the pair build
+  `0x142cd4d90`, the position read `0x142cd5270` and `FUN_142cf5020` in
+  `0x142cf3f80`'s iteration, then port the resolve; the step range is already
+  read (`+0x688`/`+0x68c`) and `FUN_140cc1440` is the stage that consumes it.
+- **The sweep's aftermath.** `RunCharacterControllerSweep` (`0x142cbcee0`) is a
+  thunk to `0x142cf3f80`, read in full: a shape-pool walk on the handle at
+  `world+0x08`, the `+0x24`/`+0x28` layer/mask test, a transform test against
+  the query bounds (`+0x10..+0x1c`), and a dispatch on `+0x50`. Not ported: the
+  Domino bookkeeping that writes the character's shape transform and the pair
+  contact lanes. The client slides by projecting the residual off the contact
+  normal, so the *travel* is the client's and the *slide* is not. Next anchor:
+  the shape-position write after the sweep and the pair-array append.
+- **The movement asset.** The per-hero rows are read into
+  `ow-tank`'s mover reader (forward/side/back/crouch speeds, terminal fall
+  `0xB74245E8 = 30.0`, the take-off lane `0xEC289987`, and the jump struct
+  `STU_97288E54`'s six defaults), and the walk uses the terminal fall as its
+  clamp. Missing: the *gravity* the client integrates with
+  (read 2026-11-16: `-17.5 m/s^2` for the install's `1.75`, see the jump
+  bullet below) and the per-frame vertical record table (see the jump bullet
+  below), so the airborne arc is shipped while the ground resolve is not. Next
+  anchor: the component that applies the movement asset's rows to
+  the body (`0x140c862e0` was read as the apply) and the producer of the five
+  inline record vectors built at `0x140ca37d0`.
+- **The jump law (read 2026-11-16; the jump is shipped).** The earlier
+  record ("`FUN_140cc1440` is control-flow-flattened, the impulse is unknown")
+  is **withdrawn**: the function is read end to end and it is the jump /
+  crouch stage, not a vertical integrator. Read and shipped as
+  `ow_sim::jump` (16 tests) with six differential units:`
+  - the button split, `MoverUpdateFrame` `0x140cbb627`/`0x140cbb63c`: bit 6
+    (`0x40`) is jump, bit 7 (`0x80`) is crouch;
+  - the handler chain `FUN_140cc1060` `0x140cc1060` -> `FUN_140cc1440`
+    `0x140cc1440` with its six arguments (`cmd+0x10`, `cmd[0x40]`, jump,
+    crouch, `cmd[0x41]`);
+  - the state file word `body+0x10d0` and its five transitions
+    (`MoverSetCrouch` `0x140ca9100`, `MoverOnLanding` `0x140ca9120`,
+    `MoverEnterAir` `0x140ca9150`, `MoverOnTakeoff` `0x140ca9190`,
+    `MoverOnGround` `0x140ca91e0`), with the gate mask `0x80000c` = bits 2, 3
+    and 23. Bit 19 is **not** in the mask - `fn/MoverEnterAir` caught that;
+  - the gate (property `0x14` > `0.5`, gate mask clear, latch bit 0 clear, a
+    live world at `body+0x1ad8`);
+  - the impulse: `target = sum_i body[0x1150][i]*row_i + body[0x1510]`, then
+    `rise` along `body+0xc0` (the constant up axis `(0,1,0,0)`), then
+    `body[0x1150] = (dot3(d,r0), dot3(d,r1), dot3(d,r2), dot3(d,r2))` with
+    `d = target - anchor`. `rise` has **two branches**:
+    `(flags & 0x80000c) != 0 && along > 0` uses `(along + body[0x60c]) - along`,
+    everything else uses `body[0x60c] - along`; both lane sums are three-lane
+    `(p1+p0)+p2` as the client's `shufps` pair does them. The anchor is
+    **never written** anywhere in `.text`, so on the ground the world lane
+    becomes `body+0x60c` and in the air (rising) it gains it.
+  - the magnitude is a **component field**: the body is a copy of the mover
+    component at `+0x528` (`CopyMoverComponentFields` `0x140ca4680` /
+    `FUN_140ca4980`), so `body+0x60c` = class `+0xe4` = hash `EC289987`
+    (`6.0` for every playable hero on this install);
+    `ow_tank::entity::mover_takeoff_lane_of` reads it. The
+    mapping is corroborated by five more offsets, listed in
+    `formats/character-controller.md`.
+  - the airborne prologue (`0x140cc148f..0x140cc155b`): while airborne, a
+    request whose `dot(body+0x1150, cmd+0x10)` is below property `0x26`
+    (default `0.001`) calls `MoverOnGround`, sets `body+0x1a7d = 1` and arms the
+    take-off budget `body+0x1ad0`; on the ground, no request calls
+    `MoverOnLanding` and a request decrements that budget. Property `0x15`
+    gates the returned "jumped" bool.
+  - the record appliers the stage reads through: `FUN_140cb3990`
+    `0x140cb3990` (0x38-byte records, one property) and `FUN_140cb3b10`
+    `0x140cb3b10` (0x40-byte records, a four-lane vector), both shipped as
+    `ow_sim::modifiers` and both units.
+  The units: `fn/MoverOnTakeoff`, `fn/MoverOnLanding`, `fn/MoverOnGround`,
+  `fn/MoverEnterAir`, `fn/MoverPropertyRecords`, `fn/MoverVectorRecords` - all
+  branch-complete and mutation-clean against the image. They found two real
+  defects in the first cut (the mask bit and the uncleared bit 10), both fixed.
+  The whole of `FUN_140cc1440` is not a unit: its middle third is obfuscated
+  dispatch and the impulse arithmetic is inline, so the impulse is transcribed
+  and tested, not bit-exactly proved.
+  What is still open, and why no jump is shipped:
+  1. **`FUN_140cb2220` `0x140cb2220` is the per-frame consumer of
+     `body+0x1150`, and it is now read end to end** - it is *not* a gravity
+     integrator. Phase 1 scales by property `0x22` against the vector length,
+     phase 2 by property `0x23`, phase 3 applies property `0x24` to the y lane
+     alone, phase 4 divides y by `body+0x60c`, lets property `0x25` act and
+     multiplies back, phase 5 runs the 0x40-byte record passes (mode 1 then mode
+     0, both behind `(*body->vtable)[0xa8](body) != 2`), and the tail calls
+     `MoverOnLanding` when the world lane rose by more than `0.004`.
+     **There is no gravity term anywhere in it.** The take-off lane
+     `body+0x60c` appears only as the phase-4 lateral cap.
+  1a. **Settled: `RSQRTSS` is `f32(1.0 / f32_sqrt(x))` in this image's
+     oracle** (220/220 sampled; the double-precision forms miss 44/220), so the
+     Newton sequence is portable and phases 1-4 are **implemented**
+     (`ow_sim::resolve`) and **verified** (`fn/MoverResolveVector`, 100% branch
+     coverage, 7/7 mutants). The differential also corrected the reading: phase
+     2 masks the y lane out of both the length and the scaling. What is left is
+     phase 5 and the bit-24-clear transform path.
+  1b. **The 0x40-byte records' producer is runtime data (still open).** The five parallel
+     inline record vectors are built at `0x140ca37d0` with `count = ctor arg`
+     and capacity 4 (`0x80000004`); the constructor's only callers are the
+     character-object constructor `0x1407ff1f0` and a factory `0x1407ff1b0`
+     that is referenced **only** from a data pointer at `0x142fdbee8`. So the
+     record content is handed in from outside the read set, and phase 5's `kind
+     == 3`/`4` plane projections (hit path `0x140cb26a2`, five-way dispatch on
+     `record[0x2c]`) are only read at the skeleton level.
+  2. **The live position is not `MoverAdvance`.** `MoverAdvance`
+     `0x140ca7f30` is the read integrator, but its only caller is
+     `MoverInvoker` `0x1407ffc50`, which has no code caller; the live position
+     comes from the swept solve (`RunCharacterControllerSweep` `0x142cbcee0`
+     -> `0x142cf3f80`), whose contact-to-position rule is unread.
+  3. `MoverStateBlockMatrix`'s **copy order against the settings object**
+     (`0x1405a87d0` writes `1.0` to `+0x5a8`/`+0x5b4`; the component copy puts
+     the capsule floats `0.5`/`0.25` there). One of the two writers runs last
+     and it is not read; the ramp unit and the capsule page disagree because of
+     it. `body+0x60c` is not one of the settings fields, so the take-off
+     magnitude is unaffected.
+  Next anchor, in order: (a) find the writer of the five record vectors
+  (`body+0x970`, `body+0x880`, `body+0x770`, `body+0x6a0`, `body+0xa80`); (b)
+  diff `FUN_140cb2220` into a unit once the records can be synthesised (they
+  are plain data, so this may not need (a)); (c) the sweep's position resolve.
+- **The level collider's consumer (now the walk's only world).** The
+  `MAP_CHUNK_COLLISION` body is the walk's ground (`ow_tank::collision_level`): its tail element names a vertex,
+  node and triangle array in the client's own mesh record layout, tiling the
+  payload exactly, and the sweep reproduces the rendered floors. What is *not*
+  read is the function that turns those arrays into a shape - `BuildBvh`
+  (`0x142ccb1b0`, five call sites, "split wrappers over the collider-face
+  array, all unreachable") is the likely one. Until it is read, the shape's
+  identity placement and the use of the stored BVH as-is are the data's own
+  conclusion, not the code's. Next anchor: the five `BuildBvh` call sites' real
+  reachability.
+- **Spawn choice.** The map's own player spawn is still unread. The practice
+  map ships no `MAP_PLACEABLE_SPAWN_VOLUME` (kind `0x19`), dynamic spawn point or
+  dynamic spawn group placeables; its only spawn records are the 25 AI bot
+  spawn groups (kind `0x16`). The map's two `MAP_PLACEABLE_TYPE_TRIGGER_VOLUME`
+  (kind `0x17`) boxes are readable (`+0xA0` yaw axis, `+0xAC` centre, `+0xB8`
+  half extents); the one whose centre lies inside a `MAP_PLACEABLE_AREA` box is
+  the hero-select room at centre `(71.169, 0.948, 53.110)`, half extents
+  `(11.861, 5.179, 7.608)`, floor `y = -4.231`. `ow-client` uses that volume as
+  its **declared viewer default** (`--spawn x y z` overrides it; `find_spawn`
+  still snaps to the floor), not as the client's rule. Next anchor: the function
+  that selects a player spawn from the mode's spawn-room volume.
+
+What *is* proven: `range_world_real` (272 shapes, 3,017 placed instances, 32/32
+downward sweeps), `walk`\'s 13 units (sweep fold, wall slide, floor snap, the
+rotation convention), and `ow-client --walk-test` (5.5 m forward in one
+second at 5.5 m/s from the spawn room's floor, no idle drift, 5.5 m strafe,
+finite body).
+
+---
+
 ## 2. The first-person camera consumer and per-frame look
 
 **Question.** `STUFirstPersonComponent` carries `m_position` and four scalars.
@@ -681,8 +871,11 @@ the type byte (`0x142cb8d60`) to five per-type primitives (`0x142ccdf40`,
 analytic path is now read and verified (`fn/CollisionSphere`,
 `ow_sim::collide::sphere_sweep`), and the wrapper's layer filter is verified
 as `fn/CollisionShapeFilter`, and the type-1 capsule as
-`fn/CollisionCapsule`; type 0 and type 1's support-point path
-(`0x142cc9460`) and types 2, 3 and 4+ are open.
+`fn/CollisionCapsule`; type 0 and type 1's support-point **handoff** to
+`0x142cc9460` is still open, but the solver body itself is now verified as
+`fn/ClosestPointGjk` (264 cases, every channel of its `0x40`-byte output, 74.5%
+branch coverage, 12/12 mutants); types 2 and 4+ are read but not implemented,
+and type 3 is `fn/MeshSweep`.
 
 **The next read is the geometry, not more query code.** The five per-type
 primitives are inventoried with their sizes and their two-path shape
@@ -751,8 +944,9 @@ the collision chunk's sector data into those descriptors. The chunk payload
 itself is read as data (`formats/maps.md`, "The collision chunk payload"):
 two STUD v1 blobs, a registered 0x78-byte component class `0x9199BF6B` with
 three RVA fields into a 220-sector table, and a second, unregistered component
-`0x99F089FE`. The next anchor is exactly that converter, and the two open
-narrowphases (the type-0/1 support-point path `0x142cc9460`, types 2 and 4).
+`0x99F089FE`. The next anchor is exactly that converter, plus the two open
+narrowphases (types 2 and 4; the shared support-point solver `0x142cc9460` is
+now `fn/ClosestPointGjk`).
 
 **Two routes were tried and settled (2026-11-01).** (a) *Field hashes:* the
 class descriptor's field table (`desc+0x28 = 0x143c3c620`, count 4 at
@@ -1683,6 +1877,83 @@ triple — the client reads it through the component's accessor, so a Rust
 reader that wants the component's own value rather than the map chunk's must
 read `m_pose` (class `0x936A1A00`, not in the reference class list).
 
+### The character's own shape: a capsule, and both links are closed (2026-11-07)
+
+`ow_sim::walk`'s `0.35` m sphere is a **declared proxy**. The read that replaces
+it is now complete on the shape side; what is left is three runtime scalars.
+
+**The shape is a capsule, not a sphere.** The chain is
+`0x142cbcd40` (record) -> `0x142cf5440` (`Alloc(0x590)`) -> `0x142cf35a0`
+(descriptors) -> `0x142cc3f50` (owner pool) + `0x142cd4ef0` ->
+`0x142cb7f10` `ShapeEntryFromDescriptor`. The record builder `0x142cbcd40` was
+read in full: the mode at `+0x00` is **always `0`** (it writes `local_b8[0] = 0`),
+so the character always takes the shape-add path and never the body path.
+
+**Where the capsule comes from (all read).** `0x140ca5db0` is the single caller
+of `0x142cbcd40`; it builds the `0x60`-byte source from the mover object and
+`0x142cbcd40` copies it field for field. The capsule is
+`A = (0, r, 0)`, `B = (0, r + d, 0)` with
+
+- `r = max(0.02, [mover+0x5a4])`,
+- `d = max(0.1*r, [mover+0x5a0] - ([mover+0x5a8] + 2*r))`,
+
+so it is a **vertical capsule of radius `r` spanning `y` in `[0, 2r + d]`**, in
+the character's local space, with the lower sphere centre `r` above the origin.
+`record+0x30` carries `r`; `record+0x10`/`+0x20` carry `A`/`B` as `vec4`.
+`record+0x40` is the mover's world point and `record+0x50` is the constant
+`(0,0,0,1)`; `record+0x80` is `{shape id at +0x46 of the source, 0x10b9 or
+0x10a1}` and `record+0x88` is `0x3fd55555` (`1/1.5`); `record+0x98` is the
+physics object pointer.
+
+**The type-1 element (link 1, closed).** `ShapeEntryFromDescriptor` does write
+`entry+0x24`: it calls `ShapePoolAllocType1(world+0x2e8)`, stores the index, and
+fills the `0x30`-byte element directly with `{P0, P1, radius}` from descriptor
+`+0x70`/`+0x80`/`+0x90`, plus `entry+0x5c` = the radius and `entry+0x60` =
+`max(|P0|, |P1|)`. The type byte is at **descriptor `+0x67`** (the builder writes
+`0x0100` at `+0x66`), which is what selects this branch. `entry+0x20` = the type,
+`entry+0x24` = the index.
+
+**The radius (link 2, closed).** `record+0x30` -> descriptor `+0x90` -> element
+`+0x20`, which is exactly where `0x142ccd7b0` reads it.
+
+**The descriptor is two structs, not one.** `0x142cf35a0` builds an **owner**
+descriptor `{+0x00 qword, +0x10 quad, +0x20 quad, +0x30/0x32 u16}` for
+`0x142cc3f50` and a **shape** descriptor - the generic
+`ShapeEntryFromDescriptor` source - for `0x142cd4ef0`. Modelling them as one
+struct with the kind at `+0x34` was wrong; `crates/ow-tank/src/character_collision.rs`
+now models both and its 10 tests pin every offset.
+
+**The values (closed 2026-11-07).** The three mover scalars are copies of
+`STUCharacterMoverComponent` fields: class `+0x78` `0x1972C687` (extent, maxed
+by `ConstructMoverBody` against `2.1 * radius + offset`), `+0x7c` `0x7A70E3E3`
+(**the radius**) and `+0x80` `0x4A576BC2` (the height the segment is derived
+against). `ow_tank::character_collision::capsule_from_mover` is the client's
+construction and `ow_tank::entity::mover_capsule_of` reads it per hero; the
+install test `every_hero_declares_a_collision_capsule` measures 54 playable
+heroes (37 at `0.5 / 1.5`, 15 at radius `0.7`, two outliers, and one landing
+exactly on the `0.1 * r` floor). On the query side,
+`ow_sim::walk::World::sweep_capsule` sweeps that shape through the verified
+mesh leaf (`collide::mesh_sweep_with_points` supplies the two centres).
+
+**The step limits (closed 2026-11-07).** `ConstructMoverBody` (`0x140ca9730`)
+stores the mover's vertical step range at `+0x688`/`+0x68c`:
+`min = -max(c84 + c8c, c78 + c80)` and `max = max(0, 2 * c_a4)`, with both
+capsule extents maxed first. `ow_tank::character_collision::step_limits_from_mover`
+is that construction, `ow_tank::entity::mover_step_limits_of` reads it per hero
+(36 of 54 at `2.5 / 1.0`, the large ones at `2.8 / 1.0`), and `ow-client`'s
+floor probe now uses it instead of an invented `1.5` m. The second capsule
+triple (`0x84`/`0x88`/`0x8c`) is crouch-sized (`1.3 / 0.5 / 0.25`) but which
+state selects it is still unread.
+
+**What is still open.** The client's character-vs-world pass `0x142cf3f80`
+iterates the entry's paired shapes (`0x142cd4d90` iterator, `0x142cbb260` pair
+getter) and divides the delta by `param_3[8]` into the fraction quad at
+`+0x640` - a Domino pair walk, not a per-shape re-query. The walk's `8 m` grid
+and its slide are therefore declared deviations, and reading that pass is the
+next narrowphase-side anchor. `ow-client` still calls the sphere form; adopting
+the capsule is a one-line switch per probe once the pass is read, because the
+capsule's origin-at-feet height changes the resting position.
+
 ---
 
 ## 7. Domino schema and integration in the current image
@@ -1864,11 +2135,13 @@ dependency and the Wwise event-posting path.
 
 ---
 
-## 14. CASC: the container path after the eight verified leaves
+## 14. CASC: the container path after the eleven verified leaves
 
-**Question.** The eight leaf units (`Salsa20Xor`, `Salsa20StateInit`,
-`DynamicIndexHash`, `DynamicIndexKeyHash`, `EncodingHeaderParse`,
-`EncodingFindCKey`, `EncodingFindEKey`, `CdnIndexFooterParse`) are verified,
+**Question.** The eleven leaf units (`Salsa20Xor`, `Salsa20StateInit`,
+`Md5Transform`, `DynamicIndexHash`, `DynamicIndexKeyHash`,
+`EncodingHeaderParse`, `EncodingFindCKey`, `EncodingFindEKey`,
+`EncodingPageIndexSearch`, `CdnIndexPageSelect`, `CdnIndexFooterParse`) are
+verified,
 and the bucket hash, segment/archive selection, entry search, key-state
 intervals, resident resolve and CDN index layout are now read and
 install-tested. Which client functions remain, and what do they change?
@@ -2005,21 +2278,30 @@ against the index's 16-byte key; `CdnIndexPageChecksums` (`0x1424d9f20`)
 compares every page MD5 and ignores a mismatch. The four install indexes the
 CDN config names all match the formula exactly (260,173,908 / 48,616,028 /
 576,828 / 90,668 B; 63,149 / 11,800 / 140 / 22 pages). The unit
-`fn/CdnIndexFooterParse` is verified (100% coverage, 11/11 mutants, one
-declared equivalent) with one gap: the client writes only `AL`, so the final
-length-gate status is not observable in the void/memory channel; synthetic
-tests and the real files cover that branch.
+`fn/CdnIndexFooterParse` is verified (100% coverage, 12/12 mutants): the unit
+returns `u8`, so the client's AL status (0 accept / 8 reject) is compared and
+the final length gate is covered. The only input the oracle cannot represent
+is a buffer shorter than 20 bytes; the client reads before the buffer.
 
-**The CDN index page selection is still open.** No function in the complete
-image was found that takes a key and walks the `pageCount * keyBytes` last-key
-array. Searched: every caller of the 16-byte `memcmp` (317 functions, 25 with a
-loop), every function containing all four footer fields (`0x14`, `0x1c`,
-`0x20`, `0x24` → the parsers only), every `SHL ..., 4` function with a `0x24`
-reference, the handler classes at `0x1424e7cb0`, `0x1424e8db0` and
-`0x1424d1f40`, and the index builder at `0x1424f04f0`/`0x1424f0920`. The
-downloaded index is handed to a callback (`0x1424b0850` → `0x1424bbe60`)
-whose consumer was not found; the search may live in the launcher/agent. The
-Rust selection is reference-derived and the row stays open.
+**The CDN index page selection is read (2026-11-05).** `CdnIndexPageSelect`
+(`0x1424da730`, 469 B) is a method of the index object the footer parser
+fills (`footer base = index + 0x58`). It lower-bounds the `pageCount *
+keyBytes` last-key array at `index+0x88` with `min(keyLen,keyBytes)` and an
+early equal exit, misses when the page equals `pageCount`, then calls
+`CdnIndexPageResident` (`0x1424da590`): pointer arithmetic in whole-file mode,
+or an HTTP range read (`0x142522870` -> WinHTTP `0x142521d70`) with a
+full-page requirement and a per-page MD5 reject (status 8) in streamed mode.
+The record scan caps at `min(entriesPerPage, elements - entriesPerPage*page)`
+and decodes the size (u32 BE) and offset (u64 BE) by the footer widths.
+`CdnResolveLocation` (`0x1424b0cc0`) splits the 6/5-byte offset into ordinal
+and offset and falls back to the file index. The earlier searches missed it
+because the footer fields sit at `index+0x6c..0x80`, not `0x14..0x24`; the
+`memcmp` length is a register, not an immediate 16; the stride is a runtime
+`IMUL`, not `SHL`; and one caller was never promoted to a Ghidra function.
+`ow-casc::container::find_page` now follows the expression, and the install
+check confirms all 63,149 + 11,800 last keys select their own page. Still
+open: the batch wrappers `0x1424b0e50`/`0x1424b0ef0` are read only at the
+expression level, and the config-to-slot wiring is an inference.
 
 The remaining CASC work is not all unread expressions: the page-table writer
 is read but not implemented because all five type-3 call sites pass a null
@@ -2027,12 +2309,47 @@ range and write location/size from uninitialised stack slots; it is
 allocator/I/O state the read path never calls. Type `0x10` is absent and no
 outer `4` block was observed; the `E` inner modes are unreadable with this
 install's 63-key keyring, so LZ4's proof is synthetic only. The page-cache
-plan is a pure leaf, but its unit cannot earn the five-stage word: the same
-function publishes the refcounted archive handle, and with the null handle the
-oracle can construct the three refcount branches never execute (coverage 3/6;
-a branch that never ran cannot be declared dead). The unit was removed rather
-than shipped with a weakened gate. The CDN HTTP transport itself remains a
-TACTLib port with no real endpoint test.
+plan is not a pure leaf: its body takes the container lock twice and AddRefs
+the archive handle through `*(handle)+8`, so its unit cannot earn the
+five-stage word; the three refcount branches never execute under the null
+handle the oracle can construct (coverage 3/6; a branch that never ran cannot
+be declared dead). The unit was removed rather
+than shipped with a weakened gate. The CDN HTTP transport remains a TACTLib port with no real endpoint test, but
+the page request shape is now read.
+
+**Two leaf units added (2026-11-05).** `fn/EncodingPageIndexSearch` verifies
+the page-index search (`0x142498880`) directly, including its fifth (stack)
+argument: 100% of its four branch edges, 11/11 mutants. It also retires the
+false claim that the oracle rejects stack arguments, and the two find units no
+longer describe the search's branches as unmeasured.
+`fn/Md5Transform` verifies the 64-round block core (`0x1426ab530`): the block
+is read only and the 16 state bytes are the whole output; the body has no
+conditional branch, so the coverage stage reports 0/0 and the 18 mutants carry
+the unit. Both were read from the image: the search's answer is written with a
+32-bit `LEA`/`MOV` (zero-extended, `0xFFFFFFFF` for zero pages), and the
+transform's Ghidra function listing stops after 64 bytes while the body runs
+straight-line to its return and adds each accumulator back into its state word.
+
+**The page selection is verified (2026-11-05).** `fn/CdnIndexPageSelect`
+(`0x1424da730`) passes all five stages: 100% branch coverage over the 469-byte
+body, 14/14 mutants killed, and every channel compared (AL, out_offset,
+out_size, the 16-byte out_key16, the whole index object and the key buffer).
+It runs the client's whole-file branch only (`index+0x38 == 0`); the
+streamed/HTTP resident branch, a null `out_key16` and a page body shorter
+than the footer describes are recorded as unreachable or uncovered. The
+duplicate-last-key early exit is also pinned by a committed Rust test
+(`container::tests::duplicate_last_keys_take_the_early_equal_page`).
+
+**What is still open in MD5.** `blte.rs`'s `md5()` is a single pass over the
+input, while the client stages `Md5Init` (`0x1426a5100`) -> `Md5Update`
+(`0x1426a4f40`) -> `Md5Final` (`0x1426a5010`) over a 0x58-byte state (byte
+count, four words, 64-byte buffer). The reader never models the client's
+buffering rule (`count & 0x3f`, transform when the input fills the buffer); a
+single pass produces the same digest for a buffer that is known in full, which
+is why nothing has broken yet. The staged form is the client's own and is the
+next unit (`fn/Md5Update`/`Init`/`Final`, three probe entries over the whole
+0x58-byte state; the earlier investigation measured the state layout and the
+image reads each one needs).
 
 **Next anchor.** `docs/casc-1to1.md`, `formats/casc.md`,
 `crates/ow-casc/src/pagecache.rs`, `crates/ow-casc/src/container.rs`,
@@ -2201,6 +2518,221 @@ provable.
 `FUN_1426781b0` (`0x1426781b0`), `FUN_142676130` (`0x142676130`).
 
 ---
+
+## 16. The model render-mesh consumer: elements to input layout
+
+**What is read and verified.** The model chunk table (`0x141b5e1e0` sizing,
+`0x141b5df70` load) with its per-tag version gate; `MDLC`'s material list
+(`MdlcMaterialRead` `0x141b88cb0`); `MSTU`'s `{u64 offset; u32 size}` header
+(`0x141b88df0` -> `FUN_1421d88c0`, the STU v2 loader); and `MRNM` end to end --
+the fixup (`FUN_141b893e0`), the runtime size (`FUN_141b89390`) and the
+runtime-block load (`MrnmHandler` `0x141b88f10`), each a differential harness
+unit (`fn/MrnmFixup`, `fn/MrnmRuntimeSize`, `fn/MrnmHandler`) against the
+shipped `crates/ow-tank/src/mrnm.rs`. Page: `formats/model.md`.
+
+**What is open.**
+
+1. **The element record is read; the value decode is not.** The record is
+   `{u8 semantic, u8 index, u8 format, u8 stream, u32 packed}` and the packed
+   dword is `offset << 12 | stride << 22`. Both packings are read from the
+   client's own render-mesh writer `FUN_14210c450`, which emits this record
+   form; the per-format byte sizes are pinned by the file (offset adjacency +
+   stride) and checked over 637 records on 68 models with zero disagreements
+   (`formats/model.md`). What is not read is the **value conversion**: the
+   image contains no CPU half-float conversion instruction, so the client
+   hands the format byte to D3D11 and the GPU converts. `ow-tank`'s floats are
+   therefore the viewer's reading; its SNORM follows the GPU rule
+   `max(x/127, -1)`. The format bytes the client's writer uses are `0x02`,
+   `0x03`, `0x04`, `0x09`, `0x0c` and `0x13`; `0x13` occurs in no model file
+   and stays undecoded rather than being guessed.
+2. **The input-layout builder.** `CreateRenderPipeline` (`0x142667be0`) builds
+   the `D3D11_INPUT_ELEMENT_DESC` array from a **prebuilt** list (element 0x20
+   bytes, semantic name `+0x10` defaulting to `"Attr"`, engine-format byte
+   `+0x04` resolved through the 64-entry table `0x1434965d0`, offset `+0x08`,
+   index `+0x00`/`+0x18`); it builds none itself. The list's builder is not
+   found, and it is the only missing piece between the file's format byte and
+   the engine enum. The searches that came up empty: no 13-entry
+   model-format -> engine-format table exists in the image; no code outside the
+   renderer shifts `packed >> 12`; and the descriptor arrives at
+   `CreateRenderPipeline` through `param_3+0xb8` already filled. Next anchors:
+   the caller of the `pm_dx11::Device` vtable slot at `0x143497040`, and the
+   0x20-byte element-list allocator (count `+0xc`, array `+0x10`).
+3. **The runtime block's non-geometry fields.** The `+0x00` qword (the OR of
+   each submesh's `+0x28`, skipping `-1`), the five `0x1c`-byte header blocks
+   and the `-1` initialisers are copied by the verified handler but nothing
+   read consumes them.
+4. **The MDLC differential unit.** The material extraction is a 1:1 copy of
+   `MdlcMaterialRead`'s loop and is pinned by a synthetic offset test, but it
+   has no harness unit: the function writes a model object whose tail size is
+   computed by a function with no Ghidra entry (`0x141b88e30`), and its two
+   source pointers are absolute, which the harness's relocation model (payload
+   base only) cannot express.
+5. **The LOD pick's last link.** The byte at runtime `+0x92` is a level set:
+   `0x141b40be0` unions it (skipping `0` and `0x7f`), `0x141b3def0` masks it by
+   availability, the lowest/highest set bits become `+0x20e`/`+0x20f`, and
+   `0x141b3ce00` picks the level per instance from distance and quality
+   (`formats/model.md`). `Model::finest_level` now implements the client's
+   finest-level bit test. What is open is the **inclusion predicate**: the
+   draw path passes the byte into the draw record at `+0x134`
+   (`0x141e20d10`) and no byte reader of that field was found, so `bit i`
+   versus `== 1 << i` is inferred from the mask semantics, not read. Next
+   anchors: the consumers of the draw record's `+0x134` and the sort that
+   compares the per-item float in `0x141f55f60`.
+6. **The bone-index join.** `MsklTableBuild` (`0x141b894d0`) is read: it sizes
+   every `mskl` table (`bones_abs` 64-byte matrices and 48-byte poses,
+   `bones_simple` ids, `remap_count` u16 Lookup, a `bones_abs` inverse table at
+   `mskl +88`, a `remap_count` 8-byte table at `+96`) and `ModelChunkLoad`
+   stores the block at model `+0x08`. The install then proves what the tables
+   *are*: on all 7,328 skinned model assets the Lookup is a permutation of
+   bone indices, `remap_count` is the largest raw blend index plus one, the
+   inverse table maps every slot back exactly, and the geometry puts the
+   dominant influence a median 0.122 m from its vertices through the Lookup
+   versus 0.591 m through the raw index (`bonemap_probe`,
+   `formats/animation.md`). **What is open is the consumer:** no client
+   function that joins a vertex's blend index to a bone has been found, so
+   three things stay the reference's: the submesh `BoneIdOffset` addition
+   (`raw + +0x82`; `0` on every install submesh), the index bound, and
+   `0xFFFF` = "unbound" (no install Lookup holds it). Next anchors: a reader
+   of the runtime skeleton's `+0x48` (Lookup) or `+0x50` (inverse), or the
+   buffer upload that hands the remap to the vertex shader. Searches that came
+   up empty: a u16 load at `+0x6a` (the runtime `remap_count`) occurs in only
+   seven functions and none builds a palette or copies the Lookup; a scan for
+   `word ptr [reg + reg*2]` (the Lookup element read) against a `+0x48` pointer
+   load gives 106 functions, none in the model path; the submesh `+0x82`
+   (`BoneIdOffset`) is read as a word by `FUN_141fb8c60` only, which is a
+   render-pass gate on a different struct.
+
+**Next anchor.** The pipeline descriptor's builder: walk back from
+`CreateRenderPipeline` (`0x142667be0`, reached through the device vtable at
+`0x143497040`) and find who fills `param_3+0xb8`'s element lists; that function
+is the join between a model's element record and the engine format table at
+`0x1434965d0`. `formats/model.md`, `formats/renderer.md` R10.
+
+---
+
+## 17. Effects: the runtime record and the array sub-chunks
+
+**Question.** The client's effect layer is now read on the payload side — the
+`EFCT` root, the 0x34-kind table at `0x143610490`, the per-tag payload copies in
+`FUN_142e4a780` and the seven components with a GUID (`docs/formats/effects.md`).
+What is not read is the destination: the runtime record the builder fills, the
+meaning of its fields, and the consumers of the four array sub-chunks.
+
+**What is known.** The builder allocates its own record through the object at
+`[param_1+0xa8]+0x30` and fills it per kind; `FUN_142e4fbe0` copies five arrays
+(one `u32` and four `u8`, count at payload `+0x28`) and `FUN_142e50110` copies a
+`u16` array plus a byte array (count at `+0x51`). The fixup `FUN_142e4e8e0`
+converts the stored offsets to pointers before the builder runs. Five tags
+(`ECMP`, `ECSS`, `ECAT`, `ESHT`, `ECCV`) have no read site in the image; their
+payloads are editor-side data.
+
+**What would settle it.** A caller of `FUN_142e4a780` that consumes the runtime
+record (its `+0xb8` kind is what the effect system switches on), and the
+consumer of `+0x1c`-style array fields — the same shape as the `MRNM`
+element-array search in item 16. Until then the record side stays open and the
+typed payloads are the claim.
+
+**Next anchor.** `docs/formats/effects.md`, `crates/ow-tank/src/effect.rs`,
+`crates/ow-tank/tests/effect_real.rs`, `FUN_142e4a780` (`0x142e4a780`),
+`FUN_142e4e8e0` (`0x142e4e8e0`).
+
+---
+
+## 18. The frontend pipeline: menu, mode, map, character select, spawn
+
+**The question.** Follow the client from the front-end menu to a spawned
+character and read each stage: menu -> mode selector -> practice range ->
+character selector -> spawn.
+
+**The answer (2026-11-08).** The front end is not native UI. The menu, the mode
+selector, the character selector and the custom-game browser are web pages in
+an **embedded CEF browser inside the game process**, and the page talks to the
+engine through a JSON callback bridge whose whole vocabulary the client names
+itself (`onConnected`, `onDataPost`, `onRegisteredFunctionCalled`,
+`onPageLoadBegin`/`Completed`, `onJavascriptDialog`, at
+`.rdata 0x143616040..0x143616640`; validator `0x142ec6cb0`). The page's content
+is fetched over bnet (API-gateway protos `0x143146e60`, the lobby systems), and
+the mode/hero rules are the custom-game descriptor
+(`CustomGame.proto`, `0x1435f1767`: `CGGameRulesetTeam.heroesArrayIsWhitelist`,
+`heroGUIDs`, `numTeamMembers`, `CGPregameOptions.enableHeroDraft*`).
+
+**What is read.** The page<->engine router is read in full (`RouteBrowserMessage`,
+`0x142ed1be0`, 4092 bytes, dispatched over three `.pdata` fragments; the middle
+fragment's function was created on 2026-11-08 with the operator's approval). It
+parses the JSON envelope, requires the integer `type` field (`0x143437678`) and
+dispatches **50 numbered messages**: service codes `0x00..0x1a` (host ->
+browser: create with `start_url`, navigate, cookie, URL allow-list, register
+javascript variable, call javascript callback, zoom, focus, scheme handler) and
+client codes `0x1b..0x31` (browser -> host: `OnReady`, `OnPageLoadBegin`,
+`OnPageLoadCompleted`, `OnDataPost` `0x21`, `OnRegisteredFunctionCalled` `0x23`,
+`OnJavascriptDialog` `0x2e`, `OnJavascriptConsoleMessage` `0x2f`,
+`OnSchemeLoadBegin` `0x30`). The full table is in
+[`formats/frontend-pipeline.md`](formats/frontend-pipeline.md).
+
+The developer overlay is read: **Dear ImGui, docking branch**, compiled into
+the game (`.rdata 0x14328fa10..0x143290b30` carries `imgui.ini`,
+`imgui_log.txt`, `Debug##Default`, `HoveredId: 0x%08X`, `Click to break in
+debugger!`, `Press ESC to abort picking.`, the dock-node strings and
+`##Menu_%02d`/`##Popup_%08x`/`##MainMenuBar`). Its own label text is not
+plaintext - the CVar name table is encoded in this image - so the overlay's
+feature list is readable only through the client's decoder.
+
+Also read: the map-start sequence `0x14054fbe0` -> `RunMapLoadEntry
+0x14055a0f0` -> `0x14055abc0` / `0x14055a8c0` -> `[[0x143b796a8]+0x240]` ->
+`0x1406c1bc0`, with `0x14055a0f0`'s body already documented; and the player
+array accessor `GetPlayerComponentByIndex 0x14214dcc0` (640 call sites).
+
+**What is open.**
+
+1. **The host's two doors.** `onDataPost` (`+0x218`) and
+   `onRegisteredFunctionCalled` (`+0x238`) are the only ways a page click
+   reaches the game; whoever fills those two slots of the browser host object
+   is the front end's gameplay entry, and that producer is not found. The
+   validator `0x142ec6cb0` only reads the config it is handed.
+2. `0x14055abc0` and `0x14055a8c0` (452 and 754 bytes) are read only by their
+   callees; the map-start tail is obfuscated.
+3. The write side of the player component array - who sets a player's position
+   and hero - is not found. The accessor is inlined at 640 sites, so caller
+   filtering is useless there; the work is a store census.
+4. The character selector has **no engine-level implementation to copy**, and
+   its *rules are now read as data* (2026-11-09): each team of a mode carries
+   `m_availableHeroes` (`0x59C86C8D`) - either the empty marker `STU_D1DC7C55`
+   (every hero) or a whitelist `STU_3C14F504` / `STU_C45DE560` whose `m_heroes`
+   (`0x056D3E39`) names them. All four pool classes are runtime component types
+   (stub block `0x1402dc690`..`0x1402dc990`, interface tables
+   `0x143e79a90`/`0x143e79bf0`/`0x143e79eb0`/`0x143e79d50`). Measured: Practice
+   Range = empty marker (all heroes), Mei's Snowball Offensive = a one-hero
+   whitelist, Stadium = one whitelisted team and one open team. Read and tested
+   in `ow_tank::hero_select` (`crates/ow-tank/tests/hero_select_real.rs`);
+   written up in `formats/frontend-pipeline.md` section 4a. **The mode's applied
+   hero is also read** (2026-11-09): each team's controller graph
+   (`m_controllerScript` `0xA2781AA4`) carries one `STUStatescriptStateHero`
+   (`0x91428992`) whose `hero` input is `STUConfigVarDynamic` (`0x4B093107`)
+   `m_identifier` **940**; install survey: 137 modes -> 35 controller graphs ->
+   13 with a hero node -> 12 read variable 940, 1 ("Assault") writes a literal
+   hero. The state is a runtime component type (stub `0x140402690`, size
+   `0xF0`, interface `0x14404EEC0`). `ow_tank::graph::hero_states_of` +
+   `hero_select::mode_team_scripts`, tests `crates/ow-tank/tests/hero_pick_real.rs`,
+   section 4b. **The hero asset's own selector fields are read too**
+   (2026-11-14): its display name (`m_0EDCE350`, a type-`0x07C` string), its
+   playable marker (`m_64DC571F`, the reference's `IsHero`; the practice roster
+   is 135 hero assets, 54 playable and 81 NPC), and its movement row
+   (`ow_tank::entity::MoverRow`: forward/side/back/crouch/terminal fall).
+   `ow-client --list-heroes` prints the roster, and a prompt or `--hero
+   <name|index>` picks one; the pick applies the hero's own first-person model
+   and its forward speed and fall clamp (section 4c). **Still open: what binds
+   runtime variable 940** - the client's dynamic-variable table and the store
+   that writes it; that store is the pick. The component's consumer is also
+   open. `spawn`, `heroselect`, `modeselect`, `practice`, `training`, `workshop`
+   are 0 hits in the whole module image, which is why no native screen can be
+   named.
+
+**How it closes.** Item 1 yields the address of the handler that starts
+something; item 3 closes by reading the spawn message's consumer. Item 4's
+roster, names, marker and movement row are read and `ow-client` applies them as
+a declared viewer default; its remaining half closes by reading what the spawn
+does with the hero id, not by inventing a selector. Item 1 is the cheapest next
+read.
 
 ## How an entry is closed
 

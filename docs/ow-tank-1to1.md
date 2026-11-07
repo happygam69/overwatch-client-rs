@@ -12,11 +12,12 @@ different run; it is not evidence. Code whose only citation is a capture is
 **open**, not read. See `provenance.md`.
 
 **"Verified" has one meaning here:** a differential-harness unit passes all
-five stages against the client's bytes. As of 2026-11-02 the harness ledger
-has 64 units and **thirteen target `ow-tank`**, including `fn/ChunkGuid`,
-`fn/MapChunkCellBytesFixup` and `fn/BundleLookup` (section D),
-`fn/BundleDirectoryLookup` (section E, a verified consumer) and
-`fn/CmfKey154504` / `fn/CmfIv154504` (section B;
+five stages against the client's bytes. As of 2026-11-05 the harness ledger
+has **77 units and sixteen targeting `ow-tank`**, all `verified`, including
+`fn/ChunkGuid`, `fn/MapChunkCellBytesFixup` and `fn/BundleLookup` (section D),
+`fn/BundleDirectoryLookup` (section E, a verified consumer), the three `MRNM`
+units and six texture leaves, and `fn/CmfKey154504` / `fn/CmfIv154504`
+(section B;
 differential and mutation pass, but the coverage stage cannot measure the
 body). `casc` targets
 `ow-casc`; the legacy probe and `ow-sim` targets are not shipped `ow-tank`
@@ -32,11 +33,15 @@ even where the code is read, implemented and exact on the install.
 | Map chunk bodies | model and entity bodies are read at real offsets; the other nine (model group, single model, light, reflection point, text, sound, effect, sequence, area) are a TankLib `teMapChunk.cs` port | the nine are explicitly "not verified against a real chunk of their kind"; the sweep only reports tallies | `src/mapchunk.rs`, `formats/maps.md` |
 | Clip record layout and kind dispatch | the file walk and 31-kind table were derived from process captures `0x7ff613ecf660`, `0x7ff614ee4130`, `0x7ff6164f38f8`, `0x7ff6162f3ae4` | captures are not the current image; kinds 1, 4, 5, 7, 8, 15, 19 and 31 are cold-unverified, and most kinds share a default stub | `src/clip.rs`, `formats/animation.md` |
 | Skin evaluation | weights, bind pose and palette are implemented and property-tested | the evaluator is known only from capture `0x7ff614e92700`; the install check is a tolerance (`< 2.0`), not bit-exact | `src/skin.rs`, `formats/animation.md` |
+| Bone-index join | `skeleton.rs` parses `mskl`'s Lookup and `skin.rs` maps a vertex's raw blend index through it (slot → bone); the client's reader `MsklTableBuild` (`0x141b894d0`) is what sizes the tables, and the install proves the direction: the Lookup is a permutation on all 7,328 skinned models, `remap_count` is the largest raw index plus one (7,308, the other 20 leave spare slots), the file stores its exact inverse at `mskl +88`, and the geometry prefers it 5–8× over the raw index (`bonemap_probe`) | the *consumer* is unread: whether the client adds the submesh `BoneIdOffset`, how it bounds the index and whether `0xFFFF` means "unbound" are the reference's rules, and all three are unexercisable on this install (every offset `0`, no Lookup hole). Only the first four-wide blend-index set is read: 454 models declare `semantic 4 / index 1` and their eight weights sum to 255, so those influences are dropped | the function that joins a mesh index to a bone (CPU-side, or the buffer upload of the remap) |
 | Animation-to-skin join | `FIT-ANI-07` drops ids not on the skin | legacy deviation, still in `ow-tank` (`src/clip.rs`), despite `deviations.md` saying simulation deviations are gone | `docs/deviations.md` |
 | STU class and field layouts | typed readers work against a local OWLib/TankLib checkout | the layouts come from a reference library at runtime, not from the client; the real-data test skips when the checkout is absent | `src/classreg.rs`, `src/fieldnames.rs`, `formats/stu.md` |
 | Hero health pools | values are read from the install and checked against a published source | no client read and no test pins the values; the old "pools verified" line was wrong | `src/entity.rs`, `formats/stu.md` |
 | Weapon, graph and volley semantics | data records, slots and graph links parse | no address is cited for slot behaviour, per-node dispatch, the fire loop or damage; `weapons` has one trivial test | `src/weapons.rs`, `src/graph.rs`, `formats/weapons.md` |
 | Map entity placeable body | placeables are skipped by their size field | the body is not decoded; its reference-shaped qwords do not resolve | `formats/maps.md` |
+| Shader instance (`0x086`) | `shader.rs` parses a reference-derived 108-byte header and its tables | this build registers **no loader** for the type: the asset-type job table at `0x143a7c3a0` maps `0x086` to 0 while `0x085` is 23 and `0x087` is 25, and no type-`0x086` asset exists in the registry, so there is no client code to read and no data to check | `formats/shaders.md` |
+| LOD selection | `Model::finest_level` takes the union of every submesh LOD byte (skipping `0`/`0x7f`) and keeps the submeshes whose bit is the union's lowest set bit — the client's own rule at the finest level (`0x141b40be0`) | the client picks that level per instance from distance and a quality term (`0x141b3ce00`), and the per-submesh inclusion predicate that consumes the draw record's LOD byte (`+0x134`) is unread; the viewer always draws the finest | `src/model.rs`, `formats/model.md` |
+| Vertex-element decode and mesh assembly | `model.rs` turns `MRNM`'s verified element array and streams into positions/UVs/colours/joints, remaps indices and compacts each submesh's vertex array | the **element record is read** from the client's render-mesh writer (`0x14210c450`: `{semantic, index, format, stream}`, packed = `stride << 22 | offset << 12`), its per-format byte sizes are pinned by offset adjacency and stride, and 637 records on 68 models show the packed stride agreeing with the descriptor; the **value conversion is not read and cannot be** — the client never converts vertex bytes on the CPU (no half-float instruction in the image), so the file's format byte must be joined to the engine enum the D3D11 path uses (`0x1434965d0`), and that join is open. The decoder's floats and the compacted vertex array are the viewer's | read the pipeline element-list builder (caller of the vtable slot `0x143497040`), which is the only missing piece |
 
 ## B. Read and implemented, but not fully proven
 
@@ -53,6 +58,8 @@ measure the body.
 | Map resolver | `0x14143b5c0`, `0x141ff5c80` | 34/34 chunks, 1,358 placeables, 229 models, 550 entities; bit-exact bounds; the mode-entry identifier (`m_A9253C68`) and the 63-variation pairing are pinned; the replay header's map GUID is the base map, not a scene map | counts and bounds are regression pins, not a client trace; no harness unit; the producer of the level-load GUID lists is unread |
 | Manifest build 154504 | `0x142e48a20`, `0x142e48700`, table `0x1436100c0` | `fn/CmfKey154504` and `fn/CmfIv154504` pass 364 synthetic differential cases each on every channel (all 32 key bytes, all 16 IV bytes, table `0x00`/`0xFF`, build and data-count extremes, digest bytes `0x00`/`0xFF` at all 20 indices); 1/1 and 5/5 mutants killed; the install manifest still decrypts to 1,301,598 records | the coverage stage cannot measure the real body (the linear sweep desynchronises at the overlapping-instruction opaque-predicate prologue), so both units set the coverage gate to 0 with an acknowledged gap; the key table may come from `OW_KEYTABLE`/TACTLib, and the test does not assert the installed exe supplied it; builds 154088 and 150851 are untested |
 | Material data join | `0x141b88cb0`, `0x141b894d0`, `0x141b7b9d0` | model → look → material → data → texture chain opens on the install | the client's runtime material application and sampler are unread; the viewer is not the renderer |
+| Model chunk table and `MRNM` runtime block | `0x141b5e1e0`, `0x141b5df70`, `0x141b893e0`, `0x141b89390`, `0x141b88f10` | the per-tag version gate (MDLC `0x165`, MRNM `0x1f`, MSTU `2`), the fixup, the size formula and the whole runtime block are read; `fn/MrnmFixup` (7/7 mutants), `fn/MrnmRuntimeSize` (6/6) and `fn/MrnmHandler` (12/12) pass every channel; MDLC's material list and MSTU's `{u64 offset; u32 size}` header are read and 60/60 install MSTU chunks parse | MDLC has no differential unit (the tail-size function `0x141b88e30` has no Ghidra entry and the harness cannot express absolute pointers in the fixture); the element decode and mesh assembly are section A; MESD/CLTH/MOCL/mskl are not parsed |
+| Effect chunks | `0x143610490` (kind table), `0x142e4a780` (component builder), `0x142e4e8e0` (fixup), `0x142e4fbe0`/`0x142e50110` (array sub-chunks) | `EFCT` root and 0x34 kinds are read; the builder's per-tag payload copies are implemented and seven components are typed (`ECMD`, `ECEF`, `ECEN`, `ECEC`, `ECSO`, `ECVS`, `ECRR`), each field's GUID type pinned on the install (3,369 models, 72,654 sounds, 1,846 voice stimuli, ...) | no harness unit (the builder allocates through a vtable); the runtime record layout and the array consumers are unread; `ECMP`/`ECSS`/`ECAT`/`ESHT`/`ECCV` have no client read site, so they stay raw |
 
 ## C. Open, with no implementation
 
@@ -62,7 +69,6 @@ measure the body.
 | Map chunk kind `0x12` cell-to-shape decoder | the container and the 17-pointer fixup are implemented/verified (section D); the 17 arrays are not yet turned into shapes | `formats/maps.md`, `formats/domino.md` |
 | Replay frame payload | container prefix only | `formats/replay.md` |
 | Audio decode | Wwise metadata and WEM headers only | `formats/sound.md` |
-| Shader instance data | containers parse; real instance layout unvalidated | `formats/shaders.md` |
 
 ## D. Closed: verified by a differential unit
 

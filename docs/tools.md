@@ -19,7 +19,11 @@ project, never write to the game.
   `--jobs N` sets how many mutant probes run at once (default 4) and
   `--mutation-timeout S` bounds one mutant probe call (default 10 s; the
   baseline candidate keeps 300 s). Neither flag skips a stage or weakens a
-  gate.
+  gate. A mutant the harness cannot build, start or drive is retried once;
+  a second infrastructure failure makes the unit `inconclusive` rather than
+  counting an unobserved mutant as killed. A mutant that does not return
+  within the doubled call budget on the retry is a non-terminating mutant and
+  is killed, so the timeout oracle is preserved.
 - **`dev/gh.py`** — the Ghidra MCP bridge client used by the naming tools.
 - **`dev/gh_apply_names.py`** — applies `docs/function-names.csv` to the
   Ghidra program.
@@ -65,6 +69,7 @@ The table below is the practical set by task.
 | `ow-tank example fpcomp_probe -- [hero]` | `STUFirstPersonComponent` values |
 | `ow-tank example stu_probe -- <guid> <instances>` | raw STU instances, layouts and payload bytes |
 | `ow-tank example hardpoint_probe` | the hardpoint transforms a model carries |
+| `ow-tank example bonemap_probe [-- --all]` | a mesh's bone indices against the skeleton Lookup: the permutation, the size fit, and the bind-distance test that picks the right rule |
 | `ow-tank-skel` | which chunk of a model carries the skeleton |
 | `ow-tank-modelanim` | model → animation linkage |
 | `ow-tank-combo` | component-level associations |
@@ -95,8 +100,11 @@ The table below is the practical set by task.
 dev/verify_harness/cli.py casc` is the CASC gate, and `fn/<Name>` is the
 per-function gate.
 | `python dev/verify_harness/scaffold_unit.py <address> --name <Name>` | a scaffold for a new client function |
-| `cargo run --release -p ow-client` | the practice-range eye-check |
+| `cargo run --release -p ow-client` | the practice-range eye-check; a terminal launch asks for a hero |
 | `cargo run --release -p ow-client -- --list-maps` | map headers and variation modes |
+| `cargo run --release -p ow-client -- --list-heroes` | the practice mode's roster: names and forward speeds |
+| `cargo run --release -p ow-client -- --hero tracer` | spawn with a hero of the mode's roster (name or asset index) |
+| `cargo test --release -p ow-tank --test hero_select_real` | the roster, names, marker and movement rows, read from the install |
 
 ## Decompilation (Ghidra)
 

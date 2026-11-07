@@ -179,12 +179,18 @@ embedded/inline instance refs, arrays and hash maps.
 
 ## MSTU: a model's own structured data
 
-`MSTU` is a model asset's structured-data chunk: a two-`i64` header naming the
-offset and size of an STU blob inside the chunk's payload.
+`MSTU` is a model asset's structured-data chunk: a two-field header naming the
+offset and size of an STU blob inside the chunk's payload. **Read** from the
+current image: the model load dispatcher `0x141b5df70` requires chunk version
+`2`, rebases the payload's first qword (offset -> pointer) and calls
+`LoadMstuChunk` (`0x141b88df0`), which passes `*(int *)(payload + 8)` -- a
+**u32**, not a qword -- and the rebased pointer to `LoadStuBlob`
+(`0x1421d88c0`), the STU v2 loader. A zero length stores a null STU.
 
 ```text
 0x00  i64 offset   relative to the MSTU payload start
-0x08  i64 size     STU blob length from `offset`
+0x08  u32 size     STU blob length from `offset`
+0x0c  u32          never read
 0x10  ...          the STU blob (offset 16 on every model inspected)
 ```
 
@@ -192,7 +198,22 @@ The offset is payload-relative, not asset-relative. On 60 of 60 models the STU
 parses at `payload[offset..offset+size]` and on none at
 `asset[offset..offset+size]`. `size` can leave trailing bytes; slice by `size`.
 `ow-tank::mstu` exposes `parse_header` / `parse`, and `Model::mstu` is filled
-when the chunk is present.
+when the chunk is present. The old reader took `size` as an `i64`; the install
+never showed a difference (the four bytes at `0x0c` are zero on all 60), but
+the client's width is four bytes.
+
+## The hero asset's own fields
+
+`STUHero` (`0x7C3457DC`) carries three selector fields beyond the entity:
+`m_0EDCE350` names the hero's **display string** (a type-`0x07C` asset; the
+`teString` payload is two header bytes, the text, then a NUL, decoded by
+`text::parse_display_text` and cleaned the reference's `GetCleanString` way —
+trailing space and non-breaking space stripped), `m_64DC571F` is the one-byte
+**playable-hero marker** (the reference's `IsHero`; an open mode's roster also
+contains NPC hero assets), and `m_heroLoadout` (`0x77FED604`) names the
+abilities. The movement row comes through `m_gameplayEntity` below. Read and
+tested in `ow_tank::hero_select` + `ow_tank::entity::MoverRow`; measured values
+in [`frontend-pipeline.md`](frontend-pipeline.md) section 4c.
 
 ## Entities and health
 

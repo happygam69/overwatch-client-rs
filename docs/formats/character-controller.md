@@ -18,6 +18,17 @@ integrates the per-frame step.
   `SubmitMoverPhysicsCommand` velocity assembly, the Domino character
   controller and collision. The invoker's caller is still not located and may
   be a dead path.
+- **The jump, 2026-11-16.** The take-off is read end to end and shipped as
+  `ow_sim::jump` (the button bits, the handler chain, the state file word and
+  its five transitions, the gate and the impulse). Its magnitude is the mover
+  component's `0xEC289987`, carried into the body at `+0x60c` by the component
+  copy at `+0x528`; it is **not** one of the six `STU_97288E54` floats. The arc
+  is read too (2026-11-16): gravity is `-10.0 * body[0x610]` along
+  `body[0xc0..0xcc]`, added into `body+0x1150` per tick by `MoverApplyForces`,
+  and the airborne terminal drag runs before it. Shipped as `ow_sim::air` and
+  wired into the walk. What is still open is the **ground** resolve through the
+  `body+0x960` record table and the swept solve's contact-to-position rule.
+  See "The vertical law" below.
 - **Collision, 2026-11-02:** the collider query leaves are proven — the type-3
   mesh sweep (`fn/MeshSweep`: the BVH walk plus the triangle test) and
   `ColliderTriangleDegenerate` (`0x142cd56e0`, the skip test
@@ -94,6 +105,224 @@ The per-hero values are read by `ow-tank`'s mover reader. The named anchors:
 
 The remaining 40+ scalars stay hash-labelled; none is guessed into a role.
 
+**The typed row.** `ow_tank::entity::MoverRow` reads the five named floats off
+a hero's gameplay entity and keeps an absent field `None` (an absent field is
+the class default, which is not known here). `ow-client` applies the picked
+hero's row as a declared viewer default: `19452F15` (forward) is the wish
+magnitude and `B74245E8` (terminal fall) the fall clamp. The side, back and
+crouch rows are carried and printed but not yet consumed, because the input
+stage that would choose them is open (`docs/open-questions.md` item 1b).
+`--list-heroes` prints each playable hero's forward speed; on this install the
+unnamed `031FE7EE` scalar (`0xDC`, 5.5 for every playable hero) is *not* the
+forward row, and the forward row is 6.0 for Tracer, Genji and Anran.
+
+## The collision capsule (2026-11-07)
+
+The character's collision shape is a **vertical capsule** built from three
+class fields, and the chain is read end to end:
+
+| STU offset | hash | mover slot | role |
+|---|---|---|---|
+| `0x78` | `1972C687` | `+0x5a0` | the extent (`2.0` for most heroes, `2.3` for the large ones) |
+| `0x7c` | `7A70E3E3` | `+0x5a4` | **the capsule radius** (`0.5`, `0.7` for the large ones) |
+| `0x80` | `4A576BC2` | `+0x5a8` | the height the segment is derived against (`0.5`) |
+
+`ConstructMoverBody` (`0x140ca9730`) maxes the extent at construction:
+`[+0x2e0] = max([+0x2e0], 2.1 * [+0x2e4] + [+0x2e8])`. `0x140ca5db0` then
+builds the shape:
+
+```text
+r = max(0.02, radius)
+d = max(0.1 * r, extent - (offset + radius + radius))
+A = (0, r, 0)        B = (0, r + d, 0)
+```
+
+with the **raw** radius in the segment term (the clamp only reaches `r` and
+`A`/`B`), the client's left-to-right addition order, and `<=` comparisons that
+send a `NaN` to the left branch. The capsule's origin is at its **feet**: its
+lowest point is local `y = 0`, so a 1.5 m capsule stands on the floor with its
+origin at the floor plane, not half a radius above it.
+
+`ow_tank::character_collision::capsule_from_mover` is that construction and
+`ow_tank::entity::mover_capsule_of` reads the three fields per hero. Measured
+on this install (54 playable heroes): 37 at `0.5 / 1.5` (radius, height), 15 at
+`0.7` with heights `1.8` and `2.0`, hero 6 at `1.2`, hero 657 at `0.54 / 1.67`,
+and hero 458 lands exactly on the `0.1 * r` segment floor (`0.7 / 0.07`).
+
+On the geometry side, `ow_sim::walk::World::sweep_capsule` sweeps the capsule
+through the same verified mesh leaf, and `collide::mesh_sweep_with_points`
+supplies the two centres directly instead of through the world image. The
+support-point form is **not** a sphere at `P0`: the leaf replaces the swept box
+with the point cloud's hull (`0x142cd5540`), so the capsule's contact differs
+from a sphere of the same radius - which is the point. Whether the character
+controller reaches the leaf that way is still open: its pass `0x142cf3f80`
+walks the entry's **already-paired** shapes instead of re-querying.
+
+## The vertical step limits (2026-11-07)
+
+There is a **second** capsule triple, and `ConstructMoverBody` uses both:
+
+| STU offset | hash | role | value (common hero) |
+|---|---|---|---|
+| `0x84` | `03E04168` | second extent, maxed against `2.1*r2 + o2` | `1.25` -> `1.3` |
+| `0x88` | `915FF368` | second radius | `0.5` |
+| `0x8c` | `D97B3735` | second offset | `0.25` |
+| `0xa4` | `08FFAA0A` | the up field, doubled | `0.5` -> `1.0` |
+
+The second triple is crouch-sized (extent `1.3` against the standing `2.0`);
+which state selects it is **not proven**. `ConstructMoverBody` stores the step
+range as
+
+```text
+[+0x688] = -max(c84 + c8c, c78 + c80)      // -2.5 on the common hero
+[+0x68c] =  max(0, 2 * c_a4)               //  1.0
+```
+
+so a step down deeper than `2.5` m is a fall for the common hero and `2.8` m
+for the large one, and a step up is capped at `1.0` m.
+`ow_tank::character_collision::step_limits_from_mover` is that construction and
+`ow_tank::entity::mover_step_limits_of` reads it per hero (measured: 36 of 54
+playable heroes at `2.5 / 1.0`, the large ones at `2.8 / 1.0`).
+
+`ow-client` now takes its floor probe's reach from that value
+(`Walker::floor_reach`, `FLOOR_REACH = 2.5` when no hero is picked) instead of
+an invented `1.5`, so a `2.0` m drop is stepped down rather than fallen.
+
+## What the walk collides with, and the invented vertical stage (2026-11-15)
+
+The operator reported that `ow-client` "always bumps into invisible obstacles"
+compared with the install. The walk's *response* is a declared stand-in, but the
+first cause was the **world**, and it is measured.
+
+### The static world is the map's `MAP_CHUNK_COLLISION`, not the models' meshes
+
+`ow-client --walk-test --no-hero` on the practice range, spawn room
+`(71.169, -3.656, 53.110)`, two worlds:
+
+| world | forward leg, 1 s at 5.5 m/s | drift off the straight line | six-second tour | contacts |
+|---|---|---|---|---|
+| the level collider only (1 shape, 343,474 triangles) | **5.500 m** | **0.000 m** | y `-3.656` -> `-3.657`, lowest `-3.659` | 47 |
+| level collider + 3,017 per-model holder shapes | 5.189 m | 0.461 m | y `-3.656` -> `-2.885` (**climbs 0.78 m**), lowest `-3.674` | 73 |
+
+The second row is what the walk did before this change. The per-model holder
+meshes are not the static map's collision:
+
+- Their read consumer in this image is **query-only**:
+  `FUN_14210bac0` walks the model's `STU_537E56E4` list, fills a `0x4c` shape
+  record with `MeshShapeFill` (`0x142cae540`) and hands it to `0x142caf6c0`,
+  which tests triangles in a stack buffer and writes nothing
+  (`formats/static-collision.md`, check 6).
+- The per-model Domino body builder `0x14201ae60` is reached from the
+  **collision component's** state-sync functions (`0x142022030`,
+  `0x1420195e0`, `0x142014b50`, `0x142015f70`); which static map nodes carry that
+  component is decided by an unread engine driver
+  (`formats/static-collision.md`, checks 9-12).
+- Their data is the models' own geometry: 272 selected holders over 161 models,
+  `4,797,872` bytes of arrays, some holders as coarse as 8 points / 12 triangles
+  (a box). Their node and triangle layer masks are **20 distinct values**
+  (`0x03A, 0x0BA, 0x0E0, 0x1BA, 0x4BA, 0x4E0, 0x5E0, 0x640, 0x6E0, 0x7E0,
+  0x11BA, 0x11BE, 0x13E0, 0x18BF, 0x19BF, 0x1BBF, 0x1EE5, 0x1FBF, 0x1FE5,
+  0x1FFF`), while the level body carries `0x1FFF` on every node and triangle
+  (`ow_tank::collision_level`, install test `collision_level_real`).
+- Where the two copies disagree, the coarse one is a wall. A column at
+  `(70.00, 61.10)` in the spawn room:
+
+  ```text
+  level mesh : y -3.476 normal (-0.55, +0.31, +0.78)     a ramp
+               y -3.575 normal (-0.54, +0.30, +0.78)
+  model 1969/1970: y -3.441 normal (-0.53, +0.41, -0.74)
+               y -3.494 normal (-0.54, +0.40, -0.74)
+               y -3.569 normal (-0.53, +0.41, -0.74)
+  ```
+
+  and the tour's blocked frames slide on **vertical** faces from those shapes,
+  `(-0.58, 0.00, -0.82)`, where the level mesh has the ramp. The walker was
+  climbing the coarse copy and being stopped by its faces.
+
+`ow-client::walk_world` now builds the world from
+`RangeWorld::level()` - the `MAP_CHUNK_COLLISION` and additive bodies, which are
+already in world coordinates - and returns an error when the range carries no
+collision body. The per-model shapes stay in `RangeWorld::placed` for the
+tests and for the entity route once its attach is read.
+
+### The vertical stage is a stand-in, and its guard was measured from the probe
+
+`Walker::step`'s floor snap is not the client's. `MoverAdvance`
+(`0x140ca7f30`) composes a target position and calls
+`RunCharacterControllerSweep` (`0x142cbcee0` -> `0x142cf5660` ->
+`0x142cf3f80`), which walks the character's Domino **pair list**: each pair's
+face records are read at `+0xc0` (normal) and `+0xf6` (count), the pair list is
+rebuilt by `0x142cd4d90`, the position comes back through `0x142cd5270`, and the
+loop iterates a resolve to a `0.005` fixed point, up to `step_state[0x94]`
+iterations, with the per-frame step height `body[0x628] * scale_b`
+(`_DAT_143872ebc` times the block's `+0x58`). There is **no snap** in that path.
+
+The stand-in had a concrete defect: `ow_sim::walk::snap_to_floor`'s "only down"
+guard compared the probe's answer with the **probe origin**, which the caller
+sets `0.2` m above the body, so the snap could lift the body by one probe lift
+per frame. Measured on the flat spawn room with the old code: `+0.118`,
+`+0.229` and `+0.165` m in three consecutive frames, `0.78` m in total. The
+defect is dormant now (the level world has nothing there to climb) but the
+stage is still a stand-in, so it stays open rather than being patched into a
+different guess:
+
+- the snap also teleports **down** by up to the `2.5` m reach in one frame;
+- a sweep-based fall cannot land on its own: the verified leaf reports nothing
+  for a sweep that starts on or inside a surface (only the query's `+0x72` byte
+  turns that on, and a moving sweep does not set it), so the snap is
+  load-bearing for the landing;
+- the wall/floor split (`WALKABLE_SLOPE = 0.7`) and the three-iteration slide
+  are the module's own.
+
+### Corners (2026-11-15)
+
+The operator's second report: straight into a smooth wall stops, but a **corner**
+(even a small one) lets the body through. Reproduced in the unit test
+`a_corner_stops_the_body_at_both_walls` (two perpendicular walls, a diagonal
+push): the first frame crossed the second wall by **3 cm**.
+
+The mechanism is the same leaf rule as the floor probe's. The first sweep hits
+wall A and stops at the diagonal point where the sphere touches **both** walls;
+the re-seat pushes off A only, so the second sweep starts exactly tangent to B,
+and the leaf reports nothing for a sweep whose start is on or inside a surface
+(only the query's `+0x72` byte turns that on). The residual was then applied in
+full, through B.
+
+The fix, still inside the stand-in (`ow_sim::walk`):
+
+- `World::overlap` asks the same leaf with **`+0x72` set** and a zero-length
+  sweep: the penetration contact. Its radius is `radius - CONTACT_SKIN`, because
+  a body *resting* on a surface already reads as "inside" at the full radius
+  (measured: the resting floor is reported at `0.35` and clears at `0.345`), so
+  the cut is what separates a resting contact from a penetration.
+- `depenetrate` pushes the body out of a penetration with a doubling step
+  (`5, 10, 20, 40` mm). A wall's push is horizontal for the same reason the
+  re-seat is; a floor or slope is pushed along its own normal.
+- `advance` calls it at the start, after every contact's re-seat, and - the
+  corner case - on a miss it moves to the **depenetrated target** instead of
+  applying the residual: the body lands on the wall, and a rising slope still
+  carries it because the push is along the slope's normal (a plain "refuse if
+  the target penetrates" was measured to stop every ramp).
+
+Measured on the range: `--wall-audit`'s near-vertical tunnelled frames fell
+**174 -> 27** of 8,741 legs (the loose `|up| < 0.6` count `289 -> 71`); the
+corner unit test fails without the fix and passes with it. The remaining 27 are
+mostly chords across edges and steep ledges (`|up| 0.3-0.5`), which the audit's
+point sweep over-reports; the corner unit test is the acceptance for a corner.
+`--wall-audit` now prints the near-vertical count separately
+(`... (27 on a near-vertical wall)`).
+
+**What would settle it.** Read `0x142cf3f80`'s iteration - the pair build
+`0x142cd4d90`, the position read `0x142cd5270` and `FUN_142cf5020` - and port
+the position resolve; the step range is already read (`+0x688`/`+0x68c`) but the
+stage that consumes it (`FUN_140cc1440`) is control-flow-flattened — **that was
+wrong**: `FUN_140cc1440` is read in full and is the jump / crouch stage, not the
+vertical one ("The jump law", below). The step stage that consumes `+0x688`/
+`+0x68c` has no other reader, so it stays open. Until then
+the walk's vertical is declared open in `docs/open-questions.md` item 1b, and
+`ow-client --walk-log` prints each step's contact normal and shape so the
+operator can see what the body touched.
+
 ## The jump struct
 
 `STU_97288E54` at STU offset `72` carries the vertical configuration. The
@@ -108,6 +337,444 @@ file:
 | `D68B7D62` | `0x5c` | `0.7f` |
 | `9FCDBE78` | `0x60` | `0.7f` |
 | `766AFA5A` | `0x64` | `0.2f` |
+
+**None of these six is the take-off lane.** The jump's magnitude is
+`body+0x60c`, i.e. class field `0xEC289987` (`6.0` roster-wide), not a member of
+this struct - see the next section. What these six drive is not read; they are
+class defaults that no instance on this install overrides.
+
+## The jump law (read 2026-11-16)
+
+This replaces the earlier "`FUN_140cc1440` is control-flow-flattened so the
+impulse is unknown" record. The function is read end to end; it was never a
+vertical integrator, and the magnitude is a **component field**, not one of the
+six jump-struct floats.
+
+### The chain
+
+```text
+MoverUpdateFrame 0x140cbb260
+  buttons = body+0xdc                     (packed usercmd button dword)
+  jump    = (buttons >> 6) & 1            bit 6, 0x40   (`0x140cbb630`)
+  crouch  = (buttons & 0x80) != 0         bit 7, 0x80   (`0x140cbb63c`)
+  jumps -> every controller's [vtable+0x40] update, and
+        -> FUN_140cc1060(body, &wish, jump, crouch)           `0x140cbb6d8`
+             -> FUN_140cc1440(body, &wish, cmd[0x40], jump, crouch, cmd[0x41])
+```
+
+`FUN_140cc1060` (`0x140cc1060`) is the command record's default handler: it
+builds the movement delta at `cmd+0x20` from `MoverWishWorldPoint`
+(`0x140c9e670`) minus `VariantPosition(world)` minus the ramp, then calls the
+jump stage. Its body continues at `0x140cc10bd` (the `.pdata` entry stops at
+`0x140cc10bc`); the argument setup for `FUN_140cc1440` is at
+`0x140cc119b..0x140cc11b8`:
+
+| `FUN_140cc1440` arg | register | value |
+|---|---|---|
+| 1 | `RCX` | the body |
+| 2 | `RDX` | `cmd+0x10`, the wish quad |
+| 3 | `R8B` | `cmd[0x40]` |
+| 4 | `R9B` | the jump bit (6) |
+| 5 | `[rsp+0x20]` | the crouch bit (7) |
+| 6 | `[rsp+0x28]` | `cmd[0x41]` |
+
+### The state file word `body+0x10d0`
+
+| bit | mask | meaning | writer |
+|---|---|---|---|
+| 0 | `0x1` | a jump is in progress | set by the take-off, cleared when the request is withdrawn |
+| 1 | `0x2` | crouched | `MoverSetCrouch` `0x140ca9100` |
+| 2 | `0x4` | airborne | `MoverOnTakeoff` `0x140ca9190` |
+| 3 | `0x8` | landing being resolved | `MoverOnLanding` `0x140ca9120` |
+| 10 | `0x400` | the take-off's second bit | `MoverOnTakeoff` (from its `dl`) |
+| 19 | `0x80000` | a per-command bit | the jump stage, from `cmd[0x41]` |
+| 23 | `0x800000` | "in the air" | `MoverEnterAir` `0x140ca9150` |
+| 24 | `0x1000000` | the movement vector is already world space | (not found) |
+
+The **gate mask** is `0x80000c` = bits 2, 3 and 23 only. Anything set means
+"not on the ground", and `MoverOnGround` `0x140ca91e0` clears all three at once.
+Bit 19 (`0x80000`) is **not** in the mask - an earlier revision of this page
+said it was, and the differential unit `fn/MoverEnterAir` is what caught it.
+
+The five transitions are exact and are shipped as `ow_sim::jump`:
+
+| function | address | effect |
+|---|---|---|
+| `MoverSetCrouch` | `0x140ca9100` | bit 1 from `dl`, nothing else |
+| `MoverOnLanding` | `0x140ca9120` | returns at once when bit 23 is set; else clear 2, set 3, and stamp `body+0xe4` into `body+0x10e0` when neither 2 nor 3 was set |
+| `MoverEnterAir` | `0x140ca9150` | clear 2 and 3, set 23; stamp the id when `0x80000c` was clear |
+| `MoverOnTakeoff` | `0x140ca9190` | returns at once when bit 23 is set; else clear 3, set 2, bit 10 from `dl` (**cleared** when `dl` is 0, not left alone), and `body+0x1a76 = 1` |
+| `MoverOnGround` | `0x140ca91e0` | clear `0x80000c` and stamp the id when any of it was set; `body+0x1a76 = 0` on both paths |
+
+The frame stamp and the `body+0x1a76` latch are **independent writes**: the
+take-off sets the latch on every path that is not the early return but stamps
+only when bits 2 and 3 were clear, and `MoverOnGround` clears the latch even on
+the path that touches nothing else. `ow_sim::jump::Transition` reports the three
+fields separately for that reason.
+
+`MoverEnterAir` has one caller outside this family - a jump table at
+`0x140cb6a18` (`cmp qword [rcx+0x1ad8],0 ; jne 0x140ca9150`), the same six-byte
+shape as `0x140cbc240` (`... jne 0x140ca91e0`): they are the world-facing
+"left the ground" / "touched the ground" notifications, and whoever calls them
+is a Domino callback, not the mover.
+
+### The state-record reads the jump makes
+
+All three go through `FUN_140cb3990` (`0x140cb3990`), the single-property query
+over the 0x38-byte records at `body+0x870` (count `+0x878`): window
+`[+0x1c,+0x20)` against the frame id `body+0xe4`, selector `+0x28`, op `+0x2c`,
+value `+0x30`, bound `+0x34`. The record format and the six ops are the ones
+`ApplyStateModifiers` (`0x140cbcbe0`) already uses; `FUN_140cb3990` is the
+same walk with a single accumulator and a property filter.
+
+| property | value read | role |
+|---|---|---|
+| `0x26` | `0.001` | the air-jump threshold; the request is compared against `dot(body+0x1150, cmd+0x10)` |
+| `0x14` | `jump_held ? 1.0 : 0.0` | "wants jump"; the gate tests `> 0.5`, so a modifier that scales it below 0.5 suppresses the jump |
+| `0x15` | `crouch` (see below) | gates the returned "jumped" bool |
+
+### The airborne prologue and the timer
+
+`0x140cc148f..0x140cc155b`. The two arms are chosen by the same `0x80000c` mask:
+
+```text
+if (flags & 0x80000c) != 0:                 -- in the air --
+    if !jump_requested            -> skip
+    if dot(body+0x1150, cmd+0x10) >= body+0x26_threshold -> skip
+    MoverOnGround(body)                    0x140ca91e0  (forces "on ground")
+    body+0x1a7d = 1
+    body+0x1ad0 = ceil(500000 / (double)[0x143871e08])
+else:                                       -- on the ground --
+    if !jump_requested:  MoverOnLanding(body)          0x140ca9120
+    else if body+0x1ad0 > 0: body+0x1ad0 -= 1, bl = (it reached 0)
+```
+
+So the air arm converts an airborne body to "on the ground" when the request
+is slow enough, which is what lets the gate below fire a second take-off; the
+`body+0x1ad0` counter is its budget. The threshold is a **property**, so a
+state record can change how slow "slow enough" is.
+
+### The gate
+
+`0x140cc1581..0x140cc15dc`:
+
+```text
+wants = jump_held ? 1.0 : 0.0
+wants = state_modifier(body, 0x14, wants)          FUN_140cb3990if (body+0x10d0 & 0x80000c) != 0        -> no jump
+if !(wants > 0.5)                       -> clear bit 0, no jump
+if (body+0x10d0 & 0x1) != 0             -> no jump
+if ([body+0x1ad8] == 0)                 -> set bit 0, no impulse
+```
+
+Property `0x14` is "jump requested" and property `0x15` is "crouch requested"
+(set to `0` whenever the body is not on the ground, so the crouch request is
+dropped in the air).
+
+### The impulse
+
+`0x140cc15d5..0x140cc166a`, with `axis` = `body+0xc0..0xcc` (the constant
+`(0,1,0,0)` at `0x14328cdd0`, written by `ConstructMoverBase` at `0x140ca3acc`;
+no per-frame writer exists):
+
+```text
+target = state_target(body, local)     0x140c9f300 : sum_i body[0x1150][i] * row_i + body[0x1510]
+along  = hsum3(axis * target)                        (lanes 0..2 only, as (p1+p0)+p2)
+rise   = (flags & 0x80000c) != 0 && along > 0 ? (along + body[0x60c]) - along
+                                             :  body[0x60c] - along
+target += rise * axis
+state_local(body, target)              0x140ca2740 : body[0x1150] = (dot3(d,r0), dot3(d,r1), dot3(d,r2), dot3(d,r2))
+                                                     with d = target - body[0x1510]
+MoverOnTakeoff(body, 1)                0x140ca9190
+(body->vtable + 0x40)(body)
+body[0x10d0] |= 1
+```
+
+The `rise` expression has **two branches** (`TEST [rsi],0x80000c ; JE
+0x140cc1631`, then `COMISS xmm2,xmm7 ; JBE 0x140cc1631`): the airborne-and-rising
+case adds `(along + lane) - along`, everything else (including a NaN `along`,
+because `JBE` is taken on unordered) uses `lane - along`. The addition and the
+subtraction are kept apart because `(along + lane) - along` is not `lane` in
+floats. With the axis `(0,1,0,0)` and a zero anchor the ground case drives the
+world lane to `body+0x60c` and the airborne-rising case adds `body+0x60c` to it.
+
+Both transforms take a direct-copy path when bit 24 of `body+0x10d0` is set, and
+both skip the transform when the matrix provider `0x140c9e740` returns false.
+That provider reads the state id at `body+0x1520`, rejects the two sentinels
+(`[0x1441880e8]`, which is zero in the image, and `0x1fffffff`), resolves the
+record through `0x140c9f000` and writes three 16-byte rows plus a fourth at
+`out+0x30` (the translation `MoverWishWorldPoint` adds). `body+0x1510` is the anchor the
+vector is measured from; **nothing in `.text` writes it**, so it is zero and
+the ground case reduces to the world lane becoming `body+0x60c`.
+`ow_sim::jump::jump_impulse` keeps the anchor as a parameter because the
+expression is the client's.
+
+The helper `0x140c9f300` rotates by the three rows and then adds the translation
+`0x140c9f110` returns; `0x140ca2740` subtracts the translation and applies the
+three dot products with the rows. Both compute their lane sums with
+`SHUFPS 0 / 0x55 / 0xaa` and two `ADDPS`, so the order is `(p1 + p0) + p2` and
+the fourth lane is never read - a four-lane sum would turn an infinite fourth
+lane into a NaN.
+
+After the impulse the function runs two more stages that are **not** part of
+the take-off: an obfuscated key lookup that calls `[obj+0x60](obj, body+0xe4)`
+(a notify on the command id) and `body+0x1ad0 = 0`, then property `0x15`, then a
+tail call to `FUN_140cbc610(body, crouch)`. `FUN_140cbc610` is the **stand /
+crouch height** stage, not a vertical integrator: it tests the standing capsule
+with the query `0x142cbd170` and, on success, shifts `body+0x10fc` by the
+capsule-height difference `body[0x5a8] - body[0x5b4]` and clamps it at
+`-max(...)`. `FUN_140cc1440` therefore contains no gravity, no fall and no
+landing rule.
+
+### The magnitude: `body+0x60c`
+
+The body is a **copy of the mover component at `+0x528`**:
+`FUN_140ca4980(body+0x528, component)` (`0x140ca4980`) calls
+`CopyMoverComponentFields` (`0x140ca4680`), which copies `src+0x10..+0x12f` to
+`dst+0x10..+0x12f` unchanged. So `body+0x60c` = component `+0xe4` = hash
+`EC289987`, which reads **`6.0` for every one of the 55 playable heroes** - a
+roster-wide constant, not the per-hero forward speed (`0x19452F15` is 5.5 for
+most of the roster). The mapping is proved by five independent matches against
+the class file, not by the copy alone:
+
+| component | hash | body | reader |
+|---|---|---|---|
+| `+0x78` | `1972C687` | `+0x5a0` | `0x140ca5e30` (capsule extent) |
+| `+0x7c` | `7A70E3E3` | `+0x5a4` | `0x140ca5e09` (capsule radius) |
+| `+0x80` | `4A576BC2` | `+0x5a8` | `0x140ca5e22` (capsule offset) |
+| `+0xe4` | `EC289987` | `+0x60c` | jump (`0x140cc1627`), lateral cap (`0x140cb246d`) |
+| `+0xec` | `B74245E8` | `+0x614` | `ApplyStateModifiers` (`0x140cbce39`, terminal fall) |
+
+`mover_takeoff_lane_of` reads it. **One offset still disagrees**: the verified
+ramp unit (`fn/MoverRampVector`) reads `body+0x5a8`/`body+0x5b4` as the two
+ramp scales, and the settings default constructor `0x1405a87d0` writes `1.0` to
+both, while the capsule and the component copy put `4A576BC2`/`D97B3735`
+(`0.5`/`0.25`) there. The two readings cannot both be right at one offset, so
+whichever writer runs last is unread; do not treat the `+0x5a8..+0x5b4` rows as
+settled until the copy order is. The jump's row (`+0x60c`) is not one of the
+settings-object fields and is unaffected.
+
+### The vertical law (read 2026-11-16)
+
+The per-tick force stage is `MoverApplyForces` (`0x140cb1990`), called once per
+body tick from `0x140ee5b41` with `(body, command, dt)`. Its first call is
+`MoverAirDrag` (`0x140cb2010`); after the ground stages it ends with the two-arm
+block that is also its own copy at `0x140cb2b00` (`MoverGravityStage`). The
+gate is always `body[0x10d0] & 0x80000c` - the same "not on the ground" mask the
+jump uses.
+
+```text
+MoverApplyForces 0x140cb1990(body, cmd, dt)
+  MoverAirDrag(body, cmd)                              airborne only
+  if (flags & 0x80000c) == 0:  ground move + three vector stages
+  if (flags & 0x80000c) == 0:                          -- on the ground --
+      if body[0x61c] > eps || body[0x620] > eps:
+          g  = MoverGravityVector(body)                dt * (-10 * body[0x610])
+          v  = dt*g - dot(cmd+0x10, dt*g) * cmd+0x10   ; project along the normal
+          ...normalise, surface direction (0x140cb51b0), scale by body[0x61c]
+             or body[0x620] by the dot's sign...
+          MoverAccumulateWorldVector(body+0x10d0, v)   ; 0x140c993e0
+  else:                                                -- airborne --
+      g = MoverGravityVector(body)                     ; (gate * body[0x610]) * axis
+      flags |= 0x8000000
+      body[0x1500..0x150c] += dt*g                     ; the world accumulator
+      MoverAccumulateWorldVector(body+0x10d0, dt*g)    ; into body+0x1150
+```
+
+**The gravity constant is a constant.** `MoverGravityVector` (`0x140ca72d0`)
+scales `body[0xc0..0xcc]` (the body's up axis, `(0,1,0,0)` for a character) by
+`gate * body[0x610]`, where `gate = 0x14202fb00(body[0x240])`. That helper is
+a decoded table lookup that returns **`-10.0`** (the image constant at
+`0x1431161f8`) or `0.0`; its second argument is dead (it overwrites RDX from
+`[RCX+0x6a8]` on entry), so nothing about the world's geometry enters. With
+`body+0x610` = component `+0xe8` (hash `0xC2C40969`, `1.75` for every playable
+hero but Jetpack Cat's `0.30`), the acceleration is **`-17.5 m/s^2`**, and
+`-3.0 m/s^2` for Jetpack Cat. `0x14202fb00` is `.pdata`-less, so it stays
+unnamed in the table.
+
+**`MoverAccumulateWorldVector`** (`0x140c993e0`) is the stage's writer of
+`body+0x1150`: unless `body[0x10d0] & 0x1000000` ("already world space") it
+rotates the vector by the state rows `MoverStateBlockMatrix` (`0x140c9e740`)
+returns, then adds it lane-wise. For an upright body the world up vector maps
+exactly onto the local up lane, so the frame's vertical step is
+`local.y += dt * -17.5`.
+
+**`MoverAirDrag`** (`0x140cb2010`) runs first and only while airborne:
+
+```text
+term = cmd[0x88] > 0 ? body[0x618] : body[0x614]     ; rise / fall terminal
+if term > 1.1920929e-05:
+    k = -abs( (gate * body[0x610] / (term*term)) * cmd[0x88] )
+    d = frame_seconds(body) * k * cmd[0x20..0x2c]    ; 0x140ca72b0 * k * the up-lane splat
+    if |d| > |local|: d *= |local| / |d|             ; it cannot reverse the vector
+    local += d
+```
+
+`cmd+0x88` and `cmd+0x20` are built by `0x140cba030`'s airborne arm:
+`cmd[0x88] = dot3(local, axis)` and `cmd[0x20] = splat(cmd[0x88]) * axis`, so
+the drag is the quadratic term on the vertical lane alone. The time step is
+**not** the caller's `dt`: `0x140ca72b0` reads `body+0xe8` (the frame duration
+in integer microseconds) and multiplies by `1e-6` (`0x142f85108`).
+
+### What is open
+
+1. The **ground** resolve: `FUN_140cb2220` (`0x140cb2220`) normalises
+   `body+0x1150`, applies properties `0x22`/`0x23`/`0x24`, divides the lateral
+   lane by `body+0x60c`, applies `0x25`, then resolves the vector through the
+   0x40-byte record table at `body+0x960` (`FUN_140cb3b10`, mode 1 preserves
+   the vertical lane) and the plane projections in its `kind == 3` / `kind == 4`
+   dispatch, closing with a landing test at a `0.004` rise. It is **not** the
+   only per-frame producer of the vector - an earlier revision of this page
+   said it was, and the force stage above writes the same field.
+2. That record table's **producer is unread** (records of `0x40` bytes over the
+   inline array at `body+0x970`, one of five parallel vectors built at
+   `0x140ca37d0`, borrowed capacity tag `0x80000004`). It shapes the vector on
+   the ground; the airborne arc does not need it.
+3. `MoverAdvance` (`0x140ca7f30`) is the read integrator
+   (`target = pos + scale_b*(wish + scale_a*body[0xc0..0xcc])`) but its only
+   caller is `MoverInvoker` (`0x1407ffc50`), which has no code caller. The live
+   position is written by the swept solve, whose contact-to-position rule is
+   unread; `ow-client` uses the walk's verified sweep and floor probe as the
+   declared contact stage.
+
+So the airborne arc is read and shipped: the take-off impulse
+(`ow_sim::jump`), then per frame the drag and the gravity add (`ow_sim::air`),
+then the walk's own integration and contact stage. What remains open is the
+ground vector resolve and the swept solve's position rule.
+
+### The per-frame vector resolve (`0x140cb2220`, read 2026-11-16)
+
+This is a per-frame producer of `body+0x1150` (not the only one: the force
+stage adds into it too), and it is **not** a gravity integrator. It is a chain
+of property scalings and record projections on the vector, closed by a landing
+test:
+
+```text
+body(body)
+  n38 = body[0x878]; n40 = body[0x968]        ; the two record counts
+  if (n38 == 0 && n40 == 0) return            ; 0x140cb2243
+  t   = &body+0x10d0                          ; the transform block
+  lv  = t[0x80] = body+0x1150                 ; the local vector
+  W   = local_to_world(t, lv)                 ; 0x140c9f300 -> rbp-0x49
+  along0 = hsum3(body[0xc0] * W)              ; -> xmm14, used only by the landing test
+
+  ; phase 1, property 0x22 (0x140cb236f)
+  sq  = hsum3(lv * lv)
+  len = sqrt via  rsqrtss  + one Newton step  (0x140cb232e..0x140cb2357)
+  if sq > 1.17549435e-36 && len > 1.1920929e-05:
+      lv *= property(0x22, len) / len
+
+  ; phase 2, property 0x23 (0x140cb2431) on the MASKED vector (lv.x, 0, lv.z, lv.w)
+  ;   the shuffle at 0x140cb2399..0x140cb23b5 keeps only lanes 0, 2 and 3
+  sq2 = hsum3((lv.x, 0, lv.z) squared)        ; = x^2 + z^2
+  len2 = the same rsqrt+Newton sequence
+  if sq2 > 1.17549435e-36 && len2 > 1.1920929e-05:
+      lv.x *= property(0x23, len2) / len2;  lv.z *= property(0x23, len2) / len2
+
+  ; phase 3, property 0x24 (0x140cb2468) on the y lane alone
+  lv.y = property(0x24, lv.y)
+
+  ; phase 4, the lateral cap by the take-off lane (0x140cb246d..0x140cb24f5)
+  cap = body[0x60c]
+  if cap > 1.1920929e-05:
+      q = (lv.x, lv.y / cap, lv.z, lv.w)
+      if property(0x25, q) applied:
+          lv = (q.x, q.y * cap, q.z, q.w)
+
+  body[0x1150] = lv                          ; 0x140cb24fb
+
+  ; phase 5, the 0x40-byte record passes (0x140cb2502..0x140cb260c)
+  if n40 > 0 && (*body->vtable)[0xa8](body) != 2:
+      W = local_to_world(t, lv); if bit 24 clear: W -= origin(t)
+      if apply_vector_records(body, mode=1, W) applied:
+          if bit 24 clear: W += origin(t)
+          world_to_local(t, W)               ; 0x140ca2740
+      C = local_to_world(t, body[0x1150])
+      if (*body->vtable)[0xa8](body) != 2:
+          if apply_vector_records(body, mode=0, C) applied: world_to_local(t, C)
+          ; then a manual 0x40-record scan (0x140cb25d1..0x140cb260c) whose hit
+          ; path (0x140cb26a2) dispatches on record[0x28] == 3 and then on
+          ; record[0x2c] in 0..4 - the plane projections
+
+  ; the landing test (0x140cb260e)
+  if hsum3(body[0xc0] * C) - along0 > 0.004000000189989805:
+      MoverOnLanding(body)                   ; 0x140ca9120
+```
+
+Constants, read as raw words: `1.17549435e-36` = `0x03c80000`,
+`1.1920929e-05` = `0x37480000`, `0.004` = `0x3b83126f`, `3.0` = `0x40400000`,
+`0.5` = `0x3f000000`.
+
+Two facts that change the picture:
+
+- **The take-off lane `body+0x60c` is the lateral speed cap here, not a vertical
+  impulse.** Phase 4 divides the y lane by it, lets property `0x25` act, and
+  multiplies it back � so the only lane the cap can change is y, and only
+  through a record's projection. The same field is the take-off magnitude in
+  `FUN_140cc1440`; it is one component field used twice.
+- **There is no gravity in this function.** The vertical decay of the vector has
+  to come from the `0x40`-byte records (phase 5), whose producer is runtime data
+  (see below), or from somewhere outside this chain.
+
+**Phases 1-4 are implemented and verified** as `ow_sim::resolve` by the unit
+`fn/MoverResolveVector` (100% branch coverage over the phases-1-4 window, 7/7
+mutants killed, two declared observationally equivalent). The unit drives the
+real `FUN_140cb2220` with the 0x40-byte count at zero, so phase 5 is
+unreachable, and with the world-space bit set, so both transform helpers are
+copies. Getting there needed two things settled:
+
+1. **`RSQRTSS` was measured, not assumed.** A two-instruction stub run through
+   the same oracle (`rsqrtss xmm1,xmm1 ; movd eax,xmm1 ; ret`) shows the value
+   is exactly `f32(1.0 / f32_sqrt(x))` - 220 of 220 sampled inputs - while the
+   double-precision forms (`f32(1/sqrt(x))` from a `f64` root) differ in 44 of
+   220 because they round once instead of twice. So the sequence is portable:
+   `ow_sim::resolve::rsqrtss` is that expression and `sqrt_newton` reproduces
+   the client's op order. It is **not** `sq.sqrt()`: on `9.0` the sequence
+   returns one ulp below `3.0`, and a 74-input sample through a hand-assembled
+   copy of the client's instructions agrees with the Rust bit for bit.
+2. **The phase-2 mask was found by the differential, not by the reading.** The
+   first cut treated the shuffle dance at `0x140cb2399` as the identity. The
+   oracle disagreed on the y lane, which exposed a `movss xmm7,xmm6` before the
+   `shufps` pair that makes it `(x, 0, z, w)` exactly. With that fixed, every
+   sampled case agrees.
+
+Still open, and why:
+
+1. **Phase 5's gate and hits.** Two virtual calls (`[vtable+0xa8]`, compared
+   with `2`) decide whether the record passes run, and the hit path
+   (`0x140cb26a2`) is a five-way dispatch on `record[0x2c]` with per-op plane
+   projections. The dispatch is read at the skeleton level; the projections are
+   not. The unit proves both gates open and close (a stub answering 2, and one
+   answering 0 over a record that matches nothing), nothing beyond that.
+2. **The bit-24-clear path** needs the state-record provider
+   (`0x140c9e740` / `0x140c9f110`), which is its own unit.
+
+### What is verified, and by which unit
+
+Every leaf of the jump stage that has no callee is a differential unit; the four
+state transitions and the two record appliers are proved against the image
+bytes, branch-exact and mutation-clean:
+
+| unit | address | what it proves |
+|---|---|---|
+| `fn/MoverOnTakeoff` | `0x140ca9190` | clear 3, set 2, bit 10 from `dl` both ways, the stamp condition, the latch |
+| `fn/MoverOnLanding` | `0x140ca9120` | the bit-23 early return, the clear/set pair, the stamp condition |
+| `fn/MoverOnGround` | `0x140ca91e0` | the three-bit mask clear, the stamp, the unconditional latch clear |
+| `fn/MoverEnterAir` | `0x140ca9150` | bits 2/3 clear, bit 23 set, the stamp condition |
+| `fn/MoverPropertyRecords` | `0x140cb3990` | the 0x38-record walk, the six ops with the client's operand order, the applied flag |
+| `fn/MoverVectorRecords` | `0x140cb3b10` | the 0x40-record walk, the five ops, the length comparisons, the mode-1 y restore |
+
+Two real defects in the first cut of `ow_sim::jump` were found by these units,
+not by review: `NOT_ON_GROUND` wrongly included bit 19, and the take-off left
+bit 10 alone instead of clearing it when `dl` was 0. Both are fixed and the
+tests that encoded the wrong law are rewritten.
+
+The **whole of `FUN_140cc1440` is not a unit**: its middle third
+(`0x140cc167c..0x140cc17f8`) is obfuscated dispatch that resolves a key through
+`0x140543440` and calls `[obj+0x60](obj, frame_id)` before writing
+`body+0x1ad0`, so a differential call would need that key resolution emulated.
+The impulse arithmetic itself is inline in the same function, so its proof stops
+at "read here, transcribed in `jump_impulse`, tested for the branch and the lane
+count" - not a bit-exact claim.
 
 ## The character object
 
@@ -1072,8 +1739,10 @@ named functions instead of an unknown.
 | `0x142caed10` (type 3) | 0x1a | a wrapper: zeroes two stack qwords and tail-calls `0x142caed30` (the mesh path) |
 | `0x142cd0ae0` (type 4+) | 0xc00 | the largest of the five |
 
-The shared support-point routine is `0x142cc9460`; the type-3 mesh body is
-`0x142caed30`. Both are unread.
+The shared support-point routine is `0x142cc9460` (now verified as
+`fn/ClosestPointGjk`); the type-3 mesh body is `0x142caed30` (`fn/MeshSweep`).
+The two per-type leaves below still do not implement their `count > 0` handoff
+to the solver, so that handoff is what remains open on type 0 and type 1.
 
 **The type-0 primitive is read and verified (2026-11-01).** `0x142ccdf40`
 takes `(record, &out, block, &xform)`. The record is `{centre +0x00, radius
@@ -1082,7 +1751,8 @@ takes `(record, &out, block, &xform)`. The record is `{centre +0x00, radius
 has two paths:
 
 * `block[0x38] > 0` (support points): it packs a `0x80`-byte info block and
-  calls `0x142cc9460`; **open**.
+  calls `0x142cc9460` (the body is verified as `fn/ClosestPointGjk`); this
+  leaf's handoff to it is not ported, so the type-0 slow path stays **open**.
 * `block[0x38] <= 0`: the analytic swept-sphere test. The local start is
   `p = rotate(start - position) - centre`. If `|p|^2 < (r + expansion)^2` the
   sweep starts inside: it reports only when `block[0x72]` is set, with the
@@ -1118,7 +1788,8 @@ pool stride `0x30`). It has three paths:
    leaf `0x142ccdf40`, so a zero-length capsule is exactly a sphere at the
    midpoint.
 2. **Support points** (`block[0x38] > 0`): the same `0x142cc9460` handoff as
-   type 0 - **open**.
+   type 0 - the solver is verified as `fn/ClosestPointGjk`; the handoff inside
+   this leaf is not ported, so the capsule's slow path stays **open**.
 3. **Analytic swept test** (`count <= 0`): the swept point is folded into the
    capsule's local frame (`w = rotate(start - position) - P0`), the sweep
    direction is `d = rotate(end - start)`, and the test is the standard
@@ -2657,10 +3328,11 @@ quat    = 0x142cb48a0(handle)            // the query's orientation
 basis   = 2*row + (0, 1, 0)              // the facing row built from that quat
 object  = 0x142cba680(query+0x28)
 ids     = 0x142caea70(object, inline, local - radius, mask)
-                                         // fills an inline 0x80-entry container
-                                         // (count at +0x04); freed through
-                                         // 0x142cadf00, the same container the
-                                         // query driver's worklist uses
+                                         // appends into the caller's container:
+                                         // data +0x200, capacity +0x208, count
+                                         // +0x20c; the growth allocator is
+                                         // 0x142cadee0 and the free is
+                                         // 0x142cadf00
 ```
 
 `0x142cb44c0` is `ResolveBodyLocalPoint(handle, point) -> [x, y, z]` and it is
@@ -2674,32 +3346,57 @@ below `0x3fff`, `(int)handle` must not be `-1`, the table is
 `0x1c0` pose stride, the `+0x10` position and the `+0x60` quaternion are the
 same three the placeable transform reads.
 
-`0x142caea70` (`FUN_142caea70`, 101 bytes) is the gather itself, and it is a
-**point-in-mesh walk**, not a ray or a sphere test: the box it takes is 8 floats
-(min corner in `0..3`, max corner in `4..7`) and both corners are multiplied
-componentwise by the object's quad at `+0x10`, so that quad is a scale into the
-object's local space. Then:
+`0x142caea70` is the gather itself, and it is a **point-in-mesh walk**, not a
+ray or a sphere test. Its `.pdata` entry covers only the first `0x65` bytes;
+the body runs from `0x142caea70` to the `ret` at `0x142caed09` (`0x299` bytes)
+and is read from the linear disassembly. The box it takes is 8 floats (low
+corner in `0..3`, high corner in `4..7`) and both corners are multiplied
+componentwise by the object's quad at `+0x10`, so that quad is the scale into
+the object's local space. Then:
 
 ```text
 root = object[0x20]; if root == null -> nothing
-if (object[0x44] >= 0x80) -> nothing      // the 128-entry traversal stack
-stack[0] = root
+if (object[0x44] i32 >= 0x80) -> nothing   // signed: the 128-entry stack
+stack = [root]
 node:
   if ((node[0x1c] u16 & mask) == 0)  -> skip
-  if (!(point inside node's box))    -> skip   // min +0x00, max +0x0c, xyz only
-  if (node[0x1f] byte == 0)          -> push node + (int)node[0x18] * 8, descend
-  else for i in 0 .. node[0x1f]:              // children at object[0x30] + i*0x20
-    tri = child; if ((tri[0x1c] u16 & mask) == 0) -> next
+  // the box test is a sign-bit OR, not a min/max slab and not ordered:
+  //   reject when any of lanes 0..2 of
+  //   (scaled_high - node_low) OR (node_high - scaled_low) has its sign set
+  if (node[0x1f] byte == 0) -> push node + node[0x18] i32 * 0x20, then
+                              push node + 0x20, then pop
+  else for i in 0 .. node[0x1f]:             // triangles at object[0x30]
+    tri = triangles + (node[0x18] i32 + i) * 0x20
+    if ((tri[0x1c] u16 & mask) == 0) -> next
     v0,v1,v2 = vertices[tri[0]], vertices[tri[1]], vertices[tri[2]]
-                                          // object[0x28], float4 each
-    if (0x142cd58a0(&point, &v0, &v1, &v2)) push (float)triangle_index
+                                          // object[0x28], stride 0x10
+    if (0x142cd58a0(&box, &v0, &v1, &v2)) push (node[0x18] i32 + i)
 ```
 
-The container is `+0x200` data / `+0x208` capacity / `+0x20c` count, doubles its
-capacity, copies with `0x142efe2b0` and frees with `0x142cadf00`. It holds
-**floats that are triangle indices** - which is why the caller reads the count
-from the container's `+0x0c`, and why the practice range's static collision is a
-plain triangle soup behind a box BVH.
+Three details the decompile hides. The **adjacent** child is always the next
+node in the array (`node + 0x20`) and it is pushed last, so the adjacent
+subtree is walked before the far one; the ids therefore come out
+adjacent-subtree-first and, inside a leaf, in increasing triangle index. A
+node's high corner at `+0x0c` overlaps the `i32` at `+0x18`, so the box's fourth
+lane *is* the child word. And the leaf/child word is one field: `i32` triangle
+base in a leaf, `i32` node offset (in `0x20`-byte nodes) when the count byte at
+`+0x1f` is zero.
+
+The container is `+0x200` data / `+0x208` capacity / `+0x20c` count. A hit past
+the capacity doubles it, copies with `0x142efe2b0` and frees the old buffer with
+`0x142cadf00`; the allocator `0x142cadee0` jumps through a global hook that is
+zero in this image and then into the CRT allocator, which faults in the
+offline emulator, so the growth path cannot be exercised there (it is declared
+dead in the unit). The entries are **32-bit stores** of the triangle index
+(`mov [buffer + count*4], esi`), not floats. The practice range's static
+collision is a plain triangle soup behind this box BVH.
+
+The walk is verified as `fn/MeshGather`: 330 cases, the object, the query box
+and the caller's container (capacity, count and the `0x80`-entry inline id
+array) compared byte for byte, 90% of the collected branch sites with two dead
+edges declared, 28/28 mutants killed. Its port is
+`ow_sim::collide::mesh_gather`; nothing calls it yet because the refinement
+below is read but not implemented.
 
 `0x142cd58a0` (985 bytes) is the gather's accept: a **box-vs-triangle overlap**
 test, in separating-axis form. Its first argument is the same 8-float box the
@@ -2810,22 +3507,44 @@ point transform), one of two colour pairs `(1.0, 0.3)` chosen by `resolved & 1`
 and `record.flags & 0x18`, and a `0.1`-long normal ray from the centroid. It is
 **not** part of the result.
 
-### The overlap test's port is unverified
+### The overlap test's port is verified
 
 `ow_sim::collide::box_triangle_overlap` is a lane-for-lane port of
 `0x142cd58a0`, driven through `box_triangle_overlap` in
 `crates/ow-sim/src/bin/verify_probe.rs`, with the fixture at
 `dev/verify_harness/box_triangle_fixture.py` and the unit at
-`dev/verify_harness/units/scaffolds/fn-BoxTriangleOverlap.json`. **It is not a
-claim and it is not in the gate.** The port agrees with the client on 346 of
-349 cases and diverges on three where the triangle only touches the box: a
-triangle lying in the box's own face plane, a zero-size box sitting at a
-triangle's interior point, and one special-value case. Two transcription
-errors were found and fixed on the way - the third edge's two cross terms were
-swapped - and a fourth, still unfound, disagreement remains in that same
-family, so the sign or the operand order of one of the `|a|*0.5 - |b|*0.5`
-terms is probably still wrong. Until all 349 agree, the read above describes
-the client and the Rust beside it is an attempt.
+`dev/verify_harness/units/fn-BoxTriangleOverlap.json`. **It is in the gate.**
+The harness agrees on every compared channel for the whole corpus - 413 cases,
+100% of the collected branch sites, 12/12 mutants killed - and the compared
+channel is the whole return register, so the read above and the Rust beside it
+are the same function.
+
+Three transcription errors were caught by that differential, all in the edge
+blocks and all invisible in the decompile because it reuses names across the
+three blocks:
+
+1. the third edge's two cross terms were swapped (`e12` against `axis` where
+   `axis` against `e12` belonged, and the mirror for the other factor);
+2. the second edge's support term multiplied the relative vertex quad `d0`
+   instead of building the same mirror of `|axis|` and the box's `half`
+   extents the first edge builds;
+3. the third edge carried the same wrong `d0` product.
+
+All three edges build one support term, `rot3(rot3(|axis|) * half +
+rot3(half) * |axis|)`, and edge *i* pairs its own edge vector with the two
+vertex-centre quads that are not its own endpoints: `e01` with `d2 + d0` and
+`e20`, `e12` with `d1 + d0` and `e01`, `e20` with `d2 + d1` and `e12`.
+
+One fixture lesson is worth keeping: the mutation stage only takes a prefix of
+the corpus, and a uniform scale of an edge axis cannot change the *sign* of
+the test at all, so the four mutants on the `1/sqrt(e.e)` normalisation
+survived until the corpus gained cases that sit inside the tolerance. It now
+carries two triangles whose deciding edge lane is `0.0045` of the `0.005`
+tolerance (`e01 . e01` = 4.625, `e12 . e12` = 8.375) plus one triangle that
+each of the first two edges rejects alone, so a zeroed, scaled or un-inverted
+`1/sqrt(e.e)` moves a verdict. A fifth case unsorts the box's `w` corner with
+a non-zero `w` edge: the edge lanes' own `w` lane is then positive (4 on edge
+1, 2.83 on edge 2), which pins the `& 7` mask the client tests with.
 
 Still open, and each is a single-function read:
 
@@ -2837,7 +3556,7 @@ Still open, and each is a single-function read:
 
 ## Verification
 
-The twenty-seven read movement units are differential, not fitted:
+The twenty-nine read movement units are differential, not fitted:
 
 ```text
 python dev/verify_harness/cli.py fn/MoverRampVector
@@ -2867,6 +3586,8 @@ python dev/verify_harness/cli.py fn/ShapeBox
 python dev/verify_harness/cli.py fn/ShapePoints
 python dev/verify_harness/cli.py fn/ShapeDispatch
 python dev/verify_harness/cli.py fn/MoveCharacterControllerShape
+python dev/verify_harness/cli.py fn/BoxTriangleOverlap
+python dev/verify_harness/cli.py fn/MeshGather
 cargo test --release -p ow-sim
 ```
 
@@ -2876,8 +3597,93 @@ every mutant. `fn/MoverWishSpring` runs 264 cases, 90% branch coverage, 12/12
 mutants killed; its one missed edge is named in the unit. `fn/StateTransform`
 runs 264 cases, 11/12 mutants (92%), with the non-returning mismatch path and
 the sentinel-skipped gate edges declared. The two scalar units and the command
-builder pass the same five stages. These units prove the read leaves, not
+builder pass the same five stages. `fn/BoxTriangleOverlap` runs 413 cases with
+100% branch coverage and 12/12 mutants killed; its 12 mutants are all on the
+axis arithmetic, so the fixture's tolerance-band cases do the work.
+`fn/MeshGather` runs 330 cases with 90% branch coverage (two dead edges, the
+redundant leaf-count test and the container growth, declared with reasons) and
+kills 28/28 mutants, so the walk's order, masks, guards and per-triangle accept
+are all pinned. These units
+prove the read leaves, not
 per-frame movement: the `FUN_140cb86c0` fan writer, the Domino velocity
 dispatch and collision are still open, so the client remains a viewer. A
 golden per-step timeline is required before any movement claim; until then the
 verified arithmetic is not a playable step.
+
+## The character's collision record and shape descriptor (2026-11-06)
+
+Read this session, chain by chain, to replace `ow_sim::walk`'s `0.35` m sphere
+proxy. Implementation: `crates/ow-tank/src/character_collision.rs` (8 unit
+tests, every offset pinned to the instruction stream). **Not yet consumed:** two
+links after the descriptor are still unread, listed at the end.
+
+### The chain
+
+```text
+0x142cbcd40                     builds the query record (check 11 of formats/static-collision.md)
+  0x142cf5440(record)           Alloc(0x590) then 0x142cf35a0(object, record)
+    0x142cf35a0                 71 bytes of copy-out, then builds the descriptor on its frame
+      0x142cc3f50(slot, desc)   slot < 0x3fff, world-table decode, pool Alloc at world+0x2a0 (stride 0x50)
+        0x142cd4290(owner, desc)  the owner record's fields (not a function in the project image)
+      0x142cd4ef0(handle, desc)  ShapeAddToOwner -> 0x142cd4350
+        0x142cb00c0               shape-pool alloc at world+0x2b8 (0xc0)
+        0x142cb7f10(entry, world, desc)  ShapeEntryFromDescriptor
+        0x142cb8380               bounds + broadphase insert (0x142cf3150, result at entry+0xa4)
+```
+
+`0x142cc3f50`'s own checks are exact: `slot < 0x3fff`, the world-table entry is
+not the empty sentinel, `desc+0x10..0x1c` are finite, `desc+0x20..0x2c` are
+finite with `|·|² > FLT_MIN`, and `world+0x15c == 0`. It returns
+`{u32 index, u16 slot, u16 generation}` or `0xffff_0000_ffff_ffff`.
+
+### The record (`0x142cf35a0`'s second argument)
+
+| offset | type | destination |
+|---|---|---|
+| `+0x00` | `u32` | the mode: `0` = shape-add, `1` = body-create, else nothing |
+| `+0x10` / `+0x20` | `vec4` ×2 | `desc+0xc0` / `+0xd0` — the hint pair, degenerate-nudged |
+| `+0x30` | `f32` | `desc+0xe0` |
+| `+0x40` / `+0x50` | `vec4` ×2 | `desc+0x10` / `+0x20` — the **validated shape pair** |
+| `+0x60` / `+0x70` | `vec4` ×2 | the mode-1 body descriptor (`0x142cb50e0`) |
+| `+0x80` | `u32` | `desc+0xa8` |
+| `+0x84` | `u16` | `desc+0xac` |
+| `+0x86` | `u16` | **the world slot** (`object+0x04`; `0x142cc3f50`'s and `OwnerCreateBody`'s first argument) |
+| `+0x88` | `f32` | `desc+0x9c` |
+| `+0x8c` / `+0x8e` | `u16` ×2 | `desc+0x30` / `+0x32` |
+| `+0x90` | `u16` | `desc+0xb0` |
+| `+0x98` | `u64` | `desc+0x00` |
+
+Nothing above `+0x98` is read.
+
+### The descriptor's constants
+
+`+0x34` = `1` in mode 0 (`0xff` in mode 1, via a full dword store) - the byte
+`0x142cd4290` copies to the owner record's `+0x36`; `1` is the capsule kind in
+the shape-entry dispatch. `+0x50` = 0, `+0x58` = **100.0**, `+0x60` = 1,
+`+0x64`/`+0x68` = `-1`/`-1` (one qword), `+0x90` = 1.0, `+0x98` = 0.1,
+`+0xa0` = **10.0**, `+0xa4` = **0.7**, `+0xae` = 0, `+0xb2` = `0xffff`
+(dword `0x0100ffff`), `+0xb6` = `0x100`.
+
+**The degenerate nudge is exact:** `COMISS |B-A|², FLT_MIN` + `JA` (so NaN
+nudges), then `B = A + (2.0)·(0.005)·(1.0,0,0,0)` = `A + (0.01, 0, 0, 0)`.
+The three constants are image data: `0x1435ed210` = `(2,2,2,2)`,
+`0x1435ed220` = `(0.005 ×4)`, `0x1435ec8a0` = `(1,0,0,0)`; the first multiply
+is exact (`0.005f × 2 = 0.01f`). The squared length is `dx² + dy² + dz²` in that
+addition order (three `ADDSS`, `w` never summed, `SHUFPS 0x99`/`0x55`).
+
+### What is still open
+
+1. **Which pool record the shape's type-1 element index names**, and where
+   `entry+0x24` is written for this path. The owner record carries the two shape
+   points at `+0x00`/`+0x10` and the kind at `+0x36`, but the capsule element
+   (`{P0, P1, radius}`, `record+0x2e8` stride `0x30`, read by `0x142ccd7b0` at
+   `+0x00`/`+0x10`/`+0x20`) is filled somewhere unread.
+2. **The radius.** No field of this descriptor is known to reach element `+0x20`.
+   Candidates are `record+0x30` (`desc+0xe0`) and the constants `0.1`/`0.7`, but
+   a candidate is not a read.
+
+A third observation worth noting: `0x142cb7f10` reads `desc+0x20..+0x54` as one
+run, and in mode 0 the bytes at `desc+0x36..+0x4f` and `+0x54` are
+**uninitialised stack**. `ShapeEntryFromDescriptor` is therefore reading
+undefined bytes into `entry+0x78..+0x84` for this shape - fields the capsule
+primitive cannot be using, which is consistent with open item 1.

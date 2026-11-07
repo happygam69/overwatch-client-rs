@@ -14,32 +14,66 @@ something we wrote. Every address in `docs/` is an address in this program.
 
 | program | base | what it is | what it answers |
 |---|---|---|---|
-| `Overwatch.exe` | `0x140000000` (preferred PE base) | the complete image of the current build: all **12,076 `.text` pages** recovered from the disk ciphertext and the install's **plaintext `.pdata`** (201,246 entries, byte-identical at RVA `0x450b000`); the working project is the clean map with **120,028 function symbols** and **6,676,292 instructions** | every behaviour question; every current-build name in `docs/function-names.csv` |
+| `Overwatch.exe` | `0x140000000` (preferred PE base) | the complete image of the current build: all **12,076 `.text` pages** recovered from the disk ciphertext and the install's **plaintext `.pdata`** (201,246 entries, byte-identical at RVA `0x450b000`); the working project is the clean map with **120,490 function symbols** and **10,736,759 instructions** | every behaviour question; every current-build name in `docs/function-names.csv` |
 
 The image comes from the installed `Overwatch.exe` itself. The `.text` pages
 are recovered from the on-disk ciphertext; `.pdata`, `.rdata` and `.data` are
 the install's own plaintext sections at the PE's preferred base. No running
 process is involved.
 
+**10,030,524 of the image's zero bytes are not data.** `.data` declares
+`VirtualSize 0x0CC43BC` with only `0x0333600` raw bytes, so RVA
+`0x03B79600..0x0450A3BC` is a BSS tail: the loader maps it zero and the client
+builds all 7,956 component-type descriptors there at startup. Reading one of
+those slots (an interface table, a vtable slot) from the file always gives
+zero; read the `RegisterComponentTypeDescriptor` call site instead. The numbers
+and the proof that the raw sections are byte-identical to the install are in
+`docs/ghidra-image-audit.md` section 2.1.
+
 ## Function census and the `.pdata` rule
 
 The executable's own `.pdata` is the authority for function starts. The
 working project is `dev/ghidra_run/owmod_clean`:
+
+Measured 2026-11-04 with [`ImageAudit.java`](ghidra/ImageAudit.java); the full
+audit is [`ghidra-image-audit.md`](ghidra-image-audit.md). Re-run the script
+after a repair and diff - a jump of more than a few units is a regression.
 
 | item | count |
 |---|---:|
 | `.pdata` entries | 201,246 |
 | real functions (`UNW_FLAG_CHAININFO` clear) | 119,802 |
 | chained fragments (pieces of a larger function) | 81,444 |
-| function symbols in the working program | 120,028 (includes 4 external entries) |
-| symbols at a real `.pdata` start | 119,802 |
-| symbols at a chained-fragment start | 0 |
-| symbols starting inside another real function | 0 |
-| no-`.pdata` functions | 226: 55 named leaves/loader + 171 analysis-created import/thunk functions |
-| instructions | 6,676,292 |
-| empty functions | 3 loader/import entries |
-| named functions / named parameters | 1,550 / 571 |
-| `function-names.csv` rows | 331: 326 functions + 5 labels, 0 missing |
+| function symbols in the working program | 120,490 |
+| symbols at a real `.pdata` start | 119,764 |
+| symbols at a chained-fragment start | **283** (the census expects 0 - see the audit) |
+| real `.pdata` starts with no function symbol | **38** |
+| no-`.pdata` functions | 443 (226 at the first census) |
+| instructions | 10,736,759 |
+| instructions inside a function body | 6,736,303 (62.7%) |
+| empty functions | 0 |
+| bodies exactly equal to their extent | 118,577 |
+| bodies that already include their chained continuation | 454 |
+| bodies longer than their extent, extra not a continuation | 26 |
+| bodies shorter than their extent | 707 (8 end at a `RET`) |
+| multi-range bodies | 251 |
+| named functions / named parameters | 1,679 / 1,231 |
+| user-defined prototypes | 4 |
+| `function-names.csv` rows | 464, 0 missing (326 were present at the first census) |
+
+**The chained continuations are not in the bodies.** 25,638 functions have
+continuations linked with `UNW_FLAG_CHAININFO`; 454 include them and 25,184 do
+not. In 23,569 of those the body's last instruction jumps or falls straight
+into the missing part, so the decompiled function is cut. That is 16.0 MB, 32%
+of `.text`, and 157 of the 174 named functions are affected. The cause is
+`DisassemblePdataFunctions.java`: it disassembles a chained fragment so jumps
+can be read, but sets the body to the real extent only.
+
+**110 `noreturn` flags are wrong.** 179 functions carry the flag; 110 of them
+contain a `RET` in their own body, so the flag cannot be right. Those 110 blind
+11,552 call sites in 6,355 functions. `Non-Returning Functions - Known` is on
+(the `- Discovered` analyzer is off), which is the only analyzer that could
+have applied them.
 
 `MoverAdvance` (`0x140ca7f30`, `.pdata` extent `0x140ca7f30..0x140ca88fd`)
 decompiles with its full body; the pre-clean map decompiled 233 lines, the
@@ -287,6 +321,19 @@ These are original work, not game content:
   a real `.pdata` body.
 - `docs/ghidra/ResizePdataFunction.java <begin> <end>` — remove inner
   fragments and set the body to the authoritative `.pdata` extent.
+- `docs/ghidra/ImageAudit.java` — the whole image audit in one read-only run
+  (block hashes, `.pdata` census, chain resolution, function map, instruction
+  ownership, flag damage, data coverage). The numbers live in
+  [`ghidra-image-audit.md`](ghidra-image-audit.md).
+- `docs/ghidra/PdataRepairList.java` — the function-map repair lists: 38
+  missing real starts, 283 chain-start objects, 480 over-long and 707 short
+  bodies, and the 174 named functions with chained continuations.
+- `docs/ghidra/NoReturnProof.java` — per-flag evidence: does the flagged
+  function's own body contain a `RET`?
+- `docs/ghidra/NoReturnList.java` — the 179 flags with call-site counts and
+  name provenance.
+- `docs/ghidra/NoReturnImpact.java` — how many call sites a wrong flag hides
+  (the false set, its callers, and the instructions behind them).
 - `dev/gh.py` — the MCP bridge client used by the naming tools.
 
 ## Housekeeping

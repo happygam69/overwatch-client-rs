@@ -44,8 +44,8 @@ has a precise meaning here, that meaning is given once.
   fields. Field names like `m_63DEDAC0` are the client's own generated names;
   many fields are `Unknown` in the game's registry.
 - **Chunk** — a named block inside a model/asset file (`mskl` = skeleton,
-  `MSTU` = model STU, `MDLC`/`MRNM` = mesh data, `HTLC`/`MHRP` =
-  hardpoints).
+  `MSTU` = model STU, `MDLC`/`MRNM` = mesh data, `CLTH` = cloth,
+  `MOCL` = model collision, hardpoints live in `MSTU`).
 - **View model (FP model)** — the separate entity/model drawn in first
   person. It is a subset rig of the character model with an identical bind
   pose.

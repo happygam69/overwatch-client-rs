@@ -337,12 +337,13 @@ per-type pool (`0x141c4b270(type+0x10)`), and its caller is the registry:
 `FUN_142029f00` allocates a 0x30-byte type descriptor (vtable `0x1433654a0`)
 and registers a **0x910-byte** class through `0x141c4b050` →
 `TypeRegistrationCore`. The descriptor's slot 2 (`0x1407803f0`) is the
-**instantiate-by-key** path: it de-obfuscates the key `param_2`, calls
-`(*(*key))(key, 0)` (the class's own deserialiser), then dispatches
-`[container+0x20]->vtable[0x58]`. So a collision world's creation is reached
-through this node-type registry, and the remaining read is the *key* that
-selects the geometry class — or, equivalently, the map-side node that carries
-the collision chunk.
+**release** path, not an instantiate: it de-obfuscates the instance handle,
+calls the instance's first vtable entry, and returns the memory through the
+allocation strategy at `[type-info+0x10]` (slot `0x58`, `0x141c5f420`, a
+per-block free-list return; the allocator is the same strategy's slot `0x50`,
+`0x141c5ef30`). The class's creation is slot 1 (`0x1420266d0`) followed by the
+node's slot 8 (`0x14202c660`) with the record; the "key that selects the
+geometry class" is withdrawn in `formats/static-collision.md` check 17.
 
 **The allocation is found (2026-11-01).** The pop is `FUN_142cb00c0`
 (`ShapePoolAlloc`, see the fill-path section above). It takes **the pool

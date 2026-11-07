@@ -34,8 +34,9 @@ operator's install; behaviour comes from the complete current-build
   open).
 - **Camera:** `formats/camera.md` → `formats/animation.md` (first-person) →
   `crates/ow-client/src/main.rs`.
-- **Map/client:** `formats/maps.md` -> `formats/materials.md` ->
-  `crates/ow-scene/src/lib.rs` -> `crates/ow-client/src/main.rs`.
+- **Map/client:** `formats/maps.md` -> `formats/model.md` ->
+  `formats/materials.md` -> `crates/ow-scene/src/lib.rs` ->
+  `crates/ow-client/src/main.rs`.
 - **View model:** `formats/animation.md` → `crates/ow-tank/src/blendtree.rs`.
 - **Data:** `formats/casc.md` → `formats/stu.md` → `formats/materials.md`.
 

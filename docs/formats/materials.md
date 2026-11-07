@@ -728,9 +728,9 @@ names the id.
 ## Client-side read
 
 `MdlcMaterialRead` (`0x141b88cb0`) copies the MDLC values verbatim into the
-runtime array at `+0xb8`; the u32 array is copied separately to `+0x30`.
-`MsklTableBuild` (`0x141b894d0`) repacks the payload-relative offsets with no
-transform.
+tail buffer at `+0xb8` (`count * 8` bytes); the u32 array is copied right after
+it, and `+0x38` / `+0x30` hold the two array pointers. `MsklTableBuild`
+(`0x141b894d0`) repacks the payload-relative offsets with no transform.
 
 The current-image functions work with 32-bit keys, not the 64-bit values:
 

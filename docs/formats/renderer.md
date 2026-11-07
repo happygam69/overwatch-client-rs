@@ -88,9 +88,10 @@ Evidence classes are those of [`provenance.md`](../provenance.md): **read**,
   selection is open.
 - **Vertex/index layout: partly read.** The D3D11 pipeline builds an input
   layout from a vertex-element array and the shader input signature; the
-  element record and the format table are read, but the material/model join
-  that fills the elements is open. No shader-instance asset (`0x086`) exists
-  in this build.
+  pipeline element and the engine format table are read, and the model's own
+  element record is read from the client's writer (`0x14210c450`) — but the
+  two use *different* format enums and the join that fills the pipeline list
+  is open. No shader-instance asset (`0x086`) exists in this build.
 - **No renderer stage is verified against the client.** D1-D4's values,
   order, dispatch and the D5 clear/draw/viewport/`0x0c` handler arguments are
   exact and synthetically tested, including the `0x0c`/`0x0d` bind pair. They
@@ -845,8 +846,16 @@ format byte is resolved through the table `0x1434965d0`. The shader's input
 signature comes from the pipeline's shader object at `+0x88` (pointer `+0x28`,
 size `+0x30`). The array is passed to `ID3D11Device::CreateInputLayout`
 (`vtable+0x58`); failure string `CreateInputLayout Failed`. The element count
-is not capped by the read code; what fills the stream list from a model's
-semantic bytes is open.
+is not capped by the read code. **The list arrives prebuilt**: nothing in this
+function reads a model, and the descriptor it consumes is filled before the
+call. The model's own element record is a different, 8-byte form — element
+count at `+0x1a` and array at `+0x1c` of the runtime vertex-buffer record
+(`formats/model.md`), written by `FUN_14210c450` as
+`{semantic, index, format, stream, stride << 22 | offset << 12}` — and its
+format byte is a *different enum* from the engine byte this function indexes:
+the file's `0x02` (three floats) would resolve to table entry 2, which is `0`
+(`DXGI_FORMAT_UNKNOWN`). The function that converts one to the other is
+**open**; no model-format table exists in the image.
 
 The pipeline also creates `ID3D11BlendState` (`vtable+0xa0`), a rasterizer
 state (`vtable+0xb0`) and a depth-stencil state (`vtable+0xa8`) from the
@@ -1167,9 +1176,10 @@ semantics remain out of scope.
   semantic table is not read; our
   `Vertex` layout (`ow-scene`: position, normal, one UV, four joints, four
   weights) is viewer-only.
-- `MRNM` (`MrnmHandler`, `0x141b88f10`) builds the skinning parent/used-bone
-  tables, not the IA layout. `MDLC` (`MdlcMaterialRead`, `0x141b88cb0`) is the
-  material list. Neither supplies the input elements.
+- `MRNM`'s descriptors and the runtime block it builds are read and verified
+  (`formats/model.md`, `fn/MrnmFixup`/`fn/MrnmRuntimeSize`/`fn/MrnmHandler`),
+  but the client's consumer of the element array -- the function that turns
+  semantic/index/format bytes into an input layout -- is still **open**.
 
 ### D3D12 staged plan (beta, not the target)
 
@@ -1191,7 +1201,7 @@ as a proof plan. R11 is not provable.
 | R7 | world draw list | writer of `renderer+0x1a0`/`+0xc1d0` and the engine-ring consumer (**open**); `0x387` is read as batch A/B, not a draw list | visibility, batches, sort keys, draw args, instancing | synthetic if the list is pure; captured argument buffers | API capture |
 | R8 | per-object constants | the constant writer inside prepare/the pass recorder (**open**) | constant-buffer layout and values | captured CB contents compared bit-exact | API capture |
 | R9 | pipeline and shader tier | `pm_dx12::Device::CreateGraphicsPipelineState` `0x14265bed0` plus the engine cache caller (**open**) | code GUID, tier index, root signature, PSO key | asset join (install) + captured PSO descriptor | install + API capture |
-| R10 | vertex/index layout | the model render-mesh loader (**open**; `MRNM` `0x141b88f10` is skinning, not IA) | IA elements, strides, index format, submeshes | install parse + captured IA state | install + API capture |
+| R10 | vertex/index layout | the model render-mesh loader (**open**; `MRNM`'s descriptors and runtime block are verified in `formats/model.md`, and its element record is read from `FUN_14210c450` — the file-format-to-engine-format join is not) | IA elements, strides, index format, submeshes | install parse + captured IA state | install + API capture |
 | R11 | full-frame image | the whole chain | pixels | **not provable** (anti-cheat) | no image oracle |
 
 **Dependency:** R0 -> R1/R2 -> R3 -> R4/R5 -> R6 -> R7/R8 -> R9/R10 -> R11 (D3D12

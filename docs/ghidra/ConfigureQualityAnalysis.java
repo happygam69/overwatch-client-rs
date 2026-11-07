@@ -12,6 +12,14 @@
 //   Subroutine References     - call-target thunk creation
 //   Decompiler Parameter ID   - bulk prototype inference
 //   Non-Returning Functions - Discovered - flow repair rewrites bodies
+//   Non-Returning Functions - Known      - applies textbook no-return
+//                                          knowledge; 110 of the 179 flags it
+//                                          left were provably wrong (the body
+//                                          contains RET) and blinded 11,552
+//                                          call sites. Leaving it on would
+//                                          re-apply them after the cleanup.
+//   PDB Universal                        - no symbol file ships with the
+//                                          install, so it can only waste time
 //   x86 Constant Reference Analyzer - decompiles every body and chases
 //                                     invalid pointers outside the image
 //                                     (observed looping); run it separately
@@ -31,6 +39,10 @@ public class ConfigureQualityAnalysis extends GhidraScript {
             "Subroutine References",
             "Decompiler Parameter ID",
             "Non-Returning Functions - Discovered",
+            "Non-Returning Functions - Discovered.Repair Flow Damage",
+            "Non-Returning Functions - Known",
+            "Non-Returning Functions - Known.Create Analysis Bookmarks",
+            "PDB Universal",
             "x86 Constant Reference Analyzer",
             "Function ID.Create Analysis Bookmarks",
             "Non-Returning Functions - Discovered.Create Analysis Bookmarks",

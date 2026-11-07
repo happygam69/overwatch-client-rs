@@ -112,6 +112,12 @@ Expect `atChained=0`, `insideReal=0`, `emptyFns=3` and no large jump in
 `totalFns`. A jump of tens of thousands means a function-start analyzer was
 left on; rebuild the clean project.
 
+As of 2026-11-04 the working project fails the first of those: `atChained=283`
+(function objects on chained fragment starts, created after the census) and
+`emptyFns=0`. See [`ghidra-image-audit.md`](ghidra-image-audit.md) section 4 for
+the repair order; do not treat an `atChained` count as a reason to rebuild -
+the bytes and the `.pdata` table are unchanged.
+
 ## Measured result (2026-10-31)
 
 The throwaway clean project finished with:

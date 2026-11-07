@@ -1,10 +1,16 @@
 # The gate, on every push and pull request.
 #
-# `cargo xtask verify --fast` is the same gate the project runs locally:
-# fmt, clippy (warnings are errors), the library and viewer test suites, the
-# dev/ tool index check and the deviation check. The tests that read an
-# Overwatch install are left out here — CI has no install; the fast gate is
-# exactly what `--fast` selects for that case.
+# `cargo xtask verify` is the same gate the project runs locally: fmt, clippy
+# (warnings are errors), every test target in the workspace, the dev/ tool
+# index check, the deviations check, the address-frame check and the PE layout
+# check.
+#
+# The runner is Windows because the D3D11 backend (`ow-render`) is
+# `#![cfg(windows)]` and `ow-client` uses it unconditionally; on Linux that
+# crate is empty and the client does not compile. CI has no Overwatch
+# installation, so the integration tests that read one print a note and return
+# - the gate still exercises every library target, including the verified
+# movement and collision arithmetic in `ow-sim`.
 #
 # No game data is fetched, extracted or cached by this workflow; see
 # CREDITS.md and AGENTS.md rule 1.
@@ -23,8 +29,8 @@ env:
 
 jobs:
   verify:
-    name: cargo xtask verify --fast
-    runs-on: ubuntu-latest
+    name: cargo xtask verify
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -43,7 +49,8 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-      - name: The gate (fmt, clippy, tests, dev index, deviations)
-        run: cargo xtask verify --fast
+      - name: The gate (fmt, clippy, tests, dev index, deviations, addresses)
+        run: cargo xtask verify

@@ -170,27 +170,154 @@ place on BLTE `F`.
   size}` header pointing at an STU blob.
 - `skeleton.rs` (347 lines, 2 tests): `mskl` chunk: 13 i64 offsets, bone
   counts, parent forest, 48-byte bind poses, bone id hashes.
-- `model.rs` (1042 lines, 5 tests), `cloth.rs`/`skin.rs` (824 lines, 12 tests),
+- `model.rs` (1,534 lines, 11 tests) + `mrnm.rs` (795 lines, 7 tests): the
+  render-mesh descriptor layer, its three verified client functions, and the
+  viewer's decode; `cloth.rs`/`skin.rs` (629 + 864 lines, 15 tests),
   `hardpoint.rs`, `effect.rs`, etc.
 
 ### Comparison
 **Near-parity on the container.** Both read the same `0xF123456F` format with
 the same sentinel and nested-children rule. Rust's chunk reader is smaller and
-test-backed (synthetic + real). OWLib has a far richer set of *typed* chunk
-classes (effect components, render mesh, cloth) with full field structs; Rust
-has `effect.rs`, `cloth.rs`, `skin.rs`, `model.rs` but the render-mesh vertex
-layout and LOD aggregation are not as deep (Rust's viewer does not need them
-for gameplay; mesh rendering is viewer-side). Rust's `chunks.rs` is explicitly
-documented as the container only; typed chunks are separate modules.
+test-backed (synthetic + real). OWLib has more *typed* chunk classes; on the
+model family Rust's descriptor layer is the one with differential proof
+(`fn/MrnmFixup`, `fn/MrnmRuntimeSize`, `fn/MrnmHandler`), and the element
+record is read from the client on both sides of the comparison below. Rust's
+`chunks.rs` is explicitly documented as the container only; typed chunks are
+separate modules.
 
 **Quality note.** OWLib's chunk structs are `[StructLayout]` with named fields
 and are consumed by the Blender exporter (`OverwatchModel`). Rust's chunk
 modules are read-only parsers with tests; rendering is out of the gameplay
 gate. Rust does not export to Blender.
 
-**Gaps in Rust:** render-mesh vertex-element/submesh/LOD aggregation, cloth
-driver solving (data parsed, physics not run). **Gaps in OWLib:** no
-differential verification; no gameplay use.
+**Gaps in Rust:** LOD selection rule (bit-mask vs equality, neither read),
+cloth driver solving (data parsed, physics not run). **Gaps in OWLib:** no
+differential verification; no gameplay use; a narrower element-format table
+(see next).
+
+### Vertex elements: what the client does, and what neither library can prove
+
+The element record was read on 2026-11-05 from the client's own render-mesh
+writer `FUN_14210c450` and its D3D11 consumer `0x142667be0`
+(`docs/formats/model.md` § "The vertex element record"):
+
+```text
+{u8 semantic, u8 index, u8 format, u8 stream, u32 packed}
+packed = offset << 12 | stride << 22
+```
+
+* **`>>22` is the stream stride, not a size.** OWLib's `VertexElementDescriptor`
+  comments `// todo: >>22 = size?` and never reads it; Rust now reads it and
+  checks it against the descriptor's stride (637 records, 68 models, 0
+disagreements).
+* **Format coverage.** OWLib's `SemanticFormat` handles only
+  `0x2, 0x4, 0x6..0x9, 0xC` and throws on anything else, so it fails on
+  `0x0, 0x1, 0x3, 0x5, 0xA` — including the four-float position `0x03` the
+  client's writer uses. Rust handles `0x0..0xA` and `0xC`, pins `0x03` from
+  that writer, and leaves `0x13` (writer-only, no model file carries it)
+  undecoded rather than inventing a reading.
+* **SNORM.** OWLib divides by 128; Rust divides by 127 and clamps at -1, which
+  is the GPU's rule (`max(x/127, -1)`, byte `0x80` = exactly -1). Neither is a
+  client *read*: the client never converts vertex bytes on the CPU — the image
+  contains no half-float conversion instruction — it hands the engine format
+  byte to D3D11 and the GPU converts.
+* **Neither library can be verified 1 to 1 on the decode**, because there is no
+  client decode to compare against. What is verifiable — the record layout, the
+  offset and stride packings, and the per-format byte sizes (from offset
+  adjacency and stride) — is now read and pinned on both sides of this file's
+  comparison; what remains is the file-format-byte → engine-format-byte join,
+  which is **open** and should be recorded as such, not guessed.
+
+### Bone indices: the same join, and one place OWLib is ahead (2026-11-05)
+
+Both libraries join a vertex's raw blend index to a bone through the `mskl`
+Lookup, but they get there differently and only one of them reads the second
+influence set.
+
+- **OWLib.** `teModelChunk_Skeleton.Parse` reads `Lookup = ushort[RemapCount]`
+  from `RemapOffset` (offset 80, count 114 — the same table the client's
+  `MsklTableBuild` (`0x141b894d0`) copies to runtime `+0x48`).
+  `teModelChunk_RenderMesh.GenerateMeshes` allocates `4*blendCount` indices per
+  vertex (blendCount = the largest semantic index + 1) and fills
+  `BoneIndices[k].AsSpan(element.Index * 4, 4)` with
+  `(ushort)(thisIndices[m] + submeshDescriptor.BoneIdOffset)`. `OverwatchModel`
+  then writes `skeleton.Lookup[ind]`, or `0xFFFF` when
+  `ind >= skeleton.Lookup.Length`. Weights come out as floats (`UINT8_UNORM4`
+  divides by 255).
+- **Rust.** `skeleton.rs` reads the same Lookup; `model.rs` reads **only**
+  `semantic 4, index 0` into four `u16`s and `semantic 5, index 0` into four
+  `u8`s; `skin.rs::remap_index` maps a raw index through the Lookup and treats
+  a missing entry or `0xFFFF` as "no bone"; the `BoneIdOffset` is parsed and
+  **not applied**; weights stay `u8` and are divided by 255 in `blend_span`.
+- **What the install settles.** On all 7,328 skinned model assets the Lookup is
+  a permutation into `[0, bones_abs)` with no `0xFFFF`, `remap_count` is the
+  largest raw index plus one on 7,308 of them (the rest leave spare slots, none
+  overflow), the file stores the exact inverse at `mskl +88`, and OWLib's own
+  claim is confirmed by geometry: the dominant influence's bone sits a median
+  `0.122 m` from its vertices through the Lookup versus `0.591 m` through the
+  raw index on Tracer's character mesh. Every install submesh has
+  `BoneIdOffset` = `0`, so OWLib's addition is unobservable here.
+- **Where OWLib is ahead.** 454 model assets declare a second
+  `semantic 4 / index 1` element and their eight weights sum to exactly 255;
+  OWLib fills both sets, Rust drops the second, so those influences are missing
+  from the viewer (`ow-tank-1to1.md`).
+- **What neither can settle.** The client's consumer. The client's reader
+  sizes the tables but no function that joins a mesh index to a bone has been
+  found, so the `BoneIdOffset` addition and the `>= length` / `0xFFFF` rules
+  remain the reference's behaviour on both sides.
+
+### Effect components: measured, and the reference is stale (2026-11-10)
+
+This one changed the verdict, so it is recorded in full. OWLib's
+effect-component structs (`TankLib/Chunks/teEffectComponent*.cs`,
+`teEffect_CAT`/`teEffect_SHT`, `teEffectChunkComponent`/`teEffectChunkShaderSetup`)
+describe **pre-2.x** payloads. The client's own builder (`FUN_142e4a780`) copies
+the current fields, and the install agrees with the client on every size:
+`ECMD` 32 B (reference 24), `ECEF` 32 (8), `ECEN` 80 (16), `ECEC` 64 (17),
+`ECSO` 32 (8), `ECVS` 48 (8), `ECRR` 64 (8), `ECPR` 112 (40), `ECAT` 16 (8),
+`ESHT` 32 (8). The old Rust `effect.rs` was a port of those structs, so it read
+the first 8/24 bytes and called it the component; it is replaced.
+
+Five of the reference's tags have **no read site in this image**: `ECMP`,
+`ECSS`, `ECAT`, `ESHT` and `ECCV` appear nowhere in either byte order and are
+not in the client's 0x34-entry kind table at `0x143610490`. Their payloads are
+editor-side data, so no 1:1 implementation of those reference classes can come
+from this image.
+
+The closure is `crates/ow-tank/src/effect.rs` plus `tests/effect_real.rs`,
+written from the client's copies and the GUID types each field carries on the
+install; the page is `docs/formats/effects.md`. **Rust gap closed:** the effect
+component family. **OWLib gap recorded:** its effect structs are stale, and it
+reads five tags the client does not.
+
+### Two model-family findings from the same audit (2026-11-10)
+
+- **`MHRP` does not exist in this build.** OWLib's `teModelChunk_Hardpoint`
+  describes a `{count, count, offset, offset}` header and 96-byte records. The
+  tag id occurs nowhere in the image, and a census of all 32,280 models on the
+  install finds no `MHRP` chunk. This build's hardpoints are
+  `STUModelHardPoint` (`0xBE9DDFDF`) instances in the model's `MSTU` and on a
+  look's `m_hardPoints`. The Rust `MHRP` port was deleted rather than kept as a
+  parser for a chunk the client cannot read (`docs/formats/animation.md`).
+- **The model chunk tags are `MOCL` and `CLTH`, not `LCOM`/`HTLC`.** The two
+  dispatchers compare `0x4d4f434c` and `0x434c5448`; the file census over all
+  models is `MDLC`, `MSTU`, `MRNM`, `mskl`, `MESD`, `CLTH`, `MOCL`. An earlier
+  version of `docs/formats/model.md` rendered the two words' bytes in the wrong
+  order; corrected, with the compare addresses recorded (`docs/formats/model.md`).
+
+**`MDLC`'s header, checked instruction for instruction.** `MdlcMaterialRead`
+(`0x141b88cb0`) copies `+0x10`/`+0x20`/`+0x30` as three 16-byte `MOVUPS` and
+`+0x40` as one dword, then **skips `+0x44..+0x50`**. So OWLib's
+`BoundingBox[16]` (0x10..0x50) has the right *range* but the wrong *reading*:
+the 13 live floats are a box minimum, a box maximum, a sphere centre and a
+radius — proven against the decoded vertices on two models — and the last row's
+three lanes are dead. OWLib's `Padding[24]` (0x50..0x68) is worse than
+mislabelled: those six dwords are copied into the model and differ per model,
+so they are data. Its `MaterialOffset` (0x08), `MaterialCount` (0x68) and
+`m_104` (0x70) are right, and its parser reads only the material array anyway,
+so the error is in the struct's documentation, not in what it produces.
+`ow-tank` had the mirror-image error: it read the 16 floats as a 4x4 matrix and
+then dropped them. Both are corrected in `docs/formats/model.md`.
 
 ---
 
@@ -633,6 +760,9 @@ a formal gate. Rust's strictness is a different kind of quality.
   not read, no interpolation.
 - Replay layout not verified against real files; filler over-read noted.
 - No key-state interval normalize, no page-table writer doc.
+- Effect component structs are pre-2.x and short on every tag (see the table in
+  §2); its `ECMP`/`ECSS`/`ECAT`/`ESHT` readers describe tags the client has no
+  code for.
 - No gameplay at all (out of scope for OWLib).
 
 ### Shared open edges
