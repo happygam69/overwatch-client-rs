@@ -2,6 +2,23 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-17 - Apache-2.0 ships as the whole text
+
+- **`LICENSE-APACHE` was a 958-byte stub** that named the licence and a URL.
+  Apache-2.0 section 4(a) requires a *copy of this License* to go out with any
+  redistribution, so a distro package carrying that stub is legally short and
+  gets bounced at review. It is now the canonical `LICENSE-2.0.txt` (201 lines,
+  all 9 sections, END OF TERMS, APPENDIX), copied byte-for-byte from a
+  distributed copy and cross-checked against a second one - never retyped, and
+  not edited.
+- **The stub's project note was redundant**, not lost: "this code only, not the
+  game or its data" already stands in `README.md` (Licence) and `CREDITS.md`
+  (Licence), which is where a scope caveat belongs; the licence file now holds
+  only the licence.
+- **Two docs claimed `--fast` is what CI runs.** It is not - CI runs the full
+  `cargo xtask verify`, and the tests that read an install skip themselves there
+  (`README.md`, `CONTRIBUTING.md` corrected).
+
 ## 2026-11-17 - CI runs at all, and on a clean checkout
 
 - **The workflow never ran on `master`.** `.github/workflows/ci.yml` filtered

@@ -13,8 +13,10 @@ cargo xtask verify --fast   # the same, without the tests that read an install
 ```
 
 A change is done when the gate passes **and** the docs that describe the
-changed behaviour are updated in the same commit. `--fast` is what CI runs
-(CI has no Overwatch install); run the full gate once before you consider a
+changed behaviour are updated in the same commit. CI runs the full gate
+(`cargo xtask verify`); with no Overwatch install there, every test that reads
+one skips itself and says so. Use `--fast` locally when you have no install
+either; run the full gate on a machine that has one before you consider a
 data-reading change finished.
 
 ## What this repository will never contain

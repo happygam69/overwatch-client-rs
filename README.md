@@ -269,7 +269,8 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). The
 short version: one gate decides whether a change is done —
 
 ```sh
-cargo xtask verify --fast   # what CI runs; drop --fast once you have an install
+cargo xtask verify          # the gate; CI runs this, less what needs an install
+cargo xtask verify --fast   # without an install here: no install-reading tests
 ```
 
 — and the work queue is [`docs/open-questions.md`](docs/open-questions.md).
