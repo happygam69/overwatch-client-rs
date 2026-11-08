@@ -2,6 +2,32 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-17 - CI runs at all, and on a clean checkout
+
+- **The workflow never ran on `master`.** `.github/workflows/ci.yml` filtered
+  `push` to `branches: [main]`; the only branch is `master`, so direct pushes
+  triggered nothing and the gate only existed on pull requests of a solo repo.
+  The filter is gone rather than corrected - a hardcoded name is what switched
+  the gate off, and a rename must not be able to do it again.
+- **`dev/pe_layout.py` failed on a runner with no install** (exit 2), which is
+  every CI run. It now reports the skip and passes in `--check` mode like
+  `dev/frame_check.py`, still fails when the image is present and its section
+  table disagrees, and takes `OW_EXE` like the other tools.
+- **Two checks could never pass on a clean checkout** - invisible until the
+  workflow actually ran. `dev/make_index.py` indexed `dev/**/*.py` on disk,
+  ignored analysis output included, so the committed INDEX.md carried 48 rows a
+  fresh clone does not have (`--check` failed); it now indexes what git ships,
+  223 rows -> 175. `collide::mesh_case0::the_python_fixture_case_hits`
+  (`crates/ow-sim/src/collide.rs:4555`) unwrapped fixtures from `dev/data/read/`
+  that the whitelist `.gitignore` never ships, failing `verify --fast` too; it
+  reports the skip now, and that case is **not tested on CI**.
+- **Green on `master`, run 42463833551.** CI checks: fmt, clippy (warnings are
+  errors), the whole workspace, the tool index, the deviations table and the doc
+  address frame. It does **not** check: anything that reads the install or the
+  recovered image (frame entry check, PE layout, the 59 install-reading tests
+  skip themselves). Proven before pushing in a clean clone
+  (`git clone --local . target/ci_sim`), which is the only local model of CI.
+
 ## 2026-11-17 - the corpus indexes functions, not `.pdata` entries
 
 - **`dev/corpus.py` schema 3: the unit is a function.** Entries are grouped by
