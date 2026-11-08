@@ -2,7 +2,7 @@
   "id": "fn/TextureRequestCount",
   "title": "tier-2 shipped code: texture request count against FUN_142e37600 (0x142e37600)",
   "address": { "v2b": "0x7ff7c7b57600" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "texture_request_count",
   "candidateLoader": "cargo",
   "candidateCrate": "ow-tank",

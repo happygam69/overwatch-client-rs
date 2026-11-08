@@ -9,6 +9,17 @@ read, it stays here and the gameplay feature stays unimplemented.
 
 ---
 
+## Chain fragments whose seam the parent never reaches - answered 2026-11-08
+
+Closed by measurement, not by argument. Walking the CFG from each entry over the
+function's own flow inside its `.pdata` union: 25,597 of 25,638 roots enter
+fragment bytes, and only **41** never do (none named). The 1,615 figure in the
+audit was "last instruction does not transfer" - an upper bound, since an earlier
+branch usually enters the fragment. The 41 were reverted to their real extent by
+`MergeChainBodies.java revert` and are in `C:/Temp/owaudit/seam_unreached.txt`.
+The merge now carries the check itself (`NO-SEAM` gate), so a re-run cannot
+re-widen them.
+
 ## Before anything else: the image repair backlog (2026-11-04)
 
 **Status: the no-risk repairs are done in the live project (saved, from a
@@ -289,6 +300,21 @@ The arithmetic around the open caller is now ground-truth verified:
 `fn/MoverRampScalarOffset` (`0x140ca7570`) and
 `fn/BuildMoverPhysicsCommand` (`0x140cb74a0`) are differential units with
 100% branch coverage and declared/killed mutants.
+
+**Measured 2026-11-17 - the call graph cannot answer this.** `MoverInvoker` has
+**zero** inbound `call`/`jmp` edges in the whole image (`dev/corpus.py index`:
+`edges` has no row with `target = 0x207ffc50`), which confirms it is only ever
+reached through the interface table. The dispatch evidence is
+`call [reg+0x48]` (slot 9 x 8 bytes): **423** sites image-wide, of which some
+belong to other interfaces. So the caller is found in two hops that are not yet
+indexed: (a) the class whose constructor stores `0x142fdbf40` into its object
+(the store, not the call), and (b) the 423 sites whose register holds an object
+of that class. That is the code-pointer-run + vtable-store enumeration listed as
+the next step in `docs/port-plan.md`; until it exists this question stays open,
+and searching for an `E8` caller is a dead end by measurement, not by
+conjecture. Note also that `MoverInvoker` is an **11-piece** function
+(`0x1407ffc50..0x14080033c`, 1,797 bytes): its linear listing stops at
+`0x1407ffce2 jle 0x14080033c`, so any read of it must use the union extent.
 
 The corrected live chain (2026-11-01) is:
 

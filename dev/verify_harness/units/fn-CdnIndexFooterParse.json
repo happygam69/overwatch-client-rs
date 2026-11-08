@@ -4,7 +4,7 @@
  "address": {
   "v2b": "0x7ff7c71f9af0"
  },
- "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+ "image": "dev/data/offline_recover/module_offline.bin",
  "entry": "cdn_index_footer_parse",
  "candidateLoader": "cargo",
  "candidateCrate": "ow-casc",

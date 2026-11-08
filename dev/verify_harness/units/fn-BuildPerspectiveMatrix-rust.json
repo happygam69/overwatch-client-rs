@@ -2,7 +2,7 @@
   "id": "fn/BuildPerspectiveMatrix-rust",
   "title": "tier-2: build a 4x4 projection matrix from a descriptor (reverse-Z aware)",
   "address": { "v2b": "0x7ff7c6d95a70" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "build_perspective_matrix",
   "candidateLoader": "rust",
   "args": [

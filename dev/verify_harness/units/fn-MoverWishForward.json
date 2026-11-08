@@ -4,7 +4,7 @@
   "address": {
     "v2b": "0x7ff7c59d5534"
   },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "mover_wish_forward",
   "candidateLoader": "cargo",
   "candidateCrate": "ow-sim",

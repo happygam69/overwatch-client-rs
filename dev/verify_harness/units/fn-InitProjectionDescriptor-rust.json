@@ -2,7 +2,7 @@
   "id": "fn/InitProjectionDescriptor-rust",
   "title": "tier-2: seed a projection descriptor with default scales and cleared extents",
   "address": { "v2b": "0x7ff7c6d95230" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "init_projection_descriptor",
   "candidateLoader": "rust",
   "args": [

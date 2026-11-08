@@ -281,6 +281,12 @@ ledger ("Exact today") moved verbatim to
 
 ## Open
 
+- **The tier-1 C units cannot run on this machine:** MSYS2's `gcc` (15.2.0,
+  ucrt64) exits 1 with no output for any input, including
+  `int f(void){return 1;}`; `cc1.exe --version` is silent too. Two units
+  (`fn/AnimTimeWrap`, `fn/CurveKeySampleDual`) are blocked by it. Reinstall with
+  `pacman -S --overwrite mingw-w64-ucrt-x86_64-gcc` (or repair the install), then
+  `python dev/verify_harness/cli.py all` must go from 79 to 81.
 - **Model vertex elements:** `MRNM`'s descriptors and runtime block are
   verified, but the client's consumer of the element array -- the function
   that decodes semantic/format/packed-offset bytes and builds the D3D12 input

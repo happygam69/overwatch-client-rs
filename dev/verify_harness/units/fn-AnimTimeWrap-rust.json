@@ -2,7 +2,7 @@
   "id": "fn/AnimTimeWrap-rust",
   "title": "tier-2: the same AnimTimeWrap oracle, candidate is the rust_probe implementation",
   "address": { "v2b": "0x7ff7c58b1ef0" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "anim_time_wrap",
   "candidateLoader": "rust",
   "args": [

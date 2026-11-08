@@ -926,3 +926,5 @@ Overwatch.exe,0x140cb2b00,0x140cb2b00,MoverGravityStage,"The gravity arm: accumu
 
 Overwatch.exe,0x140cb1990,0x140cb1990,MoverApplyForces,"Per-tick force stage: air drag, the on-ground move, three vector stages, then gravity (airborne) or the surface drag (on ground)",mover,,
 
+Overwatch.exe,0x141c6c830,0x141c6c830,ScaleFloatRunToQ12,"Scales a run of f32 to Q12 integers (value*4096, truncated, saturating at +-i32::MAX) by integer bit manipulation; verified as fn/FloatToQ12",runtime,"void ScaleFloatRunToQ12(int32_t *dst, const float *src, uint32_t count)",
+

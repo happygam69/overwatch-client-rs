@@ -28,6 +28,12 @@ from unicorn import UC_HOOK_MEM_FETCH_UNMAPPED
 
 V2B_BASE = 0x7FF7C4D20000
 IMAGE_SIZE = 0x4838000  # offline_recover/module_offline.bin
+# The image the units are authored against: `dev/data/offline_recover/
+# module_offline.bin`, sha256 pinned by `docs/ghidra-image-audit.md` section 2.
+# A unit proven against different bytes is not proven at all, so a mismatch is
+# fatal rather than a warning - the v2b frame and the current-image frame differ
+# by a fixed offset, which is exactly what makes a wrong image easy to miss.
+IMAGE_SHA256 = "12acfd1126c2fe2464f5e29892523bd258412fac8b11449dc9bb3fed22eb6300"
 
 STACK_BASE = 0x0000_7FFF_0000_0000
 STACK_SIZE = 0x1_0000
@@ -53,6 +59,15 @@ def _read_image(path: str) -> bytes:
     if img is None:
         with open(path, "rb") as f:
             img = f.read()
+        import hashlib
+
+        sha = hashlib.sha256(img).hexdigest()
+        if sha != IMAGE_SHA256:
+            raise SystemExit(
+                f"oracle image {path} is not the pinned image: sha256 {sha[:16]} "
+                f"!= {IMAGE_SHA256[:16]}; a unit proven against different bytes "
+                "is not proven (docs/ghidra-image-audit.md section 2)"
+            )
         _IMAGE_CACHE[key] = img
     return img
 

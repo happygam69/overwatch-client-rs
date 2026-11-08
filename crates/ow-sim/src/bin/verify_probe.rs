@@ -1427,6 +1427,67 @@ impl ow_sim::collide::QueryWorld for DriverQuery<'_> {
 /// `0x142cd56e0`: the collider's "is this triangle unusable" test. Three vec4
 /// corners, no pointee written; the compared channel is the whole return
 /// register (a `MOVMSKPS` mask on the non-finite exit, else 1 or 0).
+/// `FUN_141c6c830`: quantize a run of f32 to Q12. The client's loop reads
+/// `count` dwords of `src` and writes `count` dwords of `dst`.
+fn float_to_q12_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let dst = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg0 must be the dst buffer".into()),
+    };
+    let src = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg1 must be the src buffer".into()),
+    };
+    let count = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg2 must be the element count".into()),
+    };
+    if dst.len() != src.len() || dst.len() % 4 != 0 {
+        return Err("buffers must be the same multiple of 4 bytes".into());
+    }
+    let elements = count as usize;
+    if elements * 4 > src.len() {
+        return Err("count exceeds the buffer".into());
+    }
+    let mut values = Vec::with_capacity(elements);
+    for i in 0..elements {
+        values.push(f32::from_bits(u32::from_le_bytes([
+            src[i * 4],
+            src[i * 4 + 1],
+            src[i * 4 + 2],
+            src[i * 4 + 3],
+        ])));
+    }
+    let mut out = vec![0i32; elements];
+    ow_sim::fixed::quantize_q12(&mut out, &values, count as u32);
+    let mut after = dst.clone();
+    for (i, v) in out.iter().enumerate() {
+        after[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    Ok(("-".to_string(), vec![after, src]))
+}
+
+/// One 48-byte basis record, mutated in place; rows live at +0x10 and +0x20.
+///
+/// Pointee mode only. The `-state` unit passes a basis inside a state snapshot
+/// and needs the probe's guest-pointer translation; that path is not wired for
+/// this entry yet, so it fails loudly here instead of guessing an offset.
+fn orthonormalize_camera_basis_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    let mut basis = match args.into_iter().next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        Some(Arg::Ptr(_, _, Some(_))) => {
+            return Err("state-mode basis: the probe arm has no guest translation yet".into())
+        }
+        _ => return Err("arg0 must be the basis buffer".into()),
+    };
+    ow_sim::camera::orthonormalize_camera_basis(&mut basis);
+    Ok(("-".to_string(), vec![basis]))
+}
+
 fn triangle_degenerate_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     if args.len() != 3 {
         return Err(format!("expected 3 args, got {}", args.len()));
@@ -1976,6 +2037,9 @@ fn handle_call(
         "mover_move_character_world" => mover_move_character_world_entry(args, state),
         "mover_apply_character_move" => mover_apply_character_move_entry(args, state),
         "mover_set_velocity" => mover_set_velocity_entry(args, state),
+
+        // crates/ow-sim/src/camera.rs, the shipped camera basis fix-up
+        "orthonormalize_camera_basis" => orthonormalize_camera_basis_entry(args),
         "shape_sphere" => shape_sphere_entry(args),
         "shape_capsule" => shape_capsule_entry(args),
         "shape_box" => shape_box_entry(args),
@@ -1989,6 +2053,7 @@ fn handle_call(
         "collision_narrowphase" => collision_narrowphase_entry(args),
         "query_driver" => query_driver_entry(args),
         "triangle_degenerate" => triangle_degenerate_entry(args),
+        "float_to_q12" => float_to_q12_entry(args),
         "collision_capsule" => collision_capsule_entry(args),
 
         // crates/ow-sim/src/collide.rs, the closest-point GJK

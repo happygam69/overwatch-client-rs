@@ -2,7 +2,7 @@
   "id": "fn/TexturePayloadGuid",
   "title": "tier-2 shipped code: texture payload GUID formula against PayloadGuid (0x142e37520)",
   "address": { "v2b": "0x7ff7c7b57520" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "payload_guid",
   "candidateLoader": "cargo",
   "candidateCrate": "ow-tank",

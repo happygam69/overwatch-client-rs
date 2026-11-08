@@ -149,8 +149,14 @@ __declspec(dllexport) uint64_t harness_entry({self._c_params()}) {{
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
+            # gcc can fail with the message on stdout (MinGW does when it cannot
+            # find an include). An empty message on a load-stage failure is
+            # useless, so show whichever stream has text.
             raise RuntimeError(
-                f"candidate compile failed:\n{proc.stderr.strip()}"
+                "candidate compile failed:\n"
+                + (proc.stderr.strip() or proc.stdout.strip()
+                   or f"<no compiler output; exit code {proc.returncode}; "
+                   f"command: {' '.join(cmd)}>")
             )
         return dll_path
 

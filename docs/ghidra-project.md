@@ -263,10 +263,15 @@ decompile 0x140ca7f30     # MoverAdvance
 `C:\Users\Happy\ghidra_scripts\`:
 
 ```text
-analyzeHeadless.bat E:\overwatch-client-rs\dev\ghidra_run\owmod_clean Overwatch.exe \
+analyzeHeadless.bat E:\overwatch-client-rs\dev\ghidra_run\owmod_clean `
+  -process Overwatch.exe \
   -noanalysis -scriptPath C:\Users\Happy\ghidra_scripts \
   -postScript McpDecompile.java E:/overwatch-client-rs/dev/data/corpus/args.txt E:/overwatch-client-rs/dev/data/corpus/out.c
 ```
+
+`-process Overwatch.exe` is not optional: without it headless runs the script
+with no program open and every script fails on a null `currentProgram`
+(measured 2026-11-08).
 
 The args file is whitespace-separated `start end` pairs in the program's own
 address space; whole-line `#` comments are allowed. `McpCallers.java` does the
@@ -321,6 +326,22 @@ These are original work, not game content:
   a real `.pdata` body.
 - `docs/ghidra/ResizePdataFunction.java <begin> <end>` — remove inner
   fragments and set the body to the authoritative `.pdata` extent.
+- `docs/ghidra/MergeChainBodies.java [dry|apply]` — resolve every
+  `UNW_FLAG_CHAININFO` chain to its root and widen the root's body to the union
+  of its pieces, removing the function objects that sit inside a cold part.
+  Applied to `C:/Temp/owread` on 2026-11-08: 25,533 bodies widened, 320 inner
+  objects removed, body bytes 29.26 MB -> 44.42 MB, `ImageAudit` `in_body=25586`,
+  `named_flowed=0`. 52 roots are skipped because a foreign body reaches into
+  them (`OUTER` lines). It is idempotent - re-run after fixing those.
+- `docs/ghidra/ProbeFlow.java <addr> [tail]` — why a decompile stops: body
+  ranges, the last instructions with their flow type, and how many branch
+  targets leave the body.
+- `docs/ghidra/DecompScope.java <addr>...` — the body the decompiler was
+  actually handed versus the program's body, plus C length and timeout. Use it
+  before blaming the decompiler for a short output.
+- `docs/ghidra/BodySnapshot.java <tag>` — body size and range count per function
+  to `C:/Temp/owaudit/body_<tag>.txt`; diff two tags to see exactly what a pass
+  changed.
 - `docs/ghidra/ImageAudit.java` — the whole image audit in one read-only run
   (block hashes, `.pdata` census, chain resolution, function map, instruction
   ownership, flag damage, data coverage). The numbers live in

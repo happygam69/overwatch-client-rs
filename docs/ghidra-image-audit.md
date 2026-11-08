@@ -249,6 +249,24 @@ part is code that belongs to the function and is not in it.
 | bytes in the missing continuations (the 25,638 roots) | 16,038,121 |
 | named gameplay functions affected | 174 (157 of them with the continuation directly reached) |
 
+**Terminology, and what is actually proven.** These pieces are not a separate
+cold section or page. All 81,444 chained entries live in `.text`, and every
+fragment begins exactly where the previous piece ends - 25,649 of 25,649 parents,
+measured by `dev/chain_placement.py` straight from the install's `.pdata`, so the
+record describes one contiguous run of code split into separately described
+pieces. Whether the extra pieces are *cold* (rarely executed) is measured
+nowhere; the word names the pattern, not a finding.
+
+**Is the fragment even part of the function?** Measured 2026-11-08 by walking the
+CFG from the entry over the function's own flow (fall-through, jump, jcc; calls
+are not followed, their return path is) inside the `.pdata` union: **25,597 of
+25,638** roots enter fragment bytes. The 1,615 in the table above is the count of
+roots whose *last* instruction does not transfer - most of them are entered by an
+earlier branch, so 1,615 was an upper bound, not the open class. Only **41**
+roots never enter a fragment at all; none of the 41 is named, and their bodies
+were reverted to the real extent (`MergeChainBodies.java revert`), leaving the
+fragments outside as the separate code the record describes.
+
 That 92% is the proof that this is not an academic nicety: the hot body's last
 instruction jumps, or falls through, into an address the function does not own.
 `MoverInvoker` `0x1407ffc50`, `RunMapLoadEntry` `0x14055a0f0`,
@@ -332,21 +350,73 @@ in 6,355 functions.
 
 ### 8.2 Merge the chained continuations into their function bodies
 
-25,184 bodies gain their cold part (16.0 MB, 32% of `.text`), including 157
-named gameplay functions. This is the single largest correctness fix: today the
-decompiled parent of a hot/cold pair ends at a jump into code the function does
-not own.
+25,184 bodies own less than their chained extent (16.0 MB, 32% of `.text`),
+including 157 named gameplay functions. The ownership is wrong today: the
+function that a branch lands in does not own the bytes it jumps to.
 
-- **How:** for each real `.pdata` entry, resolve `CHAININFO` to the root
-  (recursively, as `ImageAudit.java` does), then set the root function's body to
-  the union of the real extent and every chained fragment that resolves to it.
-  Read-only preparation: `PdataRepairList.java` prints the 174 named cases.
-- **Prove:** `ImageAudit` must report `CHAIN_IMPACT in_body` ~ 25,638 and
-  `body_flows_into_chain` ~ 0 (all continuations now in the body); body bytes
-  rise from 28.7 MB to ~44.7 MB.
-- **Risk:** a chained fragment that is a separate funclet must stay outside the
-  body. Merge only the 23,569 functions whose body actually flows into its
-  continuation first, verify those, then decide the remaining 1,615 one by one.
+**Correction (2026-11-08): the decompiler text does not always end at the seam.**
+  Ghidra follows flow *outside* a function's body unless the address belongs to
+  another function's entry, so a body that stops at its extent still decompiles
+  the cold code when nothing claims it. Measured on `0x140ca6ac0`
+  (`ExpireMoverRecords`): evidence project body 29 B, merged body 858 B, and the
+  C is byte-identical (4,583 chars / 120 lines) on both. Same for
+  `0x142cd4bc0` (320 vs 464 B, 4,272 chars identical). The merge changes the C
+  only where a competing function object sat on the cold part (320 objects
+  removed) or a false `noreturn` pruned it - `0x142032060` grew 596 -> 615 lines.
+  So 8.2 is a *map* fix, not a sweep fix; the readable-text fix is 5.1 plus the
+  320 inner objects, and it applies to ~1.3% of the widened roots.
+
+**Status: applied to the working copy 2026-11-08** (`C:/Temp/owread`), the
+  evidence project untouched. Measured on the copy:
+
+  ```
+  pass 1  widened=25533 victims_removed=320 outer_overlap=52
+          in_body=25586 body_flows_into_chain=51
+  then    FixOuterBodies.java apply: 16 bodies resized to their .pdata extent,
+          unblocking 34 roots; 1 refused (0x140d83010, its own extent overlaps
+          [0x140d8317e..0x140d83265])
+  pass 2  widened=43 victims_removed=1 outer_overlap=9
+          in_body=25629 body_flows_into_chain=9 named_flowed=0
+  pass 3  41 roots with no seam reverted to their real extent (0 named)
+          in_body=25588 body_flows_into_chain=10 named_flowed=0
+          dry re-run: already=25588 no_seam=41 would_widen=0  (idempotent)
+  ```
+
+  `in_body` 25,629 of 25,638; `body_flows_into_chain=9`; `named_flowed=0`. The
+  26,000 bodies that were wrong now own their code.
+- **What is left open (9 roots, 16 conflicts, `ChainConflicts.java`):** every
+  remaining conflict is a function object with **no `.pdata` extent**, so
+  nothing authoritative says what it owns - `140cdd264`, `140d9c2c0`,
+  `140cb79ba`, `14214eee0`, `140d02c80`, `140543440`, `140ce1fac`, `1421cdb90`,
+  `140a401d0`, `14214d330`, `1407a1f37`, `140b2fdf0`, plus `140d83010` whose own
+  extent collides with a neighbour. Clipping them was measured too
+  (`FixOuterBodies.java apply clip`): `140d02c80` would fall 1,392 -> 11 B and
+  `140b2fdf0` 1,273 -> 12 B, i.e. it would delete a function on the strength of
+  a guess. Left open deliberately; the affected roots and the exact byte
+  overlaps are in `C:/Temp/owaudit/conflicts2.tsv`.
+- **The seam rule turns the assumption into a check.** `apply` now widens a root
+  only when the entry's own flow enters the fragment bytes (§5.2); a root that
+  never does is printed `NO-SEAM` and left alone. A third pass (`revert`) shrank
+  the 41 roots that had been widened without a seam back to their real extent and
+  saved them. Dry run after it: `already=25588 no_seam=41 would_widen=0`, i.e.
+  the state is stable and a re-run cannot undo the verdict.
+- **How:** `docs/ghidra/MergeChainBodies.java` (dry/apply, one transaction).
+  Recursive `CHAININFO` resolution as `ImageAudit.java` does; the DWORD padding
+  of the unwind code array matters (`count & 1`). The union is contiguous in all
+  25,649 cases, so a widened body is still one range.
+- **The merge alone does not lengthen a decompile.** Measured: a widened body is
+  handed to the decompiler in full (`DecompScope.java`: `dec=20886B/1R` for a
+  root whose decompile is 28 lines), but the C only grows after
+  `ClearFalseNoReturn.java clear`. With false `noreturn` flags in place the
+  decompiler prunes the cold part as dead code:
+
+  | function | body | C before the merge | C after merge + clear |
+  |---|---|---|---|
+  | `0x1407ffc50` (mover) | 152 -> 1,797 B | 175 lines, 0 refs into the cold part | 315 lines, 13 refs |
+  | `0x140c8ea20` | 47 -> 20,886 B | 28 lines | 2,586 lines |
+
+  So the readable-decompile order is: merge bodies, then clear the false
+  `noreturn` flags (section 5.1), then sweep.
 
 ### 8.3 Fix the function map
 

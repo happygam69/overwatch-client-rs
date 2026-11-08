@@ -4,7 +4,7 @@
   "address": {
     "v2b": "0x7ff7c6cf5160"
   },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "bundle_directory_lookup",
   "candidateLoader": "cargo",
   "candidateCrate": "ow-tank",

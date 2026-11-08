@@ -17,6 +17,7 @@ reproducible on a clean checkout.
 | `brush_vertex_oracle.py` | Oracle for the brush's vertex decode, and a probe of the brush builder. | 227 |
 | `call_slot_scan.py` | Find every `call qword ptr [reg + disp]` site for a set of slot offsets. | 120 |
 | `callers.py` | Find every static reference to a set of addresses, and name the function it sits in. | 134 |
+| `chain_placement.py` | Where do `UNW_FLAG_CHAININFO` fragments live, and how far from their parent? | 124 |
 | `chunk11_probe.py` | Read windows of a chunk asset through `ow-tank-look --hex` and decode them. | 105 |
 | `clip_dump.py` | Look at a clip section as bytes, in every cheap reading at once. | 60 |
 | `clip_fp.py` | Byte-level orientation probes for the first-person clip family 0x00020400. | 100 |
@@ -26,7 +27,7 @@ reproducible on a clean checkout.
 | `clip_layout.py` | Map a clip's reference graph and solve for the element size of each block. | 146 |
 | `clip_structure.py` | Dump the entire file structure to find pose data. | 57 |
 | `codec_scan.py` | Enumerate the client's out-of-line 64-bit obfuscation primitives. | 123 |
-| `corpus.py` | Build and query a standing corpus for the current image. | 1276 |
+| `corpus.py` | Build and query a standing corpus for the current image. | 1678 |
 | `deviation_check.py` | Check that the legacy deviations and the code agree. | 92 |
 | `disp_scan.py` | Every instruction in `.text` whose memory operand has a given displacement. | 117 |
 | `eng_build.py` | Build the engine-slot table by walking the disassembly block by block. | 96 |
@@ -98,8 +99,8 @@ reproducible on a clean checkout.
 | `verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` | 575 |
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/bvh_fixture.py` | Inputs for the BVH builder unit (`0x142ccb1b0`). | 144 |
-| `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 249 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 877 |
+| `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 255 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 879 |
 | `verify_harness/cdn_index_footer_fixture.py` | Deterministic inputs for the `fn/CdnIndexFooterParse` unit. | 178 |
 | `verify_harness/cdn_page_select_fixture.py` | Deterministic inputs for the `fn/CdnIndexPageSelect` unit. | 340 |
 | `verify_harness/cell_bytes_fixture.py` | Inputs for the `cell_bytes_fixup` unit (`0x141ff51a0`). | 115 |
@@ -119,7 +120,7 @@ reproducible on a clean checkout.
 | `verify_harness/curve_fixture.py` | Structured input factory for fn/CurveKeySampleDual. | 150 |
 | `verify_harness/dynamic_index_hash_fixture.py` | Deterministic data/state inputs for the `fn/DynamicIndexHash` unit. | 111 |
 | `verify_harness/dynamic_index_key_hash_fixture.py` | Deterministic inputs for the `fn/DynamicIndexKeyHash` unit. | 126 |
-| `verify_harness/emu_oracle.py` | Unicorn oracle: run one captured client function on one input. | 466 |
+| `verify_harness/emu_oracle.py` | Unicorn oracle: run one captured client function on one input. | 481 |
 | `verify_harness/encoding_find_ckey_fixture.py` | Deterministic inputs for the `fn/EncodingFindCKey` unit. | 262 |
 | `verify_harness/encoding_find_ekey_fixture.py` | Deterministic inputs for the `fn/EncodingFindEKey` unit. | 215 |
 | `verify_harness/encoding_header_parse_fixture.py` | Deterministic inputs for the `fn/EncodingHeaderParse` unit. | 207 |
@@ -161,9 +162,10 @@ reproducible on a clean checkout.
 | `verify_harness/orthonormalize_basis_fixture.py` | Structured input factory for fn/OrthonormalizeCameraBasis. | 100 |
 | `verify_harness/orthonormalize_state_fixture.py` | State-mode fixture for fn/OrthonormalizeCameraBasis-state. | 26 |
 | `verify_harness/perspective_matrix_fixture.py` | Structured input factory for fn/BuildPerspectiveMatrix. | 159 |
+| `verify_harness/q12_fixture.py` | Inputs for the Q12 scaler unit (`0x141c6c830`). | 91 |
 | `verify_harness/query_driver_fixture.py` | Inputs for the `query_driver` unit (`0x142cbd510`). | 437 |
 | `verify_harness/rigid_position_fixture.py` | Inputs for the `fn/RigidPosition` unit. | 29 |
-| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1166 |
+| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1168 |
 | `verify_harness/salsa20_fixture.py` | Deterministic Salsa20 inputs for the `fn/Salsa20Xor` unit. | 156 |
 | `verify_harness/salsa20_state_fixture.py` | Deterministic key/nonce/counter inputs for the `fn/Salsa20StateInit` unit. | 92 |
 | `verify_harness/scaffold_unit.py` | Scaffold a verification unit from an address. | 297 |

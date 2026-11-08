@@ -2,7 +2,7 @@
   "id": "fn/CurveKeySampleDual",
   "title": "sample two sorted key/time tracks at one time, interpolating vec4 key values",
   "address": { "v2b": "0x7ff7c58b09d0" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "c_file": "dev/decompiles/CurveKeySampleDual_0x140b909d0.c",
   "entry": "FUN_140b909d0",
   "args": [

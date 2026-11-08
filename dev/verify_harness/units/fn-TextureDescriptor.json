@@ -2,7 +2,7 @@
   "id": "fn/TextureDescriptor",
   "title": "tier-2 shipped code: texture descriptor builder against FUN_142e2d900 (0x142e2d900)",
   "address": { "v2b": "0x7ff7c7b4d900" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "texture_descriptor",
   "candidateLoader": "cargo",
   "candidateCrate": "ow-tank",

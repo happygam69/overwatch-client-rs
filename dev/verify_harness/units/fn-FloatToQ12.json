@@ -1,0 +1,49 @@
+{
+  "id": "fn/FloatToQ12",
+  "title": "scale a run of f32 by 4096 and truncate to i32 through the client's integer bit path (saturating)",
+  "address": {
+    "v2b": "0x7ff7c698c830"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "float_to_q12",
+  "candidateLoader": "cargo",
+  "args": [
+    {
+      "name": "dst",
+      "kind": "ptr",
+      "ptr_len": 256
+    },
+    {
+      "name": "src",
+      "kind": "ptr",
+      "ptr_len": 256
+    },
+    {
+      "name": "count",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "q12_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 90,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 7717,
+    "coverageWindow": 200
+  },
+  "notes": [
+    "Read from 0x141c6c830 (145 bytes, 3 pieces, no callees, no global reads).",
+    "Sign is applied after the magnitude path: (magnitude ^ -sign) - -sign. Saturation therefore produces i32::MAX and -i32::MAX; i32::MIN is unreachable, which the first draft of the note got wrong and the differential did not have to catch because the code was transcribed faithfully.",
+    "The loop bound is the count argument, not the buffer length; the fixture always ties them so the client's missing bounds check cannot fault.",
+    "Declared cases pin the shift boundaries: 2048.0 (exponent 138, shift 0 both sides), 2^19 (shift 8, saturate), 2^19-1ulp, 1e-5 and the subnormals (shift > 23 -> 0), +-inf and NaN, and count = 0 for the early exit.",
+    "Equivalent mutant: `>=` -> `>` on `exponent >= 138` cannot be observed, because at exponent 138 the left and right shifts are both by zero."
+  ],
+  "knownEquivalentMutants": [
+    {
+      "mutation": "cmp-flip >=to>",
+      "detail": "exponent >= 138 vs > 138: at exponent 138 both arms shift by 0"
+    }
+  ]
+}

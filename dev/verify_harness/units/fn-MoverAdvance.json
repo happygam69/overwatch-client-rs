@@ -2,7 +2,7 @@
   "id": "fn/MoverAdvance",
   "title": "SCAFFOLD: mover per-frame advance (position integrator) at 0x140ca7f30",
   "address": { "v2b": "0x7ff7c59c7f30" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "c_file": "dev/decompiles/MoverAdvance_0x140ca7f30.c",
   "entry": "mover_advance",
   "candidateLoader": "cargo",

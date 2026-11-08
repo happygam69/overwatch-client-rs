@@ -19,6 +19,7 @@ pub mod camera;
 pub mod collide;
 pub mod collider;
 pub mod fan;
+pub mod fixed;
 pub mod frame;
 pub mod gate;
 pub mod jump;

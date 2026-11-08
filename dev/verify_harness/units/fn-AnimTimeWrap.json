@@ -2,7 +2,7 @@
   "id": "fn/AnimTimeWrap",
   "title": "wrap a time value into [min,max], or modular-wrap when the range's flag bit 0 is set",
   "address": { "v2b": "0x7ff7c58b1ef0" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "c_file": "dev/decompiles/AnimTimeWrap_0x140b91ef0.c",
   "entry": "FUN_140b91ef0",
   "args": [

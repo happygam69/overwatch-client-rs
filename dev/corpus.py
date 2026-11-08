@@ -6,6 +6,8 @@
     python dev/corpus.py grep <pattern> [-i] [--tag mover] [--asm-only]
     python dev/corpus.py list
     python dev/corpus.py index [--only fn|edges|slots]
+    python dev/corpus.py triage            # port scope + port state per function
+    python dev/corpus.py proto             # inferred argument count and kinds
     python dev/corpus.py verify
     python dev/corpus.py purge <tag>
 
@@ -51,6 +53,8 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import csv
+import json
 import concurrent.futures as cf
 import hashlib
 import pathlib
@@ -269,6 +273,21 @@ def _create(con: sqlite3.Connection) -> None:
                disp INTEGER, width INTEGER, base TEXT)"""
     )
     con.execute("CREATE INDEX IF NOT EXISTS slot_disp ON slot_sites(disp, width)")
+    # Port scope: which functions the gameplay anchors reach, how each will be
+    # ported, and what evidence there is for its signature. Both are derived
+    # from the index above plus `docs/function-names.csv`, never hand-written.
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS triage(
+               begin INTEGER PRIMARY KEY, state TEXT, reason TEXT,
+               sites INTEGER, sites_in INTEGER, size INTEGER,
+               systems TEXT, name TEXT)"""
+    )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS proto(
+               begin INTEGER PRIMARY KEY, nargs INTEGER, nargs_gpr INTEGER,
+               nargs_xmm INTEGER, reads TEXT, kinds TEXT, sites INTEGER,
+               depth INTEGER)"""
+    )
 
 
 def _ensure_columns(con: sqlite3.Connection) -> None:
@@ -277,6 +296,7 @@ def _ensure_columns(con: sqlite3.Connection) -> None:
     for table, columns in (
         ("fn", (("opaque", "INTEGER DEFAULT 0"),)),
         ("slot_sites", (("base", "TEXT"),)),
+        ("proto", (("nargs_gpr", "INTEGER"), ("nargs_xmm", "INTEGER"))),
     ):
         have = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
         for name, decl in columns:
@@ -700,6 +720,30 @@ GOLDEN_CENSUS = (0x142CB3940 - IMAGE_BASE, 27, 12)
 # confirmed in a byte-scan context; the reconciliation (38 SIB stack forms, 12
 # decode-only, 19 byte-scan-only) is in docs/open-questions.md.
 GOLDEN_SLOT40 = 485
+# The system tags `docs/function-names.csv` uses for gameplay. Rendering
+# (`d3d11`, `texture`, `material`), data (`casc`, `stu`) and the engine
+# (`engine`, `reflection`) are out of this scope by the project's own split.
+GAMEPLAY_TAGS = {
+    "mover", "domino", "map", "camera", "anim", "hero", "input", "statescript",
+    "model",
+}
+ARG_GPR = ("rcx", "rdx", "r8", "r9")
+ARG_XMM = ("xmm0", "xmm1", "xmm2", "xmm3")
+# A 32-bit read is still the argument: `mov eax, ecx` uses rcx. Register names
+# must be folded to their 64-bit parent or every `ecx`-only function looks
+# argument-less (measured: folding them raised the agreement with the stated
+# unit signatures from 22/44 to the figure `proto` prints).
+_ARG_ALIASES = {
+    "rcx": ("rcx", "ecx", "cx", "cl", "ch"),
+    "rdx": ("rdx", "edx", "dx", "dl", "dh"),
+    "r8": ("r8", "r8d", "r8w", "r8b"),
+    "r9": ("r9", "r9d", "r9w", "r9b"),
+    "xmm0": ("xmm0",),
+    "xmm1": ("xmm1",),
+    "xmm2": ("xmm2",),
+    "xmm3": ("xmm3",),
+}
+ARG_ALIAS = {alias: canon for canon, aliases in _ARG_ALIASES.items() for alias in aliases}
 
 
 def _disp_width(ins: capstone.CsInsn, disp: int) -> int:
@@ -966,6 +1010,326 @@ def cmd_verify(root: pathlib.Path | None = None) -> int:
     return 0
 
 
+def names_table() -> dict[int, tuple[str, str]]:
+    """`docs/function-names.csv` as rva -> (name, tag)."""
+    path = ROOT / "docs" / "function-names.csv"
+    if not path.is_file():
+        raise SystemExit(f"missing {path}")
+    out: dict[int, tuple[str, str]] = {}
+    with path.open(encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            if not row.get("address"):
+                continue
+            out[int(row["address"], 16) - IMAGE_BASE] = (
+                row.get("name", ""),
+                row.get("tag", ""),
+            )
+    return out
+
+
+def call_graph(con: sqlite3.Connection):
+    """(functions, callees, callers, fragments) from the `edges` index.
+
+    `callers` is keyed by callee, so a fan-in query is a dict lookup."""
+    functions = {
+        r[0]: (r[1], r[2]) for r in con.execute("SELECT begin,end,opaque FROM fn")
+    }
+    fragments = {r[0]: r[1] for r in con.execute("SELECT begin,root FROM fragments")}
+    callees: dict[int, set[int]] = {}
+    callers: dict[int, set[int]] = {}
+    calls: dict[int, int] = {}
+    for src, target in con.execute(
+        "SELECT src,target FROM edges WHERE form IN ('call','jmp','jcc')"
+    ):
+        dst = target if target in functions else fragments.get(target)
+        if src in functions and dst is not None:
+            callees.setdefault(src, set()).add(dst)
+            callers.setdefault(dst, set()).add(src)
+            calls[dst] = calls.get(dst, 0) + 1
+    return functions, callees, callers, calls, fragments
+
+
+def _closure(seeds: set[int], callees: dict[int, set[int]], functions) -> set[int]:
+    seen: set[int] = set()
+    todo = [s for s in seeds if s in functions]
+    while todo:
+        x = todo.pop()
+        if x in seen:
+            continue
+        seen.add(x)
+        todo.extend(callees.get(x, ()))
+    return seen
+
+
+def cmd_triage(root: pathlib.Path) -> int:
+    """Classify every gameplay-reachable function into a port state.
+
+    Scope is computed, never chosen: the forward closure of the named anchors
+    that carry a gameplay tag. States, in the order they are applied:
+
+      entry     a named gameplay anchor; gets a harness unit of its own
+      thunk     the body is one call through the IAT (`FF 15`/`FF 25`) and
+                returns: an import wrapper. Port it as a call to the crate that
+                already does that job; the caller's unit proves it.
+      trivial   leaf, <= 64 bytes, >= 100 call sites: cheap enough to port
+                directly, and too simple to deserve its own unit
+      unit      >= 2 call sites from inside the closure: worth its own unit
+      inline    exactly 1 such call site: port inside the caller's unit
+
+    There is no `delegate` state: telling a CRT/STL primitive from a client
+    accessor needs the library name table, which this repo does not have. And
+    there is no `open` state: scope is a forward closure, so every in-scope
+    function has a caller by construction. A function reached only through a
+    slot or a table is outside the scope, not open inside it.
+
+    `docs/function-names.csv` supplies the anchors and their systems; a
+    function reached from several systems lists all of them."""
+    con = db(root)
+    functions, callees, callers, calls, _fragments = call_graph(con)
+    named = names_table()
+    seeds_by_tag: dict[str, set[int]] = {}
+    for rva, (_name, tag) in named.items():
+        if tag in GAMEPLAY_TAGS and rva in functions:
+            seeds_by_tag.setdefault(tag, set()).add(rva)
+    if not seeds_by_tag:
+        raise SystemExit("no gameplay anchors in docs/function-names.csv")
+
+    system_of: dict[int, set[str]] = {}
+    scope: set[int] = set()
+    for tag, seeds in seeds_by_tag.items():
+        reached = _closure(seeds, callees, functions)
+        scope |= reached
+        for f in reached:
+            system_of.setdefault(f, set()).add(tag)
+
+    data = image()
+    thunk_md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    thunk_md.detail = True
+
+    def is_import_thunk(f: int, size: int) -> bool:
+        """One call through `[rip+d]` and nothing else that transfers control."""
+        if size > 64:
+            return False
+        transfers = 0
+        seen = 0
+        for ins in thunk_md.disasm(data[f : f + size], f + IMAGE_BASE):
+            seen += 1
+            if seen > 8:
+                return False
+            if ins.mnemonic in ("ret", "nop", "int3"):
+                continue
+            if ins.mnemonic not in ("call", "jmp") and ins.mnemonic not in JCC:
+                continue
+            if not ins.operands or ins.operands[0].type != capstone.x86.X86_OP_MEM:
+                return False
+            if ins.operands[0].mem.base != capstone.x86.X86_REG_RIP:
+                return False
+            transfers += 1
+        return transfers == 1
+
+    all_seeds = {s for seeds in seeds_by_tag.values() for s in seeds}
+    rows = []
+    counts: dict[str, int] = {}
+    delegates = []
+    for f in sorted(scope):
+        size, opaque = functions[f][0] - f, functions[f][1]
+        sites = calls.get(f, 0)                      # call sites into f, whole image
+        sites_in = len({c for c in callers.get(f, ()) if c in scope})
+        name, tag = named.get(f, ("", ""))
+        if f in all_seeds:
+            state, reason = "entry", f"named anchor [{tag}]"
+        elif is_import_thunk(f, size):
+            state, reason = "thunk", "one IAT call and return"
+        elif not callees.get(f) and size <= 64 and sites >= 100:
+            state, reason = "trivial", f"leaf {size} B, {sites} call sites"
+            delegates.append((f, size, sites))
+        elif sites_in >= 2:
+            state, reason = "unit", f"{sites_in} call sites inside the closure"
+        elif sites_in == 1:
+            state, reason = "inline", "one caller inside the closure"
+        else:
+            state, reason = "open", "no caller inside the closure"
+        if opaque:
+            reason += "; linear listing desyncs"
+        rows.append(
+            (
+                f,
+                state,
+                reason,
+                sites,
+                sites_in,
+                size,
+                ",".join(sorted(system_of.get(f, ()))),
+                name or f"FUN_{f + IMAGE_BASE:x}",
+            )
+        )
+        counts[state] = counts.get(state, 0) + 1
+
+    con.execute("DELETE FROM triage")
+    con.executemany(
+        "INSERT OR REPLACE INTO triage(begin,state,reason,sites,sites_in,size,"
+        "systems,name) VALUES(?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    con.execute(
+        "INSERT OR REPLACE INTO meta(key,value) VALUES('triaged',?)",
+        (datetime.now(timezone.utc).isoformat(timespec="seconds"),),
+    )
+    con.commit()
+
+    print(
+        f"gameplay scope: {len(scope)} functions from {len(seeds_by_tag)} tags "
+        f"({sum(functions[f][0] - f for f in scope)} bytes)"
+    )
+    for state in ("entry", "unit", "inline", "thunk", "trivial"):
+        print(f"  {state:<9} {counts.get(state, 0):>5}")
+    print("  by system:")
+    for tag in sorted(seeds_by_tag):
+        n = sum(1 for f in scope if tag in system_of[f])
+        print(f"    {tag:<11} {n:>5} functions ({len(seeds_by_tag[tag])} anchors)")
+    print("  trivial candidates (leaf, tiny, hot):")
+    for f, size, sites in sorted(delegates, key=lambda t: -t[2])[:12]:
+        ins = next(_MD.disasm(image()[f : f + 16], f + IMAGE_BASE), None)
+        text = f"{ins.mnemonic} {ins.op_str}" if ins else "?"
+        print(f"    {f + IMAGE_BASE:#x} {size:>3} B {sites:>5} sites  {text}")
+    return 0
+
+
+def cmd_proto(root: pathlib.Path) -> int:
+    """Infer an argument count and kind per triaged function from its entry.
+
+    Evidence is the *callee's own reads*: which of `rcx/rdx/r8/r9` (and
+    `xmm0..3`) the first instructions read, and whether the value is used as a
+    memory base or index (a pointer). This is an inference, so it lives in the
+    gitignored index and never in `docs/function-names.csv`. Stack arguments and
+    struct fields are not inferred; `sites` is printed so a prototype argued by
+    many call sites can be told from one argued by none."""
+    con = db(root)
+    targets = [
+        r[0] for r in con.execute("SELECT begin,size,sites FROM triage ORDER BY begin")
+    ]
+    if not targets:
+        raise SystemExit("run `triage` first")
+    meta = {r[0]: (r[1], r[2]) for r in con.execute("SELECT begin,size,sites FROM triage")}
+    data = image()
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    md.detail = True
+    rows = []
+    hist: dict[int, int] = {}
+    for f in targets:
+        size, sites = meta[f]
+        state: dict[str, str] = {r: "unwritten" for r in argset}
+        depth = 0
+        for ins in md.disasm(data[f : f + min(size, 512)], f + IMAGE_BASE):
+            depth += 1
+            # Reads first: `mov rcx, [rcx]` uses the incoming rcx even though it
+            # also overwrites it. An incoming argument is a register read before
+            # it is first written - anything else is the function's own scratch.
+            for op in ins.operands:
+                if op.type == capstone.x86.X86_OP_MEM:
+                    for reg in (op.mem.base, op.mem.index):
+                        if reg:
+                            name = ARG_ALIAS.get(ins.reg_name(reg))
+                            if name and state[name] != "written":
+                                state[name] = "read"
+                elif op.type == capstone.x86.X86_OP_REG:
+                    name = ARG_ALIAS.get(ins.reg_name(op.reg))
+                    if name and op.access & capstone.CS_AC_READ:
+                        if state[name] != "written":
+                            state[name] = "read"
+            for op in ins.operands:
+                if op.type == capstone.x86.X86_OP_REG:
+                    name = ARG_ALIAS.get(ins.reg_name(op.reg))
+                    if name and op.access & capstone.CS_AC_WRITE:
+                        if state[name] != "read":
+                            state[name] = "written"
+            if all(v != "unwritten" for v in state.values()):
+                break
+        reads = {r: v for r, v in state.items() if v == "read"}
+        gprs = [r for r in ARG_GPR if r in reads]
+        xmms = [r for r in ARG_XMM if r in reads]
+        nargs_gpr = max([ARG_GPR.index(r) + 1 for r in gprs], default=0)
+        nargs_xmm = max([ARG_XMM.index(r) + 1 for r in xmms], default=0)
+        nargs = max(nargs_gpr, nargs_xmm)
+        kinds = ",".join(
+            f"{r}:{'f32' if r.startswith('xmm') else 'int'}"
+            for r in ARG_GPR + ARG_XMM
+            if r in reads
+        )
+        rows.append(
+            (
+                f,
+                nargs,
+                nargs_gpr,
+                nargs_xmm,
+                ",".join(sorted(reads)),
+                kinds,
+                sites,
+                depth,
+            )
+        )
+        hist[nargs] = hist.get(nargs, 0) + 1
+    con.execute("DELETE FROM proto")
+    con.executemany(
+        "INSERT OR REPLACE INTO proto(begin,nargs,nargs_gpr,nargs_xmm,reads,"
+        "kinds,sites,depth) VALUES(?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    con.commit()
+    print(
+        f"proto: {len(rows)} functions, argument count histogram "
+        f"{dict(sorted(hist.items()))}"
+    )
+    # Cross-check against the units that already state a signature: a unit's
+    # declared non-float arguments travel in rcx/rdx/r8/r9, its f32/f64
+    # arguments in xmm0..3. A disagreement is listed, not averaged away.
+    units = ROOT / "dev" / "verify_harness" / "units"
+    if units.is_dir():
+        agree = total = 0
+        disagree = []
+        for path in sorted(units.glob("*.json")):
+            try:
+                unit = json.loads(path.read_text(encoding="utf-8"))
+            except ValueError:
+                continue
+            v2b = unit.get("address", {}).get("v2b")
+            if not v2b:
+                continue
+            rva = int(v2b, 16) - 0x7FF7C4D20000
+            row = con.execute(
+                "SELECT nargs_gpr,nargs_xmm FROM proto WHERE begin=?", (rva,)
+            ).fetchone()
+            if row is None:
+                continue
+            kinds = [a.get("kind", "") for a in unit.get("args", [])]
+            want_xmm = sum(1 for k in kinds if k in ("f32", "f64"))
+            want_gpr = len(kinds) - want_xmm
+            # Only the first four of each class travel in a register; a fifth
+            # integer argument is on the stack and cannot be inferred from the
+            # entry, so the comparison is capped there.
+            total += 1
+            if row[0] == min(want_gpr, 4):
+                agree += 1
+            else:
+                disagree.append(
+                    (unit.get("id", path.stem), row[0], row[1], want_gpr, want_xmm)
+                )
+        print(
+            f"  integer-argument count agrees with {agree} of {total} unit "
+            f"signatures already stated (first four register args only; xmm is "
+            f"not scored, it is scratch as often as it is an argument)"
+        )
+        for uid, gpr, xmm, want_g, want_x in disagree[:8]:
+            print(f"    {uid:<34} inferred gpr {gpr}/{xmm}, unit says {want_g}/{want_x}")
+    print("  best-evidenced (>= 20 call sites):")
+    for begin, nargs, kinds, sites in con.execute(
+        "SELECT begin,nargs,kinds,sites FROM proto WHERE sites>=20 "
+        "ORDER BY sites DESC LIMIT 8"
+    ):
+        print(f"    {begin + IMAGE_BASE:#x} {sites:>4} sites  nargs {nargs}  {kinds or '-'}")
+    return 0
+
+
 def _parse_addr(what: str) -> int | None:
     token = str(what).lower().removeprefix("0x")
     if not token or set(token) - set("0123456789abcdef"):
@@ -1041,6 +1405,16 @@ def cmd_show(
         f"{body_end + IMAGE_BASE:#x}" + (f" ({pieces} pieces)" if pieces != 1 else "")
         + f" entry {entry or addr}"
     )
+    opaque = con.execute(
+        "SELECT opaque FROM fn WHERE begin=?", (begin,)
+    ).fetchone()
+    if opaque and opaque[0]:
+        print(
+            "// opaque: this function's linear listing desyncs (a branch lands "
+            "inside its own instruction, or a code transfer points outside "
+            ".text); the disassembly below is a hint, not a flow decode - read "
+            "the decompiler"
+        )
     if c_cut:
         print(
             "// c_cut: this decompile came from a Ghidra body shorter than the "
@@ -1097,6 +1471,7 @@ def cmd_grep(
         a_sql = "SELECT asm_file,address,name FROM functions ORDER BY asm_file"
         params = ()
     hits = 0
+    hit_fns: set[str] = set()
 
     if not asm_only:
         seen = set()
@@ -1112,6 +1487,7 @@ def cmd_grep(
             ):
                 if rx.search(line):
                     hits += 1
+                    hit_fns.add(addr)
                     print(f"{file_rel}:{lineno}  [{addr} {name}]  {line.strip()[:160]}")
 
     if not c_only:
@@ -1128,8 +1504,24 @@ def cmd_grep(
             ):
                 if rx.search(line):
                     hits += 1
+                    hit_fns.add(addr)
                     print(f"{asm_rel}:{lineno}  [{addr} {name}]  {line.strip()[:160]}")
 
+    if hits:
+        opaque_begins = {r[0] for r in con.execute("SELECT begin FROM fn WHERE opaque=1")}
+        if opaque_begins:
+            in_opaque = 0
+            for addr in hit_fns:
+                row = con.execute(
+                    "SELECT begin FROM functions WHERE address=?", (addr,)
+                ).fetchone()
+                if row and row[0] in opaque_begins:
+                    in_opaque += 1
+            if in_opaque:
+                print(
+                    f"  {in_opaque} of these hits are in bodies whose linear "
+                    f"listing desyncs - confirm with the decompiler"
+                )
     print(f"{hits} hit(s) for {pattern!r}")
     return 0 if hits else 1
 
@@ -1226,6 +1618,12 @@ def main() -> int:
     p.add_argument("--only", choices=("fn", "edges", "slots"), default=None)
     p.add_argument("--out", type=pathlib.Path, default=DEFAULT_OUT)
 
+    p = sub.add_parser("triage")
+    p.add_argument("--out", type=pathlib.Path, default=DEFAULT_OUT)
+
+    p = sub.add_parser("proto")
+    p.add_argument("--out", type=pathlib.Path, default=DEFAULT_OUT)
+
     p = sub.add_parser("verify")
     p.add_argument("--out", type=pathlib.Path, default=DEFAULT_OUT)
 
@@ -1261,6 +1659,10 @@ def main() -> int:
         cmd_list(args.out)
     elif args.cmd == "index":
         return build_index(args.out, args.only)
+    elif args.cmd == "triage":
+        return cmd_triage(args.out)
+    elif args.cmd == "proto":
+        return cmd_proto(args.out)
     elif args.cmd == "verify":
         return cmd_verify(args.out)
     elif args.cmd == "purge":

@@ -8,13 +8,15 @@
 //!
 //! Protocol (one request per line, one response per line):
 //!
-//!   -> ping
-//!   <- pong
+//! ```text
+//! -> ping
+//! <- pong
 //!
-//!   -> call <entry> <nargs> [ptr <hex> <relocs> <guest|-> | f32 <8hex> |
-//!                            f64 <16hex> | u64 <16hex>]*
-//!   <- ok <retbits-hex|-> <outhex>...
-//!   <- err <message-with-no-spaces>
+//! -> call <entry> <nargs> [ptr <hex> <relocs> <guest|-> | f32 <8hex> |
+//!                          f64 <16hex> | u64 <16hex>]*
+//! <- ok <retbits-hex|-> <outhex>...
+//! <- err <message-with-no-spaces>
+//! ```
 //!
 //! `relocs` is `-` or comma-separated decimal byte offsets of u64 relative
 //! pointers inside the pointee; a `guest` address other than `-` selects a

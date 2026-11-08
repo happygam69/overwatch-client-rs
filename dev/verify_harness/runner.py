@@ -51,8 +51,10 @@ LOCAL_IMAGE = os.path.join(
     "offline_recover",
     "module_offline.bin",
 )
-# The canonical copy is repo-local (gitignored); a one-time copy of the same
-# bytes lived on the dumps drive, and old unit JSONs still cite it there.
+# The canonical copy is repo-local (gitignored). The one-time copy that lived on
+# the dumps drive is retired: every unit JSON now cites this path, and the bytes
+# are pinned by sha256 in `emu_oracle.IMAGE_SHA256`, so a substituted image fails
+# instead of being used.
 DEFAULT_IMAGE = LOCAL_IMAGE
 FALLBACK_IMAGE = r"D:\ow-dumps\offline_recover\module_offline.bin"
 DEFAULT_BASE = 0x7FF7C4D20000

@@ -2,7 +2,7 @@
   "id": "fn/TextureDescriptorSizeWalk",
   "title": "tier-2 shipped code: descriptor mip-chain size against FUN_142e2dbb0 (0x142e2dbb0)",
   "address": { "v2b": "0x7ff7c7b4dbb0" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "texture_descriptor_size_walk",
   "candidateLoader": "cargo",
   "candidateCrate": "ow-tank",

@@ -1,15 +1,23 @@
 {
   "id": "fn/TextureCountBitsShifted",
   "title": "tier-2 shipped code: texture popcount helper against FUN_142e374d0 (0x142e374d0)",
-  "address": { "v2b": "0x7ff7c7b574d0" },
-  "image": "D:\\ow-dumps\\offline_recover\\module_offline.bin",
+  "address": {
+    "v2b": "0x7ff7c7b574d0"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "texture_count_bits_shifted",
   "candidateLoader": "cargo",
   "candidateCrate": "ow-tank",
   "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
   "args": [
-    { "name": "value", "kind": "u64" },
-    { "name": "bias", "kind": "u64" }
+    {
+      "name": "value",
+      "kind": "u64"
+    },
+    {
+      "name": "bias",
+      "kind": "u64"
+    }
   ],
   "returns": "u64",
   "argFactory": "texture_count_bits_fixture",
@@ -31,6 +39,11 @@
       "kind": "mask widen",
       "line": 335,
       "rationale": "The mutation widens the shift mask from 0x1f to 0x3f. Both the oracle (0x142e374d0) and the candidate run on x86-64 release, where a 32-bit shift masks the count to 5 bits: (bias + 2) & 0x3f produces counts 32..63 that the hardware shifts by count & 31, which is exactly (bias + 2) & 0x1f. The two builds therefore return the same value for every u32 value and every bias. What would observe a difference: a target that traps or saturates a shift count of 32..63 instead of masking it, which is outside this unit's x86-64 ABI contract."
+    },
+    {
+      "kind": "mask widen",
+      "line": 390,
+      "rationale": "`(bias.wrapping_add(2) & 0x1f)` masks the shift amount. Widening the mask to 0x3f (or removing it) cannot be observed: the shifted value is u32, and Rust's `>>` masks the shift amount to 5 bits exactly as the client's `shrl` does, so shifts of 32..63 are the same as 0..31 modulo 32. Every input, not just this fixture, takes the same path."
     }
   ]
 }
