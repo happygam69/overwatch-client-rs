@@ -440,7 +440,7 @@ pub mod loadout {
     pub const BUTTON_NAME: u32 = 0xC08C_4427;
     /// The loadout's own tuning knobs: ten `STUConfigVar` fields whose values
     /// read as literals but whose meanings are unassigned. They are reported
-    /// by hash in [`Ability::params`], never guessed at.
+    /// by hash in [`super::Ability::params`], never guessed at.
     pub const KNOBS: [u32; 10] = [
         0x306D_A3DC,
         0x5929_7A45,

@@ -235,7 +235,7 @@ impl SwapChainRequest {
     ///
     /// `None` means the format byte points outside the 64-entry table the
     /// client reads; the client has no range check there (see
-    /// [`view_format`](crate::request::view_format)).
+    /// [`view_format`]).
     pub fn client_view(
         width: u32,
         height: u32,

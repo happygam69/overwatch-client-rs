@@ -708,7 +708,7 @@ Two facts that change the picture:
 
 - **The take-off lane `body+0x60c` is the lateral speed cap here, not a vertical
   impulse.** Phase 4 divides the y lane by it, lets property `0x25` act, and
-  multiplies it back � so the only lane the cap can change is y, and only
+  multiplies it back — so the only lane the cap can change is y, and only
   through a record's projection. The same field is the take-off magnitude in
   `FUN_140cc1440`; it is one component field used twice.
 - **There is no gravity in this function.** The vertical decay of the vector has

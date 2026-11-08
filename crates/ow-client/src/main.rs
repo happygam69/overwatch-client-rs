@@ -392,7 +392,7 @@ impl Renderer {
 
         // ---- the corner overlay ----------------------------------------
         // Text is baked into a 512x32 R8 grid by `hud::HudCanvas` and drawn as
-        // one quad after the scene pass, alpha-blended, no depth ??? so it is
+        // one quad after the scene pass, alpha-blended, no depth — so it is
         // always on top and can never intersect the geometry.
         let hud_canvas = hud::HudCanvas::new();
         let (hud_w, hud_h) = hud_canvas.dims();
@@ -615,7 +615,7 @@ impl Renderer {
 
     /// Replace the joint palette with a new pose.
     ///
-    /// The palette is `[identity, bone 0, bone 1, ???]` ??? slot 0 is the identity so
+    /// The palette is `[identity, bone 0, bone 1, …]` — slot 0 is the identity so
     /// an unskinned vertex passes through unchanged (see `scene::Vertex::joints`).
     /// Shorter palettes pad with the identity, so a malformed mesh index cannot
     /// read another draw's bones.
@@ -639,7 +639,7 @@ impl Renderer {
     /// The client calls this every tenth frame with its HUD lines; the
     /// pass then reads whatever is baked, so an empty call simply hides the
     /// text. Lines beyond the overlay's rows and glyphs beyond its columns are
-    /// clipped by [`hud::HudCanvas::lines`] ??? a report that cannot break the
+    /// clipped by [`hud::HudCanvas::lines`] — a report that cannot break the
     /// frame.
     pub(crate) fn set_hud(&mut self, lines: &[String]) {
         self.hud_canvas.lines(lines);

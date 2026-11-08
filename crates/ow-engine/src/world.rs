@@ -399,7 +399,7 @@ impl World {
     /// [`World::new`] stops after the first write to that field, because the
     /// value the client ends up storing depends on where that allocation landed.
     /// Applying this to the address gives exactly what the client stores, and
-    /// [`OBJ_460`](crate::codec::OBJ_460)'s inverse gives the address back.
+    /// [`OBJ_460`]'s inverse gives the address back.
     #[must_use]
     pub fn encode_obj_460(obj: u64) -> u64 {
         OBJ_460.apply(obj)

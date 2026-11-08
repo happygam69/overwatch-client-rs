@@ -265,7 +265,7 @@ renderer).
   `FIT-PRE-01/02` only). There is no legacy engine-object code to delete; the
   object is simply unimplemented, so `AGENTS.md` rule 8 applies (an unread stage
   is *open*, not faked, and no new `FIT-*` marker may be added).
-- `crates/ow-sim` is the parked gameplay layer (AGENTS.md tooling map) and the
+- `crates/ow-sim` is the verified gameplay layer (AGENTS.md tooling map) and the
   natural home for a later engine-layer model, but nothing in it touches this
   object today.
 
@@ -273,8 +273,9 @@ renderer).
 
 docs/architecture.md:63-79, "Behaviour pipeline":
 
-> 4. **Implement it** operation for operation in a verified layer; `ow-sim`
->    stays parked until its movement layer is read and verified.
+> 4. **Implement it** operation for operation in the verified layer, which is
+>    `ow-sim`: each leaf gets its harness unit before anything is composed on
+>    top of it.
 > 5. **Prove it.** A pure function gets a golden vector; a stateful path gets a
 >    first-divergence test; a reconstructed client function gets a
 >    `dev/verify_harness/` unit.

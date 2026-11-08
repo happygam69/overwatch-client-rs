@@ -1,10 +1,10 @@
 //! The content surface: unlocks, cosmetics, loot boxes, achievements, seasons.
 //!
-//! These are the assets behind the *product* � what a player owns and how they
-//! get it � as opposed to the assets behind gameplay. They are worth reading
+//! These are the assets behind the *product* — what a player owns and how they
+//! get it — as opposed to the assets behind gameplay. They are worth reading
 //! for two reasons: they are the largest body of data in the install that
 //! nothing here touched, and one of them, the skin theme, is the only route from
-//! "this cosmetic exists" to "this is what it looks like" � the join the
+//! "this cosmetic exists" to "this is what it looks like" — the join the
 //! renderer needs and does not have.
 //!
 //! ## Where the numbers come from
@@ -12,7 +12,7 @@
 //! Asset type ids come from the reference tooling's own switch list
 //! (`TankTonka/Models/Common.cs`). Class and field hashes come from its
 //! generated STU declarations (`TankLib/STU/Types/*.cs`), which are a
-//! *published reconstruction* � a claim about structure, not a measurement of
+//! *published reconstruction* — a claim about structure, not a measurement of
 //! this install. Every hash this module hardcodes is cited to the file and line
 //! it was read from, and `docs/formats/content.md` records which of them were
 //! then checked against real bytes.
@@ -97,7 +97,7 @@ pub mod types {
     /// is named here rather than repeated as a bare literal.
     pub const MODEL_LOOK: u16 = 0x01A;
 
-    /// Every content type, in the order [`survey_content`] walks them.
+    /// Every content type, in the order [`super::survey_content`] walks them.
     pub const ALL: &[u16] = &[
         PROGRESSION_UNLOCKS,
         STAT,
@@ -153,136 +153,136 @@ pub mod types {
 /// The three intermediate classes are not decoration. `STUUnlock` is the base;
 /// `STU_3021DDED` adds the display fields (name, description, rarity,
 /// categories) every "traditional" unlock carries; `STU_895A2A7A` is an empty
-/// further subclass that the non-cosmetic unlocks � currency, loot box, battle
-/// pass � derive from instead. An unlock asset whose root is exactly
+/// further subclass that the non-cosmetic unlocks — currency, loot box, battle
+/// pass — derive from instead. An unlock asset whose root is exactly
 /// `STU_3021DDED` or `STU_895A2A7A` is a real shipped shape, and the reference
 /// tooling's own type mapping calls it `Unknown`; so does [`unlock_kind_of`].
 pub mod class {
-    /// `STUUnlock` � `TankLib/STU/Types/STUUnlock.cs:7`.
+    /// `STUUnlock` — `TankLib/STU/Types/STUUnlock.cs:7`.
     pub const UNLOCK: u32 = 0x6760_479E;
-    /// `STU_3021DDED : STUUnlock` � `TankLib/STU/Types/Misc_9.cs:1739`.
+    /// `STU_3021DDED : STUUnlock` — `TankLib/STU/Types/Misc_9.cs:1739`.
     pub const UNLOCK_DISPLAY: u32 = 0x3021_DDED;
-    /// `STU_895A2A7A : STU_3021DDED` � `TankLib/STU/Types/Misc_6.cs:5543`.
+    /// `STU_895A2A7A : STU_3021DDED` — `TankLib/STU/Types/Misc_6.cs:5543`.
     pub const UNLOCK_PLAIN: u32 = 0x895A_2A7A;
-    /// `STUUnlocks`, the holder for an unlock list �
+    /// `STUUnlocks`, the holder for an unlock list —
     /// `TankLib/STU/Types/STUUnlocks.cs:6`.
     pub const UNLOCKS: u32 = 0x5ABF_8769;
 
-    /// `STUUnlock_SkinTheme` � `STUUnlock_SkinTheme.cs:7`.
+    /// `STUUnlock_SkinTheme` — `STUUnlock_SkinTheme.cs:7`.
     pub const UNLOCK_SKIN_THEME: u32 = 0xE05E_4446;
-    /// `STUUnlock_AvatarPortrait` � `STUUnlock_AvatarPortrait.cs:6`.
+    /// `STUUnlock_AvatarPortrait` — `STUUnlock_AvatarPortrait.cs:6`.
     pub const UNLOCK_AVATAR_PORTRAIT: u32 = 0x54BC_2188;
     /// `STU_A458D547`, which derives from the emote class and is a souvenir.
-    /// Tested before [`UNLOCK_EMOTE`] for that reason � `Misc_1.cs:5879`.
+    /// Tested before [`UNLOCK_EMOTE`] for that reason — `Misc_1.cs:5879`.
     pub const SOUVENIR: u32 = 0xA458_D547;
-    /// `STUUnlock_Emote` � `STUUnlock_Emote.cs:7`.
+    /// `STUUnlock_Emote` — `STUUnlock_Emote.cs:7`.
     pub const UNLOCK_EMOTE: u32 = 0x0B51_7D2E;
-    /// `STUUnlock_Pose` � `STUUnlock_Pose.cs:6`.
+    /// `STUUnlock_Pose` — `STUUnlock_Pose.cs:6`.
     pub const UNLOCK_POSE: u32 = 0xC6A7_2877;
-    /// `STUUnlock_VoiceLine` � `STUUnlock_VoiceLine.cs:6`.
+    /// `STUUnlock_VoiceLine` — `STUUnlock_VoiceLine.cs:6`.
     pub const UNLOCK_VOICE_LINE: u32 = 0x8A9D_1F89;
-    /// `STUUnlock_SprayPaint` � `STUUnlock_SprayPaint.cs:6`.
+    /// `STUUnlock_SprayPaint` — `STUUnlock_SprayPaint.cs:6`.
     pub const UNLOCK_SPRAY_PAINT: u32 = 0x8451_5D93;
-    /// `STUUnlock_Currency` � `STUUnlock_Currency.cs:6`.
+    /// `STUUnlock_Currency` — `STUUnlock_Currency.cs:6`.
     pub const UNLOCK_CURRENCY: u32 = 0x614B_C677;
-    /// `STUUnlock_PortraitFrame` � `STUUnlock_PortraitFrame.cs:7`.
+    /// `STUUnlock_PortraitFrame` — `STUUnlock_PortraitFrame.cs:7`.
     pub const UNLOCK_PORTRAIT_FRAME: u32 = 0x6FE9_1269;
-    /// `STUUnlock_Weapon` � `STUUnlock_Weapon.cs:7`.
+    /// `STUUnlock_Weapon` — `STUUnlock_Weapon.cs:7`.
     pub const UNLOCK_WEAPON: u32 = 0xC23F_89EB;
-    /// `STUUnlock_POTGAnimation` � `STUUnlock_POTGAnimation.cs:7`.
+    /// `STUUnlock_POTGAnimation` — `STUUnlock_POTGAnimation.cs:7`.
     pub const UNLOCK_POTG_ANIMATION: u32 = 0x8E77_E8A1;
-    /// `STUUnlock_CompetitiveCurrency` � `STUUnlock_CompetitiveCurrency.cs:6`.
+    /// `STUUnlock_CompetitiveCurrency` — `STUUnlock_CompetitiveCurrency.cs:6`.
     pub const UNLOCK_COMPETITIVE_CURRENCY: u32 = 0x136D_45F1;
-    /// `STUUnlock_OWLToken` � `STUUnlock_OWLToken.cs:6`.
+    /// `STUUnlock_OWLToken` — `STUUnlock_OWLToken.cs:6`.
     pub const UNLOCK_OWL_TOKEN: u32 = 0xF2E7_4AF9;
-    /// `STUUnlock_LootBox` � `STUUnlock_LootBox.cs:7`.
+    /// `STUUnlock_LootBox` — `STUUnlock_LootBox.cs:7`.
     pub const UNLOCK_LOOT_BOX: u32 = 0xC294_A43B;
-    /// `STU_6A808718`, a weapon charm � `Misc_8.cs:4060`.
+    /// `STU_6A808718`, a weapon charm — `Misc_8.cs:4060`.
     pub const WEAPON_CHARM: u32 = 0x6A80_8718;
-    /// `STU_C3C6FD9E`, a hero unlock � `Misc_4.cs:7630`.
+    /// `STU_C3C6FD9E`, a hero unlock — `Misc_4.cs:7630`.
     pub const HERO: u32 = 0xC3C6_FD9E;
-    /// `STU_7A1A4764`, battle-pass XP � `Misc_4.cs:4204`.
+    /// `STU_7A1A4764`, battle-pass XP — `Misc_4.cs:4204`.
     pub const BATTLE_PASS_XP: u32 = 0x7A1A_4764;
-    /// `STU_DB1B05B5`, a name card � `Misc_7.cs:7420`.
+    /// `STU_DB1B05B5`, a name card — `Misc_7.cs:7420`.
     pub const NAME_CARD: u32 = 0xDB1B_05B5;
-    /// `STU_514C0F6B`, a virtual-currency unlock � `Misc_9.cs:3026`.
+    /// `STU_514C0F6B`, a virtual-currency unlock — `Misc_9.cs:3026`.
     pub const VIRTUAL_CURRENCY: u32 = 0x514C_0F6B;
-    /// `STU_52AB57E9`, a player title � `Misc_3.cs:2813`.
+    /// `STU_52AB57E9`, a player title — `Misc_3.cs:2813`.
     pub const PLAYER_TITLE: u32 = 0x52AB_57E9;
-    /// `STU_AD84E2AA`, a battle pass � `Misc_6.cs:6910`.
+    /// `STU_AD84E2AA`, a battle pass — `Misc_6.cs:6910`.
     pub const BATTLE_PASS: u32 = 0xAD84_E2AA;
-    /// `STU_184D5944`, a season XP boost � `Misc_8.cs:1117`.
+    /// `STU_184D5944`, a season XP boost — `Misc_8.cs:1117`.
     pub const SEASON_XP_BOOST: u32 = 0x184D_5944;
-    /// `STU_80C1169E`, a battle-pass tier skip � `Misc_6.cs:5204`.
+    /// `STU_80C1169E`, a battle-pass tier skip — `Misc_6.cs:5204`.
     pub const BATTLE_PASS_TIER_SKIP: u32 = 0x80C1_169E;
-    /// `STU_3F17D547`, a mythic-skin customization option � `Misc_5.cs:2456`.
+    /// `STU_3F17D547`, a mythic-skin customization option — `Misc_5.cs:2456`.
     pub const SKIN_COMPONENT: u32 = 0x3F17_D547;
-    /// `STU_A85D31BF`, a story mission � `Misc_1.cs:6066`.
+    /// `STU_A85D31BF`, a story mission — `Misc_1.cs:6066`.
     pub const STORY_MISSION: u32 = 0xA85D_31BF;
-    /// `STU_2448F3AA`, a weapon skin � `Misc_6.cs:1189`.
+    /// `STU_2448F3AA`, a weapon skin — `Misc_6.cs:1189`.
     pub const WEAPON_SKIN: u32 = 0x2448_F3AA;
-    /// `STU_FA317B7D`, a competitive signature � `Misc_7.cs:8192`.
+    /// `STU_FA317B7D`, a competitive signature — `Misc_7.cs:8192`.
     pub const COMPETITIVE_SIGNATURE: u32 = 0xFA31_7B7D;
     /// `STU_1EB22BDB`. The reference tooling maps it to `Unknown` on purpose
-    /// rather than by falling through � `Misc_5.cs:1281`.
+    /// rather than by falling through — `Misc_5.cs:1281`.
     pub const UNMAPPED_1EB22BDB: u32 = 0x1EB2_2BDB;
 
-    /// `STUSkinBase` � `TankLib/STU/Types/STUSkinBase.cs:6`.
+    /// `STUSkinBase` — `TankLib/STU/Types/STUSkinBase.cs:6`.
     pub const SKIN_BASE: u32 = 0xB7EE_A3BE;
-    /// `STUSkinTheme : STUSkinBase` � `STUSkinTheme.cs:7`.
+    /// `STUSkinTheme : STUSkinBase` — `STUSkinTheme.cs:7`.
     pub const SKIN_THEME: u32 = 0x4227_0D59;
     /// `STU_21276722 : STUShippable`, the base every skin theme and skin
-    /// sub-asset derives from � `Misc_4.cs:1208`.
+    /// sub-asset derives from — `Misc_4.cs:1208`.
     pub const SHIPPABLE_SKIN: u32 = 0x2127_6722;
-    /// `STUShippable` � `STUShippable.cs:7`.
+    /// `STUShippable` — `STUShippable.cs:7`.
     pub const SHIPPABLE: u32 = 0x8FFA_F278;
     /// `STU_4BC3E632 : STUSkinBase`, the mythic-skin base holding the
-    /// customization slots � `Misc_0.cs:2625`.
+    /// customization slots — `Misc_0.cs:2625`.
     pub const MYTHIC_SKIN_BASE: u32 = 0x4BC3_E632;
-    /// `STU_EF85B312 : STU_4BC3E632`, a mythic skin � `Misc_4.cs:9063`.
+    /// `STU_EF85B312 : STU_4BC3E632`, a mythic skin — `Misc_4.cs:9063`.
     pub const MYTHIC_SKIN: u32 = 0xEF85_B312;
-    /// `STU_47C34433`, one model a skin theme swaps in � `Misc_5.cs:2703`.
+    /// `STU_47C34433`, one model a skin theme swaps in — `Misc_5.cs:2703`.
     pub const SKIN_MODEL: u32 = 0x47C3_4433;
-    /// `STU_BE423F96`, one weapon slot a skin theme restyles � `Misc_4.cs:7392`.
+    /// `STU_BE423F96`, one weapon slot a skin theme restyles — `Misc_4.cs:7392`.
     pub const SKIN_WEAPON: u32 = 0xBE42_3F96;
-    /// `STU_882807BA`, a team-to-generated-theme mapping � `Misc_4.cs:4701`.
+    /// `STU_882807BA`, a team-to-generated-theme mapping — `Misc_4.cs:4701`.
     pub const SKIN_TEAM_VARIANT: u32 = 0x8828_07BA;
-    /// `STU_251C5714`, one mythic customization slot � `Misc_2.cs:1193`.
+    /// `STU_251C5714`, one mythic customization slot — `Misc_2.cs:1193`.
     pub const MYTHIC_SLOT: u32 = 0x251C_5714;
 
-    /// `STULootBox` � `STULootBox.cs:7`.
+    /// `STULootBox` — `STULootBox.cs:7`.
     pub const LOOT_BOX: u32 = 0x56B6_D12E;
-    /// `STULootBoxRules`, which carries the rarity weights � `STULootBoxRules.cs:7`.
+    /// `STULootBoxRules`, which carries the rarity weights — `STULootBoxRules.cs:7`.
     pub const LOOT_BOX_RULES: u32 = 0xAF3D_FC87;
-    /// `STULootBoxRarityRules`, one rarity's weights � `STULootBoxRarityRules.cs:7`.
+    /// `STULootBoxRarityRules`, one rarity's weights — `STULootBoxRarityRules.cs:7`.
     pub const LOOT_BOX_RARITY_RULES: u32 = 0xEA8F_8295;
-    /// `STULootBoxUnlocks`, a box's pool � `STULootBoxUnlocks.cs:7`.
+    /// `STULootBoxUnlocks`, a box's pool — `STULootBoxUnlocks.cs:7`.
     pub const LOOT_BOX_UNLOCKS: u32 = 0xF818_D652;
-    /// `STULootBoxCurrencyUnlocks` � `STULootBoxCurrencyUnlocks.cs:7`.
+    /// `STULootBoxCurrencyUnlocks` — `STULootBoxCurrencyUnlocks.cs:7`.
     pub const LOOT_BOX_CURRENCY_UNLOCKS: u32 = 0x16F7_C0EA;
-    /// `STULootBoxCurrencyRarityUnlock` � `STULootBoxCurrencyRarityUnlock.cs:7`.
+    /// `STULootBoxCurrencyRarityUnlock` — `STULootBoxCurrencyRarityUnlock.cs:7`.
     pub const LOOT_BOX_CURRENCY_RARITY_UNLOCK: u32 = 0x9FFC_F237;
     /// `STUGenericSettings_LootBoxes`, the settings asset that holds the rules
-    /// array � `STUGenericSettings_LootBoxes.cs:6`.
+    /// array — `STUGenericSettings_LootBoxes.cs:6`.
     pub const GENERIC_SETTINGS_LOOT_BOXES: u32 = 0x9044_BCFE;
 
-    /// `STUAchievement` � `STUAchievement.cs:6`.
+    /// `STUAchievement` — `STUAchievement.cs:6`.
     pub const ACHIEVEMENT: u32 = 0x0CC0_7049;
-    /// `STURankedSeason` � `STURankedSeason.cs:6`.
+    /// `STURankedSeason` — `STURankedSeason.cs:6`.
     pub const RANKED_SEASON: u32 = 0xDDE9_37FD;
-    /// `STURankedData`, the season's base � `STURankedData.cs:6`.
+    /// `STURankedData`, the season's base — `STURankedData.cs:6`.
     pub const RANKED_DATA: u32 = 0x8159_A26D;
-    /// `STUProgressionUnlocks` � `STUProgressionUnlocks.cs:6`.
+    /// `STUProgressionUnlocks` — `STUProgressionUnlocks.cs:6`.
     pub const PROGRESSION_UNLOCKS: u32 = 0x8CE1_D110;
-    /// `STU_1757E817`, a level and the unlocks it grants � `Misc_5.cs:921`.
+    /// `STU_1757E817`, a level and the unlocks it grants — `Misc_5.cs:921`.
     pub const PROGRESSION_LEVEL: u32 = 0x1757_E817;
-    /// `STUVoiceConversation` � `STUVoiceConversation.cs:6`.
+    /// `STUVoiceConversation` — `STUVoiceConversation.cs:6`.
     pub const VOICE_CONVERSATION: u32 = 0xA408_D74F;
-    /// `STUVoiceConversationLine` � `STUVoiceConversationLine.cs:6`.
+    /// `STUVoiceConversationLine` — `STUVoiceConversationLine.cs:6`.
     pub const VOICE_CONVERSATION_LINE: u32 = 0x6BB3_C6F8;
-    /// `STUStat` � `STUStat.cs:7`.
+    /// `STUStat` — `STUStat.cs:7`.
     pub const STAT: u32 = 0xC7BA_A017;
-    /// `STUCatalog` � `STUCatalog.cs:6`.
+    /// `STUCatalog` — `STUCatalog.cs:6`.
     pub const CATALOG: u32 = 0x8561_8B21;
 }
 
@@ -292,7 +292,7 @@ pub mod field {
     ///
     /// Asset references are sixteen bytes wide with the GUID in the **first**
     /// eight, which is what [`ow_stu::Stu::read_asset_ref`] reads. The other
-    /// eight are alignment. An *array element* puts the GUID at `+8` instead �
+    /// eight are alignment. An *array element* puts the GUID at `+8` instead —
     /// see the note on [`unlocks::UNLOCKS`].
     pub mod unlock {
         /// `m_name`, the display-text asset.
@@ -300,7 +300,7 @@ pub mod field {
         /// `m_resourceKey`, the store key the unlock is sold under.
         pub const RESOURCE_KEY: u32 = 0x38BF_B46C;
         /// `m_00B16A0B`, which the reference tooling calls `ProductId`
-        /// (`Unlock.cs:133`) � a Battle.net catalogue identifier, not an amount.
+        /// (`Unlock.cs:133`) — a Battle.net catalogue identifier, not an amount.
         pub const PRODUCT_ID: u32 = 0x00B1_6A0B;
         /// `m_A7B393BF`, `Enum_5A7EBE59`: a *named* category, independent of
         /// the subclass. This is the one category field worth anything.
@@ -392,7 +392,7 @@ pub mod field {
     pub mod potg {
         /// `m_animation`.
         pub const ANIMATION: u32 = 0x3F5B_86A4;
-        /// `m_5530D275`, a `STUSkinTheme` � the highlight's skin.
+        /// `m_5530D275`, a `STUSkinTheme` — the highlight's skin.
         pub const SKIN_THEME: u32 = 0x5530_D275;
     }
 
@@ -485,7 +485,7 @@ pub mod field {
 
     /// `STU_BE423F96`, a weapon slot a skin restyles (`Misc_4.cs:7392`).
     pub mod skin_weapon {
-        /// `m_BECFBDBA`, a `STU_649567C7` � itself an empty subclass of
+        /// `m_BECFBDBA`, a `STU_649567C7` — itself an empty subclass of
         /// `STU_21276722`, so this is another skin asset rather than a model.
         pub const SKIN: u32 = 0xBECF_BDBA;
         /// `m_weaponType`, `STUWeaponType`.
@@ -617,7 +617,7 @@ pub mod field {
         pub const DESCRIPTION: u32 = 0xCA7E_6EDC;
         /// `m_290B2ADF`, unnamed.
         pub const UNNAMED_290B2ADF: u32 = 0x290B_2ADF;
-        /// `m_245A3F6D`, a `STUTexture` � the achievement's icon.
+        /// `m_245A3F6D`, a `STUTexture` — the achievement's icon.
         pub const ICON: u32 = 0x245A_3F6D;
         /// `m_544A6A4F`, a second `STUTexture` of unestablished purpose.
         pub const UNNAMED_544A6A4F: u32 = 0x544A_6A4F;
@@ -641,7 +641,7 @@ pub mod field {
 
     /// `STURankedData` (`STURankedData.cs:8`).
     pub mod ranked_data {
-        /// `m_58066D8F`, an inline `STUUnlocks` � the season's rewards.
+        /// `m_58066D8F`, an inline `STUUnlocks` — the season's rewards.
         pub const UNLOCKS: u32 = 0x5806_6D8F;
         /// `m_heroicUnlocks`, an inline `STUUnlocks`.
         pub const HEROIC_UNLOCKS: u32 = 0x3C18_94B2;
@@ -753,7 +753,7 @@ pub mod field {
         /// Note the element layout: an array element puts its GUID at **`+8`**,
         /// sixteen bytes apart, where a scalar asset reference puts it at `+0`.
         /// That is the typed layer's `read_element`
-        /// (`ow_stu/src/types.rs:1030`), and [`read_ref_array`] follows it
+        /// (`ow_stu/src/types.rs:1030`), and `read_ref_array` follows it
         /// exactly rather than re-deriving it.
         pub const UNLOCKS: u32 = 0xDB80_3F2F;
     }
@@ -835,10 +835,10 @@ pub enum LootBoxKind {
     Internal,
     LegendaryAnniversary,
     Hammond,
-    /// 0xB � unnamed in the generated enum.
+    /// 0xB — unnamed in the generated enum.
     Unnamed0B,
     Legendary,
-    /// 0xD � unnamed in the generated enum.
+    /// 0xD — unnamed in the generated enum.
     Unnamed0D,
     Unknown(i32),
 }
@@ -919,9 +919,9 @@ pub enum Category {
     Skin,
     VictoryPose,
     Emote,
-    /// 3 � unnamed in the generated enum.
+    /// 3 — unnamed in the generated enum.
     Unnamed3,
-    /// 4 � unnamed.
+    /// 4 — unnamed.
     Unnamed4,
     Souvenir,
     HighlightIntro,
@@ -932,17 +932,17 @@ pub enum Category {
     Portrait,
     NameCard,
     PlayerTitle,
-    /// 0xE � unnamed.
+    /// 0xE — unnamed.
     Unnamed0E,
     Currency,
     CompetitiveCurrency,
     OverwatchLeagueCurrency,
-    /// 0x12 � unnamed.
+    /// 0x12 — unnamed.
     Unnamed12,
     Lootbox,
     OverwatchCoins,
     BattlePass,
-    /// 0x16 � unnamed.
+    /// 0x16 — unnamed.
     Unnamed16,
     BattlePassXp,
     Hero,
@@ -1098,7 +1098,7 @@ pub enum WeaponVariation {
     Jade,
     Galactic,
     CrimsonWolf,
-    /// 5 � unnamed in the generated enum.
+    /// 5 — unnamed in the generated enum.
     Unnamed5,
     Unknown(i32),
 }
@@ -1286,7 +1286,7 @@ pub fn unlock_kind_of(class_hash: u32) -> UnlockKind {
 /// The field hash is load-bearing rather than incidental: most fields on these
 /// classes are ones the reference tooling could not name, so the hash is often
 /// the only label that exists. Where it did name one, `label` carries *that*
-/// name � never one chosen here.
+/// name — never one chosen here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Grant {
     pub field: u32,
@@ -1332,7 +1332,7 @@ pub struct Unlock {
     /// references, and no identifier asset is shipped, so these can be counted
     /// but not named.
     pub categories: Vec<u64>,
-    /// `m_00B16A0B`, the Battle.net product id. **Not a price** � see
+    /// `m_00B16A0B`, the Battle.net product id. **Not a price** — see
     /// [`Unlock::price`].
     pub product_id: Option<i64>,
     /// `m_resourceKey`, the store key.
@@ -1403,7 +1403,7 @@ impl Unlock {
     /// **Not recovered, and there is nothing to recover it from on this class.**
     /// No field on `STUUnlock` or on any subclass is an amount of money. The
     /// money-adjacent fields are `m_00B16A0B`, which the reference tooling calls
-    /// a Battle.net *product id* � a catalogue identifier, not a price � and
+    /// a Battle.net *product id* — a catalogue identifier, not a price — and
     /// `m_A7B393BF`/`m_A649130B`, which are a category and an unnamed enum.
     /// Prices live in store data this project does not read.
     ///
@@ -1592,14 +1592,14 @@ pub struct SkinWeapon {
     pub variation: WeaponVariation,
     /// `m_weaponType` as stored, so a caller can histogram the raw values rather
     /// than trust the decode. On the reference install the four slots of every
-    /// sampled theme read 1, 2, 3 and 4 � golden, jade, galactic, crimson wolf.
+    /// sampled theme read 1, 2, 3 and 4 — golden, jade, galactic, crimson wolf.
     pub raw_variation: i32,
 }
 
 /// One customization slot of a mythic skin.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MythicSlot {
-    /// `m_id`, an `STUIdentifier` � a key, not an asset.
+    /// `m_id`, an `STUIdentifier` — a key, not an asset.
     pub id: Option<u64>,
     /// `m_displayText`, a display-text asset.
     pub display_text: Option<u64>,
@@ -1623,16 +1623,16 @@ pub struct TeamVariant {
 /// A skin theme, or a mythic skin: the asset that says what a cosmetic *is*.
 ///
 /// This is the cosmetics root, and [`SkinTheme::models`] is the join the
-/// renderer needs � a skin names the models it swaps in. It stops there: the
+/// renderer needs — a skin names the models it swaps in. It stops there: the
 /// materials and body textures are not in this asset. See the module header and
-/// `docs/formats/content.md` � "The skin join that is still missing".
+/// `docs/formats/content.md` — "The skin join that is still missing".
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinTheme {
     pub asset: u64,
     /// `0x42270D59` for a plain theme, `0xEF85B312` for a mythic one.
     pub root_class: u32,
     pub is_mythic: bool,
-    /// `m_internalName` � stored as text, not as a display-text asset, which
+    /// `m_internalName` — stored as text, not as a display-text asset, which
     /// makes it the only skin name readable without the text layer.
     pub internal_name: Option<String>,
     /// `m_ECCC4A5D`, the portrait the reference tooling saves under that name.
@@ -1695,7 +1695,7 @@ pub fn read_skin_theme_in(stu: &mut Stu, asset: u64) -> Option<SkinTheme> {
 
     // The swapped-in models. Each element's layout is walked by hand rather than
     // through `read_asset_ref`, because that addresses the *instance's* payload
-    // and an element payload starts somewhere else � the same trap `hero.rs`
+    // and an element payload starts somewhere else — the same trap `hero.rs`
     // documents for `asset_ref_at`.
     for (bag, start) in stu.inline_elements(root, field::skin_base::MODELS) {
         if bag < 0 {
@@ -2545,7 +2545,7 @@ pub struct Survey {
     pub assets: usize,
     /// Assets whose bytes opened.
     pub readable: usize,
-    /// Assets whose bytes did not open � in the registry but not downloaded.
+    /// Assets whose bytes did not open — in the registry but not downloaded.
     pub unreadable: usize,
     /// Assets that opened but did not parse as STU.
     pub unparsed: usize,
@@ -2566,7 +2566,7 @@ pub struct Survey {
     pub errors: Vec<String>,
     /// Assets this survey actually opened. Equal to `assets` unless the survey
     /// was capped, in which case the counters describe a stride-sample of the
-    /// type rather than all of it � which is why `capped` is recorded.
+    /// type rather than all of it — which is why `capped` is recorded.
     pub scanned: usize,
     /// Whether `scanned` is less than `assets`.
     pub capped: bool,
@@ -2832,7 +2832,7 @@ fn unlocks_at_field(stu: &mut Stu, instance: usize, field_hash: u32) -> Vec<u64>
 /// at `+8`, deobfuscated with the *array's* field hash. Both facts are copied
 /// from `ow_stu/src/types.rs:1030` rather than re-derived, and
 /// `tests/unlocks_real.rs` checks the result by requiring the GUIDs to resolve
-/// in the asset registry � a wrong stride yields values that resolve to nothing,
+/// in the asset registry — a wrong stride yields values that resolve to nothing,
 /// which is how the wrong layout was caught the first time it mattered.
 fn read_ref_array(stu: &mut Stu, instance: usize, field_hash: u32) -> Vec<u64> {
     let Some((offset, _size)) = stu.field_bytes(instance, field_hash) else {

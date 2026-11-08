@@ -1088,7 +1088,7 @@ pub struct VertexElement {
     pub offset: u16,
     /// Stream stride stored beside the offset, or 0 when the writer left it
     /// empty. The reader takes the stride from the descriptor instead
-    /// ([`VertexBuffer::stride`]), because that is the copy the verified
+    /// (`VertexBuffer::stride`), because that is the copy the verified
     /// `MrnmHandler` publishes at runtime `+0x18`/`+0x19`.
     pub stride: u16,
     /// The vertex-buffer descriptor's own stride for that stream

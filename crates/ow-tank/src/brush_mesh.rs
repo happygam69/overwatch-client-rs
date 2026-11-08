@@ -7,7 +7,7 @@
 //! into one of six ops, and sorts the workspace vertices into sweep order.
 //!
 //! The rest of the conversion — the six op bodies dispatched by
-//! [`HullStage::op`], the ear-clipping emission, and the face writer — is read
+//! [`WorkspaceVertex::op`], the ear-clipping emission, and the face writer — is read
 //! and recorded in `docs/formats/brush-mesh.md` but **not** implemented: a
 //! partial mesh cannot be proven identical to the client's, and a `1 to 1`
 //! claim needs the whole chain. Nothing here emits a triangle.

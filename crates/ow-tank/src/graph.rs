@@ -165,7 +165,8 @@ pub const HERO_STATE: u32 = 0x9142_8992;
 /// Fields of [`HERO_STATE`].
 pub mod hero_state {
     /// `m_hero`: the hero to set. A `STUConfigVar`: a literal
-    /// ([`LITERAL_HERO_VARS`]) or a runtime variable ([`CONFIG_VAR_DYNAMIC`]).
+    /// ([`super::LITERAL_HERO_VARS`]) or a runtime variable
+    /// ([`super::CONFIG_VAR_DYNAMIC`]).
     pub const HERO: u32 = 0x37AB_13D3;
     /// `m_controller`: the controller to set it on.
     pub const CONTROLLER: u32 = 0x176E_D263;

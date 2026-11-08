@@ -215,7 +215,7 @@ pub mod hero {
 ///
 /// A setting only stores the fields that differ from its class default, so a
 /// field missing from an instance is not zero — it is the default declared on
-/// the class. [`hero_setting_defaults`] carries those.
+/// the class. [`HERO_SETTING_FLOAT_DEFAULTS`] carries the float ones.
 pub mod hero_setting {
     /// `m_identifier`: a typed token, not an asset. No asset of the identifier
     /// type is shipped, so this names a setting rather than pointing at one.

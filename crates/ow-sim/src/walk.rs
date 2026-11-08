@@ -130,7 +130,7 @@ pub fn query_block(
 /// mask.
 ///
 /// The character's capsule enters here: its two centres are
-/// [`crate::character_collision::Capsule`]'s points in the character's local
+/// `ow_tank::character_collision::Capsule`'s points in the character's local
 /// frame, rotated by the character's quaternion, and the sphere radius is the
 /// expansion. A zero rotation is the upright identity.
 pub fn query_block_capsule(
@@ -500,7 +500,7 @@ fn depenetrate(world: &World, at: [f32; 3], radius: f32) -> ([f32; 3], Option<Sw
 ///
 /// - before the first sweep and after every contact's re-seat the body is
 ///   pushed out of anything it is inside by more than the skin
-///   ([`depenetrate`]);
+///   (`depenetrate`);
 /// - when the sweep reports nothing (its start is on a surface) the body moves
 ///   to the **depenetrated target**, not to the raw target: it lands on the
 ///   wall, and a rising slope still carries it because the push is along the

@@ -9,11 +9,11 @@ project, never write to the game.
   the oracle is the client's own bytes emulated offline (`Overwatch.exe`); the
   candidate is Ghidra C or a Rust probe. Five stages (load, determinism,
   differential, coverage, mutation), digest-bound ledger, selftest.
-  `python dev/verify_harness/cli.py all` runs every unit; `casc` runs only
-  the CASC units and fails if one is not verified;
-  `selftest` proves the verifier still detects injected defects. `all` still
-  includes the inconclusive `CurveKeySampleDual` unit and the parked `ow-sim`
-  units; `casc` is the green CASC gate. The unit format and the five stages
+  `selftest` proves the verifier still detects injected defects.
+  `python dev/verify_harness/cli.py` drives the units: `all` runs every one and
+  fails if any is not verified, so it stays red while some are inconclusive,
+  divergent or invalid (`cli.py list` names them); `casc` is the green CASC
+  gate. The unit format and the five stages
   are in `dev/verify_harness/runner.py`; the mutation stage's measured wall
   time and its quality proof are in `dev/verify_harness/PERFORMANCE.md`.
   `--jobs N` sets how many mutant probes run at once (default 4) and
@@ -50,7 +50,9 @@ project, never write to the game.
   a *linear* decode, not a flow decode: a body whose branch lands inside its own
   instruction desyncs, so those are read in the decompiler.
   `show <addr> --window` disassembles around any interior address, including a
-  cold half, which resolves through its function's union row. `build` is
+  cold half, which resolves through its function's union row; both `show` and
+  `grep` flag a hit whose function is `opaque`, where the listing is a hint and
+  the decompiler is the read. `build` is
   incremental (`--force` re-fetches decompiles, `--asm-only` refreshes
   disassembly without the bridge). Storage is shared (`asm/<function>.asm`,
   `c/<entry>.c`); tag membership lives in the `tagged` table, so a function can
@@ -71,7 +73,12 @@ project, never write to the game.
   is one query). Every index table is an RVA; attribution is by union span, so
   a call into a cold half or into `.pdata`-less code keeps its raw target, and a
   code transfer that points outside `.text` is dropped and marks its function
-  `opaque`. `verify` re-checks the three documented census facts it must
+  `opaque`. `triage` writes the port scope and state per function (forward
+  closure of the gameplay anchors: 3,864 functions, 238 `entry` + 1,303 `unit` +
+  2,312 `inline` + 6 `thunk` + 5 `trivial`; see `docs/port-plan.md`), and
+  `proto` writes a candidate argument count per function from the callee's own
+  entry reads (agrees with 28 of the 44 stated unit signatures; a reading aid,
+  never a name table row). `verify` re-checks the three documented census facts it must
   reproduce: the chunk assembler's caller at `0x1420251f5` -> `0x14209fc90`, the
   485 register-slot `+0x40` sites, and `ShapeAddToBody`'s 27 sites in 12
   functions (the pair that is only right when a cold half is not counted as a

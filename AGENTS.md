@@ -131,7 +131,7 @@ may be added**; `cargo xtask verify` fails on one.
 | Ghidra project | behaviour: decompile, callers, value flow | `dev/ghidra_run/owmod_clean`, program `Overwatch.exe` (pre-clean backup: `dev/ghidra_run/owmod`) |
 | `ow-tank` bins / examples | data: formats, registry, entities, weapons, graphs, animation | `crates/ow-tank/src/bin/`, `crates/ow-tank/examples/` |
 | `ow-client`, `ow-scene` | the one launchable client and map assembly; default practice range through `mapresolve` | `crates/ow-client/`, `crates/ow-scene/` |
-| `ow-sim` | parked reference; not built until a read gameplay layer needs it | `crates/ow-sim/` |
+| `ow-sim` | the verified movement arithmetic: mover leaves, per-frame velocity law, jump and air law, the swept collision query, the wish fan solver; a workspace member, built and tested by the gate | `crates/ow-sim/` |
 | `dev/verify_harness/` | differential proof that a Rust function equals the client's bytes | `dev/verify_harness/` |
 | `dev/pe_layout.py` | is an address raw, zero-fill (BSS, runtime-only) or unmapped | `dev/pe_layout.py` |
 | `docs/function-names.csv` | the name ↔ current address table | `docs/` |

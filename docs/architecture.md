@@ -71,8 +71,9 @@ readable header and its variation modes.
    `docs/formats/<system>.md`; never paste disassembly.
 3. **Name it.** When the role is settled, add the row to
    `docs/function-names.csv` and run `python dev/gh_apply_names.py`.
-4. **Implement it** operation for operation in a verified layer; `ow-sim`
-   stays parked until its movement layer is read and verified.
+4. **Implement it** operation for operation in the verified layer, which is
+   `ow-sim`: each leaf gets its harness unit before anything is composed on
+   top of it.
 5. **Prove it.** A pure function gets a golden vector; a stateful path gets a
    first-divergence test; a reconstructed client function gets a
    `dev/verify_harness/` unit.

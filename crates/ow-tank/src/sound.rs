@@ -167,7 +167,8 @@ pub mod types {
     /// **Not** in `Common.cs`'s enumeration.
     pub const SOUND_FILE_ALT: u16 = 0x03F;
 
-    /// Every type this module surveys, in the order [`survey_sound`] walks them.
+    /// Every type this module surveys, in the order [`super::survey_sound`] walks
+    /// them.
     pub const ALL: &[u16] = &[
         SOUND,
         SOUND_SWITCH,
@@ -318,7 +319,7 @@ pub mod observed_root {
 ///
 /// Asset references are sixteen bytes wide with the GUID in the **first** eight,
 /// which is what [`ow_stu::Stu::read_asset_ref`] reads. An *array element* puts
-/// the GUID at `+8` instead — see the note on [`read_ref_array`].
+/// the GUID at `+8` instead — see the note on `read_ref_array`.
 pub mod field {
     /// `STUSound` (`STUSound.cs:7`). Only the two fields the reference tooling
     /// itself reads are named; the rest of the class is eight floats, two `uint`s,

@@ -15,7 +15,7 @@
 //!
 //! # Records
 //!
-//! The hull is `0x60` bytes; [`Hull`] carries the field-by-field reading. Two
+//! The hull is `0x60` bytes; `Hull` carries the field-by-field reading. Two
 //! fields do double duty, and the phases never overlap, which is why one field
 //! each is enough here:
 //!

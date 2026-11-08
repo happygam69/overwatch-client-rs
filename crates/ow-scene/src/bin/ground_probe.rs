@@ -6,8 +6,11 @@
 //! constant 2.000 and means the point is outside the loaded chunks.
 //!
 //! Usage:
-//!     cargo run -p ow-scene --bin ground_probe -- --from X,Z --to X,Z
-//!         [--steps N] [--chunks-from <guid list>] [--no-map]
+//!
+//! ```text
+//! cargo run -p ow-scene --bin ground_probe -- --from X,Z --to X,Z
+//!     [--steps N] [--chunks-from <guid list>] [--no-map]
+//! ```
 
 use glam::Vec3;
 

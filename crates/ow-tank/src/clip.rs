@@ -3,13 +3,13 @@
 //! The quotes below are the *meaning* of each field, and where it comes from:
 //!
 //! * the layout was read out of 184 shipped clips by differential analysis
-//!   (`dev/clip_lab.py`, `docs/formats/animation.md` В§ "The clip chunk, read
-//!   empirically") вЂ” the header's frame count and fps, the duration that equals
+//!   (`dev/clip_lab.py`, `docs/formats/animation.md` § "The clip chunk, read
+//!   empirically") — the header's frame count and fps, the duration that equals
 //!   frames/fps in every sample, and the ten-qword section table at `+0x30`;
 //! * three header fields are *stored reciprocals*, read on clips of three sizes:
 //!   `+0x18` = `1/duration`, `+0x1c` = the fps as a float, `+0x20` = `1/fps`;
 //! * `+0x00` is a **family word**, not a content id: it partitions the corpus into
-//!   layout families (see `docs/formats/animation.md` В§ "The corpus is several clip
+//!   layout families (see `docs/formats/animation.md` § "The corpus is several clip
 //!   families"), so a record-level rule holds *per family*, never per format;
 //! * the *reading* of those records is confirmed by the client's own dispatcher:
 //!   a function that takes (clip object, record) and switches on the **kind byte
@@ -20,14 +20,14 @@
 //!
 //! What is **not** here, and why: the *file-side record offsets*. An earlier version of this
 //! module parsed a table of 32-byte records whose second word was `frames + 1`,
-//! which held exactly for one rig family вЂ” and a second family measured afterwards
+//! which held exactly for one rig family — and a second family measured afterwards
 //! uses a **20-byte** stride with that word at irregular offsets, so the rule was
 //! over-generalised and is gone. The record stride is rig-dependent, and the client
 //! dispatcher switches on a *kind byte* at `record + 0xe` across 31 handlers, which
 //! is what defines the real format. The dispatch map and the per-kind sample codecs
 //! are now ported below ([`KIND_TABLE`], [`decode_track_sample`]), but the walk to a
 //! record's file offset stays content-based (bone-table search) and family-gated
-//! ([`record_stride_for_family`]) вЂ” never positional вЂ” until the cold-kind handlers
+//! ([`record_stride_for_family`]) — never positional — until the cold-kind handlers
 //! are read and a record table offset is verified per family.
 //!
 //! Nothing here reads game data at build or test time: the tests build synthetic
@@ -38,10 +38,10 @@
 //!
 //! * the **kind dispatch** behind the kind byte at `record + 0xe`
 //!   (`FUN_7ff613ecf660`, live `0x7ff613ecf660` = v2b `0x7ff7c58df660`;
-//!   live = v2b в€’ `0x1B1A10000` in the practice-range session):
+//!   live = v2b − `0x1B1A10000` in the practice-range session):
 //!   [`KIND_TABLE`] names all 31 kinds with each handler's v2b address and
 //!   residency (inline / resident / cold-unverified / default stub). Kinds
-//!   6, 9, 11вЂ“14, 16, 17 and 20вЂ“30 share the default stub (v2b
+//!   6, 9, 11–14, 16, 17 and 20–30 share the default stub (v2b
 //!   `0x7ff7c58df913`); kinds 1, 4, 5, 7, 8, 15, 19, 31 name a handler whose
 //!   page is zero-filled in every standing capture and therefore decode as
 //!   cold-unverified, never executed here.
@@ -51,9 +51,9 @@
 //!   `ReadIndices`) and verified against the install (the pinned six-byte sample
 //!   in `crates/ow-tank/tests/rotation_format.rs` decodes to `|q| = 1.000000`):
 //!   [`decode_track_sample`] routes `TrackKind` + `TrackFlags` to the old 6-byte
-//!   or new 8-byte rotation, the f16Г·32 or f32 position, or the Г·1024 scale, and
+//!   or new 8-byte rotation, the f16÷32 or f32 position, or the ÷1024 scale, and
 //!   [`read_frame_indices`] ports the `u8`-vs-`i16` frame rule keyed on
-//!   `InfoTableSize = int(fps Г— duration) + 1` with `frame = abs(index) % size`.
+//!   `InfoTableSize = int(fps × duration) + 1` with `frame = abs(index) % size`.
 //! * **family-word gating** (*install*): [`record_stride_for_family`] returns the
 //!   20-byte stride only for the two families it was measured on (`0x006d2000`,
 //!   `0x00533c00`); every other family yields `None`, because the earlier 32-byte
@@ -62,7 +62,7 @@
 //!   there is no 32-byte constant, because that grid was a false positive.
 //! * a **bounded value search** (*install*): [`CHANNEL_VALUE_WINDOW`] caps the
 //!   channel value hunt at 8 KB past the key list (measured coverage 65% there,
-//!   against 73.1% unbounded вЂ” the cap trades the last 8 points for a bounded
+//!   against 73.1% unbounded — the cap trades the last 8 points for a bounded
 //!   scan), and [`build_unit_sample_index`] prebuilds the candidate offsets once
 //!   per body so the window costs one scan, not one per record.
 //!   [`decode_channels`] keeps its shape and now delegates to
@@ -70,8 +70,8 @@
 //! * **slerp** (*published-check*: standard unit-quaternion interpolation, no game
 //!   bytes involved): [`slerp_quat`] replaces the linear blend in
 //!   [`Channel::rotation_at`] and [`BoneTrack::quat_at`]. Linear interpolation
-//!   leaves the great arc вЂ” the midpoint stays unit here only because `w` is
-//!   re-derived, while the angular velocity bunches at the ends вЂ” so the pose
+//!   leaves the great arc — the midpoint stays unit here only because `w` is
+//!   re-derived, while the angular velocity bunches at the ends — so the pose
 //!   between keys eased rather than swept. Slerp travels at constant angular
 //!   velocity with the double-cover sign flip.
 
@@ -96,7 +96,7 @@ pub const RECORD: usize = 32;
 pub struct Header {
     /// `+0x00`: the **family word**. It is a discriminator, not a content id: it
     /// partitions the corpus into layout families (24 clips `0x00722000`, 12
-    /// `0x006d2000`, 9 `0x00d02000`, вЂ¦ вЂ” and the clip whose graph is decoded in
+    /// `0x006d2000`, 9 `0x00d02000`, … — and the clip whose graph is decoded in
     /// `docs/formats/animation.md` is the *singleton* `0x002a0604`), and clips
     /// that share it do **not** share a size or a record stride. Whether it splits
     /// into a class and a version is not established.
@@ -107,7 +107,7 @@ pub struct Header {
     pub fps: u16,
     /// `+0x14`: seconds, equal to `frames / fps` in every sampled clip.
     pub duration: f32,
-    /// `+0x18`: `1 / duration`, *stored* вЂ” read on three clips of three sizes
+    /// `+0x18`: `1 / duration`, *stored* — read on three clips of three sizes
     /// (0.5333/1.875, 1.5/0.6667, 3.0/0.3333).
     pub rate: f32,
     /// `+0x1c`: the frame rate again, as a float (30.0).
@@ -163,7 +163,7 @@ impl Header {
         }
     }
 
-    /// `1 / duration` вЂ” the relation the corpus stores at `+0x18`.
+    /// `1 / duration` — the relation the corpus stores at `+0x18`.
     pub fn implied_rate(&self) -> f32 {
         if self.duration == 0.0 {
             0.0
@@ -172,7 +172,7 @@ impl Header {
         }
     }
 
-    /// `1 / fps` вЂ” the relation the corpus stores at `+0x20`.
+    /// `1 / fps` — the relation the corpus stores at `+0x20`.
     pub fn implied_frame_period(&self) -> f32 {
         if self.fps == 0 {
             0.0
@@ -190,7 +190,7 @@ impl Header {
 /// we expect to copy much more from that project and matching headers keep the
 /// ports diffable and replaceable in one place.
 ///
-/// ## Status: PRESUMED WRONG on this build вЂ” do not trust without checking
+/// ## Status: PRESUMED WRONG on this build — do not trust without checking
 ///
 /// Still unproven as of 2026-10-17: the kind/codec port elsewhere in this
 /// module re-derives the *decodes*, not this header. [`Header`] remains the
@@ -315,7 +315,7 @@ impl ReferenceHeader {
         })
     }
 
-    /// `int(FPS * Duration) + 1` вЂ” the reference's own frame count.
+    /// `int(FPS * Duration) + 1` — the reference's own frame count.
     ///
     /// **Verified** to agree with [`Header::frames`] on all three sampled clips
     /// (21, 170, 5), so this is the rule our decoders use.
@@ -327,7 +327,7 @@ impl ReferenceHeader {
 /// Byte offset of the kind discriminator inside a graph record.
 ///
 /// *Decompiled*: `FUN_7ff613ecf660` (live `0x7ff613ecf660` = v2b
-/// `0x7ff7c58df660`; live = v2b в€’ `0x1B1A10000`) reads
+/// `0x7ff7c58df660`; live = v2b − `0x1B1A10000`) reads
 /// `byte [record + 0xe]` as an index into its 31-entry jump table.
 pub const RECORD_KIND_OFFSET: usize = 0x0e;
 
@@ -340,7 +340,7 @@ pub const RECORD_FLAGS_OFFSET: usize = 0x0c;
 /// The verified record stride: 20 bytes, for the measured families.
 ///
 /// *Install*: confirmed for families `0x00533c00` and `0x006d2000`
-/// (`docs/formats/animation.md` В§ "The record stride is 20 bytes"). Returned by
+/// (`docs/formats/animation.md` § "The record stride is 20 bytes"). Returned by
 /// [`record_stride_for_family`]; never assumed for any other word.
 pub const RECORD_STRIDE_20: usize = 20;
 
@@ -348,7 +348,7 @@ pub const RECORD_STRIDE_20: usize = 20;
 ///
 /// *Install*: only `0x006d2000` and `0x00533c00` are verified at 20 bytes. The
 /// `0x002a0604` singleton, the first-person family `0x00020400`, and every other
-/// word yield `None` вЂ” a record-level rule holds *per family*, never per format,
+/// word yield `None` — a record-level rule holds *per family*, never per format,
 /// so an unmeasured family must not be walked. In particular nothing maps to 32:
 /// the old 32-byte grid was an index table, not records.
 pub fn record_stride_for_family(family: u32) -> Option<usize> {
@@ -366,7 +366,7 @@ pub struct Clip {
     pub sections: [i64; SECTIONS],
     /// The second section's offset.
     pub second_at: usize,
-    /// The first section as words вЂ” a per-rig list that is byte-identical across
+    /// The first section as words — a per-rig list that is byte-identical across
     /// a clip family, read as ids with runs of consecutive values.
     pub first_section: Vec<u32>,
     /// Everything from the first section's end to the end of the file: the
@@ -404,7 +404,7 @@ impl Clip {
         }
         // The first section runs from the body start (BODY) to the next section;
         // the record table is the first section after it, and it begins with a
-        // 32-byte prefix вЂ” the records follow that, which is why they are read
+        // 32-byte prefix — the records follow that, which is why they are read
         // from `table_at + RECORD`.
         let in_file = |v: i64| usize::try_from(v).ok().filter(|o| *o < bytes.len());
         let offsets: Vec<usize> = sections
@@ -450,12 +450,12 @@ impl Clip {
 /// ```
 ///
 /// where the scale is the **first entry of a table of powers of two** at live
-/// `0x7ff6164f38f8` (2^-15, 2^-14, 2^-10, 2^-8, 1024, 4096 вЂ” read from the client's
+/// `0x7ff6164f38f8` (2^-15, 2^-14, 2^-10, 2^-8, 1024, 4096 — read from the client's
 /// data section, `2^-15 = 3.05176e-05`) and `0.001` is a separate constant at live
 /// `0x7ff6162f3ae4`. The `+0.001` and the shape of the surrounding code (a duration
 /// compared against a threshold of `0.004`, two terms combined by an operator byte)
 /// say this particular use is a **time or duration** value with a one-millisecond
-/// bias вЂ” it is *one* of the record kinds' semantics, not necessarily the rotation
+/// bias — it is *one* of the record kinds' semantics, not necessarily the rotation
 /// decode.
 ///
 /// What that means for this module: the *arithmetic* is read, but **where in a
@@ -470,7 +470,7 @@ pub fn evaluator_time_value(raw: u16) -> f32 {
 
 /// A bone index table: a `0`-terminated, strictly increasing list of 1-based
 /// bone numbers marking which bones a channel drives. The list may be **sparse**
-/// (a gap means the channel does not animate that bone) вЂ” see
+/// (a gap means the channel does not animate that bone) — see
 /// [`find_bone_tables`] and the measurement behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoneTable {
@@ -488,7 +488,7 @@ pub struct BoneTable {
 }
 
 /// A per-bone rotation triplet: three f32 storing a unit quaternion as
-/// `(x, y, z)` with `w = sqrt(1 - xВІ - yВІ - zВІ)`.
+/// `(x, y, z)` with `w = sqrt(1 - x² - y² - z²)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoneRotation {
     pub x: f32,
@@ -518,11 +518,11 @@ impl BoneRotation {
 /// A bone index table is a **`0`-terminated list of strictly increasing bone
 /// numbers starting at 1**, of at least 3 entries. Measured on the installed
 /// corpus, the list may be **sparse**: Tracer's first-person clip
-/// `0x0a0000000000c15a` stores `01..07, 09..81, 83..170` вЂ” 168 entries with two
-/// gaps вЂ” and contains **no** strictly-consecutive run of length в‰Ґ 8, so the
-/// earlier "run of `01 02 03 вЂ¦`" rule rejected it outright and that clip decoded
+/// `0x0a0000000000c15a` stores `01..07, 09..81, 83..170` — 168 entries with two
+/// gaps — and contains **no** strictly-consecutive run of length ≥ 8, so the
+/// earlier "run of `01 02 03 …`" rule rejected it outright and that clip decoded
 /// to zero channels. Accepting a sparse, ascending, terminated list covers both
-/// shapes: a strict `01 02 03 вЂ¦ N 00` run is the special case where no bone is
+/// shapes: a strict `01 02 03 … N 00` run is the special case where no bone is
 /// skipped.
 ///
 /// `bone_count` is the number of *entries*; the bone numbers themselves are in
@@ -579,7 +579,7 @@ pub fn find_bone_tables(body: &[u8]) -> Vec<BoneTable> {
 
 /// A float data region: a maximal run of plausible f32 values, not a bone index
 /// table. "Plausible" means finite, non-zero and within `[1e-7, 16]` in
-/// magnitude вЂ” the range unit quaternions live in. Byte patterns such as
+/// magnitude — the range unit quaternions live in. Byte patterns such as
 /// integer tables decode to f32s with absurd exponents and do not form runs.
 /// An f32 component that is exactly `0.0` terminates a run (a rare case in
 /// quaternion data; the region then splits, and pairing still reads the
@@ -695,7 +695,7 @@ pub fn pair_bone_tables_with_floats(
 /// rotation at each keyed frame.
 ///
 /// Measured on the install (2026-10-16, see `docs/formats/animation.md`
-/// В§ "The keyed-frame sparse lists are confirmed"). The record is:
+/// § "The keyed-frame sparse lists are confirmed"). The record is:
 ///
 /// ```text
 /// [u8 bone indices 1..=N][u8 pad x3][u8 keyed frames, 0-terminated][values]
@@ -770,11 +770,11 @@ const CHANNEL_KEY_PAD_MAX: usize = 4;
 /// How far past the end of the keyed-frame list the value array may start.
 ///
 /// **Bounded by measurement, not by hope.** The values live in the clip's
-/// **shared** float block, not next to their record, so the distance is large вЂ”
+/// **shared** float block, not next to their record, so the distance is large —
 /// coverage over the installed corpus rises monotonically with this window
-/// (400 B в†’ 43.7%, 800 B в†’ 50.5%, 2 KB в†’ 55.9%, 8 KB в†’ 65.0%, unbounded в†’
+/// (400 B → 43.7%, 800 B → 50.5%, 2 KB → 55.9%, 8 KB → 65.0%, unbounded →
 /// 73.1%), and stays flat past that (the "keys are a subset of a longer sample
-/// run" hypothesis moved it only 43.7% в†’ 44.0%, so that is *not* the cause).
+/// run" hypothesis moved it only 43.7% → 44.0%, so that is *not* the cause).
 /// The default stops at 8 KB: the last 8 points cost an unbounded scan, and a
 /// caller that wants them passes a larger window to
 /// [`decode_channels_with_window`] explicitly. The search is prefiltered on a
@@ -782,12 +782,12 @@ const CHANNEL_KEY_PAD_MAX: usize = 4;
 /// window stays cheap.
 pub const CHANNEL_VALUE_WINDOW: usize = 8192;
 
-/// Bytes per value sample. Measured: 16 (four f32), not 12 вЂ” see the section
+/// Bytes per value sample. Measured: 16 (four f32), not 12 — see the section
 /// reference. This is the value that was wrong in the earlier stride-12 guess.
 const CHANNEL_SAMPLE_BYTES: usize = 16;
 
 /// True when `body[off..off+12]` decodes to a unit quaternion stored as
-/// `(x, y, z)` with `w = sqrt(1 - xВІ - yВІ - zВІ)`.
+/// `(x, y, z)` with `w = sqrt(1 - x² - y² - z²)`.
 ///
 /// **The all-zero sample is rejected on purpose.** `(0, 0, 0)` gives
 /// `w = 1` and is therefore a *valid* unit quaternion (the identity rotation),
@@ -825,7 +825,7 @@ fn is_unit_sample(body: &[u8], off: usize) -> bool {
 ///
 /// The channel hunt tests each candidate start for a full run of keyed samples;
 /// scanning every byte per record repeats that predicate once per record. This
-/// builds the candidate set once вЂ” one linear pass вЂ” so
+/// builds the candidate set once — one linear pass — so
 /// [`decode_channels_with_window`] can binary-search the window instead of
 /// re-scanning it. Offsets are byte-exact (the value array's phase is unknown,
 /// so no alignment is assumed) and sorted.
@@ -856,7 +856,7 @@ pub fn decode_channels(body: &[u8], frames: u16) -> Vec<Channel> {
 /// list that follows each, then locates the value array by requiring *every*
 /// keyed frame to decode as a unit quaternion at the 16-byte stride. Records
 /// whose values are not found inside the window are skipped rather than
-/// guessed вЂ” a wrong offset is worse than no record. The candidate starts come
+/// guessed — a wrong offset is worse than no record. The candidate starts come
 /// from [`build_unit_sample_index`], built once per call.
 pub fn decode_channels_with_window(body: &[u8], frames: u16, window: usize) -> Vec<Channel> {
     let index = build_unit_sample_index(body);
@@ -891,7 +891,7 @@ pub fn decode_channels_with_window(body: &[u8], frames: u16, window: usize) -> V
             continue;
         }
         // Locate the value array: at least `keys.len()` consecutive unit
-        // samples. `>=` rather than `==` because two shapes are installed вЂ”
+        // samples. `>=` rather than `==` because two shapes are installed —
         // one sample per keyed frame (the character families) and one per
         // frame across the keyed range (the first-person family, measured at
         // 12 keys against 127 samples).
@@ -1116,7 +1116,7 @@ mod tests {
         // Three non-trivial rotations, each a unit quaternion's (x, y, z).
         // The first is deliberately NOT the identity: `(0,0,0)` is a valid unit
         // quaternion but is rejected by `is_unit_sample` on purpose (a
-        // zero-filled region otherwise reads as a long quaternion run вЂ” 599
+        // zero-filled region otherwise reads as a long quaternion run — 599
         // false positives on the first-person clip), and no installed clip
         // leads a value array with it.
         let samples: [(f32, f32, f32); 3] = [
@@ -1181,7 +1181,7 @@ mod tests {
         assert!((on_key.y - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5);
         // halfway between key 1 (y=0.2) and key 3 (y=0.7071): slerp, so the
         // midpoint is unit-length and lies strictly between the endpoints
-        // (never asserted equal to the linear blend вЂ” see `slerp_quat`).
+        // (never asserted equal to the linear blend — see `slerp_quat`).
         let mid = c.rotation_at(2.0).unwrap();
         let (x, y, z, w) = mid.quat();
         assert!((x * x + y * y + z * z + w * w - 1.0).abs() < 1e-5);
@@ -1218,10 +1218,10 @@ pub enum TrackKind {
 ///
 /// **Storage is three packed u16, not three f32.** Verified against the
 /// installed clip `0x0a0000000000005e`: decoding with the reference's
-/// arithmetic вЂ” the top bits of the first two words carry an *axis order*, the
-/// remaining 15 bits are scaled by `в€љ2` so three components carry half the
-/// quaternion вЂ” every keyed frame comes out with `|q| = 1.000000`. The fourth
-/// component is `в€љ(1 в€’ min(xВІ+yВІ+zВІ, 1))` and the four are then *reordered* by
+/// arithmetic — the top bits of the first two words carry an *axis order*, the
+/// remaining 15 bits are scaled by `√2` so three components carry half the
+/// quaternion — every keyed frame comes out with `|q| = 1.000000`. The fourth
+/// component is `√(1 − min(x²+y²+z², 1))` and the four are then *reordered* by
 /// the axis.
 ///
 /// This also explains the earlier "16-byte stride, unit quaternions" reading:
@@ -1277,7 +1277,7 @@ pub fn decode_packed_rotation(bytes: &[u8], off: usize) -> Option<[f32; 4]> {
 ///
 /// The record shape, measured: a `0`-terminated ascending bone list, a short run
 /// of zero pad, a `0`-terminated list of **keyed frames**, then the values. The
-/// values do **not** start at a fixed distance вЂ” the per-record gap measured on
+/// values do **not** start at a fixed distance — the per-record gap measured on
 /// clip `0x0a0000000000005e` is 4, 9, 6, 6 and 29 bytes for five records,
 /// because each record also carries position and scale tracks of differing
 /// lengths. So the value offset is *searched*, requiring **every** keyed frame to
@@ -1435,8 +1435,8 @@ pub fn decode_packed_position(bytes: &[u8], off: usize, legacy: bool) -> [f32; 3
 /// axis = d >> 14
 /// ```
 ///
-/// and the same `в€љ2`-halving and axis reorder as the legacy form, with an extra
-/// factor of ВЅ because the mantissas are twice as wide.
+/// and the same `√2`-halving and axis reorder as the legacy form, with an extra
+/// factor of ½ because the mantissas are twice as wide.
 pub fn decode_packed_rotation_new(bytes: &[u8], off: usize) -> Option<[f32; 4]> {
     if off + 8 > bytes.len() {
         return None;
@@ -1655,10 +1655,10 @@ pub fn decode_rotation_tracks_new(body: &[u8], frames: u16) -> Vec<RotationTrack
 pub struct TrackFlags(pub u16);
 
 impl TrackFlags {
-    /// `LegacyPositionFormat = 0x200` вЂ” when **set**, position is three f32
-    /// (12 bytes); when clear, three f16 Г· 32 (10 bytes).
+    /// `LegacyPositionFormat = 0x200` — when **set**, position is three f32
+    /// (12 bytes); when clear, three f16 ÷ 32 (10 bytes).
     pub const LEGACY_POSITION_FORMAT: u16 = 0x200;
-    /// `NewRotationCompression = 0x400` вЂ” when set, rotation is the 8-byte
+    /// `NewRotationCompression = 0x400` — when set, rotation is the 8-byte
     /// bit-packed form rather than the 6-byte one.
     pub const NEW_ROTATION_COMPRESSION: u16 = 0x400;
 
@@ -1691,9 +1691,9 @@ pub struct SourcedRotationTrack {
 
 /// One bone's complete animation data: which bone it is, and its rotation track.
 ///
-/// **The pairing is positional** вЂ” the *i*-th track belongs to the *i*-th bone
+/// **The pairing is positional** — the *i*-th track belongs to the *i*-th bone
 /// list, which is how the reference implementation pairs them (a plain loop
-/// counter over `BoneCount`; there is no lookup table вЂ” the ids in `BoneList`
+/// counter over `BoneCount`; there is no lookup table — the ids in `BoneList`
 /// are labels, not a join key).
 #[derive(Debug, Clone)]
 pub struct BoneTrack {
@@ -1735,12 +1735,12 @@ impl BoneTrack {
 /// The total angular travel of a candidate value array, in degrees.
 ///
 /// **Why this exists.** `is_unit_sample`/`decode_packed_rotation` are nearly free
-/// to satisfy вЂ” the quaternion's fourth component is *derived*, so any six bytes
+/// to satisfy — the quaternion's fourth component is *derived*, so any six bytes
 /// whose three components are small enough decode to a valid-looking rotation.
 /// Measured on the installed clip `0x0a0000000000005e`: **60.3% of randomly
 /// chosen offsets pass**. A search that takes the first passing offset therefore
-/// takes noise, which is exactly what happened вЂ” every track it found moved
-/// 150вЂ“178В° between adjacent frames.
+/// takes noise, which is exactly what happened — every track it found moved
+/// 150–178° between adjacent frames.
 ///
 /// A real animation channel is *smooth*: adjacent keyed frames differ by a small
 /// angle. Scoring candidates by total angular travel turns a weak predicate into
@@ -1841,7 +1841,7 @@ pub fn decode_bone_tracks(body: &[u8], frames: u16) -> Vec<BoneTrack> {
 ///
 /// **The bone pairing is positional**, matching the reference implementation:
 /// the *i*-th record's track drives bone *i* (`BoneAnimations[i]` pairs with
-/// `BoneList[i]` through a loop counter вЂ” there is no lookup table, the names
+/// `BoneList[i]` through a loop counter — there is no lookup table, the names
 /// in the bone list are labels). A bone with no track stays in bind pose.
 #[derive(Debug, Clone)]
 pub struct PoseClip {
@@ -1893,7 +1893,7 @@ impl PoseClip {
 /// Where a record kind's handler lives.
 ///
 /// *Decompiled*: the dispatcher at v2b `0x7ff7c58df660` (live
-/// `0x7ff613ecf660` = v2b в€’ `0x1B1A10000` in the practice-range session)
+/// `0x7ff613ecf660` = v2b − `0x1B1A10000` in the practice-range session)
 /// tail-jumps through a 31-entry table; the entries below are that table's
 /// targets. A page that is zero-filled in the flattened v2b image
 /// (`module_v2full.bin`, base `0x7ff7c4d20000`) and absent from `dumps_v2`,
@@ -1905,7 +1905,7 @@ pub enum KindResidency {
     /// Handler body is present in at least the v2b capture.
     ResidentHandler,
     /// Handler address is known but its page is zero-filled in every standing
-    /// capture вЂ” never observed, never executed here.
+    /// capture — never observed, never executed here.
     ColdUnverified,
     /// Falls through to the `XOR AL, AL` stub: the kind decodes to false.
     DefaultStub,
@@ -1913,7 +1913,7 @@ pub enum KindResidency {
 
 /// One entry of the record-kind dispatch: what kind `n` (1-based) does.
 ///
-/// Kind 0 underflows the dispatcher's `kind в€’ 1` index and lands on the default
+/// Kind 0 underflows the dispatcher's `kind − 1` index and lands on the default
 /// stub, like any kind above 31.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KindInfo {
@@ -1929,14 +1929,14 @@ pub struct KindInfo {
 
 /// The default stub every unhandled kind lands on (v2b).
 ///
-/// *Decompiled*: `FUN_7ff7c58df913` вЂ” `XOR AL, AL`, i.e. the kind evaluates to
+/// *Decompiled*: `FUN_7ff7c58df913` — `XOR AL, AL`, i.e. the kind evaluates to
 /// false/absent.
 pub const KIND_DEFAULT_STUB_V2B: u64 = 0x7ff7_c58d_f913;
 
-/// The full kind в†’ handler map, 31 entries.
+/// The full kind → handler map, 31 entries.
 ///
 /// *Decompiled* (jump table live `0x7ff613ecf928` = v2b `0x7ff7c58df928`, entry
-/// `kind в€’ 1`; cross-checked against `D:/ow-dumps/handlers.txt`, which fixed an
+/// `kind − 1`; cross-checked against `D:/ow-dumps/handlers.txt`, which fixed an
 /// off-by-one in the working labels). Residency is *capture-data*: which pages
 /// are non-zero in the flattened v2b image and the `dumps_v2` / `dumps_v2b` /
 /// `dumps_range` captures.
@@ -2131,7 +2131,7 @@ pub static KIND_TABLE: [KindInfo; 31] = [
 
 /// Look up a kind byte in the dispatch table.
 ///
-/// Returns `None` for kind 0 and anything above 31 вЂ” both land on the default
+/// Returns `None` for kind 0 and anything above 31 — both land on the default
 /// stub in the client, which this port reports as "no entry" rather than
 /// executing.
 pub fn kind_info(kind: u8) -> Option<&'static KindInfo> {
@@ -2153,8 +2153,8 @@ pub fn read_record_kind(bytes: &[u8], record_at: usize) -> Option<u8> {
 
 /// Spherical-linear interpolation between two unit quaternions.
 ///
-/// *Published-check*: this is the standard slerp вЂ” constant angular velocity
-/// along the great arc вЂ” with the double-cover sign flip (`dot < 0` negates
+/// *Published-check*: this is the standard slerp — constant angular velocity
+/// along the great arc — with the double-cover sign flip (`dot < 0` negates
 /// one operand so the short arc is taken) and a lerp-plus-renormalise fallback
 /// past `dot > 0.9995`, where the arc is degenerate. No game bytes involved;
 /// the justification is geometric, and it is what [`Channel::rotation_at`] and
@@ -2208,7 +2208,7 @@ pub fn frame_key_modulus(frames: u16) -> usize {
 /// The stored width of one frame index for a clip of this size.
 ///
 /// *Reference* (`teAnimation.cs`, `ReadIndices`): one byte while
-/// `InfoTableSize в‰¤ 255`, else one little-endian `i16`.
+/// `InfoTableSize ≤ 255`, else one little-endian `i16`.
 pub fn frame_index_width(info_table_size: usize) -> usize {
     if info_table_size <= 255 {
         1
@@ -2297,8 +2297,8 @@ pub enum TrackSample {
 /// Decode one sample of `track` at `off`, honouring `flags`.
 ///
 /// Ports the reference's per-track read (`teAnimation.cs`, behaviour only):
-/// old 6-byte or new 8-byte rotation, f16Г·32 (new, 10-byte wire) or f32
-/// (legacy, 12-byte) position, Г·1024 scale. Returns `None` on a short buffer
+/// old 6-byte or new 8-byte rotation, f16÷32 (new, 10-byte wire) or f32
+/// (legacy, 12-byte) position, ÷1024 scale. Returns `None` on a short buffer
 /// or a misaligned rotation read rather than guessing.
 pub fn decode_track_sample(
     bytes: &[u8],
@@ -2343,7 +2343,7 @@ pub fn decode_track_sample(
 /// Ports the reference's per-bone loop (`teAnimation.cs`, behaviour only):
 /// read `count` indices, reduce each to `abs(index) % InfoTableSize`, then read
 /// one value per key at `data_at + i * stride`. The caller supplies the index
-/// and data offsets вЂ” this decodes slices, it does not hunt for them вЂ” so every
+/// and data offsets — this decodes slices, it does not hunt for them — so every
 /// path is testable with synthetic bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyedTrack {
@@ -2354,11 +2354,11 @@ pub struct KeyedTrack {
 
 /// Decode a keyed track from an index array and a value array.
 ///
-/// * `index_at` вЂ” offset of `count` stored frame indices (width from
+/// * `index_at` — offset of `count` stored frame indices (width from
 ///   [`frame_index_width`]).
-/// * `data_at` вЂ” offset of `count` packed samples at
+/// * `data_at` — offset of `count` packed samples at
 ///   [`track_sample_stride`] bytes each.
-/// * `info_table_size` вЂ” the frame modulus ([`frame_key_modulus`]).
+/// * `info_table_size` — the frame modulus ([`frame_key_modulus`]).
 ///
 /// Returns `None` when either array runs past the buffer or a sample misaligns.
 pub fn decode_keyed_track(
@@ -2393,24 +2393,24 @@ pub fn decode_keyed_track(
 
 // ---- the reference-layout track tables ------------------------------------
 //
-// Family `0x00020400` вЂ” the installed **first-person** family (7 samples on
+// Family `0x00020400` — the installed **first-person** family (7 samples on
 // this install; the measured idle `0x0a0000000000c15a`, its three same-shape
-// siblings and three short clips) вЂ” is laid out exactly as the reference
+// siblings and three short clips) — is laid out exactly as the reference
 // implementation's per-bone `InfoTable` says, at a place the reference's own
 // header calls `SomeTableOffset`: the section table's largest named file
-// offset. (*Reference* layout, verified *install* вЂ” probed sample by sample in
+// offset. (*Reference* layout, verified *install* — probed sample by sample in
 // `dev/clip_fp.py` / `dev/clip_fp_lanes.py`, outputs in `D:/ow-dumps/`.)
 //
 // Table, stride 32 bytes:
 // `{u16 scale_count, u16 position_count, u16 rotation_count; u16 InfoTableFlags;
 //   i32 scale_indices, position_indices, rotation_indices;
-//   i32 scale_data, position_data, rotation_data}` вЂ” every offset scaled Г—4
+//   i32 scale_data, position_data, rotation_data}` — every offset scaled ×4
 // from the table's own start. Index entries are u8 while
-// `info_table_size = floor(fpsВ·duration) + 1 в‰¤ 255` else i16 (`ReadIndices`),
+// `info_table_size = floor(fps·duration) + 1 ≤ 255` else i16 (`ReadIndices`),
 // frame = `abs(index) % info_table_size`; data land at
-// `table + offsetВ·4` with the sample size from the flags
-// (`0x200` legacy 12-B f32 position else 10-B f16Г·32; `0x400` 8-B new rotation
-// else 6-B old; scale 3Г—u16Г·1024, `0x100` unimplemented в†’ rejected).
+// `table + offset·4` with the sample size from the flags
+// (`0x200` legacy 12-B f32 position else 10-B f16÷32; `0x400` 8-B new rotation
+// else 6-B old; scale 3×u16÷1024, `0x100` unimplemented → rejected).
 //
 // What is measured per table closes earlier stories along the way: the "bone
 // table" of preceding passes (168 entries, gaps at 8 and 82) **is track 0's
@@ -2418,7 +2418,7 @@ pub fn decode_keyed_track(
 // its `position_count`), and the "12-byte cadence" the value-area probes saw
 // (one 6-byte constant among varying u16 lanes) is the legacy f32 position
 // samples themselves.
-// How the tables pair onto rig bones is **not read yet** (the retarget) вЂ” the
+// How the tables pair onto rig bones is **not read yet** (the retarget) — the
 // decoder reports tables in file order without naming bones.
 
 /// The one family this layout is measured on so far.
@@ -2427,14 +2427,14 @@ pub const REFERENCE_TABLE_FAMILY: u32 = 0x0002_0400;
 pub const REF_TRACK_TABLE: usize = 32;
 
 /// Decode the reference-layout track tables of a clip, **given the whole
-/// asset file** вЂ” not `Clip::body`, which starts after the section table this
+/// asset file** — not `Clip::body`, which starts after the section table this
 /// reads the table base from (measured body start 0x90 on the FP family with
 /// the tables in that same region).
 ///
 /// Stops at the first table whose counts are all zero or exceed
-/// `floor(fpsВ·duration) + 1` (the measured terminator), or whose sample
+/// `floor(fps·duration) + 1` (the measured terminator), or whose sample
 /// landing would run past the file. A table with a count but no readable
-/// track is skipped, not an error вЂ” the caller sees what decoded.
+/// track is skipped, not an error — the caller sees what decoded.
 pub fn decode_reference_tables(bytes: &[u8]) -> Option<Vec<Vec<KeyedTrack>>> {
     let header = Header::read(bytes)?;
     let info_table_size = (header.fps as f32 * header.duration).floor() as usize + 1;
@@ -2548,48 +2548,48 @@ pub fn decode_reference_tables(bytes: &[u8]) -> Option<Vec<Vec<KeyedTrack>>> {
 
 // ---- the blend-family card streams ----------------------------------------
 //
-// Family `0x0053XXXX` вЂ” the family the FP blend-tree set's clips carry
+// Family `0x0053XXXX` — the family the FP blend-tree set's clips carry
 // (measured members `0x00533c00` and `0x00532400`; the low half is a per-clip
 // flag word, so the gate keys on the **upper half** and records the members
-// seen) вЂ” is a *record + card* layout, decompiled on the runtime side and
+// seen) — is a *record + card* layout, decompiled on the runtime side and
 // wired on the file side this round (2026-10-18, *install*, c50 = `0x0a00000000000050`,
 // c71 = `0x0a00000000000071`):
 //
 // * **83 records of 32 bytes** from the section table's largest named offset:
-//   `{u16 S_count, P_count, R_count; u16 flags; u32 s_off, p_off, r_off}` вЂ”
+//   `{u16 S_count, P_count, R_count; u16 flags; u32 s_off, p_off, r_off}` —
 //   one record per bone-track block (83 = the FP rig's track count).
 // * Each record's three offsets are **pool-zone cursors in count order**, at
-//   `record_at + offВ·4` вЂ” the *same record-relative Г—4 rule* as the
+//   `record_at + off·4` — the *same record-relative ×4 rule* as the
 //   reference-layout family's data offsets. Cursor order matches count order
-//   and never decreases (`s в‰¤ p в‰¤ r` on every measured record).
+//   and never decreases (`s ≤ p ≤ r` on every measured record).
 // * After the records comes one **sequential card stream**; record k's card
 //   starts at its `s_off` landing and ends at the next record's. Card size is
 //   *driven by the record's own counts* (c50: 40 B/card at `S1 P1 R1`; c71
 //   record 1: 248 B at `S1 P17 R1`).
 // * Inside a card, in this exact order:
 //   ```text
-//   S keys (u8/i16 Г— width(info) Г— S_count) @ s_land
+//   S keys (u8/i16 × width(info) × S_count) @ s_land
 //   P keys                                  @ p_land   (stops 4-aligned gap)
 //   R keys                                  @ r_land   (4-aligned gap after)
-//   S samples  6 B  (3Г—u16Г·1024) Г— S_count  @ 4-align after R keys
-//   P samples 12 B (0x200 legacy f32) or 10 B (f16Г·32) Г— P_count
+//   S samples  6 B  (3×u16÷1024) × S_count  @ 4-align after R keys
+//   P samples 12 B (0x200 legacy f32) or 10 B (f16÷32) × P_count
 //                                            @ 4-align after S samples
-//   R samples  6 B (0x400 absent) or 8 B (0x400 new) Г— R_count
+//   R samples  6 B (0x400 absent) or 8 B (0x400 new) × R_count
 //                                            @ exactly after P samples
 //   [pad to the next card]
 //   ```
 //   Verified footprint: c50 card = 3(1) keys + 3(4-pad) + 6 + pad + 12 +
 //   6+2pad = **40 B**; c71's P17 card = 1 + 3 + 17 + 4(align-8 gap) + 1 +
-//   3 + 6 + (2) + **17В·12 = 204** + 6+2 = **248 B** вЂ” and the card-pair diff
+//   3 + 6 + (2) + **17·12 = 204** + 6+2 = **248 B** — and the card-pair diff
 //   proves exactly **204 B = the 17 legacy f32 triples differ** while
 //   everything structural is equal ("equal is structure, differing is data").
 // * The **rest pose decodes sample-exact** on c50 (pos `(0,0,0)`, scale
-//   `(1,1,1)` = `0x0400Г—3 Г·1024`, rotation `{0xc000,0xc000,0x8000}` = identity),
-//   and c71's 17-key track is a real sway (y в‰€ 1.49вЂ“1.52 m constant, x/z
+//   `(1,1,1)` = `0x0400×3 ÷1024`, rotation `{0xc000,0xc000,0x8000}` = identity),
+//   and c71's 17-key track is a real sway (y ≈ 1.49–1.52 m constant, x/z
 //   jitter). Sample count == key count, keys `0..=frames` mod `info`.
 // * Flag word mapping shares `TrackFlags` with the reference layout
-//   (`0x200` legacy position, `0x400` new rotation; `0x100` unimplemented в†’
-//   rejected вЂ” no measured sample carries it).
+//   (`0x200` legacy position, `0x400` new rotation; `0x100` unimplemented →
+//   rejected — no measured sample carries it).
 
 /// The measured members of the blend-card family so far (upper half shared).
 pub const BLEND_CARD_FAMILY: u32 = 0x0053_0000;
@@ -2606,14 +2606,14 @@ pub fn is_blend_card_family(family: u32) -> bool {
 /// each holding up to three `KeyedTrack`s that decoded.
 ///
 /// Returns `None` when the header is unreadable, the section table names no
-/// in-file base, or no record decodes вЂ” never a partial guess.
+/// in-file base, or no record decodes — never a partial guess.
 /// One blend record's decoded envelope: the record row's own numbers plus
 /// the tracks its card produced. The shipped pose reader consumes `tracks`;
 /// the rest is diagnostic surface that would otherwise need the walk redone.
 ///
 /// `lands` = the row's **six** u32 cursor words (`+0x08..+0x20`): the first
 /// three (the keys) are what the decoder walks by, and the last three are
-/// the *sample* lands the client reads вЂ” the shipped assumption of
+/// the *sample* lands the client reads — the shipped assumption of
 /// fixed-order sample positions is the suspected bug, so the envelope keeps
 /// all six for the readers that want to diff them.
 #[derive(Debug, Clone, PartialEq)]
@@ -2818,29 +2818,29 @@ pub fn decode_blend_registers(bytes: &[u8]) -> Option<Vec<Vec<KeyedTrack>>> {
 /// The published reference (`teAnimation.cs` *published-check*) gives this as
 /// family-agnostic: `BoneCount` contiguous 32-byte rows at the rows section,
 /// and **all six lands resolved as `(long)offset * 4 + the row's own address`**
-/// вЂ” the row-relative basis. The samples sit at the row's *own* data lands
+/// — the row-relative basis. The samples sit at the row's *own* data lands
 /// (`lands[3..5]`), never at a computed cursor: that reading was tried by the
 /// cursor route only for the card family, where both agree (measured
 /// `landversus_probe`); the general probe (`rowswalk`, out3) measured on the
 /// installed hero-3 blend-set corpus that
 ///
 /// * the envelope invariants hold on every family tried (cards 6, walk
-///   `0x00130404`Г—4, `0x00110404`, trio `0x000a0404`Г—2, zone `0x001f0404`,
-///   `0x00140404`Г—3, item5 four families, slots 1/5 `0x004c2400/0x004c2c00`),
+///   `0x00130404`×4, `0x00110404`, trio `0x000a0404`×2, zone `0x001f0404`,
+///   `0x00140404`×3, item5 four families, slots 1/5 `0x004c2400/0x004c2c00`),
 /// * rotations decode at **100 % unit quaternions row-relative** on all of
-///   them (140вЂ“324 per clip) while the rows-base-relative basis decodes a
+///   them (140–324 per clip) while the rows-base-relative basis decodes a
 ///   strict subset, so the row-relative basis is the measured one, and
 /// * positions decode finite and plausible row-relative with the flag-gated
 ///   12-byte legacy / 10-byte new stride (`0x200`/`0x400` semantics).
 ///
 /// The first-section words are the records' bone ids as on the cards (the
 /// walk clips name the FP arm/mirror pairs 13/14, 27/28, 48/49/50, 79/80,
-/// 126 directly вЂ” one more word than records, the same off-by-one the cards
+/// 126 directly — one more word than records, the same off-by-one the cards
 /// carry), so [`BlendPose::decode`]'s pairing needs no family-specific rule.
 pub fn decode_general_records(bytes: &[u8]) -> Option<Vec<BlendRecordLane>> {
     let header = Header::read(bytes)?;
     let info_table_size = (header.fps as f32 * header.duration).floor() as usize + 1;
-    // The row table is the section table's largest in-file named offset вЂ” the
+    // The row table is the section table's largest in-file named offset — the
     // same rule the card decoder uses, measured to name the row base on every
     // family probed (the row table is always the LAST in the table since the
     // first section is the ids).
@@ -2977,11 +2977,11 @@ pub fn decode_general_records(bytes: &[u8]) -> Option<Vec<BlendRecordLane>> {
 /// A blend-family clip decoded into a pose source the renderer queries.
 ///
 /// **The pairing rule measured:** the clip's own **first-section word i**
-/// names record i's bone id (`Skeleton::ids` matches), so a record в†’ skin
+/// names record i's bone id (`Skeleton::ids` matches), so a record → skin
 /// bone join looks the id up in the model skeleton. Some records name ids
 /// the model's skeleton doesn't carry (the clip-side extras, e.g. the cast
 /// `82, 81, 48, 27 ...` set in c50 with the last section word doubling as a
-/// size annotation `567`) вЂ” those map to no skin bone and are the 11
+/// size annotation `567`) — those map to no skin bone and are the 11
 /// surplus records the bind gate measures (71 of 83 resolve, the rest =
 /// skeleton-side or metadata).
 #[derive(Debug, Clone)]
@@ -3109,7 +3109,7 @@ impl BlendPose {
     }
 
     /// The clipped *skin-bone* pose (record i) at `seconds`, where `Skin`
-    /// hands back the matching `Skeleton::ids` index вЂ” the caller's own
+    /// hands back the matching `Skeleton::ids` index — the caller's own
     /// pairing: `Some((bone_index_in_skin, pose))` for every resolvable
     /// record.
     pub fn skin_pose(
@@ -3164,9 +3164,9 @@ mod reference_layout_tests {
 
     /// A synthetic family-0x00020400 clip with the same regions the installed
     /// samples show, pinned to the measured constants: tables at the section
-    /// table's largest offset, index bytes while `info_table_size в‰¤ 255`, a
+    /// table's largest offset, index bytes while `info_table_size ≤ 255`, a
     /// legacy-position sample of 12 bytes, a 6-byte rotation, and a scale of
-    /// 922/1024 вЂ” the exact value read from the real idle `0x0a0000000000c15a`.
+    /// 922/1024 — the exact value read from the real idle `0x0a0000000000c15a`.
     fn synthetic_clip() -> Vec<u8> {
         let mut b = vec![0u8; 0x200];
         let put_u16 =
@@ -3209,7 +3209,7 @@ mod reference_layout_tests {
             b[0x148 + k * 2] = 0x9a;
             b[0x149 + k * 2] = 0x03;
         }
-        // position data: three legacy 12-byte f32 samples (y bob, z constant вЂ”
+        // position data: three legacy 12-byte f32 samples (y bob, z constant —
         // the shape the real idle shows)
         put_f32(&mut b, 0x154, 0.0);
         put_f32(&mut b, 0x158, 0.01);
@@ -3335,7 +3335,7 @@ mod blend_card_tests {
     /// window the walk reads.
     ///
     /// Two records: rec 0 `S1 P1 R1` flag 0x0277 (legacy position, old
-    /// rotation вЂ” the rest pose's shape); rec 1 `S1 P2 R1` flag 0x0677 (new
+    /// rotation — the rest pose's shape); rec 1 `S1 P2 R1` flag 0x0677 (new
     /// rotation).
     fn synthetic_blend_clip() -> Vec<u8> {
         let mut b = vec![0u8; 0x300];
@@ -3633,7 +3633,7 @@ mod kind_dispatch_tests {
 
     #[test]
     fn resident_and_inline_handlers_are_where_the_capture_says() {
-        // v2b addresses; live = v2b в€’ 0x1B1A10000 in the practice-range session.
+        // v2b addresses; live = v2b − 0x1B1A10000 in the practice-range session.
         assert_eq!(kind_info(2).unwrap().handler_v2b, Some(0x7ff7_c58e_a110));
         assert_eq!(
             kind_info(2).unwrap().residency,
@@ -3670,7 +3670,7 @@ mod kind_dispatch_tests {
                 "kind {k}"
             );
         }
-        // Kind 0 underflows the dispatcher's `kind в€’ 1` index; 32 is past the
+        // Kind 0 underflows the dispatcher's `kind − 1` index; 32 is past the
         // table. Both land on the default stub in the client, which this port
         // reports as "no entry".
         assert!(kind_info(0).is_none());
@@ -3706,7 +3706,7 @@ mod kind_dispatch_tests {
 
     #[test]
     fn the_old_rotation_sample_is_pinned_to_the_install() {
-        // The exact six bytes of clip 0x0a0000000000005e at file 0x119c вЂ”
+        // The exact six bytes of clip 0x0a0000000000005e at file 0x119c —
         // the same vector `rotation_format.rs` pins.
         let sample = [0x00u8, 0x9f, 0x67, 0x33, 0x3c, 0xe7];
         let flags = TrackFlags(0);
@@ -3764,7 +3764,7 @@ mod kind_dispatch_tests {
             other => panic!("expected a position, got {other:?}"),
         }
 
-        // new position: f16 1.0 is 0x3C00, decoded Г· 32
+        // new position: f16 1.0 is 0x3C00, decoded ÷ 32
         let mut packed = vec![0u8; 10];
         packed[0..2].copy_from_slice(&0x3C00u16.to_le_bytes());
         packed[2..4].copy_from_slice(&0x4000u16.to_le_bytes());
@@ -3778,7 +3778,7 @@ mod kind_dispatch_tests {
             other => panic!("expected a position, got {other:?}"),
         }
 
-        // scale: three u16 Г· 1024
+        // scale: three u16 ÷ 1024
         let mut sc = vec![0u8; 6];
         for (o, v) in [0usize, 2, 4].iter().zip([1024u16, 2048, 512]) {
             sc[*o..*o + 2].copy_from_slice(&v.to_le_bytes());
@@ -3822,10 +3822,10 @@ mod kind_dispatch_tests {
     #[test]
     fn a_keyed_rotation_track_decodes_end_to_end() {
         // Three u8 indices then three old-rotation samples: the reference's
-        // per-bone loop (indices в†’ abs % size в†’ one value per key) on
+        // per-bone loop (indices → abs % size → one value per key) on
         // synthetic bytes.
         let mut bytes = vec![1u8, 3, 5];
-        let zeros = [0x00u8, 0x80, 0x00, 0x80, 0x00, 0x80]; // centred в†’ identity-ish
+        let zeros = [0x00u8, 0x80, 0x00, 0x80, 0x00, 0x80]; // centred → identity-ish
         for _ in 0..3 {
             bytes.extend_from_slice(&zeros);
         }
@@ -3881,7 +3881,7 @@ mod kind_dispatch_tests {
     #[test]
     fn the_prebuilt_index_agrees_with_the_scan() {
         // The index holds exactly the unit-sample offsets, sorted. The body
-        // is 0xFF (NaN, never a sample) with one isolated triple of 0.5s вЂ”
+        // is 0xFF (NaN, never a sample) with one isolated triple of 0.5s —
         // zeros would read as valid samples beside real data, so they are
         // not the fill here.
         let mut body = vec![0xFFu8; 64];
@@ -3895,8 +3895,8 @@ mod kind_dispatch_tests {
 
     #[test]
     fn slerp_holds_endpoints_and_sweeps_uniformly() {
-        // 90В° about Y: identity to (0, sin45В°, 0, cos45В°); the midpoint is
-        // exactly 45В° about Y, i.e. (0, sin22.5В°, 0, cos22.5В°).
+        // 90° about Y: identity to (0, sin45°, 0, cos45°); the midpoint is
+        // exactly 45° about Y, i.e. (0, sin22.5°, 0, cos22.5°).
         let a = [0.0f32, 0.0, 0.0, 1.0];
         let b = [
             0.0f32,

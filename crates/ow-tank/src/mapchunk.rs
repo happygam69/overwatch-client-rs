@@ -15,7 +15,7 @@
 //!
 //! The *kind* of body is not in the placeable. A map chunk asset carries one
 //! kind throughout, chosen by the game from the asset's role, so the caller says
-//! which kind it is reading. Where that is not known, [`Kind::detect`] tries
+//! which kind it is reading. Where that is not known, [`MapChunk::detect`] tries
 //! the kinds it can score and keeps the one whose asset references resolve. The
 //! reference library locates a map's chunk by *building* the asset key from the
 //! map header with the kind in bits 32..39 (`InstanceExtensions.GetChunkKey`),

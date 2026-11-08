@@ -25,7 +25,7 @@
 //! presence-mask **swap** between the policy's two call sites. The first site
 //! masks the presence bit out of the low nibble *shifted by four*, so it is
 //! always zero and the dedupe scan behind it is unreachable in this build.
-//! [`dead_presence_term`] keeps that formula so [`tests`] can prove it never
+//! [`dead_presence_term`] keeps that formula so `tests` can prove it never
 //! fires; the live path uses the second site's binding.
 
 use crate::fan::{CandidateSolver, SweepHit};
@@ -245,7 +245,7 @@ fn ror64(v: u64, n: u32) -> u64 {
 /// A caller whose world still holds the raw, encoded pointer runs this first;
 /// [`World::geometry`] models that value *after* the decode, so the policy
 /// itself does not call it. It is public because the decode is part of the
-/// read contract, and [`tests`] pins it against the documented inverse.
+/// read contract, and `tests` pins it against the documented inverse.
 pub fn decode_geometry_pointer(raw: u64) -> u64 {
     let v = ror64(raw.wrapping_add(KEY_ADD), KEY_ROT_INNER);
     ror64(v ^ KEY_XOR, KEY_ROT)
@@ -256,7 +256,7 @@ pub fn decode_geometry_pointer(raw: u64) -> u64 {
 /// That site binds the constant-stub's masks the other way round from the
 /// live site: it takes the presence mask from `0x0f` and shifts it right by
 /// four, so the term is `(word & 0x0f) >> 4` — always zero. The dedupe scan
-/// behind it therefore never runs in this build. Kept so [`tests`] can assert
+/// behind it therefore never runs in this build. Kept so `tests` can assert
 /// that, and so nobody re-derives the scan as live.
 pub fn dead_presence_term(slot_word: u64) -> u64 {
     (slot_word & 0x0f) >> 4

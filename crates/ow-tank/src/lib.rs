@@ -3,12 +3,12 @@
 //! `ow-casc` turns keys into bytes; this crate knows what those bytes are.
 //! It provides:
 //!
-//! * [`guid`] ??? asset identifiers and their type numbers.
-//! * [`manifest`] ??? the content manifest, which is the GUID to content-key
+//! * [`guid`] — asset identifiers and their type numbers.
+//! * [`manifest`] — the content manifest, which is the GUID to content-key
 //!   registry, and the encryption wrapped around it.
-//! * [`keytable`] ??? where the per-build manifest key material is read from.
-//! * [`classes`] ??? STU instance type hashes for gameplay classes.
-//! * [`GameData`] ??? the assembled view: an install, its registry, and typed
+//! * [`keytable`] — where the per-build manifest key material is read from.
+//! * [`classes`] — STU instance type hashes for gameplay classes.
+//! * [`GameData`] — the assembled view: an install, its registry, and typed
 //!   access to game assets.
 //!
 //! No game content is carried in this repository: every byte comes from the

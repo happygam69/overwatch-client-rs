@@ -24,6 +24,7 @@ operator's install; behaviour comes from the complete current-build
 | know which tool answers a question | [`tools.md`](tools.md), [`../dev/INDEX.md`](../dev/INDEX.md) |
 | read the findings for a system | [`formats/`](formats/) |
 | see the current state | [`../STATUS-handoff.md`](../STATUS-handoff.md) |
+| read the long-form status that used to open the README | [`status-in-depth.md`](status-in-depth.md) |
 | see how the project got here | [`../MODLOG.md`](../MODLOG.md) |
 
 ## Reading orders

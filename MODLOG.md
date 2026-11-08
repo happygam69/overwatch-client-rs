@@ -6,6 +6,242 @@ Rotation: this file holds the current entries. Older ones move verbatim to
 `docs/history/modlog-YYYY-MM.md` (one file per month) at each rotation; no
 entry is rewritten after the fact.
 
+## 2026-11-17 - README re-ordered, and the status moved one click away
+
+- **The 173-line `## Status` section moved verbatim** to
+  [`docs/status-in-depth.md`](docs/status-in-depth.md). Its text is identical to
+  the old section except one link: `docs/rebuild-plan.md` became
+  `rebuild-plan.md`, because a README-relative path breaks one directory down.
+- **README top now answers the visitor's first questions in order**: one
+  paragraph (what it is, the 1:1 rule, no Blizzard content), the practice-range
+  image, a four-command quick start, an 8-row `What works today` table, then
+  the pointers to the evidence. Every claim in the table is a summary of a
+  sentence that moved; nothing was added or dropped.
+- **Screenshot slot**: `docs/img/range.png` is a generated 1280x720 placeholder
+  (grid, "screenshot placeholder", the shot command), so the README renders
+  today. The caption says it is a placeholder; the last quick-start command
+  regenerates it from the operator's install. Nothing captured from the game is
+  committed, and the whitelist already tracks `docs/img/` (`git check-ignore`
+  confirms the file is not ignored).
+- **`docs/README.md`** gained the start-here row for `status-in-depth.md`.
+- **Checked:** every relative link in `README.md`, `docs/README.md`,
+  `docs/status-in-depth.md` and `STATUS-handoff.md` resolves; the moved body
+  was diffed line by line against the old section.
+
+## 2026-11-17 - rustdoc reaches zero warnings: 26 links repaired
+
+- **Census before:** 10 links from public docs to private items, 13 unresolved
+  targets, 2 redundant explicit targets, 1 unclosed HTML tag — 26 across 19
+  files. (The audit's 41 also counted the three `verify_probe` bin headers,
+  which `doc = false` now excludes.)
+- **Private helpers stay private.** The brackets came off (`MAX_REDIRECTS`,
+  `mesh_triangle`, `compose_pose`, `quad_length_sq`, `depenetrate`, `Hull`,
+  `VertexBuffer::stride`, `read_ref_array` x2, `decode_r16_unorm`); no public
+  API was widened for a doc link.
+- **Re-pointed where the item really moved:** `Kind::detect` ->
+  `MapChunk::detect` (`ow-tank/src/mapchunk.rs:603` is an `impl MapChunk`
+  method), `HullStage::op` -> `WorkspaceVertex::op` (the op is per workspace
+  vertex, `ow-tank/src/brush_mesh.rs:75`), `hero_setting_defaults` ->
+  `HERO_SETTING_FLOAT_DEFAULTS` (only the float settings declare defaults).
+- **Nested-module links need a path:** `graph::hero_state`,
+  `entity::loadout`, `sound::types` and `unlocks::types` are child modules, so
+  their links became `super::LITERAL_HERO_VARS`, `super::CONFIG_VAR_DYNAMIC`,
+  `super::Ability::params`, `super::survey_sound`, `super::survey_content`.
+- **`ow-sim` has no dependencies by design**, so
+  `crate::character_collision::Capsule` cannot resolve there; it is now the
+  plain code span `ow_tank::character_collision::Capsule`.
+- **`tests` is not an item rustdoc can link** (private, cfg-gated) — three links
+  became code spans.
+- **Protocol grammars** in `ow-casc`/`ow-tank` `verify_probe` and
+  `ow-scene/ground_probe` were indented lines directly under a paragraph, which
+  CommonMark reads as paragraph text: `<guid list>` parsed as HTML. All three
+  are now fenced `text` blocks, so the tokens render literally.
+- **Checked:** `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`
+  exits clean (29 files generated), `cargo fmt --check` passes, `cargo clippy
+  --workspace --all-targets` reports 0 warnings.
+
+## 2026-11-17 - `cargo doc --workspace` builds again: three bins stop documenting
+
+- **The error:** `cargo doc --workspace --no-deps` died with "document output
+  filename collision" — `verify_probe` exists in `ow-casc`, `ow-sim` and
+  `ow-tank`, and three bins cannot write the same doc path.
+- **The fix:** an explicit `[[bin]]` with `doc = false` in each of
+  `crates/ow-casc/Cargo.toml`, `crates/ow-sim/Cargo.toml` and
+  `crates/ow-tank/Cargo.toml`. The bins are throwaway diagnostics driven by
+  `dev/verify_harness/`, not API, so suppressing their docs loses nothing. No
+  other bin name collides (`anim`, `census`, `ground_probe`, ... are unique).
+- **Checked:** `cargo doc --workspace --no-deps` finishes and writes
+  `target/doc/ow_casc/index.html` and 28 more; `cargo check --workspace --bins`
+  still builds all 21 bins, so auto-discovery is intact.
+- **Still open, warning only:** 26 rustdoc warnings across the workspace
+  (broken or private intra-doc links, e.g. `ow-tank/src/mapchunk.rs:18`
+  `Kind::detect`, `ow-casc/src/cdn.rs:60` `MAX_REDIRECTS`). They do not fail the
+  build now, but a doc job that runs `-D warnings` would fail on them.
+
+## 2026-11-17 - corrupted characters repaired in the clip and unlock docs
+
+- **`crates/ow-tank/src/clip.rs`**: 166 non-ASCII runs were double-encoded —
+  UTF-8 bytes once read as code page 1251 and written back as UTF-8 — so one
+  em dash became three bytes of Cyrillic-and-punctuation junk, and likewise
+  `− × ÷ § ² … → ≥`. Reversed run by run; the ASCII text is byte-identical to
+  HEAD, so only those characters moved. Comment text only, no code. The
+  corruption is **not** from `6e44bb7`: the same sequences are in the file's
+  first commit `f5608db` and every one since.
+- **`crates/ow-tank/src/unlocks.rs`**: 91 `U+FFFD` replacement characters on
+  90 lines (one line carries two), all spaced where an em dash joins two
+  clauses; replaced with `U+2014`, the same dash the file already uses 4 times.
+- **`docs/formats/character-controller.md:711`**: 1 `U+FFFD` in the same
+  position, same fix.
+- **`crates/ow-tank/src/lib.rs` and `crates/ow-client/src/main.rs`**: the same
+  loss in ASCII clothing - 8 runs of three literal question marks where a
+  separator dash belongs, all in doc comments (`lib.rs` five module bullets,  `main.rs:395`, `main.rs:642` and two on `main.rs:618`). Those question marks
+  are the intended character's UTF-8 bytes dropped by a converter, so the em
+  dash is restored. One is not a dash: the code span
+  `[identity, bone 0, bone 1, ...]` (`main.rs:618`) lists three bones of a
+  256-slot palette, so it takes the ellipsis. My first sweep missed these
+  because it only looked at non-ASCII characters and `?` is ASCII - recorded
+  here so the next sweep checks both.
+- Checked: no `U+FFFD`, no Cyrillic and no run of three question marks left
+  in any tracked `.rs`/`.md`/`.py`; `cargo fmt --check`, `cargo check -p
+  ow-tank --lib` and `cargo check -p ow-client` pass.
+
+## 2026-11-17 - `ow-sim` is not parked: three stale pages corrected
+
+- **The tooling map was wrong.** `AGENTS.md` called `ow-sim` "parked reference;
+  not built until a read gameplay layer needs it". It is a workspace member
+  (`Cargo.toml`), `cargo xtask verify` builds and tests it
+  (`cargo test --release --workspace`, `--lib` on the fast path), the
+  differential harness ships its probe
+  (`crates/ow-sim/src/bin/verify_probe.rs`), and the crate holds the read
+  arithmetic: mover leaves, the per-frame velocity law, jump/air, the swept
+  collision query, the fan solver, `body`, `camera`.
+- **Two other pages repeated the same stale fact:** the pipeline's step 4 in
+  `docs/architecture.md` ("`ow-sim` stays parked") and `docs/tools.md` ("the
+  parked `ow-sim` units"). The harness wording is now stated as it behaves:
+  `all` fails on any unit that is not verified, `casc` is the green gate.
+  `dev/engine_knowledge_brief.md` quoted both stale sentences, so it is fixed
+  too.
+- **README's crate table** named only the ramp and camera arithmetic; it now
+  matches the crate and the rest of the page (jump/air, collision query, fan).
+
+## 2026-11-17 - the port procedure written down: `docs/port-playbook.md`
+
+- **One page for the whole method**, from "which unit next" to "a system is
+  done": the inventory (3,864 functions, 1,541 units, triage states), how to read
+  (corpus asm first, decompile from `C:/Temp/owread`, `DecompScope`/`ProbeFlow`
+  before trusting a short output), the transcription rules that keep Rust 1:1
+  (widths, byte views, bit patterns, `minss`/`comiss` NaN semantics, self-masking
+  `u32` shifts), the probe contract, the fixture rules, every unit-descriptor
+  field and what it gates, how to read the five stages and each verdict, a
+  failure-to-work table, cluster order, the definition of done per system, the
+  tool map and four copy-paste checklists.
+- **It records today's tool state honestly**: 79 verified of 83 descriptors,
+  the merged project's seam numbers, the broken local `gcc`, and the one
+  `pe_layout.py: ok` failure mode that is really a stale `dev/INDEX.md`.
+- `docs/port-plan.md` now points at it instead of implying the method is
+  obvious from one worked example.
+
+## 2026-11-17 - the unit suite run end to end: 79 of 83, and three real causes
+
+- **`python dev/verify_harness/cli.py all` now reads 79 verified, 4 open.** The
+  four are known causes, not mysteries: two tier-1 C units cannot compile
+  (`gcc`/`cc1.exe` on this machine exits 1 with no output even for
+  `int f(void){return 1;}` - MSYS2 install damaged), one state-mode unit lacks
+  the probe's guest-pointer translation, and `fn/MeshSweep` sits at 61.1%
+  branch coverage against an 80% gate.
+- **Empty compiler errors are gone.** `candidate_c.py` reported
+  `candidate compile failed:` with nothing after the colon; it now prints
+  whichever stream has text, or the exit code and the full command. That is how
+  the broken gcc was identified in one run instead of an afternoon.
+- **`fn/OrthonormalizeCameraBasis-cargo` is verified again.** It had been
+  failing as `candidate fault: unknown-entry-orthonormalize_camera_basis`: the
+  mapping in `candidate_rust.py` and `camera.rs` existed, the probe arm in
+  `crates/ow-sim/src/bin/verify_probe.rs` did not. Added; five stages pass.
+  The `-state` sibling stays open on purpose - its fixture passes a basis inside
+  the state snapshot and the arm rejects a guest pointer with a named error
+  rather than guessing an offset.
+- **`fn/TextureCountBitsShifted` verifies** after declaring one equivalent
+  mutant instead of chasing it: widening `(bias+2) & 0x1f` to `& 0x3f` cannot be
+  observed because the shifted value is u32 and Rust's `>>` masks the shift to
+  5 bits exactly as the client's `shrl` does. Rationale recorded in the unit.
+
+## 2026-11-17 - the chain merge gets its seam test, and 41 bodies go back
+
+- **The open class from the last entry is measured, not argued.** Walking the CFG
+  from each root's entry over the function's own flow (fall-through, jump, jcc;
+  a call's return path is followed, its callee is not) inside the `.pdata` union:
+  **25,597 of 25,638** roots enter fragment bytes. The audit's 1,615 was "the last
+  instruction does not transfer" - an upper bound, since an earlier branch usually
+  enters the fragment. Only **41** roots never enter a fragment at all, and none
+  of them is named.
+- **Those 41 are reverted.** `MergeChainBodies.java revert` set their bodies back
+  to the real extent and saved; `ImageAudit` now reports `in_body=25588`,
+  `named_flowed=0`. A dry run afterwards reports `already=25588 no_seam=41
+  would_widen=0`, so the merge is idempotent and cannot undo the verdict.
+- **The rule now lives in `apply`:** a root is widened only when its own flow
+  enters the fragment, printed `NO-SEAM` otherwise. Two bugs on the way there,
+  both caught by the numbers not moving: `COMMIT` was gated on `apply` only, so
+  the first revert rolled back while reporting success; and the walk `continue`d
+  on call instructions, which dropped the return path and classified 6,220 roots
+  as no-seam (they were functions whose prologue calls `__chkstk`).
+- Net effect of this session's three passes: 25,588 of 25,638 chain roots own
+  their full contiguous code with a measured seam, 41 are open by measurement,
+  9 are open on a missing `.pdata` extent (previous entry), 11 roots have no
+  function object at all.
+
+## 2026-11-17 - chain merge pass 2, and the decompiler fact that shrinks the claim
+
+- **25,629 of 25,638 roots now own their chained code** (was 25,586). The 52
+  roots that pass 1 skipped were blocked by 16 function bodies that had outgrown
+  their own `.pdata` extent; `FixOuterBodies.java` set those back to the extent
+  (16 fixed, 1 refused: `0x140d83010`'s own extent collides with a neighbour),
+  and the re-run widened 43 more bodies, removing 1 more inner object.
+  `ImageAudit`: `body_flows_into_chain 51 -> 9`, `named_flowed=0`.
+- **The 9 remaining are open with names and byte counts**, not glossed: every
+  conflict left is a function object with **no `.pdata` extent** (12 of them,
+  e.g. `140a401d0` overlaps 6,179 B of `140ccce40`). Clipping them was measured
+  and rejected: `140d02c80` would go 1,392 -> 11 B, `140b2fdf0` 1,273 -> 12 B.
+  `ChainConflicts.java` now emits the full table; `FixOuterBodies.java apply
+  clip` exists for whoever judges them later.
+- **Correction to section 8.2's premise, measured.** Ghidra's decompiler follows
+  flow *outside* a function body unless another function's entry blocks it. So
+  the merge does not lengthen most decompiles: `0x140ca6ac0` has a 29-byte body
+  on the evidence project, 858 B after the merge, and the C is byte-identical
+  (4,583 chars / 120 lines) on both. `0x142cd4bc0` likewise (320 vs 464 B, 4,272
+  chars identical); only `0x142032060` grew 596 -> 615 lines. The audit's "25,184
+  decompiles end early at the seam" was an overstatement - 8.2 is a map fix, and
+  the readable-text fix is the 110 false `noreturn` flags plus the 320 inner
+  objects (~1.3% of the widened roots).
+- Four `c_cut` decompiles from the corpus (269 exist) were re-read from the
+  merged copy: `ExpireMoverRecords` 120, `MoveCharacterController` 125,
+  `DispatchCameraRequest` 616, `DmWorldSubstepDriver` 109 lines.
+
+## 2026-11-17 - S2 applied: 25,533 bodies merged, and the decompiler trap behind them
+
+- **The merge is real.** `MergeChainBodies.java` ran on a copy (`C:/Temp/owread`,
+  evidence project untouched) and saved: bodies 152 -> 1,797 B for the mover,
+  47 -> 20,886 B for a second sample, 25,533 widened, 320 inner objects removed,
+  body bytes 29,259,101 -> 44,422,830. `ImageAudit` on the copy: `in_body=25586`
+  of 25,638, `named_flowed=0` (was 157), `body_flows_into_chain=51` (was 25,184).
+- **52 roots are skipped on purpose.** A foreign function object whose entry is
+  outside the union still reaches into it; widening would delete its extent. The
+  script prints `OUTER <root>: ... e.g. <entry>` and is idempotent, so they are
+  a follow-up, not a blocker. Dry run and apply disagree on the count (64 vs 52)
+  because removing one over-extended fragment unblocks another root - benign.
+- **The merge alone does not lengthen a decompile, and that cost hours to see.**
+  After the merge the decompiler is handed the full body (`DecompScope.java`:
+  `dec=20886B/1R` for a root whose output is 28 lines) and still prints the old
+  text, because the 110 false `noreturn` flags make it prune the cold part as
+  dead code. `ClearFalseNoReturn.java clear` on top of the merge: mover 175 ->
+  315 lines with 13 references into the cold part, `0x140c8ea20` 28 -> 2,586
+  lines. Order for every readable sweep is now merge, then clear, then read.
+- **Two harness bugs fixed by measuring.** `getFunctionsOverlapping` returns
+  `Iterator<Function>` here, not `FunctionIterator`; and headless needs
+  `-process Overwatch.exe` or `currentProgram` is null and every script dies.
+  Both are in the recipes (`docs/port-plan.md` S2, `docs/ghidra-project.md`).
+- New read-only tools: `ProbeFlow.java <addr>` (why a decompile stops) and
+  `DecompScope.java <addr>` (what body the decompiler was handed).
+
 ## 2026-11-17 - both living ledgers rotated into `docs/history/`
 
 - **`MODLOG.md` 162 KB -> 34 KB, `STATUS-handoff.md` 104 KB -> 55 KB.** The
@@ -78,6 +314,74 @@ entry is rewritten after the fact.
   recovered image (frame entry check, PE layout, the 59 install-reading tests
   skip themselves). Proven before pushing in a clean clone
   (`git clone --local . target/ci_sim`), which is the only local model of CI.
+
+## 2026-11-17 - the first ported unit: f32 to Q12, verified against the client's bytes
+
+- **`fn/FloatToQ12` (`0x141c6c830`) is VERIFIED** - the first unit of the port
+  campaign. 145 bytes over 3 pieces, 53 call sites, no callees, no global reads.
+  364 cases, every channel, coverage 5/5, mutation 11/12 with the survivor
+  declared equivalent (`>=` vs `>` at `exponent >= 138`: both shift by zero).
+- **What it does, read from the body:** scales a run of `f32` by 4096 to Q12
+  integers by integer bit manipulation - `(mantissa|2^23) >> (138-exp)` in the
+  normal range, `<<` above, `0` when the shift exceeds 23, `0x7fffffff` when the
+  left shift reaches 8 - then negates by two's complement. Saturation therefore
+  yields `i32::MAX` and **`-i32::MAX`**; `i32::MIN` is unreachable. Shipped as
+  `ow_sim::fixed::{scale_q12, quantize_q12}` with two unit tests.
+- **The seven-step procedure is now written down** in `docs/port-plan.md`
+  ("Worked example"), with the per-unit size: ~50 lines of Rust, ~35 of fixture,
+  ~25 of unit JSON, ~15 of probe arm.
+- **`ScaleFloatRunToQ12`** added to `docs/function-names.csv` (tag `runtime`,
+  prototype declared). `gh_apply_names.py` was not run: the Ghidra bridge
+  answered with an empty body, so the program still shows `FUN_141c6c830`.
+
+## 2026-11-17 - S2 is staged: the body merge exists, dry-run numbers pinned
+
+- **`docs/ghidra/MergeChainBodies.java`** resolves each `.pdata` chain to its
+  transitive root (the CHAININFO walk from `ImageAudit`, DWORD-padded
+  unwind-code array included), asserts the union is contiguous, removes the
+  function objects sitting inside a cold part, and widens the root's body in one
+  transaction. `dry` prints what would change; `apply` writes.
+- **The dry run is pinned from the image, not estimated:** 25,649 roots with a
+  cold part, all contiguous; 25,638 have a function object, 11 have none;
+  **283 inner objects removed** - exactly the audit's `AT_CHAIN` count; body
+  bytes of those roots 2,572,571 -> 18,610,692 (+16,038,121), i.e. the audit's
+  predicted 28.7 -> 44.7 MB total.
+- **The mover control-law question is narrowed by measurement, not read:** the
+  call graph has **zero** inbound edges to `MoverInvoker` (`0x1407ffc50`), which
+  is reached only through vtable slot 9 - 423 `call [reg+0x48]` sites image-wide.
+  The caller therefore needs the vtable-store enumeration (next step), not an
+  `E8` search. `MoverInvoker` is also an **11-piece** body; its linear listing
+  stops at `0x1407ffce2 jle 0x14080033c`, which is why the union matters.
+- **Reading hygiene:** `show` and `grep` now flag a hit whose function is
+  `opaque` (914 bodies, 0.76%): their linear listing desyncs, so the decompiler
+  is the read. `grep` counts those hits separately instead of mixing them in.
+- The evidence project is not touched: the recipe copies `owmod_clean.rep` to
+  `C:/Temp/owread` first (`docs/port-plan.md`, "S2"). E: has 3.6 GB free, so the
+  copy goes to C: (115 GB free).
+
+## 2026-11-17 - the port scope is measured: 3,864 gameplay functions, 1,541 units
+
+- **`python dev/corpus.py triage` computes the scope instead of choosing it:**
+  the forward closure of the 238 gameplay anchors in `docs/function-names.csv`
+  is **3,864 functions / 2,301,019 bytes** (3.2% of the image). States:
+  238 `entry`, 1,303 `unit`, 2,312 `inline`, 6 `thunk`, 5 `trivial`. By system:
+  camera 2,391, map 1,457, mover 1,140, domino 915, input 462, anim 256,
+  statescript 229, model 215, hero 4. `docs/port-plan.md` records the rules.
+- **Why 1,541 units and not 3,864:** a unit is written for an entry point and
+  carries its single-caller helpers; branch coverage proves they ran. 2,312 of
+  the 3,864 have exactly one caller in the scope.
+- **`python dev/corpus.py proto`** infers a candidate argument count from the
+  callee's own entry reads, folding 32-bit aliases (`mov eax, ecx` uses `rcx`);
+  the alias folding alone moved agreement with the 44 stated unit signatures
+  from 22 to 28. It is a weighted reading aid, never a `function-names.csv` row.
+- **Harness hygiene:** all 56 unit JSONs that still named
+  `D:\ow-dumps\offline_recover\module_offline.bin` now name the repo copy, and
+  `emu_oracle.IMAGE_SHA256` pins the bytes, so a unit proved against a different
+  image fails instead of silently passing. `fn/ClosestPointGjk` still PASSes.
+  `fn/AnimTimeWrap` fails at the C-candidate compile because `gcc`/`cc1` in this
+  environment exits 1 with no output on any input, including a trivial file — 2
+  of 83 units use that loader (77 cargo, 4 rust), so this is environmental, not
+  a repo defect.
 
 ## 2026-11-17 - the corpus indexes functions, not `.pdata` entries
 

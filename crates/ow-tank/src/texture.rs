@@ -445,7 +445,7 @@ pub enum Format {
     R16Float,
     /// R16_UNORM (DXGI 56): one 16-bit unorm, 2 B/px. The decode keeps the
     /// stored `u16` exactly in [`TextureLevel::r16_unorm`] and still builds the
-    /// rounded 8-bit view ([`decode_r16_unorm`]) for the existing callers.
+    /// rounded 8-bit view (`decode_r16_unorm`) for the existing callers.
     R16Unorm,
     /// R8G8 UNORM or UINT (DXGI 49/50): two byte channels, 2 B/px. The bytes
     /// are identical; UNORM is the byte/255 view and UINT is the same integer.

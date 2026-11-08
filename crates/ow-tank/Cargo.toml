@@ -17,6 +17,13 @@ ow-casc.workspace = true
 ow-stu.workspace = true
 glam.workspace = true
 
+# A throwaway diagnostic driven by the verify harness, not API: it would clash
+# with the same-named bin in `ow-casc` and `ow-sim` when documenting.
+[[bin]]
+name = "verify_probe"
+path = "src/bin/verify_probe.rs"
+doc = false
+
 [dev-dependencies]
 # The layout tests cross-check their strides against the read narrowphase.
 ow-sim.workspace = true

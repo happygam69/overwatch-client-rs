@@ -65,7 +65,7 @@
 //! expansion compares `<= 0.005`, and the closest-point solver `0x142cc9460`
 //! otherwise. Both are implemented and verified (the solver is `fn/ClosestPointGjk`,
 //! 264 cases, every channel, 12/12 mutants; the four-vertex reduction
-//! `0x142cc7740` is executed by its tetrahedron cases). See [`mesh_triangle`] and
+//! `0x142cc7740` is executed by its tetrahedron cases). See `mesh_triangle` and
 //! [`closest_point`].
 
 use crate::movement::{maxss, minss};
@@ -1562,7 +1562,7 @@ fn support_hull(
 /// Both query shapes are the client's: the count `> 0` branch builds the
 /// support-point hull (`0x142caef15..0x142caf1a5`) and keeps the recentred
 /// points for the triangle test, and every triangle is tested by
-/// [`mesh_triangle`], which reaches the closest-point solver
+/// `mesh_triangle`, which reaches the closest-point solver
 /// ([`closest_point`]) whenever the block carries support points or an
 /// expansion lane above `0.005`. The triangle callback argument is null on this
 /// path (the wrapper `0x142caed10` zeroes it), so the walk never stops early.
@@ -1849,7 +1849,7 @@ pub fn shape_filter(a: &[u8], b: &[u8]) -> bool {
 /// quad. `1` — the body-attached state `ShapeAddToBody` (`0x142cb3940`) sets —
 /// reads the **owner pose** `[record+0x288] + entry[0x50]*0x1c0` instead: with
 /// `record[0x191] != 0` and `record[0x192] == 0` the pose is composed (see
-/// [`compose_pose`]), otherwise its `+0x10` quad (position) and `+0x20` quad
+/// `compose_pose`), otherwise its `+0x10` quad (position) and `+0x20` quad
 /// (quaternion) are copied verbatim.
 ///
 /// Both sources are pointers in the client. The caller resolves them and

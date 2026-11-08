@@ -11,3 +11,10 @@ description = "Read-only access to an Overwatch CASC installation"
 [dependencies]
 flate2.workspace = true
 
+# A throwaway diagnostic driven by the verify harness, not API: it would clash
+# with the same-named bin in `ow-sim` and `ow-tank` when documenting.
+[[bin]]
+name = "verify_probe"
+path = "src/bin/verify_probe.rs"
+doc = false
+

@@ -10,3 +10,10 @@ description = "Exact client arithmetic read from Overwatch.exe: mover ramp, wish
 
 [dependencies]
 
+# A throwaway diagnostic driven by the verify harness, not API: it would clash
+# with the same-named bin in `ow-casc` and `ow-tank` when documenting.
+[[bin]]
+name = "verify_probe"
+path = "src/bin/verify_probe.rs"
+doc = false
+

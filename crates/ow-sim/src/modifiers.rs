@@ -488,7 +488,7 @@ fn quad_length_sq(q: [f32; 4]) -> f32 {
 /// | 3 | `record` when `|quad| > |record|` (the shorter wins) |
 /// | 4 | `record` when `|quad| < |record|` (the longer wins) |
 ///
-/// The length is [`quad_length_sq`]. With `mode == 1` the `y` lane is put back
+/// The length is `quad_length_sq`. With `mode == 1` the `y` lane is put back
 /// the way it arrived, per record - which is why the lateral lanes are the ones
 /// the movement vector's state modifiers act on.
 ///

@@ -57,7 +57,7 @@ pub enum Error {
     NotFound(String),
     /// A response could not be parsed (headers, chunking, framing).
     BadResponse(String),
-    /// Redirects exceeded [`MAX_REDIRECTS`].
+    /// Redirects exceeded `MAX_REDIRECTS`.
     TooManyRedirects(String),
     Io(std::io::Error),
 }
