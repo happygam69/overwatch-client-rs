@@ -2,6 +2,45 @@
 Milestones only. Findings and addresses live in `docs/formats/`; current state
 in `STATUS-handoff.md`; the work queue in `docs/open-questions.md`.
 
+## 2026-11-17 - the corpus indexes functions, not `.pdata` entries
+
+- **`dev/corpus.py` schema 3: the unit is a function.** Entries are grouped by
+  their transitive `CHAININFO` root (`dev/fn_extent.py` is the one walker), so a
+  cold half is a piece of its function and never a function of its own. New
+  `verify` pins 201,246 entries / **119,802 functions** / 81,444 chained halves /
+  25,649 roots with a cold part, 0 gaps, 0 pieces claimed twice, 44,567,808
+  body bytes.
+- **The operator's index was migrated, not rebuilt.** From the image: 1,057
+  cold-half rows dropped (their `.c` were funclet decompiles), 329 bodies
+  widened to their union, their 269 stored decompiles marked `c_cut`, 513 rows
+  already exact -> 842 rows. Schema is checked on open and a stale version now
+  fails instead of shadowing a corrected row.
+- **`make-args` is no longer destructive.** It emits chain-root unions only,
+  refuses a chained start, and a whole-image range must produce exactly 119,802
+  pairs. Before this it emitted 201,246 pairs, and `McpDecompile.java` creates a
+  function at any entry Ghidra lacks - a sweep would have created one at each of
+  the 81,444 cold halves and trimmed the parents, which is how the 251
+  multi-range bodies in `docs/ghidra-image-audit.md` section 4 were made.
+- **The 11-root discrepancy in §5.2 is reconciled:** the image has 25,649 chain
+  roots; the audit's 25,638 are those with a Ghidra function object, and the 11
+  extra carry exactly the 11,366-byte continuation difference.
+- **The relationship index exists** (`dev/corpus.py index`, image bytes only):
+  `fn` 119,802 functions, `edges` 1,867,334 (994,637 jcc / 648,166 call / 216,891
+  jmp / 7,134 `FF 15` API calls / 506 `FF 25`) and `slot_sites` 35,835. A code
+  transfer whose target is outside `.text` is dropped (410 such decodes) and its
+  function is marked `opaque` - 915 functions, 0.76%, whose linear listing must
+  be read in the decompiler.
+- **Three documented censuses are now checks, not prose:** the chunk
+  assembler's caller (`0x1420251f5` -> `0x14209fc90`), the 485 register-slot
+  `+0x40` sites, and `ShapeAddToBody`'s **27 sites in 12 functions**
+  (`docs/formats/shape-ingest.md`; the older "13" counted a cold half as a
+  function). Each fails on a planted mutation, so the pin is not vacuous.
+- **The +0x40 slot count is re-measured and the doc corrected**
+  (`docs/open-questions.md`): `call_slot_scan.py`'s "505" is raw byte patterns,
+  not sites; the decode-anchored count is 523 = 485 register-slot + 38 SIB
+  stack-local, 473 in both sets, 12 decode-only, 19 byte-scan-only. 485 is
+  pinned as `GOLDEN_SLOT40`; `rax` carries 434 of them.
+
 ## 2026-11-16 - the jump: the arc is read, the jump is shipped
 
 - **The read law: `MoverApplyForces` (`0x140cb1990`), called once per body tick

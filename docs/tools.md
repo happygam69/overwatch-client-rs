@@ -34,18 +34,48 @@ project, never write to the game.
   oracle image, bridge counts, and the name-table reconciliation
   (`--registry` for the full function-registry sweep).
 - **`dev/corpus.py`** — the standing corpus, inside the project at
-  `dev/data/corpus` (ignored): `build` a `.pdata` range, `show`/`grep`/`list`
-  it, `make-args` for the headless batch, `purge` a tag. Every `.pdata` body
-  gets an authoritative linear disassembly (`.asm`) taken from the image,
-  including bodies Ghidra has no function for. Ghidra's decompile (`.c`) is
-  added when it exists; it can truncate and is never a verification source.
-  `show <addr> --window` disassembles an interior or unlisted address, and
-  `build` is incremental (`--force` re-fetches decompiles, `--asm-only`
-  refreshes disassembly without the bridge). Storage is shared
-  (`asm/<chunk>.asm`, `c/<entry>.c`); tag membership lives in the `tagged`
-  table, so a chunk can belong to several ranges and purging one range never
-  disturbs another's files. The bridge call pins `Overwatch.exe`; a transport
-  error is retried and never recorded as a miss.
+  `dev/data/corpus` (ignored): `build` a range, `show`/`grep`/`list` it,
+  `make-args` for the headless batch, `verify`, `purge` a tag.
+  **The unit is a function, not a `.pdata` entry**: entries are grouped by their
+  transitive `UNW_FLAG_CHAININFO` root (`dev/fn_extent.py` is the one chain
+  walker), giving 119,802 functions over 201,246 entries - chains reach 8 deep
+  and every union in this image is contiguous, so one `begin end` pair is exact.
+  `verify` pins the counts (201,246 / 119,802 / 81,444 / 25,649 roots) and the
+  zero-gap property on every run; schema 2 of this tool indexed each entry, so
+  `db()` migrates such an index from the image (cold halves dropped, shortened
+  bodies widened, their decompiles marked `c_cut`).
+  Each function gets an authoritative linear disassembly (`.asm`) taken from the
+  image, including bodies Ghidra has no function for; Ghidra's decompile (`.c`)
+  is added when it exists and is never a verification source. The disassembly is
+  a *linear* decode, not a flow decode: a body whose branch lands inside its own
+  instruction desyncs, so those are read in the decompiler.
+  `show <addr> --window` disassembles around any interior address, including a
+  cold half, which resolves through its function's union row. `build` is
+  incremental (`--force` re-fetches decompiles, `--asm-only` refreshes
+  disassembly without the bridge). Storage is shared (`asm/<function>.asm`,
+  `c/<entry>.c`); tag membership lives in the `tagged` table, so a function can
+  belong to several ranges and purging one range never disturbs another's files.
+  `make-args` emits unions only and refuses to emit a chained start, because
+  `McpDecompile.java` creates a function at any entry Ghidra lacks and creating
+  one at a cold half trims its parent; a whole-image range must produce exactly
+  119,802 pairs. The bridge call pins `Overwatch.exe`; a transport error is
+  retried and never recorded as a miss.
+  `index` builds the whole-image relationship index from the image bytes alone
+  (no Ghidra, no decompiler, works while the GUI holds the project lock):
+  `fn` (the 119,802-function register, with `opaque` set on the 915 functions
+  whose linear listing desyncs - a branch inside its own instruction, or a code
+  transfer pointing outside `.text`), `edges` (1.87M rows: `call`/`jmp`/`jcc`
+  plus the rip-relative `FF 15`/`FF 25` API form, each with its site, containing
+  function, raw target and form) and `slot_sites` (35,835 `call`/`jmp
+  [reg+disp]` dispatch sites with the base register, so "who calls slot +0x40"
+  is one query). Every index table is an RVA; attribution is by union span, so
+  a call into a cold half or into `.pdata`-less code keeps its raw target, and a
+  code transfer that points outside `.text` is dropped and marks its function
+  `opaque`. `verify` re-checks the three documented census facts it must
+  reproduce: the chunk assembler's caller at `0x1420251f5` -> `0x14209fc90`, the
+  485 register-slot `+0x40` sites, and `ShapeAddToBody`'s 27 sites in 12
+  functions (the pair that is only right when a cold half is not counted as a
+  function).
 - **`dev/frame_check.py`** — the address-frame gate (`cargo xtask frame-check`):
   docs citations, the name table, and function-entry sanity.
 - **`dev/gh_apply_types.py`** — applies `docs/struct-layouts.csv` to the

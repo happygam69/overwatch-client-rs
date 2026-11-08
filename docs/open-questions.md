@@ -1683,9 +1683,20 @@ allocator `0x1420266d0`), and NodeType2's factory `0x142029f00` registers that
 
 **Tool defect fixed:** `call qword ptr [reg+disp]` has a **disp8** form
 (`FF 5x 40`). The image has **0** disp32 `+0x40` call forms and **505** disp8
-sites, so a disp32-only slot scan reports a false negative for every slot below
-`0x80`; `dev/call_slot_scan.py` now scans both. None of the 505 passes a
-creation record.
+byte patterns, so a disp32-only slot scan reports a false negative for every
+slot below `0x80`; `dev/call_slot_scan.py` now scans both. None of the sites
+passes a creation record.
+
+**The count, re-measured 2026-11-17 by `dev/corpus.py index` (decode-anchored,
+instruction boundaries only): 523 `call [base+0x40]` instructions = 485 on a
+register base + 38 on `rsp`/`r12` (SIB, a stack-local call-through, not a
+vtable slot). Against that, `call_slot_scan.py` finds 505 raw byte patterns and
+confirms 492 by back-decoding; 473 sites are in both sets, 12 are decode-only
+and 19 are byte-scan-only (a `FF 5x 40` at an address that is not an
+instruction boundary in the linear stream - the desync class this file warns
+about elsewhere). The **485** is now the pinned number (`GOLDEN_SLOT40` in
+`dev/corpus.py`), the base register is stored per site, and `rax` carries 434 of
+them.
 
 **Kind `0x14` is a family, not an identity:** 160 `RegisterTypeWithSize` sites
 use it with sizes `0x18` .. `0x31868`; the identity is the **size `0xad0`**

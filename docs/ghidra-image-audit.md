@@ -257,6 +257,16 @@ instruction jumps, or falls through, into an address the function does not own.
 functions are in this set, so the code the project reads for gameplay is
 incomplete today.
 
+**The image has 11 more chain roots than this table counts.** Grouping all 201,246 `.pdata` entries by their *transitive*
+`CHAININFO` root gives 25,649 roots carrying 16,049,487 bytes of continuation;
+the table's 25,638 / 16,038,121 are the same set restricted to roots that have a
+Ghidra function object. The 11 roots without one
+(`0x140ccce40`, `0x140cfa090`, `0x140d10b90`, `0x140dc7700`, `0x140de7d40`, ...)
+carry exactly the 11,366-byte difference, which is why 8.3's "create the 38
+missing starts" subsumes them. `python dev/corpus.py verify` pins the image-side
+numbers (25,649 roots, 0 gaps, 0 pieces claimed twice), so the two sides can be
+re-measured against each other rather than one trusted.
+
 ## 6. Data, types and documentation
 
 Data blocks, typed share (`getDefinedData` over the whole block):

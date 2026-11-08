@@ -22,7 +22,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `clip_layout.py` | Map a clip's reference graph and solve for the element size of each block. | 146 |
 | `clip_structure.py` | Dump the entire file structure to find pose data. | 57 |
 | `codec_scan.py` | Enumerate the client's out-of-line 64-bit obfuscation primitives. | 123 |
-| `corpus.py` | Build and query a standing corpus for the current image. | 675 |
+| `corpus.py` | Build and query a standing corpus for the current image. | 1276 |
 | `data/bc7oracle/texture2ddecoder/__init__.py` | A python wrapper for [Perfare](https://github.com/Perfare)'s [Texture2DDecoder](https://github.com/Perfare/AssetStudio/tree/master/Texture2DDecoder). | 31 |
 | `data/dispfind.py` | Find every instruction whose memory operand displacement is one of the given | 59 |
 | `data/findfield.py` | (no header) | 16 |
