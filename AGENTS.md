@@ -138,8 +138,16 @@ may be added**; `cargo xtask verify` fails on one.
 
 ## Keep these files updated
 
-- `MODLOG.md`: one short entry per change; milestones only.
-- `STATUS-handoff.md`: what works, what is open, what is next.
+- `MODLOG.md`: one short entry per change; milestones only. It is a living
+  ledger, not an archive: rotate it when it passes a few hundred lines by
+  moving entries older than the current period, verbatim, to
+  `docs/history/modlog-YYYY-MM.md` (one file per month). Never edit a moved
+  entry; a correction is a new entry.
+- `STATUS-handoff.md`: what works, what is open, what is next. When a section
+  stops being live (the narrative behind a finished system, the per-unit
+  evidence ledger), move it verbatim to `docs/history/status-<date>.md` and
+  leave a pointer. The live per-system state belongs in
+  `docs/systems-coverage.md`, not here.
 - `README.md`: the public "what works / what does not" list.
 - `docs/systems-coverage.md`: every client system, its state, its next anchor.
 - `docs/formats/<system>.md`: findings, addresses, evidence class.
