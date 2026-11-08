@@ -116,7 +116,7 @@ helpers are listed here so nothing on disk is unaccounted for.
 | `offline_page_recover.py` | Recover Overwatch.exe `.text` / `.pdata` offline with the known page cipher. | 1240 |
 | `patch_clean_pe.py` | Build a clean analysis PE: the install's headers plus the recovered .text. | 96 |
 | `pdata_lookup.py` | Lookup .pdata function ranges containing given rvas. | 65 |
-| `pe_layout.py` | Classify an address in the install's PE: raw-backed, zero-fill (BSS), or unmapped. | 125 |
+| `pe_layout.py` | Classify an address in the install's PE: raw-backed, zero-fill (BSS), or unmapped. | 134 |
 | `pool_lea_args.py` | Which function collects a given object offset and hands it to a helper. | 61 |
 | `pool_scan.py` | Verified store/load census for the Domino world's pool-table fields. | 384 |
 | `probe_candidate_evaluator.py` | Run the fan's candidate evaluator `0x1420328c0` offline with a built world. | 711 |

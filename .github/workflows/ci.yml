@@ -1,4 +1,9 @@
-# The gate, on every push and pull request.
+# The gate, on every push to any branch and on every pull request.
+#
+# There is deliberately no `branches:` filter: the default branch is `master`,
+# and a hardcoded name here (it said `main`) silently ran nothing at all for
+# direct pushes. Do not add one back - a rename must not be able to turn the
+# gate off.
 #
 # `cargo xtask verify` is the same gate the project runs locally: fmt, clippy
 # (warnings are errors), every test target in the workspace, the dev/ tool
@@ -19,7 +24,6 @@ name: ci
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 env:

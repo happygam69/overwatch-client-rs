@@ -24,11 +24,14 @@ Reads the install in place; writes nothing.
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import struct
 import sys
 
-INSTALL = pathlib.Path(r"E:\Overwatch\_retail_\Overwatch.exe")
+# A CI runner has no installation, and `OW_EXE` lets any machine point at the
+# image it does have (`dev/frame_check.py` reads the same variable).
+INSTALL = pathlib.Path(os.environ.get("OW_EXE") or r"E:\Overwatch\_retail_\Overwatch.exe")
 BASE = 0x140000000
 
 
@@ -74,7 +77,13 @@ def main() -> int:
     args = ap.parse_args()
 
     if not args.install.exists():
+        # No install is not a failed check: there are no bytes to classify, and
+        # the gate must still pass on a runner that has none (CI). An explicit
+        # query still reports that it could not read anything.
         print(f"install not found: {args.install}", file=sys.stderr)
+        if args.check:
+            print("pe layout check: skipped (no image)")
+            return 0
         return 2
     image = args.install.read_bytes()
     secs = sections(image)
