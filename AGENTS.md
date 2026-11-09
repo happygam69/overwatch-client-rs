@@ -69,7 +69,8 @@ may be added**; `cargo xtask verify` fails on one.
    from another build.
 10. **The gate decides.** `cargo xtask verify` runs fmt, clippy (warnings are
     errors), the tests, the tool index, the deviation check and the
-    address/function-entry check.
+    address/function-entry check. *Suspended for now — see
+    “TEMPORARY GATE SUSPENSION” below.*
 11. **No seed lists for content.** A map, chunk set or texture is resolved by
     the client's own path (map header or loader), never by a proximity seed or
     a hand-picked GUID list. A seed that renders overlapping maps is a bug, not
@@ -81,6 +82,28 @@ may be added**; `cargo xtask verify` fails on one.
 13. **Fix a wrong doc on sight.** When you are certain a recorded address,
     conclusion or state is wrong, correct it in the same change; a stale page
     costs the next session hours.
+
+## TEMPORARY GATE SUSPENSION (operator, until further notice)
+
+**Do not run the unscoped `cargo xtask verify`.** The operator has suspended
+it: over an hour of wall clock, 98% of it in seven install suites
+(`index_find_real` alone ~16 min), and the decision about that cost is
+pending. Do not block a change on it, do not queue it "once at the end",
+and do not re-add it to a checklist. This overrides rule 10 until the
+operator lifts it.
+
+Use these, and say in the handoff which one was run:
+
+    cargo xtask verify --fast                              # fmt, doc checks, clippy, lib tests
+    cargo xtask verify -p <crate> --skip index_find_real   # one crate, minus the slow suites
+    cargo xtask verify --skip <long suite>                 # whole gate minus named suites
+
+What still holds without the full gate: `--fast` and the scoped runs include
+fmt, clippy with warnings as errors, the four python doc checks and the tests
+of whatever was selected. A suite left out has **not** been run — say so
+plainly ("`index_find_real` not run"), never imply a green full gate.
+
+Delete this section when the operator lifts it.
 
 ## How to work
 

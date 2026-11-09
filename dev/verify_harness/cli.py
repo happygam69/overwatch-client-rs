@@ -1,15 +1,30 @@
 """Run verification units. Exit code is the gate.
 
     python dev/verify_harness/cli.py fn/AnimTimeWrap
+    python dev/verify_harness/cli.py fn/BundleLookup fn/ChunkGuid   # a batch
     python dev/verify_harness/cli.py casc        # only the CASC units
     python dev/verify_harness/cli.py all
     python dev/verify_harness/cli.py selftest
     python dev/verify_harness/cli.py list
 
-Two performance knobs, neither of which can skip a stage or weaken a gate:
+Performance knobs. None of them can skip a stage inside a run, weaken a
+gate, or change a verdict - they only change *when* work runs:
 
-    --jobs N                  mutant probes run at once (default: min(4, active))
-    --mutation-timeout S      per-call budget for a mutant probe (default 10 s)
+    --unit-jobs N        units verified at once for all/casc/a batch
+                         (default min(4, cpus); 1 = the old serial behaviour)
+    --jobs N             mutant probes at once per unit (default min(4, active))
+    --slots N            mutant cargo build slots per crate (default 4; env
+                         VERIFY_MUTANT_SLOTS). Purely a build-throughput knob.
+    --mutation-timeout S per-call budget for a mutant probe (default 10 s)
+
+The verdict cache. A ledger entry is bound to the sha256 of the oracle
+window, the candidate artifact, the options and the surfaces, under the
+harness version - that is the ledger's own freshness contract. `all` and
+`casc` therefore replay a `verified` entry whose digests are all unchanged
+instead of re-running its five stages (the entry is reported as cached);
+anything else, and every unit under `--force`, runs the full ladder. A
+single named unit always re-runs: naming it is the request to re-prove it
+(`--cache` opts a single unit back into the cache).
 """
 
 from __future__ import annotations
@@ -24,11 +39,16 @@ sys.path.insert(0, os.path.dirname(__file__))
 from runner import (  # noqa: E402
     DEFAULT_MUTANT_JOBS,
     DEFAULT_MUTATION_CALL_TIMEOUT,
+    _print_line,
     load_unit,
     run_and_record,
 )
 
 UNITS_DIR = os.path.join(os.path.dirname(__file__), "units")
+
+# Units at once for all/casc. 4 keeps a 12-core machine busy (the heavy half
+# is cargo builds, which the per-crate slot pool caps independently of this).
+DEFAULT_UNIT_JOBS = min(4, os.cpu_count() or 1)
 
 
 def unit_paths():
@@ -69,9 +89,36 @@ def _pop_value(argv, flag):
     return value, out
 
 
+def _pop_flag(argv, *flags):
+    """Remove boolean flags from argv; return (seen, argv)."""
+    out = [a for a in argv if a not in flags]
+    return (len(out) != len(argv)), out
+
+
+def _resolve_unit_path(name):
+    """One command-line word -> unit descriptor path, or None."""
+    p = name if os.path.exists(name) else os.path.join(UNITS_DIR, name + ".json")
+    if not os.path.exists(p):
+        # also try id with slashes replaced
+        alt = os.path.join(UNITS_DIR, name.replace("/", "-") + ".json")
+        if os.path.exists(alt):
+            p = alt
+        else:
+            return None
+    return p
+
+
+def _is_cached(e) -> bool:
+    return any("fresh cached verdict" in n for n in e.notes)
+
+
 def main(argv):
     jobs_raw, argv = _pop_value(argv, "--jobs")
     timeout_raw, argv = _pop_value(argv, "--mutation-timeout")
+    unit_jobs_raw, argv = _pop_value(argv, "--unit-jobs")
+    slots_raw, argv = _pop_value(argv, "--slots")
+    force, argv = _pop_flag(argv, "--force", "--no-cache")
+    want_cache, argv = _pop_flag(argv, "--cache")
     try:
         jobs = int(jobs_raw) if jobs_raw is not None else DEFAULT_MUTANT_JOBS
         mutation_timeout = (
@@ -79,15 +126,29 @@ def main(argv):
             if timeout_raw is not None
             else DEFAULT_MUTATION_CALL_TIMEOUT
         )
+        unit_jobs = (
+            int(unit_jobs_raw) if unit_jobs_raw is not None else DEFAULT_UNIT_JOBS
+        )
+        slots = int(slots_raw) if slots_raw is not None else None
     except ValueError as e:
         print(f"bad performance flag value: {e}")
         return 2
     if jobs < 1:
         print("--jobs must be at least 1")
         return 2
+    if unit_jobs < 1:
+        print("--unit-jobs must be at least 1")
+        return 2
+    if slots is not None and slots < 1:
+        print("--slots must be at least 1")
+        return 2
     if not (mutation_timeout > 0):
         print("--mutation-timeout must be positive")
         return 2
+    if slots is not None:
+        import candidate_rust
+
+        candidate_rust.set_mutant_build_slots(slots)
     run_kw = {"mutant_workers": jobs, "mutation_call_timeout": mutation_timeout}
 
     if not argv:
@@ -128,35 +189,76 @@ def main(argv):
             print("no CASC units declared (suite: casc / candidateCrate: ow-casc)")
             return 2
     else:
-        # Accept an id or a path.
-        p = cmd if os.path.exists(cmd) else os.path.join(UNITS_DIR, cmd + ".json")
-        if not os.path.exists(p):
-            # also try id with slashes replaced
-            alt = os.path.join(UNITS_DIR, cmd.replace("/", "-") + ".json")
-            if os.path.exists(alt):
-                p = alt
-            else:
-                print(f"no such unit: {cmd}")
+        # A batch: every remaining word is a unit id or path, and a typo in
+        # the second word must not be silently ignored.
+        paths = []
+        for name in argv:
+            p = _resolve_unit_path(name)
+            if p is None:
+                print(f"no such unit: {name}")
                 return 2
-        paths = [p]
+            paths.append(p)
 
-    results = []
-    for p in paths:
+    # Cache policy: all/casc replay fresh verified entries by default (the
+    # iteration gate - unchanged units need not be re-proven every run); a
+    # named unit re-runs by default (naming it is the re-prove request).
+    if force:
+        use_cache = False
+    elif want_cache:
+        use_cache = True
+    else:
+        use_cache = cmd in ("all", "casc")
+
+    parallel = len(paths) > 1 and unit_jobs > 1
+
+    def run_one(p):
         unit = load_unit(p)
-        e = run_and_record(unit, **run_kw)
-        results.append((unit.id, e))
-        print(f"  => {unit.id}: {e.status}")
-        # `all` keeps every note; a suite run prints them only for a failure,
-        # where the note is the diagnosis rather than background.
-        if cmd != "casc" or e.status != "verified":
-            for n in e.notes:
-                print(f"     note: {n}")
+        kw = dict(run_kw)
+        if parallel:
+            # Every line the unit's ladder prints carries its id, so a
+            # terminal showing several units at once stays readable.
+            kw["log_prefix"] = f"[{unit.id}] "
+        e = run_and_record(unit, use_cache=use_cache, **kw)
+        return unit, e
+
+    results = [None] * len(paths)
+    if parallel:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        pool = ThreadPoolExecutor(max_workers=min(unit_jobs, len(paths)))
+        try:
+            futures = {pool.submit(run_one, p): i for i, p in enumerate(paths)}
+            for fut in as_completed(futures):
+                i = futures[fut]
+                unit, e = fut.result()
+                results[i] = (unit.id, e)
+                emit_result(cmd, unit, e)
+        except KeyboardInterrupt:
+            # Cancel the queued units, but let the in-flight ones run to
+            # completion: a half-finished unit records nothing, so every
+            # verdict in the ledger stays a whole-run verdict.
+            pool.shutdown(wait=False, cancel_futures=True)
+            print(
+                "\ninterrupted: queued units cancelled; waiting for the units "
+                "in flight to finish and record"
+            )
+            return 130
+        finally:
+            pool.shutdown(wait=True)
+    else:
+        for i, p in enumerate(paths):
+            unit, e = run_one(p)
+            results[i] = (unit.id, e)
+            emit_result(cmd, unit, e)
 
     print()
     ok = True
+    n_cached = 0
     for uid, e in results:
         if e.status != "verified":
             ok = False
+        if _is_cached(e):
+            n_cached += 1
         if cmd == "casc":
             mark = "PASS" if e.status == "verified" else "FAIL"
             cov = "-" if e.coverage is None else f"{e.coverage:.1f}%"
@@ -168,8 +270,21 @@ def main(argv):
     if cmd == "casc":
         n_ok = sum(1 for _, e in results if e.status == "verified")
         print(f"  casc: {n_ok}/{len(results)} verified")
+    if cmd == "all" and n_cached:
+        print(f"  all: {n_cached}/{len(results)} verdict(s) replayed from the ledger")
     print("gate:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
+
+
+def emit_result(cmd, unit, e):
+    """The `=>` line (and notes) for one finished unit, printed atomically."""
+    cached = "  (cached)" if _is_cached(e) else ""
+    _print_line(f"  => {unit.id}: {e.status}{cached}")
+    # `all` keeps every note; a suite run prints them only for a failure,
+    # where the note is the diagnosis rather than background.
+    if cmd != "casc" or e.status != "verified":
+        for n in e.notes:
+            _print_line(f"     note: {n}")
 
 
 if __name__ == "__main__":

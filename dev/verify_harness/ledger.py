@@ -43,7 +43,12 @@ LEDGER_PATH = os.path.join(os.path.dirname(__file__), "ledger.json")
 #    instead of probing pages; before this, any function that allocated a
 #    dynamic stack frame faulted as an unmapped read at 0x10. No gate changed,
 #    but the oracle did, so every older entry is stale.
-HARNESS_VERSION = "6"
+# 7: `all`/`casc` replay a fresh `verified` entry instead of re-running its
+#    stages, and units run in a thread pool (`--unit-jobs`). The five stages,
+#    the corpus and every gate are unchanged; a replayed verdict is the one
+#    the same digests produced under the same harness version. Existing
+#    entries are re-run once (they carry version 6) and cached from then on.
+HARNESS_VERSION = "7"
 
 
 def sha256_bytes(b: bytes) -> str:

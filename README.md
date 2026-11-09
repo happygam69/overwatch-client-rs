@@ -87,6 +87,7 @@ export OW_SUPPORT_KEYRING='path/to/Overwatch.keyring'   # optional
 
 cargo xtask verify                                      # fmt, clippy, tests, index, deviations, addresses
 cargo xtask verify --fast                               # without the install-reading tests
+cargo xtask verify -p ow-casc --skip index_find_real    # one crate, one suite left out (iteration only)
 
 cargo run --release -p ow-client                        # the practice range; WASD walks
 cargo run --release -p ow-client -- --walk-test         # the movement trace and its assertions
@@ -141,6 +142,7 @@ short version: one gate decides whether a change is done —
 ```sh
 cargo xtask verify          # the gate; CI runs this, less what needs an install
 cargo xtask verify --fast   # without an install here: no install-reading tests
+cargo xtask verify -p ow-casc   # clippy + tests for one crate; an iteration loop, not the gate
 ```
 
 — and the work queue is [`docs/open-questions.md`](docs/open-questions.md).

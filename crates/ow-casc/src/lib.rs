@@ -18,6 +18,7 @@
 //! overtools/TACTLib; see `docs/formats/casc.md` and `docs/provenance.md`.
 
 pub mod blte;
+pub mod bytes;
 pub mod cdn;
 pub mod container;
 pub mod encoding;

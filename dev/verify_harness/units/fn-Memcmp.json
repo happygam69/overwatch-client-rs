@@ -1,0 +1,65 @@
+{
+ "id": "fn/Memcmp",
+ "title": "tier-2 shipped code: the client's memcmp against Memcmp (0x142efecf0)",
+ "address": {
+  "v2b": "0x7ff7c7c1ecf0"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "client_memcmp",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u64",
+ "argFactory": "client_memcmp_fixture",
+ "args": [
+  {
+   "name": "a",
+   "kind": "ptr",
+   "ptr_len": 256
+  },
+  {
+   "name": "b",
+   "kind": "ptr",
+   "ptr_len": 256
+  },
+  {
+   "name": "count",
+   "kind": "u64"
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 8421,
+  "coverageWindow": 199,
+  "allowedImageReads": []
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/bytes.rs::client_memcmp, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the client_memcmp entry. The ledger binds the verdict to bytes.rs + the probe source + the git revision.",
+  "Oracle is Memcmp at exe 0x142efecf0, extent 0x142efecf0..0x142efedb7 (199 bytes through the ret at 0x142efedb6), which is the declared coverageWindow. v2b 0x7ff7c7c1ecf0 is 0x7ff7c4d20000 + (0x142efecf0 - 0x140000000). Signature: (const void *a, const void *b, size_t count) -> int in EAX (RCX, RDX, R8).",
+  "The read, instruction for instruction: `sub rdx, rcx` turns the second pointer into a displacement from the first. A count below 8 skips to the byte tail (`cmp r8, 8` / `jb` at 0x142efecf7). An unaligned first pointer is walked a byte at a time until `cl & 7 == 0` (`test cl, 7` at 0x142efecf9 / 0x142efed0d), so every wide compare is 8-byte aligned. The wide walk compares four qwords per 32-byte iteration (`cmp rax, [rcx+rdx]` and its three siblings at 0x142efed40..0x142efed63), then single qwords (`cmp` at 0x142efed80), then the 0..7 byte tail.",
+  "Every mismatch lands on one of two result sites. The head and tail byte walks compare the byte pair directly (`cmp al, [rcx+rdx]` at 0x142efed02 / 0x142efed22) and fall into `sbb eax, eax` / `sbb eax, -1` (0x142efed33..0x142efed38). The wide walk adjusts the cursor to the failing qword (0x142efed98/9c/a0), reloads the second operand (`mov rcx, [rdx+rcx]`), byte-swaps both words (`bswap` at 0x142efeda8/ab) and compares unsigned before the same sbb pair - that is the lexicographic order of the eight bytes, i.e. the first differing byte decides. The sbb pair writes EAX, so RAX carries 0x0000_0000_ffff_ffff for below, 1 for above; an equal run returns 0 (`xor rax, rax` at 0x142efed2f).",
+  "The wide compares test equality only and read exactly the bytes a byte scan reads; the ordering site is the first differing byte. The Rust is therefore the byte scan (left < right -> 0xffffffff, right < left -> 1, else continue), the same read set and the same three results. This is recorded because the instruction count differs while the observable does not.",
+  "Compared channels: the 64-bit return (the client's RAX value) and both 0x100-byte pointees. The client writes neither buffer; the probe returns both unchanged, so any write would show as a pointee divergence. The fixture fills the bytes past `count` with distinct padding so a candidate that compares one byte too many answers differently instead of faulting.",
+  "Coverage gate is 100% over the window's 17 conditional branches: the count<8 skip, the alignment test, the head byte compare and its back edge, the `r8 >> 3` qword-count test, the zero-length exit, the tail byte compare and its back edge, the 32-byte-block test, the four qword compares inside a block, the block back edge, the leftover-qword test, the leftover compare and its back edge. The fixture's declared cases walk count 0..0xFF with alignment 0..7: a difference in each of the four block qwords, in the alignment head, in each leftover-qword iteration, and in the 0..7 tail; exact multiples of 8, 0x20 and 0x100; and equal-over-the-region cases whose padding differs.",
+  "allowedImageReads is empty: the function reads only its two buffers - no image constants, no call, no cookie (the body is a leaf, unlike the larger entry points)."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "a count past either buffer",
+   "why": "The client reads `count` bytes with no bounds check; a longer count would read past the caller's buffer. The probe rejects it and the fixture keeps count < 0x100 on a 0x100-byte buffer (so even a mutant that compares one byte too many stays inside the arena and is observable, not a fault)."
+  },
+  {
+   "what": "a == b (the same buffer twice)",
+   "why": "The arena lays each pointer argument at its own offset, so the same address cannot be passed twice; the oracle would write the second pointee over the first. Equal-content buffers are covered (the equal cases return 0), but the aliased-pointer form itself is not exercised. The Rust has no aliasing requirement (`&[u8]` reads only)."
+  },
+  {
+   "what": "the shipped index search does not call this function",
+   "why": "crates/ow-casc/src/index.rs::find_entry orders keys with Rust's slice `cmp` and equality rather than calling client_memcmp; the client reaches memcmp from there (0x142511241) and from the page/checksum compares. The two agree on every input this unit covers, but rewiring find_entry would edit index.rs, which the ledger binds to fn/DynamicIndexFindEntry; that unit must be re-proved in the same change. Until then the ported leaf is proved on its own and the caller keeps its own verified comparison.",
+   "address": "0x142511241"
+  }
+ ]
+}

@@ -1,26 +1,102 @@
 # Handoff: finish `ow-casc` (30 entries without a unit)
 
-## This session (2026-11-19): three more units, three walls closed
+## This session (2026-11-19): four more units, four walls closed
 
 The assignment below was the previous session's. This session continued the
-same loop on the top of the playbook queue and took three functions:
+same loop on the top of the playbook queue and took four functions:
 
 | unit | address | result |
 |---|---|---|
 | `fn/ConfigKeyEntryParse` | `0x1424cebd0` (481 B) | 87.5% both-edge (14/16 of 21 sites, 5 dead edges), 11/11 mutants + 1 declared equivalent |
 | `fn/DynamicIndexResolveRange` | `0x1425115d0` (291 B) | 100% (7/7), 5/5 |
 | `fn/PageSlotFind` | `0x1424fa440` (247 B) | 100% (12/12), 12/12 |
+| `fn/CdnIndexPageSelectBatch` | `0x1424da910` (660 B) | 100% both-edge (18/18 of 20 sites, 2 dead), 11/12 mutants |
+| `fn/Memcmp` | `0x142efecf0` (199 B) | 100% (17/17), 6/6 |
 
-`cli.py casc` is **30/30 verified**. `cli.py all` is **98 verified, 3
-inconclusive, 1 divergent, 1 scaffold of 103 units** (98 of 99 distinct
-addresses); the five non-verified are the pre-existing ones listed below.
+`cli.py casc` is **31/31 verified**, re-proved end to end under harness v7
+(the ledger entries were v6, so the first v7 run re-runs every unit).
+`cli.py all` was not re-run this session; adding `fn/Memcmp` to the last
+count gives **99 verified of 104 units** (99 of 100 distinct addresses),
+the same five non-verified ones as before, listed below.
 `cargo xtask verify --fast` is green (fmt, clippy, 828 lib tests, tool index,
 deviation/frame/layout checks). `cargo xtask verify` (the install-reading
 half) does not finish on this machine because of a pre-existing slow test -
-see "Measured, not fixed" at the bottom.
+see "Measured, not fixed" at the bottom; the xtask change below overlaps
+that wall instead of summing it.
 
-`crate_coverage.py ow-casc`: **28 verified / 30 `entry` without a unit / 84
-interior / 8 code / 3 data** over 153 cited addresses.
+### xtask speed (same session): `cargo xtask verify` runs the test binaries in a pool
+
+One `cargo test` walks the ~50 test binaries serially, and each install
+suite re-opens the install first, so the gate paid the **sum** of the
+suites (~30 min) where the work itself allows the **max**. xtask now
+builds every binary once (`cargo test --no-run --message-format=json`),
+reads the executables out of the compiler-artifact messages (a dependency-
+free JSON reader inside xtask) and runs them in a pool - `--test-jobs` /
+`XTASK_TEST_JOBS`, default `min(4, cpus)`; read-only installs make it safe
+and the shared page cache makes it faster than the serial walk. Cheap
+checks (fmt + the four python doc checks) moved ahead of the compiling
+stages, `--fail-fast` ends the run at the first failing stage, failures
+print their captured output after the pool drains, and every binary
+reports a duration. Same stages, same binary sets for `--fast` and full,
+same verdict. The 19-minute `index_find_real` floor is untouched (a perf
+change, not a port). Measuring commands:
+
+    cargo xtask verify --test-jobs 1    # the old serial walk
+    cargo xtask verify                 # default pool
+    cargo xtask verify -p ow-casc --skip index_find_real   # one crate, minus the 19-min suite
+
+A scoped run is an iteration loop, not the gate: `-p`/`--package` (repeatable)
+scopes clippy, the test binaries and the doc tests; `--skip` (repeatable) drops
+a test binary whose label matches (`--skip index_find_real`) and otherwise is
+libtest's own per-test filter for the binaries that still run; both always
+print what they left out. Unscoped `cargo xtask verify` remains the definition
+of done. A bin-only crate named with `-p` no longer trips the doc stage: xtask
+asks `cargo metadata` which named packages have a library at all.
+
+xtask's own 20 unit tests (JSON parser, artifact selection, the pool
+against real scripts) pass.
+
+`crate_coverage.py ow-casc`: **29 verified / 29 `entry` without a unit / 84
+interior / 9 code / 3 data** over 154 cited addresses.
+
+### The five units that are not verified (pre-existing, not regressions)
+
+| unit | why |
+|---|---|
+| `fn/AnimTimeWrap`, `fn/CurveKeySampleDual` | tier-1 C units blocked by the broken local `gcc` (`cc1.exe` exits silently) |
+| `fn/MeshSweep` | 61.1% branch coverage, below its gate |
+| `fn/OrthonormalizeCameraBasis-state` | missing guest-pointer probe arm (reports `divergent`) |
+| `fn/MoverAdvance` | declared scaffold (`"scaffold": true`), reported SKIP |
+
+The harness's own tests (`test_harness_smoke.py`, `test_cache_and_parallel.py`)
+go red at the same wall: every tier-1 C candidate compile exits 1 with no
+compiler output. A trivial `gcc -shared t.c` reproduces it, so those failures
+are environmental, not a unit defect.
+
+### Harness speed (same session): `cli.py all` is an iteration gate now
+
+The 45-minute `all` was re-proving every unit on every run. Harness v7
+(same five stages, same corpus, same gates; see `dev/verify_harness/
+PERFORMANCE.md`'s 2026-11 section): `all`/`casc` replay a ledger entry whose
+every bound digest still matches instead of re-running it (`--force`
+re-proves, a named unit always re-runs); units run in a thread pool
+(`--unit-jobs`); mutant build slots are a knob (`--slots`). Naming several
+units runs them as one parallel batch - that is the subagent-batch verify
+step above, without the "they can block each other" caveat. First run after
+v7 re-proves everything once (entries carry version 6). To measure on the
+operator machine:
+
+    python dev/verify_harness/cli.py casc --force     # one full re-run
+    python dev/verify_harness/cli.py casc             # expect all (cached)
+    python dev/verify_harness/cli.py all --force --unit-jobs 4 --slots 6
+    python dev/verify_harness/cli.py all              # expect only stale units
+
+The harness's own tests (`test_harness_smoke.py`, `test_run_unit_e2e.py`,
+new `test_cache_and_parallel.py` and `test_cargo_mutant_builds.py`) pass;
+the two older ones had been broken since the image sha pin and now register
+their synthetic images' digests explicitly (`test_cargo_mutant_builds.py`
+skips itself where cargo is absent). The real-suite wall time is **not measured here** (no oracle
+image on this machine).
 
 ## The assignment (previous session)
 
@@ -83,22 +159,25 @@ In `docs/casc-1to1.md` ("The same wall, measured (2026-11-17)"):
 Plus the already-declared: `CdnIndexPageResident` `0x1424da590` (HTTP range
 read in streamed mode) and `PageReadPlan` `0x1424faa20` (container lock).
 
-## Measured, not fixed (2026-11-19)
+## Measured, not fixed (2026-11-19; xtask note 2026-11-19)
 
 - `crates/ow-casc/tests/index_find_real.rs::find_range_and_duplicate_choice_match_the_install`
   takes **1154 s (19 min) and passes**. It walks every install key group and
   calls `Store::location_of` + `Store::resolve_range` twice per group; each call
   rebuilds the segment's whole 18-byte entry buffer
   (`SegmentEntries::key_state`) and a fresh `KeyState`, so a 1.1M-key install
-  means tens of GB of copying. It is the reason plain `cargo xtask verify`
-  needs ~25 minutes here, not a failure. Pre-existing (the test predates this
-  session and nothing here touches `key_state`), and not fixed: the honest fix
-  is a `key_state`-free resolve path, which is a perf change, not a port.
+  means tens of GB of copying. It used to make plain `cargo xtask verify`
+  need ~25 minutes here; since the xtask pool change it sets the gate's
+  floor (~19 min) instead of being paid on top of the other suites. Not a
+  failure. Pre-existing (the test predates this session and nothing here
+  touches `key_state`), and not fixed: the honest fix is a
+  `key_state`-free resolve path, which is a perf change, not a port.
 - The `ow-tank` install tests (`component_payload_sizes_match_the_client`,
   `effect_assets_parse_and_every_component_keeps_the_clients_widths`,
   `a_model_carries_no_brush_container_chunk`) are the same shape: each runs
-  for minutes, so a non-`--fast` `cargo xtask verify` is a ~30-minute job on
-  this machine even when everything passes.
+  for minutes, so they used to sum into a ~30-minute non-`--fast`
+  `cargo xtask verify`; now they run concurrently and every binary's
+  duration shows in the gate log, so the slowest one is named, not hunted.
 
 ## Next: work in batches, not one unit at a time
 

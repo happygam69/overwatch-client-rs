@@ -26,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HARNESS = os.path.dirname(HERE)
 sys.path.insert(0, HARNESS)
 
+import emu_oracle  # noqa: E402
 import ledger  # noqa: E402
 import runner as runner_mod  # noqa: E402
 from runner import load_unit  # noqa: E402
@@ -72,11 +73,15 @@ def main() -> int:
     failures = []
     try:
         img_path = os.path.join(work, "img.bin")
+        import hashlib
+
+        blob = bytearray(b"\x00" * 0x1000)
+        blob[0x100 : 0x100 + len(FUNC)] = FUNC
         with open(img_path, "wb") as f:
-            f.write(b"\x00" * 0x1000)
-        with open(img_path, "r+b") as f:
-            f.seek(0x100)
-            f.write(FUNC)
+            f.write(bytes(blob))
+        # The synthetic image is not the pinned game image; register its
+        # digest so the oracle accepts it without weakening the pin itself.
+        emu_oracle.allow_image_sha256(hashlib.sha256(bytes(blob)).hexdigest())
 
         # Redirect the ledger to a temp file for this test (ledger.py
         # resolves the path at call time, so patching LEDGER_PATH is enough

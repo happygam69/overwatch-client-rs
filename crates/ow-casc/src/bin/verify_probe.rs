@@ -35,9 +35,10 @@ use std::io::{self, BufRead, Write};
 use ow_casc::blte::{
     md5_final, md5_init, md5_transform, md5_update, salsa20, salsa20_state_init, MD5_CTX_SIZE,
 };
+use ow_casc::bytes::client_memcmp;
 use ow_casc::container::{
-    decode_page_record, parse_index_file, parse_index_footer, select_page, verify_page_checksums,
-    IndexFooter, INDEX_FOOTER_SIZE, PAGE_MISS,
+    decode_page_record, parse_index_file, parse_index_footer, select_page, select_page_batch,
+    verify_page_checksums, IndexFooter, INDEX_FOOTER_SIZE, PAGE_MISS,
 };
 use ow_casc::encoding::{
     espec_string_index, find_ckey_record, find_ekey_record, page_index_search, write_header_fields,
@@ -828,6 +829,76 @@ fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), St
             let ret = parse_bool_string(&text, len, &mut flag);
             Ok((format!("{:x}", u64::from(ret)), vec![text, vec![flag]]))
         }
+        "cdn_page_select_batch" => {
+            // CdnIndexPageSelectBatch (0x1424da910): (index, keys, key_len,
+            // count, out_found, out_locations) -> u8. `keys` is the client's
+            // pointer array of u64 arena addresses; this fixture keeps every
+            // key buffer inside the index blob, so the probe turns each
+            // address into an offset there. The index object's own pointers
+            // (+0x50 whole-file base, +0x88 last keys) stay absolute; the
+            // candidate subtracts ARENA.
+            const ARENA: u64 = 0x2_0000_0000;
+            if args.len() != 6 {
+                return Err(format!("expected 6 args, got {}", args.len()));
+            }
+            let mut it = args.into_iter();
+            let mut index = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let keys_blob = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg1 must be a plain arena buffer".into()),
+            };
+            let key_len = match it.next() {
+                Some(Arg::U64(v)) => u8::try_from(v).map_err(|_| "key-len-past-u8".to_string())?,
+                _ => return Err("arg2 must be u64".into()),
+            };
+            let count = match it.next() {
+                Some(Arg::U64(v)) => u32::try_from(v).map_err(|_| "count-past-u32".to_string())?,
+                _ => return Err("arg3 must be u64".into()),
+            };
+            let mut out_found = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg4 must be a plain arena buffer".into()),
+            };
+            let mut out_locations = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg5 must be a plain arena buffer".into()),
+            };
+            let n = count as usize;
+            if out_found.len() < n || out_locations.len() < n * 8 {
+                return Err("out-buffers-too-short".into());
+            }
+            if keys_blob.len() < n * 8 {
+                return Err("keys-array-too-short".into());
+            }
+            let mut keys = Vec::with_capacity(n);
+            for i in 0..n {
+                let word = u64::from_le_bytes(keys_blob[i * 8..i * 8 + 8].try_into().unwrap());
+                let at = word
+                    .checked_sub(ARENA)
+                    .ok_or_else(|| "key-before-arena".to_string())?
+                    as usize;
+                if at >= index.len() {
+                    return Err("key-outside-index-blob".into());
+                }
+                keys.push(at);
+            }
+            let ret = select_page_batch(
+                &mut index,
+                &keys,
+                key_len,
+                count,
+                &mut out_locations,
+                &mut out_found,
+                ARENA,
+            );
+            Ok((
+                format!("{:x}", u64::from(ret)),
+                vec![index, keys_blob, out_found, out_locations],
+            ))
+        }
         "page_slot_find" => {
             // PageSlotFind (0x1424fa440): (cache, archive, page, len,
             // out_usable, exclude) -> slot. One blob holds the cache object at
@@ -865,6 +936,37 @@ fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), St
             let chosen = slot_find(&mut blob, ARENA, words[0], words[1], len, words[4]);
             blob[out_at] = chosen.usable;
             Ok((format!("{:x}", chosen.slot), vec![blob]))
+        }
+        "client_memcmp" => {
+            // memcmp (0x142efecf0): (a, b, count) -> the client's RAX value,
+            // 0xffffffff / 1 / 0. Both pointees are plain arena buffers; the
+            // client reads exactly `count` bytes of each and writes nothing,
+            // so the probe hands back both buffers unchanged (the harness
+            // compares them to prove no write happened).
+            if args.len() != 3 {
+                return Err(format!("expected 3 args, got {}", args.len()));
+            }
+            let mut it = args.into_iter();
+            let a = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let b = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg1 must be a plain arena buffer".into()),
+            };
+            let count = match it.next() {
+                Some(Arg::U64(v)) => v,
+                _ => return Err("arg2 must be u64".into()),
+            };
+            // The client compares `count` bytes with no bounds check; a count
+            // past either buffer is a fixture error, not a value.
+            let n = usize::try_from(count).map_err(|_| "count-past-usize".to_string())?;
+            if n > a.len() || n > b.len() {
+                return Err("count-past-buffer".into());
+            }
+            let ret = client_memcmp(&a, &b, n);
+            Ok((format!("{:x}", ret), vec![a, b]))
         }
         "build_info_select_row" => {
             // BuildInfoSelectRow (0x1424aec30): (table, flavor) - the 2-arg

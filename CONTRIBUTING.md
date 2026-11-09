@@ -10,7 +10,17 @@ to human contributors the same as to tooling.
 ```sh
 cargo xtask verify          # fmt, clippy (-D warnings), every test, dev index, deviations
 cargo xtask verify --fast   # the same, without the tests that read an install
+cargo xtask verify -p ow-casc   # the same for one crate (repeatable; iteration only)
+cargo xtask verify --skip index_find_real   # leave the 935 s suite out
 ```
+
+`-p` and `--skip` are for the edit-run loop; they scope clippy, the test
+binaries and the doc tests, and they always print what they left out. `--skip
+<name>` drops a whole test binary when the name matches its label (that is how
+`--skip index_find_real` removes the 19-minute suite) and otherwise passes
+libtest's own `--skip <name>` to every binary that still runs. A scoped run is
+**not** the gate: a change is done when the unscoped `cargo xtask verify`
+passes on a machine with the install.
 
 A change is done when the gate passes **and** the docs that describe the
 changed behaviour are updated in the same commit. CI runs the full gate

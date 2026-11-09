@@ -32,6 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HARNESS = os.path.dirname(HERE)
 sys.path.insert(0, HARNESS)
 
+import emu_oracle  # noqa: E402
 from emu_oracle import ArgSpec, EmuOracle  # noqa: E402
 from coverage import BranchTracker, _pdata_function_bounds  # noqa: E402
 from gen import F64_EDGE_POOL, U64_EDGE_VALUES, UnitArg, focused_f32_edge_cases, generate_args  # noqa: E402
@@ -53,12 +54,18 @@ def check(name, cond, detail=""):
 
 def make_image(funcs: dict, size: int = 0x1000) -> str:
     """funcs: {offset: bytes}; returns a temp file path."""
+    import hashlib
+
     img = bytearray(size)
     for off, code in funcs.items():
         img[off : off + len(code)] = code
+    blob = bytes(img)
+    # A synthetic image is not the pinned game image; register this one's
+    # digest instead of monkeypatching the pin away.
+    emu_oracle.allow_image_sha256(hashlib.sha256(blob).hexdigest())
     fd, path = tempfile.mkstemp(prefix="owimg_", suffix=".bin")
     with os.fdopen(fd, "wb") as f:
-        f.write(bytes(img))
+        f.write(blob)
     return path
 
 

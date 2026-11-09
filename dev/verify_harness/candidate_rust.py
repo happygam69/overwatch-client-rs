@@ -145,6 +145,8 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "md5_update": ["crates/ow-casc/src/blte.rs"],
     "md5_final": ["crates/ow-casc/src/blte.rs"],
     "md5_transform": ["crates/ow-casc/src/blte.rs"],
+    "client_memcmp": ["crates/ow-casc/src/bytes.rs"],
+    "cdn_page_select_batch": ["crates/ow-casc/src/container.rs"],
     "dynamic_index_hash": ["crates/ow-casc/src/index.rs"],
     "dynamic_index_key_hash": ["crates/ow-casc/src/index.rs"],
     "encoding_header_parse": ["crates/ow-casc/src/encoding.rs"],
@@ -242,6 +244,8 @@ ENTRY_MUTATION: Dict[str, str] = {
     "md5_update": "md5_update",
     "md5_final": "md5_final",
     "md5_transform": "md5_transform",
+    "client_memcmp": "client_memcmp",
+    "cdn_page_select_batch": "select_page_batch",
     "dynamic_index_hash": "hash_index",
     "dynamic_index_key_hash": "key_hash",
     "encoding_header_parse": "write_header_fields",
@@ -305,13 +309,46 @@ DEFAULT_STARTUP_TIMEOUT = DEFAULT_CALL_TIMEOUT
 
 # Mutant builds share a small pool of cargo target directories per crate. The
 # dependency graph (registry crates, ow-casc, ow-stu) is compiled once per
-# slot instead of once per mutant, and up to MUTANT_BUILD_SLOTS mutants compile
-# at the same time. A slot is checked out for one build at a time, and the
-# mutant's own binary is copied out before the slot is returned, so no build
+# slot instead of once per mutant, and up to `MUTANT_BUILD_SLOTS` mutants
+# compile at the same time. A slot is checked out for one build at a time, and
+# the mutant's own binary is copied out before the slot is returned, so no build
 # can ever replace the binary a running probe was launched from.
+#
+# The count is a throughput knob only - it changes how many mutants compile at
+# once, never what is measured or gated. `set_mutant_build_slots()` (the CLI's
+# `--slots`) or the env var `VERIFY_MUTANT_SLOTS` raise it on machines with
+# more cores; the measured default stays 4 (PERFORMANCE.md).
 MUTANT_BUILD_SLOTS = 4
 _MUTANT_SLOT_QUEUES: Dict[str, "queue.Queue[int]"] = {}
 _MUTANT_SLOT_GUARD = threading.Lock()
+
+
+def set_mutant_build_slots(n: int) -> None:
+    """Set how many mutant build slots each crate gets.
+
+    Must be called before the first mutant build of a run: a crate whose slot
+    queue already exists keeps the count it was created with (the queue is the
+    set of checked-out slots, and shrinking it under a running build would
+    deadlock the waiters). No verdict depends on the count.
+    """
+    global MUTANT_BUILD_SLOTS
+    n = int(n)
+    if n < 1:
+        raise ValueError(f"mutant build slots must be >= 1, got {n}")
+    MUTANT_BUILD_SLOTS = n
+
+
+def _mutant_slot_count() -> int:
+    """The effective slot count: env var first, then the module setting."""
+    env = os.environ.get("VERIFY_MUTANT_SLOTS")
+    if env is not None:
+        try:
+            n = int(env)
+        except ValueError:
+            n = 0
+        if n >= 1:
+            return n
+    return MUTANT_BUILD_SLOTS
 
 
 def _mutant_slot_queue(crate_key: str) -> "queue.Queue[int]":
@@ -319,7 +356,7 @@ def _mutant_slot_queue(crate_key: str) -> "queue.Queue[int]":
         q = _MUTANT_SLOT_QUEUES.get(crate_key)
         if q is None:
             q = queue.Queue()
-            for i in range(MUTANT_BUILD_SLOTS):
+            for i in range(_mutant_slot_count()):
                 q.put(i)
             _MUTANT_SLOT_QUEUES[crate_key] = q
         return q

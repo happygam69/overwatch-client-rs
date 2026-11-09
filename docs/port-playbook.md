@@ -22,7 +22,7 @@ below exists to make that checkable rather than believable.
 | triage `entry` | 238 | reachable from outside the system: port as a cluster head |
 | triage `inline` | 2,312 | only meaningful inside a caller: port with it |
 | triage `thunk` / `trivial` | 6 / 5 | wrappers and one-liners: port with the head |
-| verified today | 98 of 103 unit ids (99 distinct addresses) | `python dev/verify_harness/cli.py all` |
+| verified | whatever this machine's ledger says | `python dev/verify_harness/cli.py list` (the ledger is local, §7) |
 
 One unit = one client function address, one Rust function, one descriptor, one
 verdict. The verdict is bound by SHA-256 to the oracle bytes, the candidate
@@ -64,6 +64,40 @@ measurement, not a recollection.
 Do not start a unit whose inputs you cannot construct. A unit needs a fixture
 that can build every input the client's code branches on.
 
+### 1.5 Screen the callees before you read the body
+
+The queue orders by "proved callees, then size", but the property that decides
+whether a unit is cheap is whether the **oracle can execute** what the body
+calls. The emulator maps the image only: a call into a real function start runs
+(proved or not - the ladder compares the top function, and its callees execute),
+while these three shapes fault on the first instruction:
+
+| shape in the `.asm` | why it cannot run | example |
+|---|---|---|
+| `call qword ptr [rip + …]` | an import thunk: the IAT slot is zero in the offline image, so the call jumps to 0 | the page-cache locks `0x142694c20` / `0x142694c50` |
+| `call qword ptr [reg + off]`, `call reg` | a virtual slot: the object and its table have to be modelled first | `PageReadPlan`'s release at `[rcx+8]` / `call r8` |
+| `syscall`, `int 0x2b` | kernel transition | - |
+
+```sh
+python dev/corpus.py show <addr> --asm | grep -E "call|syscall"
+```
+
+One grep before the deep read separates a 199-byte leaf that will verify in 45
+seconds from a 401-byte queue head that cannot verify at all yet. The queue
+order is a heuristic; a leaf with zero callees and zero image reads beats a
+smaller-looking entry with fifteen.
+
+**Check the address is in the corpus first.** `corpus.py show` answers
+`not in corpus: … (build the range first)` for a function outside a built range;
+build the disassembly only (no Ghidra bridge, seconds):
+
+```sh
+python dev/corpus.py build <start> <end> --asm-only --tag <name>
+```
+
+`<end>` is the start plus the byte size `crate_coverage.py --queue` prints; a
+function with a `.pdata` entry gets its exact extent in the corpus header.
+
 ---
 
 ## 2. Read it
@@ -82,6 +116,10 @@ sqlite3 dev/data/corpus/corpus.db "select c_cut,file,asm_file from functions whe
 `c_cut = 1` means the stored decompile was produced before the body merge and
 ends at the seam: read it, but re-decompile anything it truncates.
 
+The corpus stores the disassembly of the whole game and it is written without
+the bridge, so it is the fast path: `--asm-only` re-reads any range in seconds
+and needs no Ghidra session.
+
 **b. Read from the merged project, not the evidence project.** The evidence
 project (`dev/ghidra_run/owmod_clean`) has each function's body clipped to its
 own `.pdata` extent. The merged working copy (`C:/Temp/owread`) gives every
@@ -95,7 +133,10 @@ analyzeHeadless.bat C:\Temp\owread owmod_clean -process Overwatch.exe -noanalysi
 ```
 
 The args file is whitespace-separated `start end` pairs (`0x140cb74a0 0x140cb760d`).
-`-process` is mandatory; without it the script runs with no program.
+`-process` is mandatory; without it the script runs with no program. The merged
+project is the reading source: 25,588 of 25,638 chain roots own their full
+contiguous code with a measured seam; 41 have no seam (0 named) and 9 are blocked
+by objects with no `.pdata` extent (`docs/ghidra-image-audit.md` 5.2, 8.2).
 
 **c. When the decompile stops early, say why before trusting it.**
 
@@ -135,6 +176,11 @@ Rules that keep the Rust 1:1 instead of approximate:
 - **Integer shifts mask themselves.** `u32 >> n` masks `n` to 5 bits, exactly as
   `shrl` does — so a widened `& 0x1f` may be unobservable. That is an
   equivalent mutant, declared with a rationale, not a fixture to pad.
+- **Write comparisons so a flip is observable.** `if a != b { return if a < b
+  {…} }` makes the `<` → `<=` mutant *observationally equivalent* inside the
+  guard, so it can never be killed and must be declared. Two independent tests
+  (`if a < b`, `if b < a`) return the same three results and both flips are
+  killable. Same category as the shift mask above.
 - **Do not build on a stand-in.** If a stage is a declared non-1:1 stand-in, the
   Rust feature is open; replace the stand-in first (`docs/deviations.md`).
 
@@ -195,6 +241,14 @@ Rules that matter:
 - **Lengths and counts stay tied.** The client has no bounds checks; a fixture
   that draws `count` independently of the buffer faults in the emulator and
   proves nothing.
+- **Keep mutants inside the buffer, and answering differently.** A mutant that
+  panics, overruns or hangs is an *infrastructure* failure, not a kill: the
+  probe dies, the runner reports the mutant "not evaluated", and the unit turns
+  `inconclusive`. A `while i < count` mutant that becomes `<=` reads one byte
+  past `count`, so length the pointee one element past the compared region and
+  make that element differ between the buffers: the widened loop reads a real
+  byte and returns the wrong answer, which is a kill. A panic is a fixture bug
+  even when the mutant is the one that is wrong.
 - **State mode.** A unit with a `state` block preloads a snapshot; an argument
   with `guest=<address>` lives inside it, and the whole region is compared after
   the call. Use it when the client reads/writes a surrounding object.
@@ -215,6 +269,9 @@ Rules that matter:
   "image": "dev/data/offline_recover/module_offline.bin",
   "entry": "mover_physics_command",
   "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
   "args": [ { "name": "body", "kind": "ptr", "ptr_len": 6800 } ],
   "returns": "void",
   "argFactory": "mover_command_fixture",
@@ -258,16 +315,33 @@ Rules that matter:
   is not a pass.
 - `scaffold: true` marks a unit that is declared but not yet wired; `cli.py all`
   reports it as SKIP.
+- `candidateCrate` / `candidateProbe` choose the crate whose probe is built (the
+  default is `ow-sim` / its probe), and `suite` groups the unit: it is in the
+  CASC suite when `suite == "casc"` or its crate is `ow-casc`, so an ow-casc
+  unit that omits both is silently absent from `cli.py casc`.
+- **The smallest complete real unit is `units/fn-Memcmp.json`** (199-byte leaf,
+  46 declared cases, 100% of 17 branch sites, 6/6 mutants): copy its shape rather
+  than this skeleton's, and read its `notes` as the model for what a unit says.
+- `knownEquivalentMutants` is **line-keyed**: any edit above the mutated
+  statement silently re-arms the mutant and the unit goes red for a non-port
+  reason (`fn/EncodingFindEKey`, 991 -> 1122 -> 1124; the last move was two
+  lines added to a doc comment). Re-state the line and say why it moved; do not
+  delete the declaration.
 
 ---
 
 ## 7. Run it and read the ladder
 
 ```sh
-python dev/verify_harness/cli.py fn/BuildMoverPhysicsCommand
-python dev/verify_harness/cli.py all --jobs 8      # the whole suite
-python dev/verify_harness/cli.py list              # ids and titles
+python dev/verify_harness/cli.py fn/BuildMoverPhysicsCommand   # one unit, re-proves it
+python dev/verify_harness/cli.py casc                          # the CASC suite
+python dev/verify_harness/cli.py all                           # every suite
+python dev/verify_harness/cli.py list                          # ids and titles
 ```
+
+`all` and `casc` replay a `verified` entry whose bound digests still match; a
+named unit always re-runs (`--cache` opts it back in, `--force` re-proves a
+suite). The knobs `--unit-jobs`, `--jobs`, `--slots` change throughput only.
 
 | stage | what it proves |
 |---|---|
@@ -280,6 +354,16 @@ python dev/verify_harness/cli.py list              # ids and titles
 Verdicts: `verified` (all five), `divergent` (a real disagreement), `inconclusive`
 (a gate could not be met), `stale` (inputs or harness changed), `SKIP (scaffold)`.
 Only `verified` counts as done.
+
+**Cost, measured on a 2-core machine with `--unit-jobs 4 --jobs 4 --slots 4`:**
+one unit ~20-45 s (stage 5's mutant cargo builds dominate); `cli.py casc`
+re-proving all 31 stale units 8 min 33 s; `cargo xtask verify --fast` 2-3 min. A
+fresh entry replays in milliseconds, so a suite run costs only what changed.
+
+**The ledger is local.** `dev/verify_harness/ledger.json` is gitignored, so a
+fresh checkout has zero verdicts and the first `casc`/`all` re-proves every unit
+once. "Verified" is a property of this machine's ledger and the digests it
+binds, not of the commit.
 
 ---
 
@@ -294,6 +378,10 @@ Only `verified` counts as done.
 | `INCONCLUSIVE: coverage x% < gate` | add declared cases for the missed branch addresses printed |
 | `SURVIVOR: …` | either a fixture gap (add the discriminating case) or an equivalent mutant (declare with a proof) |
 | `candidate compile failed` with no text | the harness now prints the command and exit code: run it by hand |
+| harness self-test red at `candidate compile failed`, no compiler output | the local `gcc` is broken (`cc1.exe` exits 1 silently), not your change; the tier-1 C units go `inconclusive` for the same reason |
+| `mutant … not evaluated` / unit `inconclusive` after a mutant | the mutant panicked or hung: fix the fixture so a broken candidate answers differently instead of faulting (§5) |
+| `make_index.py (python): FAILED`, then `python3: Python was not found` | the second line is the gate's interpreter fallback, not the cause: `dev/INDEX.md` is stale. `python dev/make_index.py` |
+| `gh_apply_names.py` takes minutes, or times out | it is one HTTP call per table row (~500). Use `--addr 0x…` for the row just added (§12); `--check` now only reads |
 | `stale` | expected after editing the candidate source or the harness; re-run |
 
 A divergence is never resolved by loosening a gate. `docs/port-plan.md` records
@@ -341,13 +429,14 @@ image is CRT, STL, compiler helpers, middleware and rendering.
 | need | tool |
 |---|---|
 | what a function does | `python dev/corpus.py show <addr> [--asm]`, then `McpDecompile.java` from `C:/Temp/owread` |
+| put a body into the corpus | `python dev/corpus.py build <start> <end> --asm-only` (no bridge needed) |
 | is the body complete? | `DecompScope.java <addr>`, `ProbeFlow.java <addr>` |
 | why is a decompile short? | false `noreturn` (`ClearFalseNoReturn.java`) or a body seam (`MergeChainBodies.java`) |
 | who calls / what it calls | `CallersOf.java`, `McpCallers.java`, `dev/callers.py` |
 | which chain fragments exist | `dev/chain_placement.py`, `ChainConflicts.java` |
 | data formats and values | `crates/ow-tank/src/bin/*`, `crates/ow-tank/examples/*` |
 | is an address readable | `python dev/pe_layout.py --addr <addr>` |
-| names ↔ addresses | `docs/function-names.csv`, `python dev/gh_apply_names.py` |
+| names ↔ addresses | `docs/function-names.csv`, `python dev/gh_apply_names.py [--addr 0x…] [--check]` |
 | which functions a data crate covers | `python dev/crate_coverage.py <crate> [--queue]` |
 | the gate | `cargo xtask verify` (`--fast` skips install-reading tests) |
 | tool index | `python dev/make_index.py` after adding a script |
@@ -358,16 +447,28 @@ image is CRT, STL, compiler helpers, middleware and rendering.
 
 **New unit**
 
-1. `corpus.py show <addr> --asm`; decompile from `C:/Temp/owread`.
-2. Write the Rust (`crates/<crate>/src/<file>.rs`), doc comment naming the
+1. Screen the callees (§1.5): a `call qword ptr [rip+…]` or `[reg+off]` is a
+   dead end until the missing stage is read. `corpus.py build … --asm-only` if
+   `show` says the address is not in the corpus.
+2. `corpus.py show <addr> --asm`; decompile from `C:/Temp/owread` when a branch
+   is not obvious from the instructions.
+3. Write the Rust (`crates/<crate>/src/<file>.rs`), doc comment naming the
    address and the instructions that decide each branch.
-3. Probe arm + `cargo build --release --bin verify_probe -p <crate>`.
-4. `ENTRY_SOURCES` / `ENTRY_MUTATION` rows in `candidate_rust.py`.
-5. Fixture: declared cases on every boundary, then random.
-6. Unit JSON: address, entry, args, options, equivalent mutants, gaps, notes.
-7. `cli.py fn/<Name>` until `verified`.
-8. Name row + `gh_apply_names.py`; `docs/formats/<system>.md`; `systems-coverage.md`; `MODLOG.md`.
-9. `cargo xtask verify`.
+4. Probe arm + `cargo build --release --bin verify_probe -p <crate>`.
+5. `ENTRY_SOURCES` / `ENTRY_MUTATION` rows in `candidate_rust.py`.
+6. Fixture: declared cases on every boundary, then random; a mutant must land
+   on a real byte, not outside the buffer (§5).
+7. Unit JSON: address, entry, args, options, equivalent mutants, gaps, notes.
+   `candidateCrate` / `candidateProbe` / `suite` route it to the right probe and
+   suite (§6).
+8. `cli.py fn/<Name>` until `verified`.
+9. Name row in `docs/function-names.csv`, then
+   `python dev/gh_apply_names.py --addr <addr>` (one row; the full table is a
+   minutes-long walk, and the CSV row is the durable record either way).
+10. `docs/formats/<system>.md`; `docs/systems-coverage.md`; `MODLOG.md`.
+11. `python dev/make_index.py` if a `dev/**/*.py` file was added.
+12. `cargo xtask verify --fast`, then `python dev/verify_harness/cli.py casc`
+    (or the crate's suite) to prove no sibling went stale.
 
 **Closing a cluster**
 
@@ -377,35 +478,25 @@ image is CRT, STL, compiler helpers, middleware and rendering.
 
 **Weekly hygiene**
 
-1. `cli.py all --jobs 8`; every `stale` is a unit whose inputs changed.
+1. `cli.py all` (replays fresh entries); every `stale` is a unit whose inputs
+   changed. `--force` is the full re-proof, and it is the expensive one.
 2. `cargo xtask verify`.
 3. `docs/open-questions.md`: the top item is the only one being worked.
 4. Rotate `MODLOG.md` past a few hundred lines.
 
 ---
 
-## 13. State of this playbook's own tools (2026-11-19)
+## 13. Where the state lives
 
-- `cli.py all`: **98 verified, 4 open, 1 scaffold**. Open: `fn/AnimTimeWrap`
-  and `fn/CurveKeySampleDual`, two tier-1 C units blocked by a broken local
-  `gcc` (`cc1.exe` exits silently); `fn/MeshSweep` at 61.1% branch coverage;
-  and `fn/OrthonormalizeCameraBasis-state`, whose guest-pointer probe arm is
-  missing (it reports `divergent`). `fn/MoverAdvance` is a declared scaffold.
-  All five are pre-existing, not regressions.
-- `cli.py casc` is **30/30 verified**: the three newest units are
-  `fn/ConfigKeyEntryParse`, `fn/DynamicIndexResolveRange` and
-  `fn/PageSlotFind` (2026-11-19), which took `ow-casc` from twenty-seven.
-- A unit's `knownEquivalentMutants` is **line-keyed**, so any edit above the
-  mutated statement silently re-arms the mutant and the unit goes red for a
-  non-port reason (`fn/EncodingFindEKey`, 991 -> 1122 -> 1124; the last move
-  was two lines added to a doc comment). Re-state the line and say why it
-  moved; do not delete the declaration.
-- Do not use `cli.py all` to check progress: stage 5 rebuilds the crate once
-  per mutant, so a full run is roughly an hour. `cli.py casc`, one unit id, or
-  a detached run writing to a file are the cheap paths; `cargo xtask verify`
-  does not include the harness.
-- The merged project `C:/Temp/owread` is the reading source: 25,588 of 25,638
-  chain roots own their full contiguous code with a measured seam; 41 have no
-  seam (0 named) and 9 are blocked by objects with no `.pdata` extent.
-- `cargo xtask verify` is green. If it fails right after `pe_layout.py: ok`,
-  check `dev/INDEX.md` is current (`python dev/make_index.py`).
+This page is procedure and carries no counts. It used to end with a status
+section, which meant every session edited numbers into it and the next session
+read stale ones. State has an owner:
+
+| question | file |
+|---|---|
+| what is verified right now, and every verdict's digests | `dev/verify_harness/ledger.json` (local, gitignored) - read by `python dev/verify_harness/cli.py list` |
+| what each crate and system covers, function by function | `docs/systems-coverage.md` |
+| what is open, what is next, which units are red | `STATUS-handoff.md`, `docs/open-questions.md` |
+| the read behind a unit | `docs/formats/<system>.md` and the unit's `notes` |
+| why a unit is red for a non-port reason | §6 (line-keyed mutants) and §8 (the environment rows) |
+

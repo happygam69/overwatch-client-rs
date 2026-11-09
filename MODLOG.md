@@ -6,6 +6,219 @@ Rotation: this file holds the current entries. Older ones move verbatim to
 `docs/history/modlog-YYYY-MM.md` (one file per month) at each rotation; no
 entry is rewritten after the fact.
 
+## 2026-11-19 - gate: the unscoped `verify` is suspended by the operator
+
+The full run costs over an hour (seven install suites are 98% of the test
+time; `index_find_real` alone 935-1154 s) and that cost is deliberately not
+being paid while the question of what to do about it is open. `AGENTS.md`
+now carries a temporary "TEMPORARY GATE SUSPENSION" section, rule 10 points
+at it, and it says what to run instead (`--fast`, `-p <crate>`, `--skip
+<suite>`) and that a suite left out must be reported as **not run** - never
+implied to be green. Nothing is disabled in `crates/xtask`: the unscoped
+command still exists and still means what it meant, so this is a policy
+suspension, not a behaviour change. A full run started to qualify this
+tree was killed mid-suite; it is not a verdict and nothing here is claimed
+from it.
+
+## 2026-11-19 - xtask: `verify` can be scoped, so the edit loop stops paying for the gate
+
+The gate's floor is one test: `index_find_real` at 935-1154 s, with six more
+install suites of 134-428 s behind it. Being told "the gate is over an hour"
+is the operator's correct complaint, and the answer is not a second gate - it
+is a scoped run for the loop and the whole one for the verdict. `verify` now
+accepts `-p/--package <spec>` (repeatable) and `--skip <name>` (repeatable).
+Both are pure plumbing. `-p` replaces `--workspace` on clippy, on the test
+build/run and on the doc stage. `--skip <name>` has two effects, because a name
+can mean either thing you would want to type: a binary whose label contains
+the name is **not run at all** (`--skip index_find_real` drops that suite), and
+for every remaining binary the name is appended as libtest's own
+`--skip <name>` (drop matching tests). A bare positional name is libtest's
+*include* filter, the opposite meaning; the first version of this passed the
+names without the flag, ran zero tests in nine binaries and reported
+"all good" in 0.2 s - the trap the new self-run test now catches. The four
+python doc checks and fmt stay workspace-wide - they answer in seconds and a
+stale table is workspace-wide news either way. The gate is unchanged: no
+`-p`/`--skip` means exactly the old command, and the docs now say a scoped run
+is an iteration loop, not the definition of done (CONTRIBUTING, README,
+`docs/open-questions.md` item 2, `dev/verify_harness/PERFORMANCE.md`). One more
+trap fixed on the way: a bin-only crate (`-p xtask`) makes `cargo test --doc
+-p xtask` exit 101 with "no library targets found", so the scoped doc stage
+asks `cargo metadata --no-deps` which named packages have a library and says
+so instead of adding a false red. Empty flag values are errors, not silent
+no-ops. `run_all` gained the pass-through argument list; 3 new xtask tests
+(scoping, skip collection, empty values) plus one that proves `--skip` reaches
+a binary by re-running the test executable itself and asserting the skips are
+reported as `filtered out` while the rest still runs. Measured on this box
+(12 logical cores) with the install present: `cargo xtask verify -p xtask` 5 s (doc stage
+reports no library targets), `-p ow-sim` 3.5 s, and `-p ow-casc --skip
+index_find_real` **20 s** (8 binaries, `blte_real` 15.9 s, the 19-minute suite
+skipped by label) against >19 minutes for the same scope without the skip.
+The full unscoped gate was **not** run here.
+
+## 2026-11-19 - xtask: `cargo xtask verify` stops walking the tests serially
+
+The full gate spent ~30 minutes even when green, and the shape of the cost
+was known: `index_find_real` alone runs 1154 s, several `ow-tank` install
+suites run minutes each, and one `cargo test` walks every binary serially,
+so the gate paid the sum instead of the max. The gate now builds every test
+binary once (`cargo test --no-run --message-format=json`), reads the
+executable paths out of the compiler-artifact messages with a dependency-
+free JSON reader in xtask itself, and runs the binaries in a thread pool
+(`--test-jobs` / `XTASK_TEST_JOBS`, default `min(4, cpus)`). The suites are
+read-only on the install, so they interleave safely and share the page
+cache; every binary now reports a duration, and failures print their
+captured output after the pool drains, so a detached log names every
+failure instead of cargo's first one. The verdict does not change: same
+stages, same binaries for `--fast` (lib targets, no doc tests) and full
+(everything plus `--doc`), any failure still fails the gate. The cheap
+checks (fmt and the four python doc checks) moved ahead of the compiling
+stages so a stale table answers in seconds, and `--fail-fast` stops at the
+first failing stage when iteration wants that. Two labels changed in the
+log (`cargo test` split into `(build)`/`(run)`/`(doc)`) and a typo'd flag
+is an error now instead of a silent no-op. The 1154 s single-test floor
+itself is untouched - the handoff still classifies a `key_state`-free
+resolve path as a perf change, not a port. xtask grew `json.rs` and
+`test_runner.rs` and 20 unit tests (parser round-trips, artifact
+selection, the pool against real shell scripts); measured here on a
+2-core box with no install, the parallel runner's own overhead over
+serial `cargo test` is the build stage's JSON capture, and the
+`--test-jobs` win needs the install to show (the measuring commands sit
+in `dev/verify_harness/PERFORMANCE.md`'s v8 section).
+
+## 2026-11-19 - the gate's cost measured: seven install suites, 98% of the time
+
+`cargo xtask verify` takes over an hour on this machine and 2218 s of the
+2246 s of measured test time sit in seven suites (`index_find_real` 935 s,
+`skin_pose_gate` 428 s, then five between 134 s and 223 s; every other binary
+is under 16 s; `cargo xtask verify` passed 84 minutes of wall clock before it
+was stopped). The pool above makes the gate pay the **max** instead of the
+**sum**, so the remaining floor is `index_find_real`'s 935 s, not an hour. The
+pool does not reduce CPU-seconds: the reduction still has to come from the
+suites themselves (the per-key loop, the install scans) or from splitting the
+gate by cost. Options are in `docs/open-questions.md`.
+
+## 2026-11-19 - `CdnIndexPageSelectBatch` (`0x1424da910`) verified: the batch page walk
+
+The batch form of the CDN index selection is now a five-stage unit
+(`fn/CdnIndexPageSelectBatch`, 660 B): 18/18 reachable branches of 20 sites
+(two declared dead: the resident-error exit, unreachable in whole-file mode,
+and the tail's `i >= count` guard), 11/12 mutants with the one compile-failure
+counted killed, differential and determinism green. Two facts the unit pins
+that the closed-form `CdnIndexPageSelect` note did not: the record cursor is
+*not* reset on a hit (a duplicate key resumes one record past the hit and is
+reported missing), and the page cursor is monotonic across the sorted keys, so
+an unsorted caller gets the cursor's answer rather than a fresh search. The
+tail's scalar zero loop is only reachable when the caller's found array sits on
+the location array; the fixture aliases them exactly (`count` bytes at the
+location address) and the client's second overlap test then fires. The
+streamed resident path and the resident-error exit stay open with
+`CdnIndexPageResident`.
+
+## 2026-11-19 - playbook: the callee screen, the real costs, and the state out of the procedure
+
+Seven edits, all paid for by the `Memcmp` port below (a 55-minute unit whose
+reading time went to six candidates and to a naming tool that would not
+finish):
+
+- **§1.5 screen the callees before reading.** A `call qword ptr [rip+…]` is an
+  import thunk (the IAT slot is zero in the offline image, so the call jumps to
+  address 0), `call qword ptr [reg+off]` / `call reg` is a virtual slot, and
+  `syscall` is a kernel transition - all three fault in the oracle, and four of
+  the six candidates read that day were dead there. One `grep -E "call|syscall"`
+  decides it; `corpus.py build <start> <end> --asm-only` puts a body in the
+  corpus without the Ghidra bridge.
+- **§3/§5 mutant-shaped rules.** Write independent comparisons (`if a < b`, `if
+  b < a`), not `if a != b { if a < b }`, which makes `<` -> `<=` equivalent and
+  unkillable; and keep every mutant inside the buffer and answering differently
+  - a mutant that panics or hangs is reported "not evaluated" and turns the
+  unit `inconclusive`, not killed.
+- **§6 the template routes the unit.** `candidateCrate` / `candidateProbe` /
+  `suite` were missing, so an ow-casc unit copied from it is silently absent
+  from `cli.py casc` (suite membership is `suite == "casc"` or crate
+  `ow-casc`). It now points at `units/fn-Memcmp.json` as the smallest complete
+  unit and carries the line-keyed-equivalent-mutants warning.
+- **§7 measured costs and the local ledger.** One unit 20-45 s, `cli.py casc`
+  re-proving all 31 stale units 8 min 33 s at `--unit-jobs 4`, the gate 2-3 min;
+  and `dev/verify_harness/ledger.json` is gitignored, so a fresh checkout has no
+  verdicts and re-proves every unit once. "Verified" is not a property of the
+  commit.
+- **§8 four environment rows**: stale `dev/INDEX.md` (its `make_index.py`
+  failure is followed by a misleading `python3: Python was not found` line from
+  the gate's interpreter fallback), the broken local `gcc` (every tier-1 C
+  candidate compile exits 1 with no output - harness self-tests and two units
+  go red for it), a mutant that faults instead of failing, and the minutes-long
+  name-table walk.
+- **§13 removed.** It was a status page inside a procedure: every session had
+  to edit counts into it and the next read stale ones. It is now a pointer to
+  the ledger, `docs/systems-coverage.md`, `STATUS-handoff.md` and
+  `docs/open-questions.md`; the five non-verified units moved verbatim into
+  `STATUS-handoff.md`.
+- **`dev/gh_apply_names.py --addr <address>`**: one row - rename, plate + tag,
+  save - instead of a ~500-row HTTP walk, and `--check` is now genuinely
+  read-only (it reads `/get_functions`; the old path renamed on a "check" and
+  four timed-out runs left the project with unsaved renames). `docs/tools.md`
+  states both. The apply path itself was not run to completion here: the
+  bridge's program is the `C:/Temp` copy, outside this repo, and a save would
+  have persisted those unsaved renames.
+
+## 2026-11-19 - `Memcmp` (`0x142efecf0`) verified: the comparison under every index search
+
+- **The read.** A 199-byte leaf (`0x142efecf0..0x142efedb7`), no call, no
+  image constant, no write: `sub rdx, rcx` turns the second pointer into a
+  displacement; a count below 8 jumps to the byte tail (`cmp r8, 8` /
+  `jb`); an unaligned first pointer is walked a byte at a time until
+  `cl & 7 == 0`; the wide walk compares four qwords per 32-byte iteration
+  (`cmp` only, equality), then single qwords, then the 0..7 tail. A mismatch
+  returns through `sbb eax, eax` / `sbb eax, -1` - direct on the byte walks,
+  and on the wide walk after the failing qword is reloaded, both words
+  `bswap`ed and compared unsigned, which orders like the first differing
+  byte. EAX is written, so RAX carries `0xffff_ffff` / `1` / `0`.
+- **`ow_casc::bytes::client_memcmp`** is the byte scan: the wide compares
+  read exactly the bytes a scan reads and the ordering site is the first
+  differing byte, so the read set and the three results are identical. New
+  probe entry `client_memcmp`, new fixture `client_memcmp_fixture.py` (46
+  declared cases: count 0..0xFF, alignment 0..7, a difference in each block
+  qword, in the alignment head, in each leftover qword and in the 0..7 tail;
+  equal-over-the-region cases differ in the padding, so a loop one byte too
+  long answers differently instead of faulting).
+- **Verdict `fn/Memcmp`: verified.** 100% branch coverage (17/17 sites, no
+  dead edges), 6/6 mutants killed, 364 differential cases. Declared gaps: a
+  count past either buffer; `a == b` (the arena cannot pass one address
+  twice); and `index::find_entry` still ordering with Rust's slice `cmp`
+  rather than calling the ported leaf - rewiring would edit `index.rs`, which
+  `fn/DynamicIndexFindEntry`'s ledger entry binds.
+- **`docs/function-names.csv`** got the `Memcmp` row. `gh_apply_names.py` was
+  not run to completion: the bridge answered and `--check` reached the row,
+  but the check path still calls the rename endpoint (it is not read-only)
+  and the run was killed at its 300 s wall; the live program shows `Memcmp`
+  with `unsaved_changes`, so nothing was saved to the project.
+- `dev/INDEX.md` refreshed for the new fixture; `cargo xtask verify --fast`
+  green; `cli.py casc` re-proved the suite (all entries were v6, the v7 bump
+  invalidates them) with `fn/Memcmp` included.
+
+## 2026-11-19 - harness: `cli.py all` becomes an iteration gate (v7)
+
+The 45-minute `all` re-proved every unit on every run; the wall was
+structural (~1300 mutant cargo builds, four slots per crate), not per-call.
+Three changes, same five stages, same corpus, same gates, no unit JSON
+touched: `all`/`casc` replay a ledger entry whose every bound digest still
+matches instead of re-running it (`--force` re-proves; a named unit always
+re-runs); units run in a thread pool (`--unit-jobs`, default `min(4, cpus)`,
+with a lock so concurrent verdicts cannot drop each other from the ledger);
+mutant build slots per crate are a knob (`--slots` / `VERIFY_MUTANT_SLOTS`,
+default unchanged at 4). Naming several units runs them as one parallel
+batch (the subagent-batch verify step); a typo in a unit name is an error
+now. HARNESS_VERSION 6 -> 7, so the first run re-proves everything once.
+Also fixed: `test_harness_smoke.py` / `test_run_unit_e2e.py` had been broken
+since the image sha pin (synthetic images were rejected); they register
+their digests via `emu_oracle.allow_image_sha256` and pass again, plus the
+new `test_cache_and_parallel.py` (29 checks) and
+`test_cargo_mutant_builds.py` (real cargo builds of the ow-sim probe; two
+mutants built concurrently on two slots each carry their own mutation). The
+real-suite wall time is
+**not measured** on this machine (no oracle image, 2 cores) - the measuring
+commands are in `dev/verify_harness/PERFORMANCE.md`'s v7 section.
+
 ## 2026-11-19 - Three CASC functions ported: the walls that were not walls
 
 - **`fn/ConfigKeyEntryParse` (`0x1424cebd0`, 481 B), verified.** 87.5%

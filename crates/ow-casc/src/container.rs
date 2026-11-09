@@ -19,6 +19,7 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::blte;
+use crate::bytes;
 use crate::encoding::EncodingFile;
 use crate::index::{self, Location};
 use crate::install::{Error as InstallError, Install};
@@ -1269,6 +1270,202 @@ pub fn select_page(
         page
     } else {
         PAGE_MISS
+    }
+}
+
+fn u32_le(b: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(b[at..at + 4].try_into().expect("4 bytes"))
+}
+
+fn u64_le(b: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(b[at..at + 8].try_into().expect("8 bytes"))
+}
+
+fn put_u64_le(b: &mut [u8], at: usize, value: u64) {
+    b[at..at + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+/// One page resident, as `CdnIndexPageResident` (`0x1424da590`) does it when
+/// the index is a whole file in memory (`index[0x38] == 0`): the page pointer
+/// at `+0x98` becomes `base + (page * pageSize)` (32-bit multiply, adding the
+/// zero-extended product) and the current page at `+0xa0` becomes `page`.
+///
+/// The streamed branch (`index[0x38] != 0`) needs the CDN reader object and its
+/// lock - `0x142522870` / `0x142522380` behind an import thunk - so it is the
+/// named open stage here and returns 1 without touching the object.
+fn resident_page(index: &mut [u8], arena: u64, page: u32) -> u8 {
+    if index[0x38] != 0 {
+        return 1;
+    }
+    let page_size = u32_le(index, 0x6c);
+    let base = u64_le(index, 0x50).wrapping_sub(arena);
+    let at = base.wrapping_add(u64::from(page.wrapping_mul(page_size)));
+    put_u64_le(index, 0x98, arena + at);
+    index[0xa0..0xa4].copy_from_slice(&page.to_le_bytes());
+    0
+}
+
+/// Compare `n` bytes at two offsets of the index blob with the client's
+/// `memcmp` (`0x142efecf0`): negative below, positive above, zero equal.
+fn cmp_at(index: &[u8], a: usize, b: usize, n: usize) -> i32 {
+    bytes::client_memcmp(&index[a..a + n], &index[b..b + n], n) as i32
+}
+
+/// Zero the outputs of keys `from..count`, which is what the client's tail
+/// does after the page cursor runs out: `out_locations[from..count]` (8 bytes
+/// each) and `out_found[from..count]`. The client splits this into two
+/// `memset`s with an overlap test and a scalar fallback; the final bytes are
+/// the same.
+fn zero_batch_tail(out_locations: &mut [u8], out_found: &mut [u8], from: u32, count: u32) {
+    let start = from as usize;
+    let end = count as usize;
+    if start >= end {
+        return;
+    }
+    out_locations[start * 8..end * 8].fill(0);
+    out_found[start..end].fill(0);
+}
+
+/// `CdnIndexPageSelectBatch` (`0x1424da910`): the batch form of the CDN index
+/// page selection, read operation for operation.
+///
+/// `index` is the client's CDN-index object as a byte view; `keys[i]` is the
+/// offset of the `i`-th query key **inside** that blob (the oracle's pointer
+/// array holds absolute arena addresses; the probe turns them into offsets),
+/// and `arena` converts the object's absolute pointers (`+0x50`, `+0x88`, and
+/// the `+0x98` the resident step writes) back to offsets. `out_locations`
+/// carries `u64` values at `i * 8`, `out_found` one byte per key.
+///
+/// The object fields the client reads: `+0x38` the whole-file flag, `+0x50`
+/// the whole-file base, `+0x5c` the location width in bytes, `+0x5d` the
+/// location offset from the key's end, `+0x5e` the key width, `+0x60` the total
+/// entry count, `+0x6c` the page size, `+0x70` the entry stride, `+0x74` the
+/// entries per page, `+0x78` the page count and `+0x88` the last-key array.
+///
+/// The page cursor is monotonic across keys: a key is compared with the
+/// current page's last key while it orders above it, then the page is made
+/// resident and its records are scanned from the record cursor, which is *not*
+/// reset on a hit (so a repeated key resumes one record later). `memcmp(entry,
+/// key)` below zero continues the scan, above zero is a miss, equal is the hit
+/// and its location is decoded from `[0x5c]` big-endian bytes at `entry +
+/// keyBytes + [0x5d]`, storing the partial value on every digit. A miss zeroes
+/// that key's outputs; when the cursor runs past the last page, the remaining
+/// keys are zeroed in one sweep.
+///
+/// Returns 0, or the page-resident error: 1 is the whole-file read failure and
+/// the **open stage** (the streamed branch is not modelled).
+pub fn select_page_batch(
+    index: &mut [u8],
+    keys: &[usize],
+    key_len: u8,
+    count: u32,
+    out_locations: &mut [u8],
+    out_found: &mut [u8],
+    arena: u64,
+) -> u8 {
+    if count == 0 {
+        return 0;
+    }
+    let key_bytes = index[0x5e];
+    let loc_bytes = index[0x5c];
+    let loc_off = index[0x5d];
+    let cmp_len = usize::from(key_bytes.min(key_len));
+    let total = u32_le(index, 0x60);
+    let entry_stride = u32_le(index, 0x70) as usize;
+    let per_page = u32_le(index, 0x74);
+    let page_count = u32_le(index, 0x78);
+    let last_keys = u64_le(index, 0x88).wrapping_sub(arena) as usize;
+    let last_key_at = |page: u32| last_keys + usize::from(key_bytes) * page as usize;
+
+    let mut key_index: u32 = 0;
+    let mut page: u32 = 0;
+    let mut record: u32;
+    let mut in_page: u32;
+    if page_count == 0 {
+        zero_batch_tail(out_locations, out_found, key_index, count);
+        return 0;
+    }
+    'keys: loop {
+        // The page cursor: advance while the key orders above the page's last
+        // key (the client's `memcmp(key, lastKey, cmpLen); jg`).
+        if cmp_at(index, keys[key_index as usize], last_key_at(page), cmp_len) > 0 {
+            page = page.wrapping_add(1);
+            if page >= page_count {
+                zero_batch_tail(out_locations, out_found, key_index, count);
+                return 0;
+            }
+            continue 'keys;
+        }
+        let error = resident_page(index, arena, page);
+        if error != 0 {
+            return error;
+        }
+        let start = per_page.wrapping_mul(page);
+        let remaining = total.wrapping_sub(start);
+        in_page = if per_page < remaining {
+            per_page
+        } else {
+            remaining
+        };
+        if in_page == 0 {
+            zero_batch_tail(out_locations, out_found, key_index, count);
+            return 0;
+        }
+        record = 0;
+        loop {
+            if record >= in_page {
+                zero_batch_tail(out_locations, out_found, key_index, count);
+                return 0;
+            }
+            let resident = u64_le(index, 0x98).wrapping_sub(arena) as usize;
+            let entry = resident + record as usize * entry_stride;
+            let cmp = cmp_at(index, entry, keys[key_index as usize], cmp_len);
+            if cmp < 0 {
+                record = record.wrapping_add(1);
+                continue;
+            }
+            if cmp > 0 {
+                put_u64_le(out_locations, key_index as usize * 8, 0);
+                out_found[key_index as usize] = 0;
+            } else {
+                out_found[key_index as usize] = 1;
+                put_u64_le(out_locations, key_index as usize * 8, 0);
+                let mut at = entry + usize::from(key_bytes) + usize::from(loc_off);
+                let mut left = loc_bytes.wrapping_sub(1);
+                if (left as i8) >= 0 {
+                    let mut acc: u64 = 0;
+                    loop {
+                        let byte = index[at];
+                        at += 1;
+                        let value = (u64::from(byte) << ((left as u32) << 3)) | acc;
+                        put_u64_le(out_locations, key_index as usize * 8, value);
+                        acc = value;
+                        left = left.wrapping_sub(1);
+                        if (left as i8) < 0 {
+                            break;
+                        }
+                    }
+                }
+                // The hit advances the record cursor (0x1424daa6e); a miss
+                // above the key does not (0x1424daa70 is reached directly).
+                record = record.wrapping_add(1);
+            }
+            key_index = key_index.wrapping_add(1);
+            if key_index == count {
+                return 0;
+            }
+            // The next key's pre-check against the same page: above its last
+            // key means the page cursor moves; otherwise the record scan
+            // continues from where the previous key left it.
+            if cmp_at(index, keys[key_index as usize], last_key_at(page), cmp_len) > 0 {
+                page = page.wrapping_add(1);
+                if page >= page_count {
+                    zero_batch_tail(out_locations, out_found, key_index, count);
+                    return 0;
+                }
+                continue 'keys;
+            }
+        }
     }
 }
 

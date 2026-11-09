@@ -245,12 +245,30 @@ index at `client+0x48` (patch `+0x118`), splits the 6-byte offset into
 `ordinal = off >> (shift*8)` and `off & mask`, and copies the 16-byte archive
 record from `client+0x108` (patch `+0x1d8`); a miss or a non-load status falls
 back to the file index at `client+0x1e8` (patch `+0x290`) with the 16-byte
-result key. The batch form `CdnIndexPageSelectBatch` (`0x1424da910`) advances
-the page monotonically over sorted keys. The batch wrappers `0x1424b0e50` and
-`0x1424b0ef0` are not Ghidra functions; they are read at the expression level
-only. The slot-to-config-key mapping (`+0x48` archive group, `+0x118` patch
-group, `+0x1e8` file index, `+0x290` patch file index) is a structural
-inference, not a read of the config wiring.
+result key. The batch form `CdnIndexPageSelectBatch` (`0x1424da910`, 660 B)
+looks up a sorted key array with one monotonic page cursor (details below). The
+batch wrappers `0x1424b0e50` and `0x1424b0ef0` are not Ghidra functions; they
+are read at the expression level only. The slot-to-config-key mapping (`+0x48`
+archive group, `+0x118` patch group, `+0x1e8` file index, `+0x290` patch file
+index) is a structural inference, not a read of the config wiring.
+
+**The batch selection is verified (2026-11-19).** `fn/CdnIndexPageSelectBatch`
+pins `0x1424da910` through its 660-byte extent (five stages; 18/18 reachable
+branches of 20 sites, two declared dead: the resident-error exit, because the
+fixture runs whole-file mode where the resident step always returns 0, and the
+tail's `i >= count` guard, which no path reaches; 11/12 mutants, the one
+compile-failure counted killed). The read it proves: the page cursor advances
+monotonically across the sorted keys (`memcmp(key, lastKeys + keyBytes*page,
+min(+0x5e, keyLen)) > 0`), the record cursor is *not* reset on a hit (resume at
+the next record), a page with zero entries and a cursor past the last page both
+zero the remaining keys, and the location is decoded big-endian from
+`entry + keyBytes + +0x5d` (size) and the next `+0x5c` bytes (offset), all in
+32-bit accumulated arithmetic. Coverage of the two tail layouts forced an
+aliased fixture case: when the found array sits exactly on the location array
+(`found[0..count]` at the location address) the client takes its scalar zero
+loop, which is otherwise unreachable. The streamed resident path
+(`index+0x38 != 0`) and the resident-error exit stay open with
+`CdnIndexPageResident` (`docs/open-questions.md`, 2026-11-17 entry).
 
 Still not read: which function writes the archive shift/mask/count/array
 (`client+0xf0..+0x110` and `+0x1c0..+0x1e0`) from the CDN config, and the batch
@@ -1868,3 +1886,39 @@ that extent". The merged function register measures 401 bytes
 `0x1424da6ee..0x1424da705` is inside it. The conclusion (no unit: the streamed
 branch needs the container, its I/O engine and a lock) still stands, and that
 unit's note now says so.
+
+## `Memcmp` (`0x142efecf0`): the comparison every index search goes through (2026-11-19)
+
+`Memcmp` is a leaf: 199 bytes, `0x142efecf0..0x142efedb7`, no call, no image
+constant, no cookie. Signature `int __cdecl Memcmp(void *a, void *b, size_t
+count)` (RCX, RDX, R8); the caller reaches it from `DynamicIndexFindEntry`
+(`0x142511241`), `EncodingPageIndexSearch` and the CDN page/checksum compares.
+
+The read: `sub rdx, rcx` turns the second pointer into a displacement so one
+cursor walks both buffers. A `count` below 8 jumps straight to the byte tail
+(`cmp r8, 8` / `jb` at `0x142efecf7`); an unaligned first pointer is walked a
+byte at a time until `cl & 7 == 0` (`test cl, 7` at `0x142efecf9` and
+`0x142efed0d`), so every wide compare is 8-byte aligned. The wide walk compares
+four qwords per 32-byte iteration (equality only: `cmp rax, [rcx+rdx]` at
+`0x142efed40`, `0x142efed49`, `0x142efed54`, `0x142efed5f`), then single qwords
+(`0x142efed80`), then the 0..7-byte tail.
+
+A mismatch produces `-1`, `1` or `0` through one of two sites. The byte walks
+compare the pair directly (`cmp al, [rcx+rdx]`) and fall into `sbb eax, eax` /
+`sbb eax, -1` (`0x142efed33`). The wide walk steps to the failing qword
+(`0x142efed98`/`0x142efed9c`/`0x142efeda0`), reloads the second operand
+(`mov rcx, [rdx+rcx]`), byte-swaps both words (`bswap` at `0x142efedab`) and
+compares unsigned, which is the lexicographic order of the eight bytes, so the
+first differing byte decides; the same `sbb` pair then writes EAX. Because EAX
+is written, RAX holds `0x0000_0000_ffff_ffff` for below, `1` for above, and
+`0` on an equal run (`xor rax, rax` at `0x142efed2f`). The function never
+writes either buffer.
+
+The wide compares are equality tests over exactly the bytes a byte scan reads,
+and the ordering site is the first differing byte, so the observable result is
+the byte scan; `ow_casc::bytes::client_memcmp` is that scan and is verified as
+`fn/Memcmp` (100% of 17 branch sites, 6/6 mutants). The declared gaps: a count
+past either buffer (the client has no bounds check); `a == b` (the arena cannot
+pass one address twice); and the shipped `index::find_entry` still orders with
+Rust's slice `cmp` rather than calling the ported leaf - rewiring it would
+edit `index.rs`, which `fn/DynamicIndexFindEntry`'s ledger entry binds.

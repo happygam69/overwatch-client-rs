@@ -12,6 +12,10 @@ the next; the order is deliberate.
   5. mutation    the candidate is mutated; the differential must notice
 
 A unit is `verified` only when all five pass. `inconclusive` is not a pass.
+
+`run_and_record(..., use_cache=True)` replays a ledger entry instead of
+re-running the stages when every digest the ledger binds is unchanged (see
+`_fresh_cached_entry`); the stages themselves are never skipped inside a run.
 """
 
 from __future__ import annotations
@@ -23,11 +27,12 @@ import shutil
 import struct
 import sys
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from emu_oracle import EmuOracle, ArgSpec, bits_f32, f32_bits
+from emu_oracle import EmuOracle, ArgSpec, bits_f32, f32_bits, function_bytes
 from gen import UnitArg, generate_args, focused_f32_edge_cases
 from ledger import (
     HARNESS_VERSION,
@@ -209,7 +214,122 @@ class MutantOutcome:
 
 
 def _warn(msg: str) -> None:
-    print(f"  WARNING: {msg}", file=sys.stderr)
+    with _PRINT_LOCK:
+        print(f"  WARNING: {msg}", file=sys.stderr)
+
+
+# One print at a time: units can run in a thread pool (`cli.py all --unit-jobs`),
+# and two half-written lines interleaved on a terminal cost more attention than
+# the lock costs time (a unit logs a few dozen lines in total).
+_PRINT_LOCK = threading.Lock()
+
+
+def _print_line(msg: str) -> None:
+    with _PRINT_LOCK:
+        print(msg)
+
+
+# `load_ledger(); record()` is a read-modify-write of ledger.json; units that
+# finish concurrently must not drop each other's verdicts.
+_LEDGER_LOCK = threading.Lock()
+
+
+@dataclass
+class _CandidateRef:
+    """Everything the runner needs about the candidate artifact: the source
+    file the mutation stage rewrites, the digest the verdict is bound to, and
+    (for the shipped cargo path) the crate/probe the mutant builds use.
+
+    Computed once per unit, both by `run_unit` (for the ledger entry) and by
+    the fresh-verdict cache check, so the two can never disagree.
+    """
+
+    sha: str
+    sources: List[str]
+    crate_rev: str
+    path: str
+    crate_dir: str
+    probe: str
+
+
+def _candidate_ref(unit: Unit) -> _CandidateRef:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    # A cargo unit names its crate and probe; the defaults preserve the old
+    # ow-sim units. These paths are used again by the mutation builds, so
+    # resolve them once here.
+    cand_crate = unit.candidate_crate or "ow-sim"
+    cand_probe_rel = unit.candidate_probe or "crates/ow-sim/src/bin/verify_probe.rs"
+    cand_crate_dir = os.path.join(repo_root, "crates", cand_crate)
+    cand_probe = (
+        cand_probe_rel
+        if os.path.isabs(cand_probe_rel)
+        else os.path.join(repo_root, cand_probe_rel)
+    )
+    if unit.candidate_loader == "cargo":
+        from candidate_rust import candidate_binding, entry_sources
+
+        sha, sources, rev = candidate_binding(
+            unit.entry, crate=cand_crate, probe=cand_probe
+        )
+        path = os.path.join(repo_root, entry_sources(unit.entry, cand_crate)[0])
+        return _CandidateRef(
+            sha=sha, sources=list(sources), crate_rev=rev, path=path,
+            crate_dir=cand_crate_dir, probe=cand_probe,
+        )
+    if unit.candidate_loader == "rust":
+        from candidate_rust import PROBE_SRC
+
+        path = PROBE_SRC
+        sha = sha256_file(path) if os.path.exists(path) else "missing"
+    else:
+        path = unit.c_file
+        sha = sha256_file(path) if os.path.exists(path) else "missing"
+    return _CandidateRef(
+        sha=sha, sources=[], crate_rev="", path=path,
+        crate_dir=cand_crate_dir, probe=cand_probe,
+    )
+
+
+def _fresh_cached_entry(unit: Unit) -> Optional[LedgerEntry]:
+    """A verified ledger entry whose every bound digest still matches.
+
+    The ledger's contract is that a verdict is a function of the oracle window
+    (the image bytes at the function's address), the candidate artifact, the
+    options, the surfaces, and the harness version that produced it. When all
+    five are unchanged, re-running the ladder reproduces the recorded verdict
+    by construction: the recorded run itself proved the oracle deterministic on
+    identical inputs, and the digests cover every input the five stages
+    consume. The entry is replayed instead of re-executed; `--force` re-proves.
+
+    The cache is exactly as trustworthy as the ledger file (a produced,
+    gitignored artifact): a hand-edited ledger can lie to it as easily as to a
+    human reader. Only `verified` entries are replayed - a stale or failing
+    verdict is always re-run.
+    """
+    try:
+        oracle_sha = sha256_bytes(
+            function_bytes(unit.image, unit.base, unit.address_v2b)
+        )
+    except (OSError, ValueError):
+        # Missing image or a cold page: run_unit reports the failure properly.
+        return None
+    cref = _candidate_ref(unit)
+    prev = load_ledger().get(unit.id)
+    if prev is None or prev.status != "verified":
+        return None
+    if (
+        check_entry(prev, oracle_sha, cref.sha, _options_sha(unit), _args_sha(unit))
+        != "fresh"
+    ):
+        return None
+    return replace(
+        prev,
+        notes=[
+            "fresh cached verdict: every bound digest matches the ledger entry; "
+            "the five stages were not re-run (--force re-proves)"
+        ]
+        + list(prev.notes),
+    )
 
 
 def load_unit(path: str) -> Unit:
@@ -525,10 +645,11 @@ def run_unit(
     verbose: bool = True,
     mutant_workers: int = DEFAULT_MUTANT_JOBS,
     mutation_call_timeout: Optional[float] = None,
+    log_prefix: str = "",
 ) -> LedgerEntry:
     def log(msg: str) -> None:
         if verbose:
-            print(msg)
+            _print_line(log_prefix + msg)
 
     opts = unit.options
     iterations = int(opts.get("iterations", 300))
@@ -558,36 +679,12 @@ def run_unit(
     oracle_sha = "unloaded"
     # The candidate artifact the ledger binds to: the decompile for tier 1,
     # the probe source for tier 2 rustc, the crate function source + crate
-    # revision for the shipped cargo probe.
-    candidate_sources: List[str] = []
-    crate_rev = ""
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    # A cargo unit names its crate and probe; the defaults preserve the old
-    # ow-sim units. These paths are used again by the mutation builds, so
-    # resolve them once here.
-    cand_crate = unit.candidate_crate or "ow-sim"
-    cand_probe_rel = unit.candidate_probe or "crates/ow-sim/src/bin/verify_probe.rs"
-    cand_crate_dir = os.path.join(repo_root, "crates", cand_crate)
-    cand_probe = (
-        cand_probe_rel
-        if os.path.isabs(cand_probe_rel)
-        else os.path.join(repo_root, cand_probe_rel)
-    )
-    if unit.candidate_loader == "cargo":
-        from candidate_rust import candidate_binding, entry_sources
-
-        cand_sha, candidate_sources, crate_rev = candidate_binding(
-            unit.entry, crate=cand_crate, probe=cand_probe
-        )
-        cand_path = os.path.join(repo_root, entry_sources(unit.entry, cand_crate)[0])
-    elif unit.candidate_loader == "rust":
-        from candidate_rust import PROBE_SRC
-
-        cand_path = PROBE_SRC
-        cand_sha = sha256_file(cand_path) if os.path.exists(cand_path) else "missing"
-    else:
-        cand_path = unit.c_file
-        cand_sha = sha256_file(cand_path) if os.path.exists(cand_path) else "missing"
+    # revision for the shipped cargo probe. One place computes this (also
+    # used by the fresh-verdict cache), so the entry and the cache can never
+    # disagree about what a verdict is bound to.
+    cref = _candidate_ref(unit)
+    cand_path = cref.path
+    cand_sha = cref.sha
     opt_sha = _options_sha(unit)
     surf_sha = _args_sha(unit)
 
@@ -604,8 +701,8 @@ def run_unit(
             equivalent_mutants=unit.known_equivalent_mutants,
             acknowledged_gaps=unit.acknowledged_gaps,
             notes=list(unit.notes) + list(kw_notes),
-            candidate_sources=list(candidate_sources),
-            crate_rev=crate_rev,
+            candidate_sources=list(cref.sources),
+            crate_rev=cref.crate_rev,
             **kw,
         )
 
@@ -615,12 +712,12 @@ def run_unit(
         log(f"  FAIL: image not found: {unit.image}")
         return entry("inconclusive", notes=["image missing: " + unit.image])
     if unit.candidate_loader == "cargo":
-        if not os.path.exists(cand_probe):
-            log(f"  FAIL: cargo probe source not found: {cand_probe}")
-            return entry("inconclusive", notes=[f"cargo probe missing: {cand_probe}"])
-        if not os.path.isdir(cand_crate_dir):
-            log(f"  FAIL: cargo crate not found: {cand_crate_dir}")
-            return entry("inconclusive", notes=[f"cargo crate missing: {cand_crate_dir}"])
+        if not os.path.exists(cref.probe):
+            log(f"  FAIL: cargo probe source not found: {cref.probe}")
+            return entry("inconclusive", notes=[f"cargo probe missing: {cref.probe}"])
+        if not os.path.isdir(cref.crate_dir):
+            log(f"  FAIL: cargo crate not found: {cref.crate_dir}")
+            return entry("inconclusive", notes=[f"cargo crate missing: {cref.crate_dir}"])
         if not os.path.exists(cand_path):
             log(f"  FAIL: candidate source not found: {cand_path}")
             return entry("inconclusive", notes=[f"candidate source missing: {cand_path}"])
@@ -683,8 +780,8 @@ def run_unit(
                 loader=unit.candidate_loader,
                 state_base=unit.state.base if unit.state is not None else None,
                 state_bytes=unit.state.data if unit.state is not None else None,
-                crate_dir=cand_crate_dir,
-                cargo_probe=cand_probe,
+                crate_dir=cref.crate_dir,
+                cargo_probe=cref.probe,
             )
             log(f"  candidate {unit.candidate_loader} probe: {candidate.exe}")
         else:
@@ -981,8 +1078,8 @@ def run_unit(
                                 if unit.state is not None
                                 else None,
                                 call_timeout=mutation_call_timeout * (attempt + 1),
-                                crate_dir=cand_crate_dir,
-                                cargo_probe=cand_probe,
+                                crate_dir=cref.crate_dir,
+                                cargo_probe=cref.probe,
                             )
                         else:
                             from candidate_c import CCandidate
@@ -1173,8 +1270,26 @@ def _fmt_ret(bits: int, kind: str) -> str:
         return "?"
 
 
-def run_and_record(unit: Unit, **kw) -> LedgerEntry:
+def run_and_record(unit: Unit, use_cache: bool = False, **kw) -> LedgerEntry:
+    """Run the ladder for one unit and record the verdict.
+
+    `use_cache=True` first asks `_fresh_cached_entry`: when the ledger holds a
+    `verified` entry whose every bound digest still matches, that entry is
+    replayed (with an explanatory note) instead of re-running the five stages.
+    The ledger is not rewritten on a cache hit, so the entry keeps the
+    timestamp of the run that actually proved the verdict.
+
+    Units may be verified concurrently (the CLI runs `all`/`casc` through a
+    thread pool); the load-then-record pair is serialised by `_LEDGER_LOCK`
+    because it is a read-modify-write of ledger.json - without the lock, two
+    units finishing together would each record over the other's verdict.
+    """
+    if use_cache:
+        cached = _fresh_cached_entry(unit)
+        if cached is not None:
+            return cached
     e = run_unit(unit, **kw)
-    entries = load_ledger()
-    record(entries, e)
+    with _LEDGER_LOCK:
+        entries = load_ledger()
+        record(entries, e)
     return e

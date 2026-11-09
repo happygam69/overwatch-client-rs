@@ -119,3 +119,111 @@ and `cargo xtask verify` pass.
   does not apply to it; its mutants were already fast, and a C mutant that
   never returns would still wedge the harness. That is a pre-existing
   limitation, unchanged here.
+
+## 2026-11: fresh-verdict replay, parallel units, slots knob (harness v7)
+
+The remaining wall of `cli.py all` was structural, not per-call: ~1300 mutant
+cargo builds at ~8-17 s each over four slots per crate is ~45 minutes no
+matter how fast any single probe is, and `all` re-proved all 102 units every
+time even when nothing on either side had changed. Three changes, none of
+which skips a stage inside a run, weakens a gate, or edits a unit JSON:
+
+1. **Fresh-verdict replay.** The ledger already binds every input of a
+   verdict (oracle window sha, candidate artifact sha, options sha, surfaces
+   sha, harness version) - that is its staleness contract. `all` and `casc`
+   now use that contract as a cache: a `verified` entry whose digests all
+   still match is replayed (reported `(cached)`) instead of re-running its
+   stages. Re-running would reproduce the recorded verdict by construction:
+   the recorded run proved the oracle deterministic on identical inputs, and
+   the digests cover every input the five stages consume. The ledger is not
+   rewritten on a replay, so an entry keeps the timestamp of the run that
+   actually proved it. Only `verified` entries replay; stale, divergent and
+   inconclusive units always re-run. `--force` re-proves everything. A single
+   named unit re-runs by default (`--cache` opts it back in).
+   Consequence for the crate-rev binding: a commit (any commit) changes
+   `candidate_sha256` of every cargo unit, so the cache survives *edits* but
+   not *commits* - unchanged behaviour from the ledger's own rules.
+2. **Unit-level parallelism.** `--unit-jobs N` (default `min(4, cpus)`, 1 =
+   the old serial behaviour) runs whole units in a thread pool. A unit is
+   never split: each thread runs the full five-stage ladder for one unit.
+   The heavy half of a run is subprocess work (cargo builds, probe
+   processes), which threads overlap fine; stages 1-4 are ~0.6 s per unit
+   (measured above) so GIL contention is noise. The per-crate mutant slot
+   queues were already global and lock-guarded, so concurrent units of one
+   crate share the four slots instead of multiplying them. Concurrent
+   baseline probe builds of one crate share `target/verify_probe/<crate>`,
+   which cargo already serialises with its own target-dir lock. Ledger
+   writes go through a lock (load-then-record is a read-modify-write).
+   Three crates ship cargo units (ow-sim, ow-casc, ow-tank), so at
+   `--unit-jobs 4` up to 12 mutant builds run at once instead of 4.
+3. **Slots knob.** `--slots N` / `VERIFY_MUTANT_SLOTS` sets the mutant build
+   slots per crate (default still 4, the measured number above). More slots
+   = more concurrent builds AND more disk (each slot holds a full dependency
+   tree); the measured 8 s -> 17 s contention at four slots is the reason
+   the default did not move.
+
+Naming several units (`cli.py fn/A fn/B fn/C`) runs them as one parallel
+batch, which is the subagent-batch workflow's verify step; a typo in any
+name is now an error instead of a silently ignored extra argument.
+
+**Not measured on the operator's machine** (this change was written on a
+machine without the oracle image, with 2 cores): the real `all` wall time
+before/after, and the best `--slots`/`--unit-jobs` for 12 cores. Measure
+with, from the repo root:
+
+    python dev/verify_harness/cli.py casc --force   # one full re-run after v7
+    python dev/verify_harness/cli.py casc           # expect: all (cached), seconds
+    python dev/verify_harness/cli.py all --force --unit-jobs 4 --slots 6
+    python dev/verify_harness/cli.py all            # expect: only stale units run
+
+and fill the numbers in here. What *is* proven here, on synthetic images
+(`test_cache_and_parallel.py`, 29 checks, all green): a replayed entry never
+re-executes a stage and does not touch the ledger; an edited candidate,
+edited options, a non-verified verdict and `--force` all re-run; eight
+concurrent units keep all eight verdicts in the ledger; a CLI batch runs in
+parallel, replays under `--cache` and re-proves under `--force`.
+`test_cargo_mutant_builds.py` (needs cargo; skips itself without it) builds
+the real ow-sim probe, builds two mutants concurrently on two slots, and
+proves each binary carries its own mutation - the slot pool never lets one
+mutant's build answer another's probe.
+`test_harness_smoke.py` and `test_run_unit_e2e.py` also pass (the two had
+been broken since the image sha pin: they build synthetic images, which the
+pin rejected; they now register their digests via
+`emu_oracle.allow_image_sha256` instead of monkeypatching the pin away - the
+production path still refuses any image but the pinned one).
+
+HARNESS_VERSION was bumped 6 -> 7, so the first `all`/`casc` after this
+change re-runs every unit once (~the old cost); from then on a run verifies
+only units whose digests changed.
+
+## 2026-11: the xtask gate stops walking the tests serially (v8)
+
+The other slow gate was `cargo xtask verify` (~30 minutes when green): one
+`cargo test` walks every test binary serially, `index_find_real` alone runs
+1154 s, and the `ow-tank` install suites run minutes each. The gate now
+builds every binary once (`cargo test --no-run --message-format=json`),
+picks the executables out of the compiler-artifact messages, and runs them
+in a pool (`--test-jobs`, default `min(4, cpus)`). Cheap checks run first
+(fmt, the four python doc checks), `--fail-fast` stops at the first failing
+stage, and a failure prints its captured output after the pool drains.
+
+Not measurable on this machine (no install, 2 cores): the win against the
+serial walk. On a machine with the install, measure it as:
+
+    cargo xtask verify --test-jobs 1    # the old serial walk
+    cargo xtask verify                 # default pool (4 binaries at a time)
+    cargo xtask verify --test-jobs 8    # more I/O overlap
+    cargo xtask verify -p ow-casc --skip index_find_real   # an iteration loop
+
+The scoping flags (`-p`/`--package`, repeatable; `--skip`, repeatable - drops
+a binary whose label matches, else libtest's own per-test filter) do not change
+the gate: the unscoped run is still the definition of done. They exist because
+the gate's floor is one test in one crate, and a change in `ow-sim` should not
+have to pay for it. Measured on a 2-core box with the install: the `ow-casc`
+scope is 20 s with `--skip index_find_real` and over 19 minutes without it.
+
+and read the per-binary durations the run now prints. Expected shape: the
+wall becomes the longest single binary (~19 min, `index_find_real`) plus
+the build, instead of the sum of all binaries. The 1154 s floor itself is
+untouched - a `key_state`-free resolve path stays classified as a perf
+change, not a port (`STATUS-handoff.md`, "Measured, not fixed").

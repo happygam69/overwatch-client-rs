@@ -16,17 +16,28 @@ project, never write to the game.
   gate. The unit format and the five stages
   are in `dev/verify_harness/runner.py`; the mutation stage's measured wall
   time and its quality proof are in `dev/verify_harness/PERFORMANCE.md`.
-  `--jobs N` sets how many mutant probes run at once (default 4) and
-  `--mutation-timeout S` bounds one mutant probe call (default 10 s; the
-  baseline candidate keeps 300 s). Neither flag skips a stage or weakens a
-  gate. A mutant the harness cannot build, start or drive is retried once;
-  a second infrastructure failure makes the unit `inconclusive` rather than
-  counting an unobserved mutant as killed. A mutant that does not return
-  within the doubled call budget on the retry is a non-terminating mutant and
-  is killed, so the timeout oracle is preserved.
+  Several units run at once (`--unit-jobs N`, default `min(4, cpus)`; a unit
+  is never split across threads), each through the full ladder.
+  `all` and `casc` replay a ledger entry whose every bound digest still
+  matches (oracle window, candidate, options, surfaces, harness version)
+  instead of re-running it - reported as `(cached)`; `--force` re-proves
+  everything, and a named unit always re-runs. Naming several units runs them
+  as one parallel batch.
+  `--jobs N` sets how many mutant probes run at once (default 4),
+  `--slots N` / `VERIFY_MUTANT_SLOTS` how many cargo build slots each crate
+  gets (default 4), and `--mutation-timeout S` bounds one mutant probe call
+  (default 10 s; the baseline candidate keeps 300 s). None of these flags
+  skips a stage or weakens a gate. A mutant the harness cannot build, start
+  or drive is retried once; a second infrastructure failure makes the unit
+  `inconclusive` rather than counting an unobserved mutant as killed. A
+  mutant that does not return within the doubled call budget on the retry is
+  a non-terminating mutant and is killed, so the timeout oracle is preserved.
 - **`dev/gh.py`** — the Ghidra MCP bridge client used by the naming tools.
 - **`dev/gh_apply_names.py`** — applies `docs/function-names.csv` to the
-  Ghidra program.
+  Ghidra program. `--addr <address>` applies one row (a unit's checklist
+  step; the full table is one HTTP call per row and takes minutes), and
+  `--check` only reads the project's current names - add `--addr` to check
+  one row.
 - **`dev/field_index.py`** — struct-aware field-access index over the complete
   image; separates the mover component, character body and `dmBody`.
 - **`dev/pdata_lookup.py`** — `.pdata` function bounds for an RVA.
@@ -128,9 +139,14 @@ The table below is the practical set by task.
 |---|---|
 | `cargo test --release -p ow-casc -p ow-stu -p ow-tank -p ow-scene` | data layer, map resolver and scene tests |
 | `cargo test --release -p ow-client` | client-side camera math |
-| `python dev/verify_harness/cli.py all` | every differential unit |
+| `python dev/verify_harness/cli.py all` | every differential unit (cached; `--force` re-proves) |
 | `python dev/verify_harness/cli.py casc` | the verified CASC subset |
-| `python dev/verify_harness/cli.py fn/<Name>` | one unit |
+| `python dev/verify_harness/cli.py fn/<Name>` | one unit (always re-runs) |
+| `python dev/verify_harness/cli.py fn/A fn/B fn/C` | a batch of units, in parallel |
+| `cargo xtask verify` | fmt, clippy, every test: the doc checks first, then the test binaries built once and run in a parallel pool (per-binary durations in the log) |
+| `cargo xtask verify --fast` | the same without the install-reading tests |
+| `cargo xtask verify --fail-fast` | stop at the first failing stage instead of reporting every one |
+| `cargo xtask verify --test-jobs N` | the pool width (`XTASK_TEST_JOBS`; default 4, or the core count when smaller) |
 | `cargo xtask frame-check` | docs addresses, the name table and function-entry sanity |
 
 `cargo xtask verify` does not run the differential harness; `python

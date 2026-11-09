@@ -1,0 +1,95 @@
+{
+ "id": "fn/CdnIndexPageSelectBatch",
+ "title": "tier-2 shipped code: the batch CDN index page selection against CdnIndexPageSelectBatch (0x1424da910)",
+ "address": {
+  "v2b": "0x7ff7c71fa910"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "cdn_page_select_batch",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u8",
+ "argFactory": "cdn_page_select_batch_fixture",
+ "args": [
+  {
+   "name": "index",
+   "kind": "ptr",
+   "ptr_len": 32768
+  },
+  {
+   "name": "keys",
+   "kind": "ptr",
+   "ptr_len": 256
+  },
+  {
+   "name": "key_len",
+   "kind": "u64"
+  },
+  {
+   "name": "count",
+   "kind": "u64"
+  },
+  {
+   "name": "out_found",
+   "kind": "ptr",
+   "ptr_len": 256
+  },
+  {
+   "name": "out_locations",
+   "kind": "ptr",
+   "ptr_len": 512
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 7314,
+  "coverageWindow": 660,
+  "allowedImageReads": [
+   "0x7ff7c87e5f40",
+   "0x7ff7c87e5f98-0x7ff7c87e5fa7",
+   "0x7ff7c8339530-0x7ff7c83395ff"
+  ],
+  "unreachableBranches": [
+   {
+    "site": "0x7ff7c71fa99d",
+    "edge": "0x7ff7c71fab66",
+    "why": "the resident-error exit after CdnIndexPageResident. The fixture reads the index as a whole file (index+0x38 == 0), where the resident step is pure arithmetic and always returns 0; the error can only come from the streamed branch (0x1424da5b8 onward), which needs the CDN reader object and its lock (open stage below)."
+   },
+   {
+    "site": "0x7ff7c71faab0",
+    "edge": "0x7ff7c71fab64",
+    "why": "the tail's `i >= count` guard. Every path into the tail has i < count: the key loop exits through the `i == count` test at 0x1424daa75 before any tail, and the tail is entered with a key still to zero. The guard is dead for every input."
+   }
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/container.rs::select_page_batch, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the cdn_page_select_batch entry. The ledger binds the verdict to container.rs + the probe source + the git revision. The function calls bytes::client_memcmp (fn/Memcmp, verified) for every comparison, so the client's memcmp leaf is on this path.",
+  "Oracle is CdnIndexPageSelectBatch at exe 0x1424da910, extent 0x1424da910..0x1424daba4 (660 bytes through the ret at 0x1424daba3), which is the declared coverageWindow. v2b 0x7ff7c71fa910 is 0x7ff7c4d20000 + (0x1424da910 - 0x140000000). Signature: (index *index, u64 *keys, u8 keyLen, u32 count, u8 *outFound, u64 *outLocations) -> u8 (RCX, RDX, R8, R9, then the two stack arguments; arg5 is the byte 'found' array, arg6 the u64 location array, read from the tail's zeroing loop).",
+  "The read: the page cursor is monotonic across keys. Per key, memcmp(key, lastKeys + keyBytes*page, min(index+0x5e, keyLen)) > 0 advances the page (0x1424da983 / jg 0x1424dab83) until the last key is not below the key, then CdnIndexPageResident (0x1424da590) makes that page current. The object fields: +0x38 whole-file flag, +0x50 whole-file base, +0x5c location width, +0x5d location offset, +0x5e key width, +0x60 total entries, +0x6c page size, +0x70 entry stride, +0x74 entries per page, +0x78 page count, +0x88 last-key array, +0x98 resident page pointer, +0xa0 current page.",
+  "Entries per page is min(+0x74, +0x60 - page*+0x74) in 32-bit wrapping arithmetic; a page with zero entries exits to the tail. The record scan compares memcmp(entry, key, cmpLen): below zero continues (0x1424da9f0 / jns false), above zero (0x1424daa0f / jle false) writes found 0 and location 0 for that key, equal writes found 1 and decodes the location from +0x5c big-endian bytes at entry + keyBytes + +0x5d, storing the partial value on every digit (0x1424daa50..0x1424daa6c). The record cursor is not reset on a hit: after key i, the next key either resumes the same page from the next record (0x1424daa9e) or advances the page cursor and restarts the scan at record 0.",
+  "When the cursor runs past the last page (or a key's page is empty), the remaining keys get zeroed: the client's tail splits into two memsets (0x142efe950) when the outputs are far apart, with a scalar loop for an odd remainder, and a plain scalar loop when the first overlap test fires. The final bytes are the same; the candidate zeroes the two ranges.",
+  "The fixture's index blob holds the object, the query keys, the per-page last keys and the page data in one 0x8000-byte arena buffer; the object's +0x50 and +0x88 are absolute arena addresses and the candidate subtracts the arena base. The caller's pointer array is a second pointee of u64 arena addresses; the probe turns each into a key offset inside the index blob. The two output arrays are separate pointees prefilled with 0xA5 / 0xBB sentinels, so the whole region is compared and a stray write or a missing zero is visible.",
+  "Compared channels: the u8 return (0 or the resident error), the whole index blob (the resident pointer at +0x98 and the current page at +0xa0 are the only writes), the key pointer array (read-only, sentinel-checked), the found array and the location array. The declared cases walk: count 0; page count 0 with even, odd and single tails; a hit at record 2 with location widths 0, 1, 5 and 8; a miss above every record; page advance to the next page and past the last; same-page and next-page continuation; a duplicate key whose second lookup resumes past the hit and is reported missing; clamped key lengths (0, prefix, longer than the key width); an empty last page; a nonzero location offset; equal adjacent keys; one entry per page; both tail layouts (found array before and after the location array), and the exact overlap where the found array sits on the location array (the scalar zero loop runs once per key). allowedImageReads lists the two data reads outside the arguments: PageResident's stack-cookie global at exe 0x143ac5f40 (v2b 0x7ff7c87e5f40, zero-fill in this image, so it reads 0) and the memset dispatch table at exe 0x143619530..0x14361956f (v2b 0x7ff7c8339530-0x7ff7c833956f, 16 dwords used for sizes 0..15)."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "the streamed page read",
+   "why": "CdnIndexPageResident's streamed branch (index+0x38 != 0) issues the read through 0x142522870 / 0x142522380 behind an import thunk and takes the table lock at 0x142694c20 - both outside the image. The candidate's resident_page returns 1 for that branch as the named open stage; the fixture pins the whole-file mode and the unit's index never sets the flag.",
+   "address": "0x1424da5bb"
+  },
+  {
+   "what": "the found array strictly inside the location array's tail",
+   "why": "The aliased case passes the found array exactly `count` bytes long at the location array's address, so the bytes both arguments share are the bytes the client actually zeroes. A stricter alias (the found array ending inside the location array's tail) is out of reach: a probe passes independent pointees, so the oracle would write into the other argument's bytes while the candidate's two buffers stay independent.",
+   "address": "0x1424daae8"
+  },
+  {
+   "what": "the record-scan behaviour for unsorted query keys",
+   "why": "The client assumes the keys are ascending (the page cursor is monotonic and the record cursor is not reset on a hit). An unsorted key is still deterministic and is covered by a declared case, but the contract the client relies on is not enforced anywhere in the function - a caller passing unsorted keys gets the cursor's answer, and this unit proves the client's answer, not a specification."
+  }
+ ]
+}

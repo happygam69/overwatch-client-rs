@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import struct
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -68,27 +69,76 @@ MAX_STEPS = 2_000_000
 
 # Images are large (tens of MB) and immutable during a session; several
 # consumers (selftest, runner, coverage) build more than one EmuOracle over
-# the same path. Read each file once per process.
+# the same path. Read each file once per process, and let the first reader
+# win: units run in a thread pool, and four concurrent 72 MB reads of the
+# same file buy nothing.
 _IMAGE_CACHE: Dict[str, bytes] = {}
+_IMAGE_READ_LOCK = threading.Lock()
+
+# Digests the self-tests registered for their synthetic images. Nothing in
+# the harness proper (runner, cli, selftest) calls `allow_image_sha256`; a
+# unit JSON cannot name its way past the pin, because the pin is checked
+# against the pinned game image first and the extra set only ever holds
+# digests a test put there in the same process.
+_EXTRA_IMAGE_SHA256: set = set()
+
+
+def allow_image_sha256(sha: str) -> None:
+    """Permit one more image digest (self-tests with synthetic images only).
+
+    The tests build tiny fake images instead of shipping the 72 MB game
+    image; without this they would have to monkeypatch the pin away. The
+    production path never registers anything, so a substituted image on
+    disk still fails exactly as before.
+    """
+    _EXTRA_IMAGE_SHA256.add(sha)
 
 
 def _read_image(path: str) -> bytes:
     key = os.path.realpath(path)
-    img = _IMAGE_CACHE.get(key)
-    if img is None:
-        with open(path, "rb") as f:
-            img = f.read()
-        import hashlib
+    with _IMAGE_READ_LOCK:
+        img = _IMAGE_CACHE.get(key)
+        if img is None:
+            with open(path, "rb") as f:
+                img = f.read()
+            import hashlib
 
-        sha = hashlib.sha256(img).hexdigest()
-        if sha != IMAGE_SHA256:
-            raise SystemExit(
-                f"oracle image {path} is not the pinned image: sha256 {sha[:16]} "
-                f"!= {IMAGE_SHA256[:16]}; a unit proven against different bytes "
-                "is not proven (docs/ghidra-image-audit.md section 2)"
-            )
-        _IMAGE_CACHE[key] = img
+            sha = hashlib.sha256(img).hexdigest()
+            if sha != IMAGE_SHA256 and sha not in _EXTRA_IMAGE_SHA256:
+                raise SystemExit(
+                    f"oracle image {path} is not the pinned image: sha256 {sha[:16]} "
+                    f"!= {IMAGE_SHA256[:16]}; a unit proven against different bytes "
+                    "is not proven (docs/ghidra-image-audit.md section 2)"
+                )
+            _IMAGE_CACHE[key] = img
     return img
+
+
+def function_bytes(
+    image_path: str,
+    base: int,
+    v2b_addr: int,
+    max_size: int = 0x2000,
+) -> bytes:
+    """The oracle's function window, without building an emulator.
+
+    Returns exactly what `EmuOracle.load_function` returns: the pinned image
+    bytes at `v2b_addr` for `max_size`. A caller that only needs the digest of
+    the oracle window (the fresh-verdict cache check in runner.py) does not
+    have to pay for a `Uc` instance and a tens-of-MB memory write to learn
+    whether a ledger entry is still fresh.
+    """
+    img = _read_image(image_path)
+    off = v2b_addr - base
+    if off < 0 or off >= len(img):
+        raise ValueError(f"address {v2b_addr:#x} outside image")
+    blob = img[off : off + max_size]
+    if len(blob) < 16 or all(b == 0 for b in blob[:16]):
+        raise ValueError(
+            f"cold page at {v2b_addr:#x}: first 16 bytes are zero; "
+            "capture a warm image before verifying this function"
+        )
+    return blob
 
 
 @dataclass
@@ -147,6 +197,7 @@ class CallResult:
 class EmuOracle:
     def __init__(self, image_path: str, base: int = V2B_BASE):
         self.base = base
+        self.image_path = image_path
         self.image = _read_image(image_path)
         self.uc = self._build()
         # (base, bytes) of the controlled state region, if one is declared.
@@ -209,16 +260,7 @@ class EmuOracle:
         return u
 
     def load_function(self, v2b_addr: int, max_size: int = 0x2000) -> bytes:
-        off = v2b_addr - self.base
-        if off < 0 or off >= len(self.image):
-            raise ValueError(f"address {v2b_addr:#x} outside image")
-        blob = self.image[off : off + max_size]
-        if len(blob) < 16 or all(b == 0 for b in blob[:16]):
-            raise ValueError(
-                f"cold page at {v2b_addr:#x}: first 16 bytes are zero; "
-                "capture a warm image before verifying this function"
-            )
-        return blob
+        return function_bytes(self.image_path, self.base, v2b_addr, max_size)
 
     def call(
         self,

@@ -67,6 +67,61 @@ one.
 
 ---
 
+## The gate's wall time: seven install suites are 98% of it (2026-11-19)
+
+Measured on the operator's machine (12 cores) with `cargo xtask verify`, the
+sequential `cargo test --release --workspace` run: of the 56 binaries whose
+timings parse out of the log, **2246 s of test time** and these seven suites
+account for 2218 s of it:
+
+| suite | wall |
+|---|---:|
+| `ow-casc` `index_find_real` | 935.2 s |
+| `ow-scene` `skin_pose_gate` | 428.3 s |
+| `ow-tank` `effect_real` | 222.8 s |
+| `ow-scene` `practice_launch` | 185.5 s |
+| `ow-scene` `hero_draws` | 158.6 s |
+| `ow-tank` `hero_pick_real` | 151.9 s |
+| `ow-tank` `brush_real` | 134.5 s |
+
+Everything else is under 16 s per binary. The full sequential run passed 84
+minutes of wall clock (compile + fmt + clippy + the suites) before it was
+stopped, so the operator's "verification takes longer than the work" is
+arithmetic: a unit is ~12 minutes, the gate is over an hour.
+
+The pool is now in: `crates/xtask/src/json.rs` + `test_runner.rs` +
+`main.rs` (applied from `xtask-verify-speedup.patch`) build every binary once
+and run them `--test-jobs N` at a time (default `min(4, cpus)`, or
+`XTASK_TEST_JOBS`), select artifacts by `profile.test` (not the target's
+`test` flag, which is true for every testable bin and once made plain
+example/bin `main`s run instead of harnesses), print each binary's duration,
+and run doc tests separately. Same stages, same binary sets, same verdict. The
+pool pays the **max** of the suites instead of their sum, so the gate's floor
+becomes `index_find_real`'s 935 s. It does **not** reduce CPU-seconds - it
+still uses every core while those minutes run - so the work-reduction items
+below remain the real fix.
+
+Three ways forward, in order of what actually removes work:
+
+1. **Make the seven suites cheap.** `index_find_real` re-derives a binary
+   search for every one of ~10M entries; the same property can be proven from
+   the sortedness walk plus a deterministic sample of keys (boundaries,
+   duplicates, first/last per bucket). The other six re-scan install trees per
+   run; a shared, gitignored, install-keyed cache of the derived facts would
+   collapse them to seconds.
+2. **Split the gate by cost.** Done as scoping, not as a second gate:
+   `cargo xtask verify -p <crate>` runs clippy, the tests and the doc tests for
+   the named crates only, and `cargo xtask verify --skip <name>` (repeatable)
+   drops a test binary whose label matches (`--skip index_find_real` removes
+   the 935 s floor; measured: the `ow-casc` scope goes from >19 min to 20 s)
+   and otherwise hands libtest's `--skip` to every binary that still runs. A
+   scoped run is an iteration loop, **not** the gate: the definition of done is
+   still the unscoped `cargo xtask verify`, because the crates you did not name
+   are exactly where an unexpected break hides. The four python doc checks stay
+   workspace-wide either way - they answer in seconds.
+3. ~~Parallel binaries~~ **done** (the pool above). Wall-time win only; no
+   CPU saved. Once (1) lands the pool makes the gate a few minutes.
+
 ## 0. The engine object and its subsystem schedule
 
 **Status: the object, both constructors, its interface registry and the
@@ -2460,6 +2515,42 @@ network stack present, so the unit could never reach 100% coverage; the
 whole-file branch it does contain is already exercised through
 `fn/CdnIndexPageSelect`, which calls it and pins both the cache-hit and the
 cache-miss edges. It stays read and documented, not verified.
+
+**The batch selection is verified, and the CDN cluster screen is closed
+(2026-11-19).** `fn/CdnIndexPageSelectBatch` (`0x1424da910`, 660 B) passes the
+five stages: 18/18 reachable branches of 20 sites, two declared dead (the
+resident-error exit, and the tail's `i >= count` guard), 11/12 mutants with the
+one compile failure counted killed, 300 differential cases plus the edge pool.
+It pins three facts the closed-form `CdnIndexPageSelect` note did not: the
+record cursor is not reset on a hit (a duplicate key resumes one record past
+the hit and is reported missing), the page cursor is monotonic across the
+sorted keys (an unsorted caller gets the cursor's answer), and the tail's
+scalar zero loop only runs when the caller's found array overlaps the location
+array (the unit's fixture aliases them exactly).
+
+The rest of the "CDN transport + index fetch" queue cannot become five-stage
+units against this image. The oracle supplies no OS services, and every one of
+these functions reaches one of: an IAT slot (`WinHttpReadData` `0x142521d70`
+calls `[rip+...]` at `0x142521da2`/`0x142521dac`/`0x142521dd8`; the index
+loaders `CdnIndexFooterLoad` `0x1424dabb0`, `CdnIndexFileLoad` `0x1424dad20`,
+`CdnIndexBufferAdopt` `0x1424db020` and `CdnIndexFetchState` `0x1424e8f20`
+reach `0x142521c70`, a handle close through an IAT slot, and `0x1424d9800`, a
+file read), a virtual slot (`CdnClientDtor` `0x1424b0a90` `call [rax+0x30]`;
+`CdnIndexBufferStore` `0x1424da4c0` `call rax`), or a runtime lock global
+(`CdnResolveComplete` `0x1424b0c50` -> `0x142694c20`/`0x142694c50`,
+`CdnClientCtor` `0x1424b0970` -> `0x142694c30`, and `CdnResolveLocation`
+`0x1424b0cc0` -> `0x1424b0be0` -> the file read). Each of those sites faults
+in the emulator, so the transport stays read and documented, not ported;
+`ow-casc` keeps its whole-file reader and the batch/incremental selectors.
+Unlocking the set needs an IAT-stub feature (a fake handle table and a read
+callback) in the harness, which does not exist today.
+
+Two neighbours are not blocked and are the next candidates:
+`CdnConfigParse` (`0x1424ce680`) calls only direct in-image functions
+(`0x142388210`, `ParseHexKey`, `0x1424cc390`, `0x1424cc490`, `0x1426a0f20`),
+and `CdnIndexInit` (`0x1424da340`, 125 B) is pure stores plus the `-1` handle
+initialiser at `0x142521c60` - the latter has no shipped 0xa4-byte object in
+the port, so it would prove state no shipped code uses and stays open.
 
 **MD5 is answered (2026-11-17).** `blte.rs`'s `md5()` used to be a single pass
 over the input while the client stages `Md5Init` (`0x1426a5100`) -> `Md5Update`
