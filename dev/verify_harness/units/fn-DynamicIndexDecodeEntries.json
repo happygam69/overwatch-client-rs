@@ -1,0 +1,94 @@
+{
+ "id": "fn/DynamicIndexDecodeEntries",
+ "title": "tier-2 shipped code: the entry decode against DynamicIndexDecodeEntries (0x1425209a0)",
+ "address": {
+  "v2b": "0x7ff7c72409a0"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "dynamic_index_decode_entries",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "void",
+ "argFactory": "dynamic_index_decode_entries_fixture",
+ "args": [
+  {
+   "name": "obj",
+   "kind": "ptr",
+   "ptr_len": 16384
+  },
+  {
+   "name": "entries_begin",
+   "kind": "u64"
+  },
+  {
+   "name": "entries_end",
+   "kind": "u64"
+  },
+  {
+   "name": "ptr_array_begin",
+   "kind": "u64"
+  },
+  {
+   "name": "ptr_array_end",
+   "kind": "u64"
+  },
+  {
+   "name": "rec_begin",
+   "kind": "u64"
+  },
+  {
+   "name": "rec_end",
+   "kind": "u64"
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4273,
+  "coverageWindow": 693,
+  "allowedImageReads": [
+   "0x7ff7c72406a8",
+   "0x7ff7c72406ac",
+   "0x7ff7c72406b0",
+   "0x7ff7c72406b4",
+   "0x7ff7c72406b8",
+   "0x7ff7c72406bc",
+   "0x7ff7c72406c0",
+   "0x7ff7c7c9aae4",
+   "0x7ff7c87e5f40"
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/index.rs::KeyState::decode_entries (with KeyState::sink, IntervalSet::append and IntervalSet::normalize - all verified callees, unchanged in behaviour except IntervalSet now keeps the count separate from the physical buffer, which is the client's shape), built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the dynamic_index_decode_entries entry. The ledger binds the verdict to index.rs + the probe source + the git revision. SegmentEntries::key_state was refactored onto decode_entries (its entries become the 18-byte form, its page matches the 19-byte payload form), so the shipped path and the tested function are the same code, not a parallel copy.",
+  "Oracle is DynamicIndexDecodeEntries at exe 0x1425209a0, measured extent 0x1425209a0..0x142520c55 (693 bytes, the whole .pdata root, through the tail-jump to DynamicIndexNormalizeIntervals at 0x1425208d0 at 0x142520c50), which is the declared coverageWindow. Signature: (key_state *obj, const entry *entries_begin, const entry *entries_end, const record **ptr_array_begin, const record **ptr_array_end, const record *rec_begin, const record *rec_end) -> void (RCX, RDX, R8, R9, then the three stack arguments). The shipped decode_entries matches it operation for operation: the count at +0x130 is cleared first, the entry count is (end - begin) / 18 (the signed magic division at 0x1425209d6), one entry is sink type 1 (the count's low byte, 1), more are type 2 for the first and type 6 for the rest, the pointer array and the contiguous range are decoded in order with the record's own type byte at +0x12, and the function ends in the tail-jump to the normalize. The 5-byte big-endian location at +9 and the little-endian u32 size at +14 are the same decode in all three sources; the key bytes are never read.",
+  "The shipped IntervalSet needed one correction to be the client's buffer: it modelled the logical events as a Vec and discarded the rest on normalize, while the client keeps a count at +0x130 over a buffer whose slots past the count (the sorted tail a normalize leaves, and stale slots a count clear leaves) are observable bytes. IntervalSet now stores the count separately from the physical Vec, clear only zeroes the count, append overwrites at the count, and normalize sorts and compacts only the logical prefix, leaving the tail - exactly the client's in-place buffer. The public events()/len() view is unchanged, so the verified append/normalize units are unaffected.",
+  "Compared channels: one 0x4000-byte blob pointee (key-state header with a disabled logger at +0x08 whose level is 0, found at +0x10, chosen at +0x18, event base at +0x128 and capacity at +0x134, the event buffer at 0x1000, the entries, the pointer array, the records it points at and the contiguous records). The six pointer arguments are u64 arena addresses (0 for a null range), so the probe translates them against the fixed ARENA_BASE; the header's logger and event-base pointers travel as relocs inside the blob, as fn/DynamicIndexAppendInterval does. The probe writes back the found byte, the chosen location/size, the new count and the whole physical event buffer (start and delta only - the client never writes a record's padding, which the fixture keeps uniform).",
+  "Coverage gate is 100% over the window's 11 conditional branches: the null-entries exit (0x1425209cd), the count == 1 / count == 0 / count > 1 split (0x1425209f0, 0x142520a5f) and the entry loop checks (0x142520ad3, 0x142520b4e), the null and empty pointer-array exits and its loop (0x142520b53, 0x142520b5d, 0x142520bb7), and the null, empty and loop exits of the contiguous range (0x142520bc1, 0x142520bcb, 0x142520c37). The fixture has a declared case on both edges of each: null and empty and 1/2/3-record ranges for every source, plus an inverted entries range (end = begin - 36) for 0x142520ad3. That pre-loop jae (begin+18 >= end unsigned) is taken only when the signed count is negative (end < begin, so the low dword is > 1 unsigned and the count>1 path runs) - a monotonic count>=2 range has end-begin >= 36, so begin+18 < end and the edge is not taken. The earlier claim that 1/2/3-record ranges cover both edges of 0x142520ad3 was wrong; the inverted special is the discriminating case, and the probe drives clear/type-2/indirect/contiguous/normalize directly for it because the slice-based decode_entries cannot represent end < begin. The loop-back jb at 0x142520b4e is taken by the 3-record case and not taken by the 2-record case.",
+  "allowedImageReads lists the image data the called sink reads: its seven jump-table dwords at exe 0x1425206a8.. (v2b 0x7ff7c72406a8..0x7ff7c72406c0, one per type 1-7), the float constant the type 4/5 branches load (exe 0x142f7aae4), and the stack-cookie global the type 4/5 log call reads through its cookie checks (exe 0x143ac5f40). No other image data is read: the decode body itself has no rip-relative reads, and the normalize sort reads none. The main session confirms the measured figure when it runs the unit."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "the capacity-grow path inside DynamicIndexAppendInterval, reached through the sink",
+   "why": "When an append would reach the capacity at +0x134 the client calls the log function at 0x1424f8440, allocates through the vtable at [obj] and frees the old buffer - callees outside the system whose new base pointer cannot be compared byte for byte, exactly as fn/DynamicIndexAppendInterval declares. Every fixture case pins capacity at 256, past the most appends the case's records can do (the probe rejects a case whose capacity is not past twice its record count), and the count starts cleared, so the grow branch never runs.",
+   "address": "0x14252073a"
+  },
+  {
+   "what": "equal interval starts in one pre-normalize buffer",
+   "why": "The client's sort (0x14251ff30) is unstable, so two events with the same start but different deltas (a zero-length interval, or one interval's end landing on another's start) can be ordered either way and the tail past the new count is not deterministic; the Rust sort_unstable_by_key may pick the other order. Every fixture case keeps all appended interval starts and ends (and the initial chosen entry's, for a type-4 append) distinct, so the sorted order is unique on both sides.",
+   "address": "0x14251ff30"
+  },
+  {
+   "what": "a type-4/5 log call with a live logger",
+   "why": "The sink's type 4 and 5 branches call the log function at 0x1424f8440 with the logger at [obj+0x08]. The fixture's logger has level 0 at its +8, so the call returns after its cookie checks without formatting or emitting anything. A live logger's output is outside the system and is not modelled; the shipped sink likewise has no log stage, and the cases prove the decode effects around the call, not the logging.",
+   "address": "0x1424f8440"
+  },
+  {
+   "what": "a non-multiple-of-stride range length (an inverted range whose length is a multiple of the stride is covered by the declared special above)",
+   "why": "The client derives the entry count by dividing the range by 18 but then walks by pointer comparison, and walks the other two ranges by pointer equality, so a range whose length is not an exact multiple of its stride reads past the end or never terminates. That is a caller bug the probe rejects (entries % 18, pointer array % 8 and contiguous % 19 must all be zero, checked on the absolute delta for the inverted entries range); every caller passes exact ranges."
+  }
+ ]
+}

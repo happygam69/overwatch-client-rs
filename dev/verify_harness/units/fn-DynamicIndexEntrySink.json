@@ -1,0 +1,79 @@
+{
+  "id": "fn/DynamicIndexEntrySink",
+  "title": "tier-2 shipped code: the per-type entry sink against DynamicIndexEntrySink (0x142520590)",
+  "address": {
+    "v2b": "0x7ff7c7240590"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "dynamic_index_entry_sink",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "returns": "void",
+  "argFactory": "dynamic_index_entry_sink_fixture",
+  "args": [
+    {
+      "name": "obj",
+      "kind": "ptr",
+      "ptr_len": 16384
+    },
+    {
+      "name": "kind",
+      "kind": "u64"
+    },
+    {
+      "name": "entry",
+      "kind": "ptr",
+      "ptr_len": 16
+    }
+  ],
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4274,
+    "coverageWindow": 308,
+    "allowedImageReads": [
+      "0x7ff7c72406a8",
+      "0x7ff7c72406ac",
+      "0x7ff7c72406b0",
+      "0x7ff7c72406b4",
+      "0x7ff7c72406b8",
+      "0x7ff7c72406bc",
+      "0x7ff7c72406c0",
+      "0x7ff7c7c9aae4",
+      "0x7ff7c87e5f40"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/index.rs::KeyState::sink, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the dynamic_index_entry_sink entry. The ledger binds the verdict to index.rs + the probe source + the git revision. The verified callees (IntervalSet::append, IntervalSet::normalize) are unchanged in behaviour.",
+    "Oracle is DynamicIndexEntrySink at exe 0x142520590, measured extent 0x142520590..0x1425206c4 (308 bytes, the whole .pdata root: code 0x142520590..0x1425206a8 followed by the 7-dword jump table at 0x1425206a8..0x1425206c4), which is the declared coverageWindow. The first instruction is `push rbx` at 0x142520590; the code body ends with the default-exit `ret` at 0x1425206a7, and the type-1/4/6/7 blocks tail-jump to DynamicIndexAppendInterval (0x142520700). Signature: (key_state *obj, u8 kind, const entry *entry) -> void (RCX, DL, R8); the entry is the 16-byte record {u64 location, u32 size, u32 trailing}. The shipped sink matched operation for operation with one correction: the client copies all 16 entry bytes on types 1/2 (movups at 0x1425205c5/0x1425205ec) and type 3 zeroes only the location and size (mov [rbx+0x18], rax / mov [rbx+0x20], eax at 0x142520606/0x14252060a), leaving the trailing dword at +0x24 in place. ChosenEntry now carries that trailing dword (0 from the 18/19-byte decoders, which have no such byte; the verified DynamicIndexDecodeEntries unit pins zero there), and sink type 3 preserves it instead of zeroing the whole record. The jump table maps type 6 to 0x1425205d3, inside the type-1 block: type 6 shares the resident-append tail with no found/copy/clear prefix, which the shipped match already modelled.",
+    "The client's read: `movzx eax, dl; dec eax; cmp eax, 6; ja default` sends types above 7 (and 0, which wraps to 0xffffffff) to the ret at 0x1425206a2; otherwise the table dword at 0x1425206a8+4*(kind-1) is added to 0x140000000 and jumped to. Type 1 (0x1425205bf): [rbx+0x10]=1, the 16-byte copy to +0x18, count=0, then the append tail at 0x1425205d3 with r8b=1. Type 2 (0x1425205e6): found, copy, count=0, ret. Type 3 (0x142520600): found=0, location=0, size=0, count=0, ret. Type 4 (0x142520619): movss loads the float constant at exe 0x142f7aae4, lea of a log string, call 0x1424f8440 with the logger at [rbx+0x08], then count=0 and the append tail with rdx=rbx+0x18 (the current chosen entry) and r8b=1. Type 5 (0x14252065b): the same log call, count=0, ret. Type 6 reaches 0x1425205d3 directly: the append tail with the caller's entry and r8b=1. Type 7 (0x14252068f): xor r8d, r8d, so the append is non-resident and tail-jumps to the normalize. No block writes +0x128 or +0x134.",
+    "Compared channels: one 0x4000-byte blob pointee (key-state header with a disabled logger at +0x08 whose level is 0, found at +0x10, the 16-byte chosen record at +0x18, event base at +0x128 and capacity at +0x134, the event buffer at 0x1000) and the read-only 16-byte entry pointee; kind travels as a u64 whose low byte is the type (RCX obj, DL kind, R8 entry). The header's logger and event-base pointers travel as relocs inside the blob, as fn/DynamicIndexAppendInterval does. The probe drives the shipped sink with the blob's found/chosen/pre-existing events and the entry record, then writes back the found byte, the full 16-byte chosen record, the new count and the whole physical event buffer (start and delta only - the client never writes a record's padding, which the fixture keeps uniform).",
+    "Coverage gate is 100% over the window's single conditional branch: the `cmp eax, 6; ja` at 0x1425205a4, taken by types 0/8/255 (and 0x1ff, pinning the low-byte read) and not taken by types 1-7 (and 0x107, also pinning it). The jump table's seven destinations are each exercised by their type's declared case. The main session confirms the measured figure when it runs the unit.",
+    "allowedImageReads lists the image data the called sink reads: its seven jump-table dwords at exe 0x1425206a8.. (v2b 0x7ff7c72406a8..0x7ff7c72406c0, one per type 1-7), the float constant the type 4/5 branches load (exe 0x142f7aae4), and the stack-cookie global the type 4/5 log call reads through its cookie checks (exe 0x143ac5f40). No other image data is read: the sink body itself has no other rip-relative reads."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "the capacity-grow path inside DynamicIndexAppendInterval, reached through the sink",
+      "why": "When an append would reach the capacity at +0x134 the client calls the log function at 0x1424f8440, allocates through the vtable at [obj] and frees the old buffer - callees outside the system whose new base pointer cannot be compared byte for byte, exactly as fn/DynamicIndexAppendInterval declares. Every fixture case pins capacity at 256, past the most appends the case can do (the probe rejects an appending case whose capacity is not past the effective count + 1), so the grow branch never runs.",
+      "address": "0x14252073a"
+    },
+    {
+      "what": "equal interval starts in one pre-normalize buffer",
+      "why": "The client's sort (0x14251ff30) is unstable, so two events with the same start but different deltas can be ordered either way and the tail past the new count is not deterministic; the Rust sort_unstable_by_key may pick the other order. Every fixture case keeps all appended interval starts and ends (and the initial chosen entry's, for a type-4 append) distinct, except two sort-free shapes: a resident append never sorts, and a zero-size non-resident pair's same-start group sums to zero commutatively in the normalize.",
+      "address": "0x14251ff30"
+    },
+    {
+      "what": "a type-4/5 log call with a live logger",
+      "why": "The sink's type 4 and 5 branches call the log function at 0x1424f8440 with the logger at [obj+0x08]. The fixture's logger has level 0 at its +8, so the call returns after its cookie checks without formatting or emitting anything. A live logger's output is outside the system and is not modelled; the shipped sink likewise has no log stage, and the cases prove the decode effects around the call, not the logging.",
+      "address": "0x1424f8440"
+    },
+    {
+      "what": "sequences of sink calls (duplicate sink calls in one decode)",
+      "why": "One harness call drives exactly one sink invocation; back-to-back calls are the caller's decode order and are pinned by fn/DynamicIndexDecodeEntries, whose fixture drives type sequences (1..7 in order, 1 then 2, entries then page records) through the same shipped sink. This unit pins each call's per-invocation effects: what it preserves from the incoming state is exercised by giving every case a non-default incoming found flag, chosen record and pre-existing events."
+    }
+  ]
+}

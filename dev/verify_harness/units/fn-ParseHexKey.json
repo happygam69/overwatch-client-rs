@@ -1,0 +1,62 @@
+{
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u64",
+ "id": "fn/ParseHexKey",
+ "title": "tier-2 shipped code: the client's 16-byte hex key parser against ParseHexKey (0x14248efd0)",
+ "address": {
+  "v2b": "0x7ff7c71aefd0"
+ },
+ "entry": "parse_hex_key",
+ "argFactory": "parse_hex_key_fixture",
+ "args": [
+  {
+   "name": "text",
+   "kind": "ptr",
+   "ptr_len": 64
+  },
+  {
+   "name": "len",
+   "kind": "u64"
+  },
+  {
+   "name": "out",
+   "kind": "ptr",
+   "ptr_len": 16
+  },
+  {
+   "name": "flag",
+   "kind": "ptr",
+   "ptr_len": 1
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4261,
+  "coverageWindow": 102,
+  "allowedImageReads": []
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/install.rs::parse_hex_key (with its hex_decode, hex_value and leading_whitespace leaves), built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the parse_hex_key entry. The ledger binds the verdict to install.rs + the probe source + the git revision.",
+  "Oracle is ParseHexKey at exe 0x14248efd0, extent 0x14248efd0..0x14248f036 (102 bytes through the ret), which is the declared coverageWindow. Signature: (const char *text, size_t len, u8 out[16], u8 *flag) -> size_t consumed.",
+  "The client's read (0x14248efd0): zero `out` (one 16-byte movups) and `*flag`; walk a byte loop that skips `0x20` or `0x09..=0x0d` while the cursor is before `text + len`; rbx = whitespace count; call 0x14269ab80(out, 16, text + ws, len - ws) (the hex-pair decoder, which returns the bytes written and stops at a zero byte, a non-hex character or the end); if the result is exactly 16 return `ws + 0x20` else return 0.",
+  "Compared channels: the 64-bit return (consumed characters), the text (read-only), the 16-byte out block and the 1-byte flag. The fixture pre-fills out and flag with 0xA5, so the client's zeroing, its in-place partial writes on a short decode, and the flag write are all compared.",
+  "Coverage gate is 100% over the window's sites: the whitespace loop with its space, tab..CR and 'not whitespace' edges, the end-of-string edge, the 'everything was whitespace' exit, and the decoder's success/short pair compare (the decoder runs inside the oracle but outside the measured window)."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "a len larger than the text buffer",
+   "why": "The client reads `len` bytes from the pointer it was given; a shorter buffer is a caller bug and would read past the arena. The probe rejects it and the fixture never builds one."
+  },
+  {
+   "what": "the decoder's own branches (0x14269ab80)",
+   "why": "They are inside the call, so they are outside this unit's coverage window; they run in the oracle and their effect is compared through the 16-byte output. 0x14269ab80 has 7 call sites and is a candidate for its own unit."
+  }
+ ]
+}

@@ -1,0 +1,116 @@
+{
+ "id": "fn/ConfigKeyEntryParse",
+ "title": "tier-2 shipped code: the key-<id> = <key> config line against ConfigKeyEntryParse (0x1424cebd0)",
+ "address": {
+  "v2b": "0x7ff7c71eebd0"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "config_key_entry_parse",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u8",
+ "argFactory": "config_key_entry_parse_fixture",
+ "args": [
+  {
+   "name": "ctx",
+   "kind": "ptr",
+   "ptr_len": 12288
+  },
+  {
+   "name": "key_begin",
+   "kind": "u64"
+  },
+  {
+   "name": "key_end",
+   "kind": "u64"
+  },
+  {
+   "name": "val_begin",
+   "kind": "u64"
+  },
+  {
+   "name": "val_end",
+   "kind": "u64"
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 87,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 8151,
+  "coverageWindow": 481,
+  "allowedImageReads": [
+   "0x7ff7c87e5f40"
+  ],
+  "unreachableBranches": [
+   {
+    "site": "0x7ff7c71eec44",
+    "edge": "0x7ff7c71eec4a",
+    "why": "the vector-grow entry `cmp eax, ecx` / `jne` at 0x1424cec44: the fall-through needs count == capacity, and the block it enters reallocates through the allocator vtable at [vec] (+0x10 alloc, +0x30 free, with a 0x142efe2b0 copy) and derives the new capacity by multiplying the eight bytes at [rsp+0x48] - the `key-` tag literal, whose high dword is never written - by 0xaaaaaaaaaaaaaaab. Allocator callees are outside the system and the capacity depends on uninitialised stack, so no input can be compared byte for byte. Every fixture case keeps count < capacity."
+   },
+   {
+    "site": "0x7ff7c71eed05",
+    "edge": "0x7ff7c71eed0d",
+    "why": "the token skip loop's space test `cmp al, 0x20` / `je` at 0x1424ced05: the loop is entered only when `cmp rsi, rbx` / `jae` at 0x1424cecf8 falls through, i.e. `key_begin + 4 < token_end`, and the token scan that produced `token_end` started at `key_begin + 4` and stops on the first whitespace byte - so the byte at `key_begin + 4` is never whitespace there, and the space edge cannot execute. The whitespace test is left in the code because the client's loop tests it before the range predicate."
+   },
+   {
+    "site": "0x7ff7c71eed0b",
+    "edge": "0x7ff7c71eed0d",
+    "why": "the same loop's `sub al, 9` / `cmp al, 4` / `ja` at 0x1424ced0b: falling through means the byte at `key_begin + 4` is whitespace, which the token scan above makes impossible for the same reason, so only the taken edge (to the parse at 0x1424ced25) ever runs."
+   },
+   {
+    "site": "0x7ff7c71eed42",
+    "edge": "0x7ff7c71eed15",
+    "why": "the id-parse flag test `cmp byte ptr [rsp+0x48], 0` / `jne` at 0x1424ced42: the flag is written by ParseHexKeyId (0x14248f040), whose only store to it is `mov byte ptr [r9], 0` at 0x14248f055. The client's parser never sets it, so the not-equal edge cannot execute from this function's entry."
+   },
+   {
+    "site": "0x7ff7c71eed96",
+    "edge": "0x7ff7c71eeda1",
+    "why": "the key-parse flag test `cmp byte ptr [rsp+0x48], 0` / `jne` at 0x1424ced96: the flag is written by ParseHexKey (0x14248efd0), whose only store to it is `mov byte ptr [r9], 0` at 0x14248efe0. It is never non-zero, so the not-equal edge cannot execute."
+   }
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/install.rs::config_key_entry_parse, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the config_key_entry_parse entry. The ledger binds the verdict to install.rs + the probe source + the git revision.",
+  "Oracle is ConfigKeyEntryParse at exe 0x1424cebd0, extent 0x1424cebd0..0x1424cedb1 (481 bytes, the `.pdata` extent), which is the declared coverageWindow. v2b 0x7ff7c71eebd0 is 0x7ff7c4d20000 + (0x1424cebd0 - 0x140000000). Signature: (ctx *ctx, const char *key_begin, const char *key_end, const char *val_begin, const char *val_end) -> u8 disposition (RCX, RDX, R8, R9, then the one stack argument, which the client reads at [rsp+0x60] after its frame). The context's only read field is the qword at +8, the entry vector; the vector is {allocator at +0, base at +8, count u32 at +0x10, capacity u32 at +0x14} and the records are 24 bytes ({u64 id, [u8;16] key}).",
+  "The read, in order: the key span must start with 'k' (0x1424cebdd), its 32-bit pointer difference must exceed 4 (0x1424cebfb), its first dword must be 0x2d79656b = `key-` (0x1424cec06); the token scan then walks from key_begin+4 to the first space, TAB/LF/VT/FF/CR or key_end (0x1424cec19..0x1424cec34). When count == capacity the client grows the vector (declared open); it then zeros one 24-byte record at base + count*24 and stores count+1 (0x1424cecdd..0x1424ceced). The first non-whitespace byte of the token onward is ParseHexKeyId'd into the record's first 8 bytes (0x1424ced38): a zero consumed count returns 1. Then val_begin >= val_end returns 0 (0x1424ced51); the value's leading whitespace is skipped with the same predicate, running off the end returning 0 (0x1424ced53..0x1424ced67); and ParseHexKey fills the record's 16-byte key (0x1424ced8c): a non-zero consumed count returns 1, a zero one returns 0.",
+  "The disposition is the client's, not a boolean success: a line whose id parses and whose value carries 32 hex digits returns 1, and a line whose value is too short returns 0. The record is appended before either parse, so a rejected line still grows the vector.",
+  "Compared channels: the return byte (AL) and one 0x3000-byte blob. The blob holds the context at 0 (its +8 qword is the absolute arena address of the vector), the vector object at 0x40, 32 entry slots at 0x1000 (each filled with a distinct pattern so an append is visible), the key text at 0x2000 and the value text at 0x2200. All pointer fields are absolute arena addresses written by the fixture - no relocation, so the two sides hold identical bytes and the whole blob is one channel.",
+  "The fixture's declared cases sit on every boundary: a first byte that is not 'k', spans of 0/3/4 bytes, a four-byte prefix that is not `key-`, a token that stops on a space, a tab and a CR, a token that runs to the span end, spans that cut the token one and two bytes short of the eight bytes the id parser needs, an inverted span whose 32-bit difference passes the length test, non-hex and short ids, an id followed by every value shape (empty span, inverted span, whitespace-only, 31 and 33 hex digits, a non-hex byte inside, upper case), counts 1/3/7/31/32 against capacities 4/8/32 so the append lands at a non-zero offset, and counts above the capacity (5/3, 9/1) - a state the client's own invariant forbids but memory can hold, and the only input that separates the grow guard's two compares. The sweep afterwards varies the key/value pools, cuts spans at random offsets and inverts one in seven.",
+  "The fixture cannot exercise a leading-whitespace run before the id: the token scan starts at `key_begin + 4` and stops on the first whitespace, so that byte is never whitespace when the skip loop is entered. Both skip-loop compares are declared dead for that reason; the whitespace test stays in the Rust because the client has it.",
+  "Coverage: the 481-byte window holds 21 conditional branch sites. Five are declared with one dead edge (the grow entry, the two parse-flag tests and the two dead compares of the token skip loop), each validated by the coverage stage (site ran, exactly one edge observed, the declared edge never observed). Two sites never execute: 0x1424cec51, inside the grow block, and 0x1424ced13, the token skip loop's own back edge, which needs a whitespace advance the scan above makes impossible. That leaves 16 reachable sites of which 14 have both edges: 14/16 = 87.5%, so the gate is set at 87.",
+  "Mutation: 11 of 12 injected mutants are killed (92%), including the token scan's `<` bound (killed by the span cut at 19) and the grow guard's `==` (killed by the count-above-capacity case). The one survivor, `>` -> `>=` in the guard, is declared observationally equivalent with a proof.",
+  "allowedImageReads is the /GS cookie at exe 0x143ac5f40 (v2b 0x7ff7c87e5f40), read by the prologue store and the epilogue check through 0x1426c3d40. The callees ParseHexKeyId (0x14248f040), ParseHexKey (0x14248efd0), the hex decoder (0x14269ab80) and the cookie check are code, not data reads; the measured run's union of image reads is exactly this range."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "the entry-vector grow",
+   "why": "The client reallocates through the allocator vtable at [vec] (alloc at +0x10, free at +0x30, a 0x142efe2b0 copy) and then recomputes the capacity with `mul qword ptr [rsp+0x48]` - the eight bytes where the `key-` tag literal lives, of which only the low dword and byte +4 are written - so the result depends on uninitialised stack and on allocator callees outside the system. Every fixture case keeps count < capacity, so the block never runs.",
+   "address": "0x1424cec53"
+  },
+  {
+   "what": "a non-zero parse flag",
+   "why": "Both parse callees only ever zero the flag byte, so the two flag tests' not-equal edges cannot execute from this function. Declared in unreachableBranches, site by site.",
+   "address": "0x1424ced42"
+  },
+  {
+   "what": "the capacity wrap at count == capacity == 0xffffffff",
+   "why": "There count+1 wraps to 0, the grow is skipped, and the append would write at base + 0xffffffff*24, which no arena can hold. Not representable, so not covered.",
+   "address": "0x1424cec4e"
+  },
+  {
+   "what": "a caller in the crate",
+   "why": "The client's config-line dispatcher (which splits a line into the key and value spans it hands this function) is not read, so `ow-casc`'s own keyring reader keeps its current logic and this function has no production caller yet. Adding one before the dispatcher is read would be an invention."
+  }
+ ],
+ "knownEquivalentMutants": [
+  {
+   "kind": "cmp-flip >to>=",
+   "line": 930,
+   "rationale": "the guard is `if count == capacity { if count.wrapping_add(1) > capacity {`; inside it count == capacity, so count + 1 == capacity + 1 (the only way into the block), which never equals capacity. `>` and `>=` therefore agree for every input, including the 0xffffffff wrap where both are false."
+  }
+ ]
+}

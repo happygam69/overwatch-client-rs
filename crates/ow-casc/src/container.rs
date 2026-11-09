@@ -1003,8 +1003,23 @@ impl IndexFooter {
     }
 
     fn from_out(out: &[u8; 0x30]) -> IndexFooter {
+        IndexFooter::from_descriptor(out).expect("the client's 0x30-byte block")
+    }
+
+    /// Decode the client's derived-footer block at its own offsets.
+    ///
+    /// `out` is the 0x30 bytes `CdnIndexFooterParse` (`0x1424d9af0`) writes and
+    /// `CdnIndexPageChecksums` (`0x1424d9f20`) reads: the footer copy at
+    /// `0..0x14`, then `pageSize` at `0x14`, `entrySize` at `0x18`,
+    /// `entriesPerPage` at `0x1c`, `pageCount` at `0x20`, `lastKeyBytes` at
+    /// `0x24` and `checksumBytes` at `0x28`. Only `0..0x2c` is read; a shorter
+    /// slice is refused rather than padded.
+    pub fn from_descriptor(out: &[u8]) -> Option<IndexFooter> {
+        if out.len() < 0x2c {
+            return None;
+        }
         let dword = |at: usize| u32::from_le_bytes(out[at..at + 4].try_into().unwrap());
-        IndexFooter {
+        Some(IndexFooter {
             version: out[0],
             offset_bytes: out[4],
             size_bytes: out[5],
@@ -1016,7 +1031,7 @@ impl IndexFooter {
             page_count: dword(0x20),
             last_key_bytes: dword(0x24),
             checksum_bytes: dword(0x28),
-        }
+        })
     }
 
     /// `out[4] + out[5] + out[6]`, the client's per-entry stride.
@@ -1257,6 +1272,153 @@ pub fn select_page(
     }
 }
 
+/// `MD5(tail[..n - checksumSize])[..checksumSize] == tail[n - checksumSize..]`.
+///
+/// The client's terminal check (`0x1424d9e71`): it hashes the last-key array
+/// plus the per-page checksums and compares the digest's first `checksumSize`
+/// bytes with the terminal bytes that follow them. `tail` must be that region
+/// **including** the terminal; a tail shorter than the checksum is refused
+/// (the client would read before it).
+fn terminal_checksum_matches(tail: &[u8], checksum_size: usize) -> bool {
+    let Some(at) = tail.len().checked_sub(checksum_size) else {
+        return false;
+    };
+    blte::md5_digest(&tail[..at])[..checksum_size] == tail[at..]
+}
+
+/// `MD5(terminal + footer)[..16] == key`.
+///
+/// The client's own-key check (`0x1424d9ed1`): the 16-byte key the index is
+/// named by must be the MD5 of the terminal checksum followed by the 20 footer
+/// bytes, compared as two 64-bit values.
+fn key_checksum_matches(terminal: &[u8], footer: &[u8], key: &[u8; 16]) -> bool {
+    let mut hashed = Vec::with_capacity(terminal.len() + footer.len());
+    hashed.extend_from_slice(terminal);
+    hashed.extend_from_slice(footer);
+    blte::md5_digest(&hashed)[..16] == *key
+}
+
+/// The client's whole-file CDN index validation: `CdnIndexFileParse`
+/// (`0x1424d9c90`), operation for operation.
+///
+/// `key` is the index's own 16-byte key (its file name in `indices/`), `data`
+/// the file, `len` the declared length and `out` the 0x30-byte derived-footer
+/// block. The status is the client's `AL`: 0 accepted, 8 rejected, and whatever
+/// [`verify_page_checksums`] returns for the last stage (0, 3 or 8).
+///
+/// The order is the client's:
+///
+/// 1. [`parse_index_footer`] - copy the last 20 bytes into `out`, check the
+///    header MD5 against `MD5(header[..12] + 8 zeros)[..8]`, restore the hash,
+///    accept version 0/1 and `checksumSize <= 16`, derive the geometry
+///    (`pageSize = footer[3] << 10`, `entrySize = footer[4]+[5]+[6]`,
+///    `entriesPerPage`, `pageCount`, `lastKeyBytes`, `checksumBytes`) and
+///    require `len == checksumSize + 20 + (checksumSize+keyBytes+pageSize) *
+///    pageCount` in 32-bit arithmetic. A header-MD5 rejection leaves the
+///    hash bytes in `out` zeroed, exactly as the client does.
+/// 2. The **terminal** check: `MD5(last keys + checksums)[..checksumSize]` must
+///    equal the terminal bytes that follow them.
+/// 3. The **key** check: `MD5(terminal + footer)[..16]` must equal `key`.
+/// 4. The **page** pass: [`verify_page_checksums`]'s status is returned
+///    unchanged, so a page mismatch is the file's status, not a re-wrap.
+///
+/// The `bodies`, `tail` and terminal offsets are the client's: `pageCount *
+/// pageSize` and `lastKeyBytes + checksumBytes` are 32-bit products (they
+/// wrap), then added in 64 bits. A descriptor whose products wrap describes a
+/// file the client would read outside its buffer; this port needs `data` to
+/// cover `len` and will panic rather than read past it (a fixture never does).
+pub fn parse_index_file(key: &[u8; 16], data: &[u8], len: u32, out: &mut [u8; 0x30]) -> u8 {
+    if data.len() < len as usize {
+        // The client reads `len` bytes from the pointer it was given; a
+        // shorter buffer is a caller bug, not an input the client handles.
+        return 8;
+    }
+    let status = parse_index_footer(data, len as usize, len, out);
+    if status != 0 {
+        return status;
+    }
+    let footer = IndexFooter::from_descriptor(out).expect("parse_index_footer fills 0x2c bytes");
+    let bodies = footer.page_count.wrapping_mul(footer.page_size);
+    let tail = footer.last_key_bytes.wrapping_add(footer.checksum_bytes);
+    let tail_start = bodies as usize;
+    let terminal_at = tail_start + tail as usize;
+    let checksum_size = usize::from(footer.checksum_size);
+    if !terminal_checksum_matches(
+        &data[tail_start..terminal_at + checksum_size],
+        checksum_size,
+    ) {
+        return 8;
+    }
+    let terminal = &data[terminal_at..terminal_at + checksum_size];
+    if !key_checksum_matches(terminal, &out[..INDEX_FOOTER_SIZE], key) {
+        return 8;
+    }
+    verify_page_checksums(data, len, &footer)
+}
+
+/// The page-wise MD5 verification of a CDN index: `CdnIndexPageChecksums`
+/// (`0x1424d9f20`), read operation for operation.
+///
+/// `file` is the whole index file (or at least everything this call reads),
+/// `len` the length the caller declares, and `footer` the derived-footer block
+/// [`IndexFooter::from_descriptor`] decodes. The status byte is the client's
+/// `AL`: 0 every page matched, 3 `len` shorter than the page bodies, 8 a
+/// stored checksum disagreeing with its page.
+///
+/// The client's shape, from the disassembly:
+///
+/// 1. `bodies = pageCount * pageSize` in **32-bit** arithmetic
+///    (`imul r8d, dword ptr [r8 + 0x14]`, `0x1424d9f5e`); `len < bodies`
+///    returns 3 (`0x1424d9f66 jae` falls through to `mov al, 3`).
+/// 2. The checksum array starts at `file + lastKeyBytes + bodies`: both fields
+///    are u32, zero-extended and added in 64 bits (`0x1424d9f6c..0x1424d9f77`).
+/// 3. `pageCount == 0` returns 0 (`0x1424d9f7d je`).
+/// 4. Page `p` hashes `file + (p * pageSize) as u32` over `pageSize` bytes and
+///    compares the digest with
+///    `file + lastKeyBytes + bodies + (p * checksumSize) as u32` over
+///    `checksumSize` bytes; a mismatch returns 8.
+/// 5. All pages matching returns 0.
+///
+/// Both strides wrap in 32 bits, as the client's `imul`s do, which is why the
+/// offsets are computed here rather than through
+/// [`IndexFooter::checksum_offset`] (that one is the 64-bit form, for a file
+/// that fits). `checksumSize` is used unbounded: the client's caller
+/// `CdnIndexFileParse` (`0x1424d9c90`) rejects a value above 16 before this
+/// function can be reached with a real descriptor.
+///
+/// The streaming diagnostic reader in [`inspect_index`] keeps its per-page
+/// comparison; this whole-file form is the client's own check, and
+/// `fn/CdnIndexPageChecksums` proves it.
+pub fn verify_page_checksums(file: &[u8], len: u32, footer: &IndexFooter) -> u8 {
+    let bodies = footer.page_count.wrapping_mul(footer.page_size);
+    if len < bodies {
+        return 3;
+    }
+    if footer.page_count == 0 {
+        return 0;
+    }
+    let checksum_size = usize::from(footer.checksum_size);
+    let checksums = footer.last_key_bytes as usize + bodies as usize;
+    let page_size = footer.page_size as usize;
+    let mut ctx = [0u8; blte::MD5_CTX_SIZE];
+    let mut digest = [0u8; 16];
+    for page in 0..footer.page_count {
+        let at = page.wrapping_mul(footer.page_size) as usize;
+        blte::md5_init(&mut ctx);
+        blte::md5_update(&mut ctx, &file[at..at + page_size]);
+        blte::md5_final(&mut ctx, &mut digest);
+        let stored = checksums + page.wrapping_mul(u32::from(footer.checksum_size)) as usize;
+        // `memcmp` with a zero length compares nothing and never dereferences
+        // either pointer, so the client returns 0 for a `checksumSize` of 0
+        // even where the array's address is past the buffer. The guard keeps
+        // that case from needing the bytes.
+        if checksum_size != 0 && file[stored..stored + checksum_size] != digest[..checksum_size] {
+            return 8;
+        }
+    }
+    0
+}
+
 /// One CDN index record as `CdnIndexPageSelect` decodes it: the client's
 /// `*out_size`, `*out_offset` and 16-byte key copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1456,20 +1618,15 @@ impl PageIndex {
         file.seek(SeekFrom::Start(tail_start))?;
         file.read_exact(&mut tail)?;
         let ck = footer.checksum_size as usize;
-        let terminal = &tail[tail_len as usize - ck..];
-        let digest = blte::md5_digest(&tail[..tail_len as usize - ck]);
-        if digest[..ck] != *terminal {
+        if !terminal_checksum_matches(&tail, ck) {
             return Err(Error::Parse(format!(
                 "{}: terminal checksum does not match the last keys and checksums",
                 path.display()
             )));
         }
         if let Some(expected) = key {
-            let mut hashed = Vec::with_capacity(ck + INDEX_FOOTER_SIZE);
-            hashed.extend_from_slice(terminal);
-            hashed.extend_from_slice(&footer_bytes);
-            let digest = blte::md5_digest(&hashed);
-            if &digest[..16] != expected {
+            let terminal = &tail[tail_len as usize - ck..];
+            if !key_checksum_matches(terminal, &footer_bytes, expected) {
                 return Err(Error::Parse(format!(
                     "{}: index key does not match MD5(terminal + footer)",
                     path.display()
@@ -2111,6 +2268,124 @@ mod tests {
         assert_eq!(index.page_entry_count(1), 29);
         assert_eq!(index.page_entry_count(2), 0);
         fs::remove_file(&path).ok();
+    }
+
+    /// The whole-file validator `CdnIndexFileParse` (`0x1424d9c90`) on a
+    /// complete synthetic index: accepted with its own key, rejected on a
+    /// wrong key, a broken terminal, a broken page and a short length.
+    #[test]
+    fn parse_index_file_walks_the_whole_file_checks() {
+        let entries: Vec<_> = (0u8..80).map(|i| (key(i), 1, 0, 0)).collect();
+        let bytes = build(&entries, 0);
+        let ck = 8usize;
+        let footer = &bytes[bytes.len() - 20..];
+        let terminal = &bytes[bytes.len() - 20 - ck..bytes.len() - 20];
+        let mut hashed = terminal.to_vec();
+        hashed.extend_from_slice(footer);
+        let index_key: [u8; 16] = blte::md5_digest(&hashed)[..16].try_into().unwrap();
+        let len = bytes.len() as u32;
+
+        let mut out = [0xA5u8; 0x30];
+        assert_eq!(parse_index_file(&index_key, &bytes, len, &mut out), 0);
+        // The derived block is the client's 0x2c bytes; the tail beyond it is
+        // untouched.
+        assert_eq!(&out[..20], footer);
+        assert_eq!(u32::from_le_bytes(out[0x20..0x24].try_into().unwrap()), 2);
+        assert!(out[0x2c..].iter().all(|b| *b == 0xA5));
+
+        // A key that is not MD5(terminal + footer).
+        let mut wrong = index_key;
+        wrong[0] ^= 1;
+        assert_eq!(parse_index_file(&wrong, &bytes, len, &mut [0u8; 0x30]), 8);
+
+        // A broken terminal checksum.
+        let mut bad = bytes.clone();
+        bad[bytes.len() - 20 - ck] ^= 1;
+        assert_eq!(parse_index_file(&index_key, &bad, len, &mut [0u8; 0x30]), 8);
+
+        // A broken page body: the last stage is `verify_page_checksums`.
+        let mut bad = bytes.clone();
+        bad[0] ^= 1;
+        assert_eq!(parse_index_file(&index_key, &bad, len, &mut [0u8; 0x30]), 8);
+
+        // Shorter than the footer: the client's `cmp r8d, 0x14; jb`.
+        assert_eq!(
+            parse_index_file(&index_key, &bytes, 10, &mut [0u8; 0x30]),
+            8
+        );
+
+        // A header byte flipped after signing: the header MD5 rejects and the
+        // hash bytes in `out` stay zeroed, as the client leaves them.
+        let mut bad = bytes.clone();
+        let at = bad.len() - 20;
+        bad[at] ^= 1;
+        let mut out = [0xA5u8; 0x30];
+        assert_eq!(parse_index_file(&index_key, &bad, len, &mut out), 8);
+        assert!(out[12..20].iter().all(|b| *b == 0));
+    }
+
+    /// The whole-file status machine of `CdnIndexPageChecksums`
+    /// (`0x1424d9f20`): 0 every page matched, 3 a short `len`, 8 a mismatch.
+    #[test]
+    fn verify_page_checksums_returns_the_client_statuses() {
+        // The descriptor as `CdnIndexFooterParse` writes it: two 64-byte
+        // pages, 16 bytes of last keys, 8-byte checksums.
+        let mut d = [0u8; 0x30];
+        d[0] = 1;
+        d[6] = 16;
+        d[7] = 8;
+        d[8..12].copy_from_slice(&2u32.to_le_bytes());
+        d[0x14..0x18].copy_from_slice(&64u32.to_le_bytes());
+        d[0x20..0x24].copy_from_slice(&2u32.to_le_bytes());
+        d[0x24..0x28].copy_from_slice(&32u32.to_le_bytes());
+        let footer = IndexFooter::from_descriptor(&d).expect("0x30-byte block");
+        assert_eq!(footer.page_count, 2);
+        assert_eq!(footer.last_key_bytes, 32);
+
+        // bodies (2 x 64) | last keys (32) | checksums (2 x 8) | terminal (8)
+        let mut file = vec![0u8; 128 + 32 + 16 + 8];
+        for page in 0..2usize {
+            let body: Vec<u8> = (0..64u8).map(|i| i.wrapping_add(page as u8)).collect();
+            file[page * 64..page * 64 + 64].copy_from_slice(&body);
+            let digest = blte::md5_digest(&body);
+            let at = 128 + 32 + page * 8;
+            file[at..at + 8].copy_from_slice(&digest[..8]);
+        }
+        let len = file.len() as u32;
+        assert_eq!(verify_page_checksums(&file, len, &footer), 0);
+        // One byte short of the page bodies: status 3, before any hashing.
+        assert_eq!(verify_page_checksums(&file, 127, &footer), 3);
+        // Exactly the bodies is enough: the client's gate is `len < bodies`.
+        assert_eq!(verify_page_checksums(&file, 128, &footer), 0);
+
+        // A corrupted page body breaks its own checksum (first page).
+        let mut bad = file.clone();
+        bad[0] ^= 1;
+        assert_eq!(verify_page_checksums(&bad, len, &footer), 8);
+        // A corrupted stored checksum on the *second* page: the loop reaches
+        // page 2 and stops there.
+        let mut bad = file.clone();
+        bad[128 + 32 + 8] ^= 1;
+        assert_eq!(verify_page_checksums(&bad, len, &footer), 8);
+        // A byte past `checksumSize` inside the stored 16-byte MD5 is not
+        // compared: the client's `memcmp` length is `checksumSize`.
+        let mut extra = file.clone();
+        let spare = 128 + 32 + 16;
+        extra[spare] ^= 1; // in the terminal, past every compared checksum
+        assert_eq!(verify_page_checksums(&extra, len, &footer), 0);
+
+        // Zero pages: status 0 even with `len` 0 (the client's `test r9d`).
+        let mut d0 = d;
+        d0[0x20..0x24].copy_from_slice(&0u32.to_le_bytes());
+        d0[0x24..0x28].copy_from_slice(&0u32.to_le_bytes());
+        let empty = IndexFooter::from_descriptor(&d0).expect("0x30-byte block");
+        assert_eq!(verify_page_checksums(&[], 0, &empty), 0);
+
+        // `checksumSize` 0 compares nothing, so every page matches.
+        let mut d0ck = d;
+        d0ck[7] = 0;
+        let no_ck = IndexFooter::from_descriptor(&d0ck).expect("0x30-byte block");
+        assert_eq!(verify_page_checksums(&file[..128], 128, &no_ck), 0);
     }
 
     fn bucket_file(bucket: u8, entries: &[([u8; 9], u64, u32)]) -> Vec<u8> {

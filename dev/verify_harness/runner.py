@@ -234,8 +234,21 @@ def load_unit(path: str) -> Unit:
         ret_kind = d.get("returns", "f32")
         if ret_kind not in _RET_KINDS:
             raise ValueError(f"unknown returns {ret_kind!r} (expected one of {_RET_KINDS})")
-        v2b_raw = d["address"]["v2b"]
-        address_v2b = int(v2b_raw, 16)
+        addr = d["address"]
+        # A unit's address is in the frame its oracle runs in. Most units use
+        # the v2b frame (the default base); a function that dereferences an
+        # absolute pointer stored in the image (a spelling table, a vtable)
+        # needs the image's own frame, because those values are baked in at
+        # the link addresses. Such a unit declares `address.exe` plus
+        # `base: 0x140000000`.
+        if "v2b" in addr:
+            address_v2b = int(addr["v2b"], 16)
+        elif "exe" in addr:
+            address_v2b = int(addr["exe"], 16)
+            if int(d.get("base", "0x0"), 16) == 0:
+                raise ValueError("address.exe requires an explicit base")
+        else:
+            raise ValueError("address needs a v2b or exe key")
     except (KeyError, ValueError, TypeError) as e:
         raise ValueError(f"unit {path}: malformed descriptor: {e}") from e
     # Unit paths are repo-relative; resolve against the repo root (two levels

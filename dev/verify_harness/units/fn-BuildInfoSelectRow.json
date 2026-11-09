@@ -1,0 +1,81 @@
+{
+  "id": "fn/BuildInfoSelectRow",
+  "title": "tier-2 shipped code: the build-info row select against BuildInfoSelectRow (0x1424aec30)",
+  "address": {
+    "v2b": "0x7ff7c71cec30"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "build_info_select_row",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "returns": "u64",
+  "argFactory": "build_info_select_row_fixture",
+  "args": [
+    {
+      "name": "table",
+      "kind": "ptr",
+      "ptr_len": 16384
+    },
+    {
+      "name": "flavor",
+      "kind": "u64"
+    }
+  ],
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4275,
+    "coverageWindow": 347,
+    "allowedImageReads": [
+      "0x7ff7c7c9aa00"
+    ],
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c71cec68",
+        "edge": "0x7ff7c71cecdb",
+        "why": "Flavor-path count retest at exe 0x1424aec66 `test esi, esi` / 0x1424aec68 `je 0x1424aecdb`. esi is the count loaded at 0x1424aec3d, tested at 0x1424aec43 `je 0x1424aed7b` (return null on zero), and never rewritten (only read at 0x1424aecd1 `cmp r9d, esi`), so any run reaching this retest has count >= 1 and the je is never taken. The site runs on every non-empty-flavor case with count >= 1 and only its fall-through edge is observed."
+      },
+      {
+        "site": "0x7ff7c71ceccc",
+        "edge": "0x7ff7c71cecec",
+        "why": "Flavor post-mismatch compare at exe 0x1424aecca `cmp edx, ecx` / 0x1424aeccc `je 0x1424aecec`. It is reached only from the first-char jne at 0x1424aeca5 (al != dil, with edx = dil) and from the fall-through of the walk cmp at 0x1424aecc0 (al != dl); at 0x1424aecc4 ecx = dl and edx = al, so the compared bytes are already unequal on both entries and the je is never taken. The site runs on every flavor first-char or later-byte mismatch and only its fall-through edge is observed."
+      },
+      {
+        "site": "0x7ff7c71ced0b",
+        "edge": "0x7ff7c71cecdb",
+        "why": "No-flavor count retest at exe 0x1424aed09 `test esi, esi` / 0x1424aed0b `je 0x1424aecdb`. Same proof as the flavor retest: esi is the entry count, zero already returns null at 0x1424aec43, and esi is never rewritten, so count >= 1 on every run reaching here and the je is never taken. The site runs on every null/empty-flavor case with count >= 1 and only its fall-through edge is observed."
+      },
+      {
+        "site": "0x7ff7c71ced57",
+        "edge": "0x7ff7c71ced59",
+        "why": "No-flavor mismatch-exit compare at exe 0x1424aed55 `cmp cl, dl` / 0x1424aed57 `jne 0x1424aed7b`. It is reached only from the first-char jne at 0x1424aed3c (cl != dil, with dl = dil from 0x1424aed21) and from the fall-through of the walk cmp at 0x1424aed51 (cl != dl); cl/dl are unchanged between those tests and 0x1424aed55, so cl != dl always, the jne to the return-null block at 0x1424aed7b is always taken, and the fall-through to the active test at 0x1424aed59 is dead. The site runs on every no-flavor mismatch and only its taken edge is observed."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/install.rs::select_build_info_row (the byte view) over crates/ow-casc/src/install.rs::select_build_info_index (the shared index decision), built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the build_info_select_row entry. The ledger binds the verdict to install.rs + the probe source + the git revision. The typed select_build_info now runs through select_build_info_index, so the shipped path and the tested function are the same code, not a parallel copy; the shipped change was the empty-flavor rule (Some(\"\") takes the no-flavor path), which the old typed code treated as a flavor match on the empty product.",
+    "Oracle is BuildInfoSelectRow at exe 0x1424aec30, measured extent 0x1424aec30..0x1424aed8b (347 bytes, 0x15b, through the ret at 0x1424aed8a; the .pdata root is only 0x1424aec30..0x1424aec6a, 0x3a bytes, and the body is the chained continuation, first instruction `mov [rsp+0x18], rbx` at the entry), which is the declared coverageWindow. v2b 0x7ff7c71cec30 is computed as 0x7ff7c4d20000 + (0x1424aec30 - 0x140000000) and cross-checked against fn/DynamicIndexFindEntry at 0x1425111a0 -> v2b 0x7ff7c72311a0. Signature: (table *table, const flavor *flavor) -> row * (RCX, RDX; RDX null allowed). The table supplies the rows pointer at +0x20 and the count (u32) at +0x28; rows are 0xb0 bytes each, Product is the qword at row +0 and the active byte is at row +0x10.",
+    "The shipped select_build_info_index matched the client operation for operation and needed only that empty-flavor correction: a zero count returns null at once; a null flavor or a flavor whose first byte is zero takes the no-flavor path; any other flavor is a byte-for-byte, case-sensitive equality (first-char pre-check, then the per-byte walk) against each row's Product, returning the first active match; the no-flavor path takes the first row's Product as the baseline, requires every row (active or not) to equal it before the active test, and returns the last active row. A null Product pointer selects the default at exe 0x142f7aa00, whose first byte is zero, so it compares as the empty string. The return is the selected row pointer or null.",
+    "Compared channels: the return as a u64 and the one 0x4000-byte table blob pointee. The probe returns the client's row pointer as an absolute arena address (ARENA_BASE + rows offset + row offset), or 0 for null, so the raw RAX comparison carries the selected row's offset from the rows base. The blob holds the header at 0 (rows field at +0x20 with a reloc rebasing the relative 0x1000, count at +0x28), the 0xb0-byte rows at 0x1000 with absolute Product pointers (0 for null), the Product strings at 0x2000 and the flavor string at 0x2800; the flavor argument is a u64 arena address (0 for null) so a null flavor is representable, and the probe resolves it to the C string in the blob. The function writes nothing, so the sentinel bytes pin that.",
+    "Coverage: the sweep finds 16 conditional branch sites. Four sites run with exactly one edge and are declared under unreachableBranches with the proofs in their why fields: the flavor count retest at 0x1424aec68 and the no-flavor count retest at 0x1424aed0b (esi is the entry count, zero returns null at 0x1424aec43, esi is never rewritten, so the je to 0x1424aecdb is never taken), the flavor post-mismatch compare at 0x1424aeccc (reached only when the compared bytes already differ, so the je to 0x1424aecec is never taken), and the no-flavor mismatch-exit compare at 0x1424aed57 (reached only when cl != dl, so the jne to 0x1424aed7b is always taken and the fall-through to 0x1424aed59 is dead). The remaining missed site, the no-flavor walk loop-back at 0x1424aed53, is genuinely reachable on both edges and is covered by new fixture cases ([(\"pro\", True), (\"pxo\", True)], None) and ([(\"pro\", True), (\"pr\", True)], None): the baseline and the second row share the first char, so the walk at 0x1424aed41..0x1424aed53 runs and exits on its fall-through, while the uniform no-flavor cases drive its taken loop-back edge. Honest arithmetic: 16 sites swept - 4 valid declarations = 12 reachable sites, and 12 both-edge sites / 12 reachable = 100.0%, floored to a gate of 100 (the measured both-edge count, so the gate never exceeds what was measured).",
+    "allowedImageReads lists the only image data the body reads: the empty-string default at exe 0x142f7aa00 (v2b 0x7ff7c7c9aa00), selected by the `lea`/`cmovne` when a Product pointer is null; only its first (zero) byte is ever compared. The function has no callees and no stack-cookie global."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "The taken edges of the flavor count retest at 0x1424aec68 and the no-flavor count retest at 0x1424aed0b (je 0x1424aecdb)",
+      "why": "esi is the entry count, zero already returns null at 0x1424aec43, and esi is never rewritten, so count >= 1 at both retests and the je is never taken. Each site runs with only its fall-through edge observed; declared under unreachableBranches."
+    },
+    {
+      "what": "The taken edge of the flavor post-mismatch compare at 0x1424aeccc (je 0x1424aecec)",
+      "why": "Reached only from the first-char jne at 0x1424aeca5 and the walk-cmp fall-through at 0x1424aecc0, both with the compared bytes already unequal (edx = al, ecx = dl), so the je is never taken. The site runs with only its fall-through edge observed; declared under unreachableBranches."
+    },
+    {
+      "what": "The fall-through edge of the no-flavor mismatch-exit compare at 0x1424aed57 (to 0x1424aed59)",
+      "why": "Reached only from the first-char jne at 0x1424aed3c and the walk-cmp fall-through at 0x1424aed51, both with cl != dl and cl/dl unchanged to 0x1424aed55, so the jne to 0x1424aed7b is always taken. The site runs with only its taken edge observed; declared under unreachableBranches."
+    }
+  ]
+}

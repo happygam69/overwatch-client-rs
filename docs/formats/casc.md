@@ -42,12 +42,33 @@ Two directory shapes are supported:
   are one level up.
 
 `BuildInfoLoadFromInstall` (`0x14248f2a0`) builds `<install>/../.build.info`
-when `.flavor.info` exists. `BuildInfoSelectRow` (`0x1424aec30`) picks the
-**first active row whose Product equals the flavor**. With no flavor it
-requires every row's Product to be equal and returns the last active row.
-`Product` is at row offset `+0`, not `Branch` at `+8`; the flavor is `pro`.
-`ParseBoolString` (`0x1424d8800`) accepts `1`, `true`, `yes`, `on`, `enable`,
-`enabled` (case-insensitive) as true.
+when `.flavor.info` exists. `BuildInfoSelectRow` (`0x1424aec30`, measured extent
+`0x1424aec30..0x1424aed8b`, 347 bytes through the `ret` at `0x1424aed8a`;
+the `.pdata` root is only 0x3a bytes) picks the **first active row whose
+Product equals the flavor**. It takes the table in RCX (rows at `+0x20`,
+count `u32` at `+0x28`) and the flavor in RDX, rows are 0xb0 bytes, and
+it returns a row pointer or null. A zero count returns null; a null
+flavor or one whose first byte is zero takes the no-flavor path, which
+requires every row's Product (active or not) to equal the first row's
+and returns the last active row. The flavor compare is byte for byte
+and case-sensitive, Product is the qword at row `+0` (not `Branch` at
+`+8`), the active byte is at `+0x10`, and a null Product pointer
+compares as the empty string (the default at `0x142f7aa00` starts with
+a zero byte). The flavor on this install is `pro`. The shipped
+`select_build_info_row`/`select_build_info_index` (`install.rs`) is the
+byte view, and `select_build_info` runs through it; `fn/BuildInfoSelectRow`
+is the candidate-wired unit.
+`ParseBoolString` (`0x1424d8800`) is a **prefix** match, folding `A..=Z` only,
+against two eight-entry tables: true is `1 on enable enabled yes y true t`
+(`0x143472f10`) and false is `0 off disable disabled no n false f`
+(`0x143472f50`), in that order. A match writes 1 (true table) or 0 (false
+table) to the caller's flag and returns 1; no match returns 0 and writes
+nothing, so the caller can tell "no answer" from "false". The caller's text
+must be a prefix of a spelling - `"t"`, `"enab"` and `"on"` match, `"enablex"`
+does not (its seventh byte is compared against the spelling's NUL) - the empty
+text matches, nothing trims, and `on` is tried before `off`, so `"o"` is true
+and `"of"` false. The `.build.info` reader trims the field before calling it.
+Verified by `fn/ParseBoolString` (`install::parse_bool_string`).
 
 ## Config files
 
@@ -127,10 +148,31 @@ terminal       checksumSize bytes, MD5(last keys + checksums)[..checksumSize]
 footer         20 bytes above
 ```
 
-`CdnIndexFileParse` (`0x1424d9c90`) checks the terminal checksum and then
-`MD5(terminal + footer)` against the index's own 16-byte key (the file name).
-`CdnIndexPageChecksums` (`0x1424d9f20`) compares every page's MD5 with its
-stored checksum; a mismatch is ignored. Records are `[key keyBytes][size
+`CdnIndexFileParse` (`0x1424d9c90`) copies the last 20 bytes into the 0x30-byte
+derived block, checks `MD5(header[0..12] + 8 zeros)[..8]` against the footer's
+own key, derives the geometry, checks the exact total length, then verifies the
+terminal checksum (`MD5(last keys + checksums)`) and `MD5(terminal + footer)`
+against the index's own 16-byte key (the file name), and finally calls
+`CdnIndexPageChecksums` (`0x1424d9f20`), returning its status. That function
+returns **3** when the declared length is shorter than `pageCount * pageSize`
+(32-bit product), **8** when any page's MD5 does not match its stored
+checksum, and **0** when every page matches - a mismatch is a rejection, not
+ignored. It reads the four descriptor fields at `+0x07` (checksum size),
+`+0x14` (page size), `+0x20` (page count) and `+0x24` (last-key bytes), hashes
+each page through the three staged MD5 functions, and starts the checksum
+array at `lastKeyBytes + pageCount*pageSize`. Verified by
+`fn/CdnIndexPageChecksums`. `CdnIndexFileParse` is verified too
+(`fn/CdnIndexFileParse`, 364 cases, 10/10 branches, 5/5 mutants): the unit
+compares AL, the key and file (read-only) and the 0x30-byte derived block, so
+the header-MD5 rejection path's zeroed hash bytes and the derived fields are
+both pinned. The three stages are the shipped `parse_index_file` composed of
+`parse_index_footer`, the terminal and key helpers and `verify_page_checksums`,
+and the streaming `PageIndex::open_with_key` uses the same two helpers.
+`CdnIndexPageResident` (`0x1424da590`) is read but cannot be a five-stage unit:
+its streamed branch is an HTTP range read (0x142522870 start, 0x142522380
+wait) followed by a per-page MD5 of the returned page, so its branch sites
+cannot run without the network stack; its whole-file branch (two stores) is
+already exercised through `fn/CdnIndexPageSelect`, which calls it. Records are `[key keyBytes][size
 sizeBytes BE][archive ordinal (offsetBytes - 4)][offset 4 BE]`; a loose index
 has `offsetBytes = 0` and stops after the size. The main group has
 `offsetBytes = 6` (u16 ordinal), the patch group 5 (u8).
@@ -227,6 +269,16 @@ The name's last 16 hex digits are the key id. The client parses them with
 (`0x14248efd0`); the BLTE E-block lookup reads the 8 id bytes as a
 little-endian `u64`. The byte swap is the address order, not a convention.
 
+Both parsers are tiny and shared with every other text config (`ParseHexKey`
+has 17 call sites, all in the config/keyring readers): zero the target, zero a
+flag byte, skip `0x20` and `0x09..=0x0d`, decode exactly 16 bytes (or 8) with
+the hex-pair leaf `0x14269ab80` - which needs two characters per byte, stops at
+a zero byte or a non-hex character, and leaves its partial output in place -
+and return the characters consumed (`whitespace + 32`, or `+ 16`) or 0 on a
+short decode. Both are ported (`install::parse_hex_key`,
+`install::parse_hex_key_id`, which the keyring field parser calls) and verified
+by `fn/ParseHexKey` and `fn/ParseHexKeyId`.
+
 The community "support" keyring uses `<id> <key> [1|0]`, space separated,
 with the id used as written and no swap. A file is told apart by whether a
 line begins `key-`. A correct key registered under the wrong byte order simply
@@ -310,9 +362,39 @@ word; callers branch only on success. For a static file inside the client's
 declared block size that is not a multiple of 18 is accepted and its trailing
 partial entry is never hashed or decoded.
 
+**No five-stage unit for `DynamicIndexSegmentParse` (open stage).** Its
+measured extent is `0x14250fcf0..0x1425101c8` (1240 bytes, the whole `.pdata`
+root, first instruction at `0x14250fcf0`, `ret` at `0x1425101c7`), v2b
+`<frame base + RVA>` (see `docs/casc-1to1.md`), signature `(segment *obj /*RCX*/, file *file /*RDX*/,
+mode u32 /*R8D*/, bucket u32 /*R9D*/) -> u32 status`. The pure validation
+core at `0x14250ff6a` (file size `< 8`, section size + 8, section hash via
+verified `DynamicIndexHash` `0x142512c60`, section `< 0x10` -> 5, bucket byte
+at `+0x0A`, version/widths -> 5, `u64` at `+0x10` stored at segment `+0x40`,
+entry header `(section + 0x17) & ~0xf`, entry block bound, entry count
+`block / 18` and its rolling hash, page-table offset
+`(block + entry header + 0x1007) & ~0xfff`, remaining `< 0x7800`, page count
+`remaining >> 9`, and per-record `DynamicIndexKeyHash` `0x142513230`
+`(record + 4, 0x13, 0) | 0x80000000` stopping at the first zero hash) is
+mirrored operation-for-operation by `index::parse_bucket_file` /
+`PageTable::parse` and install-tested on all sixteen files. The prefix that
+must run to reach that core cannot run in the oracle: it frees the previous
+buffer through the allocator vtable at `[obj]` (`[rax + 0x30]` when mode
+== 2, else `0x1426a8c40`), queries the file size through `0x14269e180`
+(IAT indirect call at `0x14269e191`), handles the writable zero-size path
+with `DynamicIndexHash` plus `0x142520fa0`/`0x14269dff0`/`0x142521030`, then
+gets the buffer by the allocator vtable `[rax + 0x18]` with `0x14269e470`
+(mode 2) or `0x1426a8d70` (mapped view), and on failure frees it through
+`0x142511f10`/`0x142509420` and zeroes segment `+0x40..+0x70`. Those are
+file/allocator/IAT callees outside the system; there is no plain-buffer
+signature for the Unicorn oracle, so a unit would leave the prefix branches
+uncovered and could not be declared dead. The shipped file reader is the
+mode-2 synchronous equivalent for the validation core, not a harness unit.
+
 Not modelled: the writable path creates an empty segment when the file size is
-0 (mode 2 with size 0 returns 9); a file with size above `0xffffffff` makes
-the client return 0 with zeroed fields before parsing. `fs::read` returns either all bytes
+0 (mode 2 with size 0 returns 9); a file with size above `0xffffffff` (or a
+second size query of 0) takes the cleanup at `0x142510163`, which sets status
+9, frees/unmaps the buffer and zeroes the parsed fields, before parsing.
+`fs::read` returns either all bytes
 or an error, so the client's short-read continuation after a status-0 read
 cannot occur here. A read failure is an `Io` error; the client maps the OS
 status (5 -> `0x14`, `0x70` -> 8, otherwise 7) and aborts unless the mapped
@@ -334,6 +416,57 @@ state. The function's third argument is the salt. Its three callers —
 `DynamicContainerRead` (`0x1424f48d0`), `FUN_1424f2900` and `FUN_1424f4b30` —
 all pass 0. `index::bucket_of` is that expression; the other key-state entry
 points take the same salt argument and use it for their own inserts.
+
+**Full read, no five-stage unit (2026-11-18).** Measured extent
+`0x142501b40..0x142501c7e` (0x13e = 318 bytes: the whole `.pdata` root, one
+fragment, first instruction `push rbx` at the entry, `ret` at `0x142501c7d`;
+no tail-jump — the exit is the cookie check through `0x1426c3d40` and the
+`ret`). v2b `<frame base + (0x142501b40 - 0x140000000)>`, cross-checked
+against `fn/DynamicIndexDecodeEntries` at `0x1425209a0`. Signature
+`(manager /*RCX*/, key[9] /*RDX*/, salt /*R8B*/, request /*R9 {u64 start,
+u32 len}*/, unused /*stack arg 5*/, out_range /*stack arg 6*/,
+out_entry /*stack arg 7*/) -> u32 status`. The 9-byte key is copied to a
+stack slot for the resolve call; the fifth stack argument is never read in
+the body (only the sixth and seventh are loaded, as `r12`/out-range and
+`r13`/out-entry). The three callers all zero `R8D` (salt 0) and pass, in
+`R9`, the request `{location + 0x1e, size}` they built for the resolve
+(`DynamicIndexResolveRange` reads the start at `+0` and the length at `+8`,
+with length `-1` meaning to the end of the chosen entry).
+
+The bucket fold (the only part the shipped crate implements as
+`index::bucket_of`) is 1:1: the XOR visits key bytes 7,8,6,5,4,3,2,1,0 in
+that order (order is unobservable for XOR), then `b ^ (b >> 4)`, a 32-bit
+add of the salt byte (`movzx r8b`) and `& 0xf`. The shipped `u8`
+wrapping add is observably the same under the mask (a wrap subtracts 256,
+a multiple of 16), so it is kept. The rest of the body is manager state,
+not a pure leaf: it locks `manager + 0xa58 + bucket * 8` through
+`0x142694c20` (unlock `0x142694c50`, unconditional on every path), reads
+the mode dword at `manager + 0x38` and, unless the mode is 2 or 4/5
+(`mode == 2 || (mode - 4) unsigned <= 1`), calls
+`DynamicIndexSegmentOpen` (`0x14250e400`, itself declared open above) with
+`manager + 0xf0`, the bucket, the cached segment dword at
+`*(manager + 0x68) + bucket * 4 + 0x110`, and the key state at
+`manager + 0x208 + bucket * 0x78` — returning its non-zero status without
+resolving if the open fails. Otherwise it calls
+`DynamicIndexResolveKeyRange` (`0x142511540`) on that key state with the
+copied key, the request, out-range and out-entry, and returns its status.
+
+**This cannot be a five-stage unit, so none was wired** (no probe arm,
+fixture or unit JSON): the mutex calls at `0x142501bd4`/`0x142501c59` run
+on every path and, as with the page-cache mutex wall, would have to
+execute inside the oracle; the segment-open branch ends in the declared-open
+`DynamicIndexSegmentOpen`/`DynamicIndexSegmentLoad`; and the resolve chain
+(`0x142511540` -> `DynamicIndexResolveRange` `0x1425115d0` ->
+`DynamicIndexFindEntry` `0x1425111a0`, which builds its decode context with
+an allocator) is manager/segment state outside the system's plain-buffer
+surface, with a stack-cookie global at `0x143ac5f40` and the cookie check
+`0x1426c3d40`. Pinning the mode to 2/4/5 would only skip the open branch;
+the lock and the resolve chain remain. The shipped crate therefore keeps
+`bucket_of` as the fold only; the lookup/resolve behaviour lives in
+`SegmentEntries::key_state`/`resolve_range` (install- and synthetic-tested,
+not a `DynamicKeyStateLookup` port), and the found/chosen outputs it
+produces are pinned by `fn/DynamicIndexDecodeEntries` and
+`fn/DynamicIndexEntrySink`, not by this function.
 
 ### Bucket to segment
 
@@ -365,6 +498,40 @@ segments (one per bucket); a key lookup lazily opens its own bucket's segment
 when it is not already open. The client never opens two segments for one
 bucket and never merges entries across files.
 
+**`DynamicIndexSegmentOpen` read, no harness unit (2026-11-18).** Measured
+extent `0x14250e400..0x14250e58c` (0x18c = 396 bytes; the 0x5c-byte `.pdata`
+root plus its three chained fragments, ending in the stack-cookie check and
+`ret` at `0x14250e58b`; v2b `<frame base + (0x14250e400 - 0x140000000)>`,
+cross-checked against `fn/DynamicIndexDecodeEntries` at `0x1425209a0`).
+Signature `(manager, bucket: u32, segment: u32, segment_context) -> u32`
+(RCX, EDX, R8D, R9). The cached segment is the dword at
+`manager + bucket * 16 + 0x18` (the `+0x110` table's slot for a manager
+whose table base is the argument minus `0xf8`): equal returns 0, greater
+returns 1 (unsigned), smaller falls into the open path. The open path
+builds `<bucket:02x><segment:08x>.idx` in a 0x380-byte stack frame: a
+literal `'0'`, the lowercase hex digit from the table at `0x14346b2c8`
+(`0123456789abcdef`, index 16 = NUL, used when `bucket >= 16`), the segment
+as eight lowercase hex digits through `0x14269acd0`, and the dword
+`.idx\0` at `0x143474c98`, joined to the base path at `manager + 8` by
+`0x1426a1bb0`. It then opens the file (`0x142521c60` handle init,
+`0x14269e1c0` IAT file open with mode 4 when `manager + 0x10 == 2` else 6),
+maps a non-zero open result through the log call `0x1424fbe70` and the
+error map `0x142509420` to its return, and on success stores the segment
+at the cached slot, transfers the handle through `0x14269dd30`, and calls
+`DynamicIndexSegmentLoad` (`0x14250fc60`) with the segment context, the
+transferred object, the manager mode and the bucket - discarding that
+call's return and returning 0. This cannot be a five-stage unit: the open
+path is file/CRT/IAT state (path join, file open, handle close/transfer
+through IAT slots, stack-cookie global at `0x143ac5f40`), and its final
+callee `DynamicIndexSegmentLoad` is itself declared open, so most branches
+(open success vs. error, and the load) cannot run in the plain-buffer
+oracle and the name-formatting mutants cannot be killed by the two
+cache-hit returns alone. The shipped `index::segment_name` matches the
+client's name for `bucket < 16` (all real callers) but is only the
+formatter, not a `DynamicIndexSegmentOpen` port: it has no cache check, no
+0/1 status, and for `bucket >= 16` it writes two hex digits where the
+client writes `'0'` plus a NUL terminator.
+
 A read-only open requires all sixteen buckets. A missing file makes
 `DynamicIndexOpen` return 9 (0x12 if all sixteen are missing); a lazy open for
 a missing file returns 8 (the OS error mapping) and the key lookup fails. A
@@ -394,6 +561,30 @@ archive-relative range to the reader object at `container+0xb38`. The reader is
 built by `ContainerReaderInit` (`0x1424fbf00`); its page cache is at `reader+8`
 and is built by `PageCacheInit` (`0x1424f8790`). This is the cache the old notes
 called missing.
+
+**`ContainerReaderInit` read, no harness unit (2026-11-18).** Measured extent
+`0x1424fbf00..0x1424fc09a` (0x19a = 410 bytes; the `.pdata` root is the whole
+body, chain 1, first instruction `mov r11, rsp`, `ret` at `0x1424fc099`),
+v2b `<frame base> + (0x1424fbf00 - 0x140000000)`, cross-checked against the
+runner delta. It is **not** a
+BuildInfo row-cursor advance: there is no `BuildInfoRowsAdvance` function and
+no shipped row-cursor candidate in `crates/ow-casc/src/install.rs` (the
+BuildInfo surface there is `BuildInfoSelectRow` at `0x1424aec30`, rows at
+`+0x20`, count `u32` at `+0x28`, 0xb0-byte rows). This function takes the
+reader in RCX and returns it in RAX (the caller at `0x1424f4294` stores RAX at
+`container+0xb38`), plus register args in RDX/R8/R9 and further stack args
+(read at `[rsp+0x90]` and above after the prologue), and on every path it
+calls `PageCacheInit` (`0x1424f8790`), the archive-handle-map init
+`0x14250c7b0` (which itself calls `0x14251c5e0` and the mutex unlock
+`0x142694c30`), and the mutex unlock `0x142694c30` on `reader+0x240`; the
+non-null R8 path additionally runs a length call (`0x1426cce30`), an indirect
+vtable call (`[rax+0x18]` on the object at `[reader]`), and the two
+string/memory helpers `0x142efe950`/`0x142efe2b0`, then trims trailing `/` and
+`\` bytes. Its pure part is only the shift/mask store (`(1 << byte) - 1` at
+`reader+0x1c8`, the byte at `reader+0x1d0`) and the self-list at `+0x248`;
+the rest is page-cache, allocator-vtable, string and mutex state outside the
+system, so no plain-buffer oracle signature exists. No probe arm, fixture or
+unit JSON was wired for it; it stays read and open, not faked.
 
 **Geometry.** The page cache does not read its geometry from the index header.
 The `.cmf` database open params carry the slot count at `+0x78` and the page
@@ -430,13 +621,71 @@ flag), the whole-page run at `+0x58` (flag, page `+0x60`, dest `+0x68`, len
    whole-page run was read completely.
 
 The completion (`PageLoadComplete`, `0x1424fadf0`, and
-`PageSlotPublish`, `0x1424f9bf0`) copies `min(fragment_len, stored - in_page)`
-bytes and zero-fills the rest of the fragment, so a short page reports the short
-count rather than inventing bytes. A range whose offset and length are both
+`PageSlotPublish`, `0x1424f9bf0`) copies the full fragment from
+`page + in_page` and reports `stored - in_page` when that 32-bit wrapping
+difference is unsigned-below the fragment length, the full length otherwise,
+zero-filling past the served count. When `stored >= in_page` that is
+`min(fragment_len, stored - in_page)`, so a short page reports the short
+count; when `stored < in_page` the wrapping difference is above the length
+and the whole fragment is served from whatever the page buffer holds there. A range whose offset and length are both
 page-aligned never enters the cache: `ArchiveRead` (`0x1424f9fe0`) sends it
 straight to the archive handle. A zero length returns 0 before any I/O. The
 middle is direct, not page-by-page, on this install: the non-blocking flag is 1,
 so only the head and tail fragments are served from the cache.
+
+**`PageSlotPublish` read, no harness unit (2026-11-18).** Measured extent
+`0x1424f9bf0..0x1424f9e3f` (0x24f = 591 bytes; the `.pdata` root is only
+`0x1424f9bf0..0x1424f9bfe`, 14 bytes, and the body chains past it, ending
+with an `int3` at `0x1424f9e3f` before the next function at `0x1424f9e40`;
+first instruction `push rbx` at the entry, no `ret` - the exit at
+`0x1424f9d54` is a tail-jump to `0x14269eae0`). v2b `<frame base> +
+(0x1424f9bf0 - 0x140000000)`, cross-checked against
+`fn/DynamicIndexDecodeEntries` at `0x1425209a0`. Signature `(table /*RCX*/, slot /*RDX*/, stored u32
+/*R8D*/, flag u8 /*R9B*/) -> void`.
+
+The table object supplies a bucket array at `+0x48`, a 16-byte entry array
+pointer at `+0x50`, a next-index array at `+0x58` and a bucket count at
+`+0x68`; the slot supplies a waiting-key array at `+0x40`, its count at
+`+0x5c`, the page buffer at `+0x18`, the stored count, and the flag,
+invalid and busy bytes at `+0x2c..+0x2e`. For each waiting key the body folds
+it through the splitmix-style hash (shift 33, xor, multiply
+`0xff51afd7ed558ccd`, shift 33, xor, multiply `0xc4ceb9fe1a85ec53`), masks
+the low word with `bucket_count - 1`, and walks the bucket chain (head at
+the bucket array, links at the next-index array, `-1` ends) comparing the
+16-byte entries' key word. On a match the entry's second word is the read
+plan; the head fragment is published when the plan's slot word at `+0x48`
+equals the slot and the tail fragment when its slot word at `+0x90` does,
+and a plan naming neither is skipped. Publishing a fragment clears its slot
+word first, copies the full fragment length from `slot + 0x18 + in_page`
+through `0x142efe2b0`, stores the served count at `+0x44` (head) or `+0x8c`
+(tail), zero-fills past it through `0x142efe950` when short, and stores the
+`R9B` flag at `+0x54` or `+0x9c` - in that order.
+
+After the waiting keys the body stores `stored` at slot `+0x28`, fills the
+u32 array at slot `+0x38` with `0xff` bytes for `*(slot + 0x58)` entries
+when both are non-zero, zeroes the waiting count at `+0x5c`, clears the
+busy byte at `+0x2e`, stores the last published plan pointer (or zero) at
+`+0x30`, and only when the invalid byte at `+0x2d` is non-zero or the flag
+is non-zero also zeroes the word at `+0x2c`, the key words at `+0x08` and
+`+0x10`, and the stored count at `+0x28` again. It ends with the tail-jump
+through `0x14269eae0` on `slot + 0x68`, which dereferences that pointer and
+jumps through the IAT slot at `0x142f2d5f8` - a lock/event release outside
+the system, executed on every path.
+
+**This cannot be a five-stage unit, so none was wired** (no probe arm,
+fixture or unit JSON): the unconditional tail-jump faults in the oracle
+because the offline image's IAT qword at `0x142f2d5f8` is `0x3843c96`, not
+a mapped address, and the fixture cannot change an image slot; the hash
+table, waiting-key array and plan structs with absolute destination
+pointers also have no plain-buffer shape the shipped synchronous cache
+uses. The shipped `pagecache::copy_fragment` was corrected to this
+function's fragment copy (full-length copy, wrapping served count, then
+zero-fill - the earlier saturating form reported zero when
+`stored < in_page`); the hash/waiting-key publish, the slot post-writes
+and the tail release are not operation-for-operation in the shipped
+`PageCache`, which keeps only the state that survives a load in a
+single-threaded reader, as documented above. `PageSlotPublish` is
+therefore declared open, not faked.
 
 **There is no read-size threshold.** The decision is purely the offset and
 length alignment: a one-byte unaligned read loads its whole 0x10000-byte page
@@ -579,6 +828,31 @@ and the record index reached by the page scan; both are 0 when the scan stops
 at the first record, and `DynamicIndexResolveRange` passes 0 for both, so the
 resolve path does not consume them.
 
+**`DynamicIndexFindEntry` unit (candidate wired, 2026-11-18).** Measured
+extent `0x1425111a0..0x142511539` (921 bytes through the `ret` at
+`0x142511538`; the `.pdata` root is only `0x1425111a0..0x1425111c4`, 0x24
+bytes, and the body continues past it with no tail-jump), v2b
+`<frame base> + (0x1425111a0 - 0x140000000)` (cross-checked against
+`fn/DynamicIndexDecodeEntries` at `0x1425209a0`). Signature
+`(segment, key[9], key_state, out_page, out_record) -> void`: the segment
+supplies entries at `+0x58`, entry count at `+0x60`, page-table base at
+`+0x68` and page count at `+0x70`; the key state is the caller-built one
+from `DynamicIndexFindContextInit` (`0x142520520`, found `+0x10`, chosen
+`+0x18`, interval buffer `+0x28`/base `+0x128`, count `+0x130`, capacity 16
+at `+0x134` - this function does not call that init; `DynamicIndexResolveRange`
+`0x1425115d0` does, on the stack). The walk midpoint is the 32-bit
+`(lo+hi)>>1` at `0x142511221` with `memcmp` through `0x142efecf0`; the
+backward/forward expansions compare the first eight bytes then the ninth;
+the `cmp ebx, r15d; je` at `0x142511265` (mid == hi) can never be taken.
+The page scan (`0x142511318`) is skipped for a zero page count and returns
+`(0, 0)` then, `(page_count, 21)` for a full table, and the first zero's
+`(page, record)` otherwise. The shipped `index::find_entry` is that byte
+view operation for operation, and `SegmentEntries::key_state` now builds
+its state through it. The two grow paths are declared gaps: the pointer
+array past 32 matches (`0x1425113b2`, allocator vtable at `[segment]`)
+and the interval grow inside the decode (`0x14252073a`); the fixture pins
+matches <= 32 and decode appends <= 8 against the fresh capacity of 16.
+
 On this install's 806 duplicate pairs the first entry is at the 30-byte data
 header and the second at `offset + 30` with `size - 30`. The client chooses the
 header entry; `DynamicContainerRead` then adds `0x1e` to reach the payload, so
@@ -711,27 +985,92 @@ path is synthetic-only. The writer is read and documented, not ported.
 
 ### Key-state intervals and resolve
 
-`DynamicIndexDecodeEntries` (`0x1425209a0`) clears the interval count, decodes
-the sorted equal range, then the matching page records in page/record order,
-and calls `DynamicIndexNormalizeIntervals` (`0x1425208d0`) once at the end. A
-single equal entry is sink type 1 (found, chosen, clear intervals, append its
-resident interval); two or more are type 2 for the first (found, chosen, clear
-intervals) and type 6 for each later entry (append resident). The chosen entry
-is therefore the first equal entry, and on a duplicate pair the only interval
-comes from the second entry.
+`DynamicIndexDecodeEntries` (`0x1425209a0`, measured extent
+`0x1425209a0..0x142520c55`, 693 bytes - the whole `.pdata` root) clears the
+interval count, decodes the sorted equal range, then the matching page
+records in page/record order, and calls `DynamicIndexNormalizeIntervals`
+(`0x1425208d0`) once at the end. A single equal entry is sink type 1
+(found, chosen, clear intervals, append its resident interval); two or more
+are type 2 for the first (found, chosen, clear intervals) and type 6 for
+each later entry (append resident). The chosen entry is therefore the first
+equal entry, and on a duplicate pair the only interval comes from the
+second entry. Its signature is seven arguments: the key state, the entry
+range begin/end, the pointer-array begin/end, and the contiguous record
+range begin/end. The entry count is `(end - begin) / 18` (the signed
+magic division at `0x1425209d6`); the pointer array holds pointers to
+19-byte payload records and the contiguous range holds those records back
+to back, each decoded with its own type byte at `+0x12`. A null or empty
+range of any source is skipped, and the found flag/chosen entry are
+preserved until a sink changes them - only the count is cleared up front.
+The unit `fn/DynamicIndexDecodeEntries` pins all of this; its declared
+gaps are the capacity-grow path through the sink, equal interval starts
+(the unstable sort's tail), and a live logger for the sink's type 4/5 log
+call at `0x1424f8440` (the fixture's logger is disabled, level 0). The
+sink reads its jump table at `0x1425206a8` and, on types 4/5, a float
+constant at `0x142f7aae4` and the stack-cookie global at `0x143ac5f40`
+through the log call; those are the unit's `allowedImageReads`.
 
-`DynamicIndexAppendInterval` (`0x142520700`) writes two 16-byte
-`{u64 start, i32 delta}` events: `(start, +1)` and `(start + (u32)len, -1)` for
-a resident range, or `(start, -0x40000000)` and `(start + (u32)len,
-+0x40000000)` for a non-resident one. Only the non-resident append normalizes
-immediately; the decode pass normalizes once at the end. The end is a 64-bit
-add of the 32-bit length.
+`DynamicIndexEntrySink` (`0x142520590`, measured extent
+`0x142520590..0x1425206c4`, 308 bytes - the whole `.pdata` root: the code
+`0x142520590..0x1425206a8` followed by the 7-dword jump table at
+`0x1425206a8`) dispatches one record by its type byte, which arrives in
+`DL`; `movzx eax, dl; dec eax; cmp eax, 6; ja` sends 0 and anything above
+7 to the default `ret` at `0x1425206a2`, and the table sends types 1-7 to
+their blocks. Type 1 (at `0x1425205bf`) sets the found flag at `+0x10`,
+copies all 16 bytes of the entry record to the chosen record at `+0x18`
+(`movups` at `0x1425205c5`, so the trailing dword at `+0x24` comes with
+it), clears the count at `+0x130`, and appends the entry resident.
+Type 2 (at `0x1425205e6`) does the same without the append. Type 3 (at
+`0x142520600`) clears the found flag, the chosen location and size, and
+the count, but writes nothing to the trailing dword. Type 4 (at
+`0x142520619`) calls the log function at `0x1424f8440` with the logger
+at `[obj+0x08]` (a float constant at `0x142f7aae4` is loaded for it),
+then clears the count and appends the *current* chosen entry resident;
+type 5 (at `0x14252065b`) makes the same log call, then clears the
+count. Type 6 jumps to `0x1425205d3`, inside the type-1 block: it shares
+the resident-append tail with no found/copy/clear prefix. Type 7 (at
+`0x14252068f`) clears `r8d`, so its append is non-resident and
+normalizes immediately. The unit `fn/DynamicIndexEntrySink` pins every
+type against `KeyState::sink`; the read needed one shipped-code
+correction - `ChosenEntry` now carries the trailing dword so the
+16-byte copy on types 1/2 and its preservation on type 3 are exact.
+Its declared gaps are the same three as `fn/DynamicIndexDecodeEntries`:
+the capacity-grow path, equal interval starts, and a live logger for
+the type 4/5 log call (the fixture's logger is disabled, level 0).
+
+`DynamicIndexAppendInterval` (`0x142520700`, measured extent
+`0x142520700..0x1425208c1` - the `.pdata` extent is only 0x11 bytes; the
+body is the chained continuation the sink tail-jumps into) writes two
+16-byte `{u64 start, i32 delta}` events: `(start, +1)` and
+`(start + (u32)len, -1)` for a resident range, or
+`(start, -0x40000000)` and `(start + (u32)len, +0x40000000)` for a
+non-resident one. Only the non-resident append normalizes immediately; the
+decode pass normalizes once at the end. The end is a 64-bit add of the
+32-bit length. The count at `+0x130` is incremented once per event, only
+the start and delta words of each record are written (the padding stays),
+and the base at `+0x128` and capacity at `+0x134` are untouched on the
+no-grow path. The grow path (`count + 1 >= capacity`, `jb` at
+`0x14252073a`) calls the log function at `0x1424f8440`, doubles the
+capacity, allocates through the allocator vtable at `[obj]`
+(`+0x18` alloc, `+0x30` free), zeroes and copies the buffer, and frees the
+old one unless it is the inline buffer at `obj+0x28`: it is read, not
+ported, and is `fn/DynamicIndexAppendInterval`'s declared gap (the Rust
+`Vec` has no observable capacity contract). The unit
+`fn/DynamicIndexAppendInterval` pins `capacity > count + 1` and proves
+`IntervalSet::append` on the no-grow body. Harness surface: 3-arg ABI
+(RCX obj, RDX entry, R8B resident) - the event buffer is embedded in the
+obj pointee (0x2000-byte blob, header + events at 0x1000, reloc at
++0x128) since the client reaches it via `[obj+0x128]`.
 
 `DynamicIndexNormalizeIntervals` sorts the events by start (the client's
 unstable 16-byte sort), sums each equal-start group with 32-bit wrap, and keeps
 only coverage crossings: `(start, +1)` when coverage goes from `<= 0` to `> 0`
 and `(start, -1)` when it goes from `> 0` to `<= 0`. The group's start is the
-first event's start, and non-crossing groups disappear.
+first event's start, and non-crossing groups disappear. The buffer is a
+count at `+0x130` over a fixed array: the compaction leaves the sorted
+records past the new count in place, and a count clear leaves every slot,
+so `IntervalSet` models the count separately from the physical slots it
+has written (the stale tail is observable bytes, not padding to discard).
 
 `DynamicIndexRangeIsResident` (`0x142520c60`) walks the normalized events while
 `event.start <= request.start`, adding deltas with 32-bit wrap. If the buffer
@@ -848,15 +1187,63 @@ path to 8 is a redundant check of the two page-byte fields, which cannot fire
 after an accepted header. A section read clamped short is 14 through the
 completion's short flag.
 
+**No five-stage unit for `EncodingHeaderRead` (open stage).** Its measured
+extent is `0x1424d1b40..0x1424d1c59` (0x119 = 281 bytes, the whole `.pdata`
+root, first instruction at `0x1424d1b40`, `ret` at `0x1424d1c58`), v2b
+`<frame base> + (0x1424d1b40 - 0x140000000)` - the same frame delta as the
+verified `EncodingHeaderParse` `0x142498920` - signature `(obj *RCX, a *RDX,
+b *R8) -> void`. The shipped `encoding.rs` needs no change: it already
+models this function's remap (`Error::open_status` maps a parser reject to
+14, and `write_header_fields` is the verified callee it calls). The body is
+a refcounted state-machine step, not a leaf: it calls `0x14248cac0`
+(a thunk to `0x1424904c0`, which queries the stream size through
+`0x142490a60` and an indirect vtable call at `[rax + 0x18]`, then
+`0x142490610`), acquires a reference through `0x14248c9d0` (lock cmpxchg
+plus `0x14269d770`), calls the verified `EncodingHeaderParse`
+`0x142498920` on `[obj + 0x88]` into `obj + 0xa0` only when the size out
+param at `rsp + 0x30` is exactly 22, merges the status byte at
+`obj + 0x168` through `0x14249f7a0`, then tail-jumps through the object:
+on success with both page-byte fields non-zero it calls `0x1424d1690`
+(indirect `[rax + 0xd80]` -> `[rcx]` -> `+8`), otherwise it calls
+`0x142490190` (indirect function pointer at `obj + 0x20`), sets
+`obj + 0x40` to 6, and releases the reference with a lock xadd and an
+indirect vtable call at `[[obj] + 8]` when it reaches zero. Those
+allocator/stream/vtable/lock callees are outside the system and there is
+no plain-buffer signature for the Unicorn oracle, so no probe arm,
+fixture or unit is shipped. The one pure callee, the status merge at
+`0x14249f7a0`, is read but has no unit of its own yet.
+
 The client issues all five reads and merges their statuses in completion
 order; `ow-casc` reads them synchronously and reports the first failing
 section in layout order. The open fails either way; a corrupt file with two
 different failures could report a different one of the two statuses.
 
-The client's post-read step `FUN_142498a70` (`0x142498a70`) validates the
-espec block: its last byte must be zero (else status 8), and the number of NUL
-bytes is the number of strings it indexes. `ow-casc` performs the same check
-and count.
+`EncodingEspecStringIndex` (`0x142498a70`, 217 B,
+`0x142498a70..0x142498b49`, v2b `<frame base> + (0x142498a70 - 0x140000000)`) is the client's post-read
+step that builds the espec string index. Its only caller is the encoding
+open step at `0x1424d16c0` (call at `0x1424d1728`, on the sub-object at
+`[rbx+0x88]`); on a zero return the caller writes 1 at `[sub-object +0x10]`.
+It takes one pointer, to a struct with the espec block size as a u32 at
+`+0x24`, the block pointer at `+0x28`, and a pointer vector at `+0x50`
+(allocator pointer `+0x50`, buffer `+0x58`, size u32 `+0x60`, capacity u32
+`+0x64`). In order it reads `block[count - 1]` - with the offset a zero-extended
+32-bit `count - 1`, so for an empty block the read lands at `base + 0xFFFFFFFF`,
+not `base - 1`, and in the oracle arena that is the `0xC3`-filled sentinel page -
+and returns 8 unless it is zero, counts the NUL bytes into a 32-bit counter,
+reserves the vector to that count through the shared vector grow at `0x142388210`
+(a no-op when the count fits the capacity), returns 0 for an empty block
+(unreachable in the oracle, since the empty block already returned 8), and
+otherwise walks the block once: at every NUL it calls the string-length helper at
+`0x1426cce30` (which returns the string's length) on the current string start -
+the base, or one past the previous NUL - returns 8 when that length is zero, i.e.
+for an empty string, before appending, and appends the string start at
+`buffer[size * 8]`. The grow path
+(reserve or append through the allocator vtable at the vector's `+0x50`)
+is outside the system and is the unit's declared gap; a fresh encoding
+object's empty vector always takes the no-grow route. `EncodingFile::parse`
+uses the shipped `espec_string_index` for the tail check and entry count,
+storing the client pointers as offsets, and the unit
+`fn/EncodingEspecStringIndex` proves it against the oracle.
 
 The installed decoded stream is 111,058,223 bytes. The five sections end at
 111,058,161; the last 62 bytes are the builder's debug string
@@ -951,7 +1338,15 @@ the ekey terminator, duplicate keys, compare lengths 0/1/2 and widths
 
 ## BLTE
 
-`BlteFrameHeaderParse` (`0x1424a90e0`) is implemented operation for operation.
+`BlteFrameHeaderParse` (`0x1424a90e0`) is implemented operation for operation,
+but it has **no unit**: after the validation prefix it builds the chunk table
+with three calls through the IAT (`0x1424a92a4`, `0x1424a9301`, `0x1424a936c`
+all dispatch through the import slot at `0x143aafdc9`, and the type-`0x10`
+extras through `0x143aafdd0`), i.e. a heap allocation of `count*0x18 + 8` and
+of `count*0x10`, plus a store of the parsed digest and count into the caller's
+out struct. The oracle maps the image and an arena, not the process heap, so
+the allocation cannot run and the function cannot be a five-stage unit. The
+validation order below is what the port implements.
 It first requires at least `0x24` bytes, then checks the `BLTE` magic, a
 non-zero big-endian header size at `+4`, a frame type at `+8` of `0x0F`
 (24-byte records) or `0x10` (40-byte records), and a non-zero big-endian `u24`
@@ -1000,19 +1395,31 @@ than `block_size` is status 8. A compressed slice shorter than the bound
 returns status 0 without consuming input; `decode_lz4_chunk` treats that as an
 error because it already holds the whole chunk.
 
-MD5 is standard: `Md5Init` (`0x1426a5100`) writes the four RFC 1321 init
-words, `Md5Update` (`0x1426a4f40`) updates the byte count and buffers input,
-`Md5Final` (`0x1426a5010`) appends `0x80`, zeroes to 56 mod 64, writes the bit
-length little-endian and emits the four state words little-endian, and
-`Md5Transform` (`0x1426ab530`) is the 64-round block transform. The transform
-loads the four state words, adds each round's message word from the 64-byte
-block, and adds each accumulator back into the word it came from; the block is
-read only, so the state is the whole output. Its Ghidra function listing stops
-after the first 64 bytes and the rest of the straight-line body belongs to no
-function, while the code continues at instruction boundaries to the return
-(`0x1426ab530..0x1426abca9`, 1913 bytes, no conditional branch anywhere). It
-is verified by `fn/Md5Transform`, which calls the shipped
-`ow_casc::blte::md5_transform`.
+MD5 is standard, and the client stages it: `Md5Init` (`0x1426a5100`) writes
+the four RFC 1321 init words, `Md5Update` (`0x1426a4f40`) advances the byte
+count and buffers input, `Md5Final` (`0x1426a5010`) appends `0x80`, zeroes to
+56 mod 64, writes the bit length little-endian and emits the four state words
+little-endian, and `Md5Transform` (`0x1426ab530`) is the 64-round block
+transform. The transform loads the four state words, adds each round's message
+word from the 64-byte block, and adds each accumulator back into the word it
+came from; the block is read only, so the state is the whole output. Its Ghidra
+function listing stops after the first 64 bytes and the rest of the
+straight-line body belongs to no function, while the code continues at
+instruction boundaries to the return (`0x1426ab530..0x1426abca9`, 1913 bytes,
+no conditional branch anywhere).
+
+The context the three stages share is `0x58` bytes, at the offsets the code
+reads rather than a library's: the byte count at `+0x00` (`Md5Init` writes it
+with one `mov qword ptr [rcx], 0`; `Md5Update` adds the length to it and takes
+`(count as u32) & 0x3f` from the **pre-add** value), the four chaining words at
+`+0x08`, and the 64-byte input buffer at `+0x18`, whose last eight bytes
+(`+0x50`) hold `count << 3` while `Md5Final` pads. `Md5Update` completes a
+partial buffer with a `memcpy` and transforms it, then transforms every whole
+block straight from the caller's pointer, then buffers the remainder;
+`Md5Final` picks one or two transforms by `fill + 1` against `0x38` and `0x40`.
+All four are verified by `fn/Md5Init`, `fn/Md5Update`, `fn/Md5Final` and
+`fn/Md5Transform`, which call the shipped `ow_casc::blte` functions, so
+`md5()` in the crate is the client's own composition.
 
 Salsa20 is the standard 20-round cipher; `Salsa20StateInit`
 (`0x1424e3230`), `Salsa20Xor` (`0x1424e32c0`) and the block helpers match the
@@ -1072,6 +1479,10 @@ any one of them is not verified.
 | `CdnIndexFooterParse` | `0x1424d9af0` | `ow_casc::container::parse_index_footer` | `fn/CdnIndexFooterParse` |
 | `EncodingPageIndexSearch` | `0x142498880` | `ow_casc::encoding::page_index_search` | `fn/EncodingPageIndexSearch` |
 | `Md5Transform` | `0x1426ab530` | `ow_casc::blte::md5_transform` | `fn/Md5Transform` |
+| `Md5Init` | `0x1426a5100` | `ow_casc::blte::md5_init` | `fn/Md5Init` |
+| `Md5Update` | `0x1426a4f40` | `ow_casc::blte::md5_update` | `fn/Md5Update` |
+| `Md5Final` | `0x1426a5010` | `ow_casc::blte::md5_final` | `fn/Md5Final` |
+| `CdnIndexPageChecksums` | `0x1424d9f20` | `ow_casc::container::verify_page_checksums` | `fn/CdnIndexPageChecksums` |
 | `CdnIndexPageSelect` | `0x1424da730` | `ow_casc::container::select_page` + `decode_page_record` | `fn/CdnIndexPageSelect` |
 | `EncodingResolve` | `0x142498700` | `ow_casc::encoding::EncodingFile` (sizes + `ekeys_for_ckey`) | no standalone unit: it composes the two finds and the espec table; the find units prove the parts |
 
@@ -1388,3 +1799,72 @@ cargo test --release -p ow-casc --test cdn_index_real -- --nocapture
 cargo test --release -p ow-tank
 cargo test --release -p ow-tank --test manifest_154504_real -- --nocapture
 ```
+
+## Three more units and one unit's stale claim (2026-11-19)
+
+Three previously declared walls turned out to be closable, and one of the
+declarations was wrong about the machine. All three units are `verified` in
+the ledger and the CASC suite is 30/30.
+
+**`ConfigKeyEntryParse` (`0x1424cebd0`, 481 B, `0x1424cebd0..0x1424cedb1`,
+`fn/ConfigKeyEntryParse`).** The wall was "it grows its vector through an
+allocator vtable", which is true only when the entry count equals the
+capacity. Every other path is pure, so the unit keeps `count < capacity` and
+declares the grow block open. The read: the key span must start with `k`, its
+**32-bit** pointer difference must exceed 4, and its first dword must be
+`0x2d79656b` (`key-`); a token scan then ends at the first `0x20`, at a byte
+`c` with `c - 9 <= 4`, or at the span end. The entry record is 24 bytes
+(`{u64 id, [u8; 16] key}`) appended at `base + count*24` **before** either
+field is parsed, so a rejected line still grows the vector. The id is
+`ParseHexKeyId` (`0x14248f040`) over the first non-whitespace token byte, the
+key is `ParseHexKey` (`0x14248efd0`) over the first non-whitespace value byte.
+The disposition is not a success flag: a good id with 32 hex digits returns
+**1**, a good id with a short value returns **0**. Two consequences worth
+recording: the token skip loop at `0x1424ced00` can never advance (the scan it
+follows starts at the same byte and stops on whitespace), so both of its
+compares have exactly one reachable edge; and the grow block recomputes the
+capacity with `mul qword ptr [rsp+0x48]` - the eight bytes holding the `key-`
+literal, whose upper dword is never written - so the grow's result depends on
+uninitialised stack and cannot be compared at all. 21 branch sites, five
+declared dead edges, two sites that never execute (one is the grow block's own
+compare): 14/16 = 87.5% both-edge, gate 87.
+
+**`DynamicIndexResolveRange` (`0x1425115d0`, 291 B,
+`0x1425115d0..0x1425116f2`, `fn/DynamicIndexResolveRange`).** The wall was
+"it operates on the whole segment object, which is a marshalling job". It is a
+flat read of four segment fields (entries base `+0x58`, entry count `+0x60`,
+page-table base `+0x68`, page count `+0x70`) plus the client's own fresh key
+state; the shipped `index::resolve_range` builds that state and calls the
+already-shipped `KeyState::resolve`, which production's
+`SegmentEntries::resolve_range` also uses. Statuses: 2 no entry (found byte at
+key-state `+0x10` zero), 4 `start > chosen.size` and again 4
+`start + len > size`, 3 not resident, 0 found. A length of `0xffffffff`
+becomes `size - start` in 32 bits. The out range is the u64 `chosen.location +
+start` and the u32 length, written **before** the resident check, so it is
+present for status 3 as well; the 16-byte entry is written only on success and
+only when its pointer is non-null. All seven branch sites reach both edges:
+100%, 5/5 mutants.
+
+**`PageSlotFind` (`0x1424fa440`, 247 B, `0x1424fa440..0x1424fa536`,
+`fn/PageSlotFind`).** The wall was "the crate splits the client's one pass into
+`PageCache::find` and `PageCache::claim`". The client's single pass is now
+shipped as `pagecache::slot_find` over the byte table, and its contract is
+worth stating exactly because the split cannot express it: a MATCH requires
+slot `+0x2d == 0`, the archive qword and page qword equal, and either
+`stored >= len` or `+0x2e != 0`; a match ends the pass and is returned **even
+when the slot is busy**, with `out_usable = (byte [+0x2e] == 0)`. Only when no
+slot matches does the same pass pick an eviction victim: it skips busy slots
+and the excluded slot (`arg6`) and takes the largest wrapping
+`cache+0x20 - slot+0x20`, keeping the lower index on a tie (`ja` plus an
+existing-candidate test). The chosen slot then bumps the clock and its own
+stamp. Slot `+0x2c` is never read by this function; a zero count returns null
+after `out_usable` has already been zeroed. 12 branch sites, all both-edge:
+100%, 12/12 mutants.
+
+**Corrected claim.** `fn/CdnIndexPageSelect` said `CdnIndexPageResident`
+(`0x1424da590`) was "82 bytes of .pdata extent whose whole-file path lives past
+that extent". The merged function register measures 401 bytes
+(`0x1424da590..0x1424da721`) and the whole-file path at
+`0x1424da6ee..0x1424da705` is inside it. The conclusion (no unit: the streamed
+branch needs the container, its I/O engine and a lock) still stands, and that
+unit's note now says so.

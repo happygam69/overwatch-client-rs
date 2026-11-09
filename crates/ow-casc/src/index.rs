@@ -210,6 +210,25 @@ impl PageTable {
         self.records.iter().filter(move |record| record.key == key)
     }
 
+    /// The table's byte form, as [`find_entry`] walks it: `page_count`
+    /// 0x200-byte pages, the retained records in their slots (they are the
+    /// sequential prefix before the first zero), and zero everywhere else,
+    /// so the first zero is at [`Self::first_empty`] and a full table has
+    /// none. Pad bytes are never read by the scan or the decode.
+    fn page_bytes(&self) -> Vec<u8> {
+        let mut bytes = vec![0u8; self.page_count * PAGE_SIZE];
+        for (slot, record) in self.records.iter().enumerate() {
+            let at = (slot / PAGE_RECORD_COUNT) * PAGE_SIZE
+                + (slot % PAGE_RECORD_COUNT) * PAGE_RECORD_SIZE;
+            bytes[at..at + 4].copy_from_slice(&record.stored_hash.to_le_bytes());
+            bytes[at + 4..at + 13].copy_from_slice(&record.key);
+            bytes[at + 13..at + 18].copy_from_slice(&record.location.packed().to_be_bytes()[3..8]);
+            bytes[at + 18..at + 22].copy_from_slice(&record.location.size.to_le_bytes());
+            bytes[at + 22] = record.kind;
+        }
+        bytes
+    }
+
     /// Parse the client's page table from a loaded segment.
     ///
     /// The first zero stored hash stops the client's validation and lookup;
@@ -372,36 +391,22 @@ impl SegmentEntries {
 
     /// Build the key state in the client's decode order.
     ///
-    /// `DynamicIndexDecodeEntries` (`0x1425209a0`) clears the interval count,
-    /// decodes the sorted equal range first (type 1 for one entry, type 2 then
-    /// type 6 for the rest), then the matching page records in page/record
-    /// order, and finally calls `DynamicIndexNormalizeIntervals`
-    /// (`0x1425208d0`). [`KeyState::sink`] is `DynamicIndexEntrySink`
-    /// (`0x142520590`) exactly, including the interval clears on types 1-5 and
-    /// the immediate normalize of a type-7 non-resident interval.
+    /// This is [`find_entry`] (`DynamicIndexFindEntry`, `0x1425111a0`) over
+    /// the segment's byte forms: the sorted 18-byte entries, the page table
+    /// bytes, and the fresh key state the caller builds with
+    /// `DynamicIndexFindContextInit` (`0x142520520`). The out page/record
+    /// words are not part of the shipped state, so they are discarded here.
     pub fn key_state(&self, key: &[u8; 9]) -> KeyState {
         let mut state = KeyState::default();
-        let range = self.find_range(key);
-        match range.len() {
-            0 => {}
-            1 => state.sink(1, self.chosen_entry(range.start)),
-            _ => {
-                state.sink(2, self.chosen_entry(range.start));
-                for at in range.start + 1..range.end {
-                    state.sink(6, self.chosen_entry(at));
-                }
-            }
+        let mut entries = Vec::with_capacity(self.entries.len() * ENTRY_SIZE);
+        for (ekey, location) in &self.entries {
+            entries.extend_from_slice(ekey);
+            entries.extend_from_slice(&location.packed().to_be_bytes()[3..8]);
+            entries.extend_from_slice(&location.size.to_le_bytes());
         }
-        for record in self.pages.matches(key) {
-            state.sink(
-                record.kind,
-                ChosenEntry {
-                    location: record.location.packed(),
-                    size: record.location.size,
-                },
-            );
-        }
-        state.intervals.normalize();
+        let page_table = self.pages.page_bytes();
+        let page_count = self.pages.page_count() as u32;
+        let _ = find_entry(&entries, &page_table, page_count, key, &mut state);
         state
     }
 
@@ -413,14 +418,6 @@ impl SegmentEntries {
     /// client's: 0 found, 2 no entry, 3 not resident, 4 past the entry's end.
     pub fn resolve_range(&self, key: &[u8; 9], start: u64, len: u32) -> ResolveResult {
         self.key_state(key).resolve(start, len)
-    }
-
-    fn chosen_entry(&self, at: usize) -> ChosenEntry {
-        let location = self.entries[at].1;
-        ChosenEntry {
-            location: location.packed(),
-            size: location.size,
-        }
     }
 
     /// Number of distinct keys, using the client's non-decreasing order.
@@ -435,6 +432,130 @@ impl SegmentEntries {
                 .count()
         }
     }
+}
+
+/// The two output words `DynamicIndexFindEntry` (`0x1425111a0`) writes
+/// through its optional out arguments: the page index and the record index
+/// of the first zero stored hash in the page scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FindEntryOut {
+    pub page: u32,
+    pub record: u32,
+}
+
+/// `DynamicIndexFindEntry` (`0x1425111a0`): find a 9-byte key in one segment
+/// and decode it into a fresh key state.
+///
+/// Measured extent `0x1425111a0..0x142511539` (921 bytes through the `ret`
+/// at `0x142511538`; the `.pdata` root is only `0x1425111a0..0x1425111c4`,
+/// 0x24 bytes, and the body continues past it). Signature
+/// `(segment, key, key_state, out_page, out_record) -> void`
+/// (RCX segment, RDX key, R8 key state, R9 out page, stack out record).
+/// The segment supplies the 18-byte entries at `+0x58`, the entry count at
+/// `+0x60`, the page-table base at `+0x68` and the page count at `+0x70`;
+/// this byte-view form takes those four directly. The key state is the
+/// one `DynamicIndexFindContextInit` (`0x142520520`) builds (found at
+/// `+0x10`, chosen at `+0x18`, interval buffer at `+0x28` with its base
+/// at `+0x128`, count at `+0x130`, capacity 16 at `+0x134`) - in
+/// production the caller builds it, this function never calls that init.
+///
+/// The walk (`0x142511219..0x1425112d5`) is a lower bound with
+/// `lo = 0, hi = count`: `mid = (lo + hi) >> 1` in 32-bit arithmetic
+/// (`lea eax, [r15+r13]` / `shr eax, 1` at `0x142511221`), `memcmp(key,
+/// entry[mid], 9)` through `0x142efecf0`. A negative result moves `hi` to
+/// `mid`, a positive one moves `lo` to `mid + 1`, and the loop ends when
+/// `lo == hi` (`cmp r13d, r15d` / `jne` at `0x142511257`). On equality
+/// the midpoint is recorded, the backward walk (`0x142511280`) steps
+/// while the previous entry's first eight bytes and ninth byte match,
+/// and the forward walk (`0x1425112b0`) steps while the next entry's do;
+/// the decode range is `[lo, hi)`, empty at the insertion point for an
+/// absent key. An empty entry count skips the walk (`test esi, esi` /
+/// `je` at `0x142511219`) and decodes the empty range.
+///
+/// The page scan (`0x142511318..0x14251145b`) runs when the page count
+/// at segment `+0x70` is non-zero (`cmp [rax+0x70], 0` / `jbe` at
+/// `0x14251131b`): for each page, for each of 21 records, it stops at
+/// the first record whose stored hash (the `u32` at `page*0x200 +
+/// record*0x18`) is zero, and otherwise appends the record's 19-byte
+/// payload (at `+4`) to a pointer array when its key matches, by the
+/// same first-byte / qword / ninth-byte compare. The out words are
+/// that first zero's `(page, record)`, `(page_count, 21)` when every
+/// slot is non-zero, and `(0, 0)` when the page count is zero. The
+/// pointer array lives on the stack with capacity 32; growing it past
+/// 32 matches calls the allocator vtable at `[segment]` (`+0x18` alloc,
+/// `+0x30` free) and is the declared gap of `fn/DynamicIndexFindEntry`.
+///
+/// The decode is the call to `DynamicIndexDecodeEntries`
+/// (`0x1425209a0`) at `0x1425114a3` with the equal range as the 18-byte
+/// source, the collected payloads as the pointer-array source, and a
+/// null contiguous range. Each entry/page payload decodes the 5-byte
+/// big-endian location at `+9` and the little-endian `u32` size at
+/// `+14`. The two out words are written only when their pointer is
+/// non-null (`test rax, rax` / `je` at `0x1425114e0` and `0x1425114f5`).
+pub fn find_entry(
+    entries: &[u8],
+    page_table: &[u8],
+    page_count: u32,
+    key: &[u8; 9],
+    state: &mut KeyState,
+) -> FindEntryOut {
+    let count = entries.len() / ENTRY_SIZE;
+    let mut lo = 0usize;
+    let mut hi = count;
+    while lo != hi {
+        let mid = ((lo as u32).wrapping_add(hi as u32) >> 1) as usize;
+        let entry_key = &entries[mid * ENTRY_SIZE..mid * ENTRY_SIZE + 9];
+        match key.as_slice().cmp(entry_key) {
+            Ordering::Equal => {
+                lo = mid;
+                hi = mid + 1;
+                while lo > 0 && &entries[(lo - 1) * ENTRY_SIZE..(lo - 1) * ENTRY_SIZE + 9] == key {
+                    lo -= 1;
+                }
+                while hi < count && &entries[hi * ENTRY_SIZE..hi * ENTRY_SIZE + 9] == key.as_slice()
+                {
+                    hi += 1;
+                }
+                break;
+            }
+            Ordering::Less => hi = mid,
+            Ordering::Greater => lo = mid + 1,
+        }
+    }
+    let mut indirect: Vec<[u8; 19]> = Vec::new();
+    let mut out = FindEntryOut { page: 0, record: 0 };
+    if page_count != 0 {
+        let mut first_empty = None;
+        'pages: for page in 0..page_count {
+            for record in 0..PAGE_RECORD_COUNT {
+                let at = page as usize * PAGE_SIZE + record * PAGE_RECORD_SIZE;
+                let stored = u32::from_le_bytes([
+                    page_table[at],
+                    page_table[at + 1],
+                    page_table[at + 2],
+                    page_table[at + 3],
+                ]);
+                if stored == 0 {
+                    first_empty = Some((page, record as u32));
+                    break 'pages;
+                }
+                if &page_table[at + 4..at + 13] == key.as_slice() {
+                    let mut payload = [0u8; 19];
+                    payload.copy_from_slice(&page_table[at + 4..at + 23]);
+                    indirect.push(payload);
+                }
+            }
+        }
+        out = match first_empty {
+            Some((page, record)) => FindEntryOut { page, record },
+            None => FindEntryOut {
+                page: page_count,
+                record: PAGE_RECORD_COUNT as u32,
+            },
+        };
+    }
+    state.decode_entries(&entries[lo * ENTRY_SIZE..hi * ENTRY_SIZE], &indirect, &[]);
+    out
 }
 
 /// Number of buckets in a dynamic index.
@@ -472,7 +593,12 @@ pub const NON_RESIDENT_DELTA: i32 = -0x4000_0000;
 /// them with wrap-around, exactly as the client's `ADD` instructions do.
 #[derive(Debug, Clone, Default)]
 pub struct IntervalSet {
+    /// The client's buffer, as the slots it has ever written. The logical
+    /// buffer is `events[..count]`; slots at `count..` are the stale tail
+    /// the client's normalize leaves behind (see [`IntervalSet::normalize`]).
     events: Vec<IntervalEvent>,
+    /// The client's count at key-state `+0x130`.
+    count: usize,
 }
 
 impl IntervalSet {
@@ -484,23 +610,34 @@ impl IntervalSet {
     /// normalize is the subject of the arithmetic tests; production callers
     /// must use [`IntervalSet::append`] so the buffer reaches the same shape.
     pub fn from_events(events: Vec<IntervalEvent>) -> IntervalSet {
-        IntervalSet { events }
+        let count = events.len();
+        IntervalSet { events, count }
     }
 
+    /// The logical buffer: the first `count` events, as the client reads it.
     pub fn events(&self) -> &[IntervalEvent] {
+        &self.events[..self.count]
+    }
+
+    /// Every slot the buffer has ever written, including the stale tail at
+    /// `count..` that the client's normalize leaves in place. The client's
+    /// byte-level buffer is exactly this sequence of records.
+    pub fn physical_events(&self) -> &[IntervalEvent] {
         &self.events
     }
 
     pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
+        self.count == 0
     }
 
     pub fn len(&self) -> usize {
-        self.events.len()
+        self.count
     }
 
+    /// The client's count clear (`mov dword ptr [obj+0x130], 0`): the count
+    /// goes to zero and the buffer slots stay, exactly as the client's do.
     pub fn clear(&mut self) {
-        self.events.clear();
+        self.count = 0;
     }
 
     /// `DynamicIndexAppendInterval` (`0x142520700`): append the range's two
@@ -512,14 +649,26 @@ impl IntervalSet {
     /// decode result.
     pub fn append(&mut self, start: u64, len: u32, resident: bool) {
         let delta = if resident { 1 } else { NON_RESIDENT_DELTA };
-        self.events.push(IntervalEvent { start, delta });
-        self.events.push(IntervalEvent {
+        self.write_event(IntervalEvent { start, delta });
+        self.write_event(IntervalEvent {
             start: start.wrapping_add(u64::from(len)),
             delta: delta.wrapping_neg(),
         });
         if !resident {
             self.normalize();
         }
+    }
+
+    /// Write one event at the count and increment the count, as the client's
+    /// append does: a slot the buffer has written before is overwritten, a
+    /// slot past the high-water mark extends it.
+    fn write_event(&mut self, event: IntervalEvent) {
+        if self.count < self.events.len() {
+            self.events[self.count] = event;
+        } else {
+            self.events.push(event);
+        }
+        self.count += 1;
     }
 
     /// Sort by start, sum equal-start deltas, and keep only coverage changes.
@@ -532,15 +681,15 @@ impl IntervalSet {
     /// the first event's start. Events that do not cross a boundary are
     /// dropped; the written count is the number of emitted events.
     pub fn normalize(&mut self) {
-        self.events.sort_unstable_by_key(|event| event.start);
-        let mut out = Vec::with_capacity(self.events.len());
+        self.events[..self.count].sort_unstable_by_key(|event| event.start);
+        let mut out = Vec::with_capacity(self.count);
         let mut coverage: i32 = 0;
         let mut at = 0usize;
-        while at < self.events.len() {
+        while at < self.count {
             let start = self.events[at].start;
             let mut sum = coverage.wrapping_add(self.events[at].delta);
             at += 1;
-            while at < self.events.len() && self.events[at].start == start {
+            while at < self.count && self.events[at].start == start {
                 sum = sum.wrapping_add(self.events[at].delta);
                 at += 1;
             }
@@ -554,7 +703,12 @@ impl IntervalSet {
             }
             coverage = sum;
         }
-        self.events = out;
+        // The client compacts the emitted prefix forward over the sorted
+        // buffer and stores the emitted count; the sorted records at
+        // `new_count..old_count` stay in place as the tail. Copying `out`
+        // over the front and keeping the rest of the Vec is that compaction.
+        self.events[..out.len()].copy_from_slice(&out);
+        self.count = out.len();
     }
 
     /// `DynamicIndexRangeIsResident` (`0x142520c60`) on a normalized buffer.
@@ -574,14 +728,14 @@ impl IntervalSet {
         let end = start.wrapping_add(u64::from(len));
         let mut coverage: i32 = 0;
         let mut at = 0usize;
-        while at < self.events.len() {
+        while at < self.count {
             if start < self.events[at].start {
                 break;
             }
             coverage = coverage.wrapping_add(self.events[at].delta);
             at += 1;
         }
-        if at == self.events.len() {
+        if at == self.count {
             return !resident;
         }
         if coverage > 0 {
@@ -595,12 +749,14 @@ impl IntervalSet {
     }
 }
 
-/// The client's chosen entry, the first 12 meaningful bytes of the 16-byte
-/// decode result copied to `out_entry`.
+/// The client's chosen entry, the 16-byte decode result copied to `out_entry`.
 ///
 /// `DynamicIndexResolveRange` copies all 16 bytes, but the decoder only
 /// initializes the packed location (8) and the size (4); the trailing dword is
-/// never read back. [`ChosenEntry`] models the two fields that carry meaning.
+/// never read back. [`ChosenEntry`] therefore carries it only so byte-level
+/// copies (the sink's `movups` on types 1/2, at `0x1425205c5`/`0x1425205ec`)
+/// and the type-3 clear, which writes only the location and size and leaves
+/// the trailing dword in place, can be modelled exactly.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ChosenEntry {
     /// Packed `archive << 30 | offset` location, as the five big-endian entry
@@ -608,11 +764,43 @@ pub struct ChosenEntry {
     pub location: u64,
     /// Stored size, including the 30-byte data header when present.
     pub size: u32,
+    /// The record's trailing dword (the `movups` at `0x1425205c5` copies it
+    /// along with the location and size). Never read back as a value.
+    pub trailing: u32,
 }
 
 impl ChosenEntry {
     pub fn to_location(self) -> Location {
         Location::from_packed(self.location, self.size)
+    }
+}
+
+/// The chosen entry one 18-byte index entry decodes to: the 5-byte
+/// big-endian location at `+9` and the little-endian u32 size at `+14`.
+/// The key bytes at `+0..9` are never read by the decoder.
+fn decode_entry_18(record: &[u8]) -> ChosenEntry {
+    decode_entry_common(record)
+}
+
+/// The chosen entry one 19-byte payload record decodes to: the same
+/// location at `+9` and size at `+14`. The type byte at `+18` is the
+/// sink's argument, not part of the entry.
+fn decode_entry_19(record: &[u8]) -> ChosenEntry {
+    decode_entry_common(record)
+}
+
+fn decode_entry_common(record: &[u8]) -> ChosenEntry {
+    let mut packed = 0u64;
+    for byte in &record[9..14] {
+        packed = (packed << 8) | u64::from(*byte);
+    }
+    ChosenEntry {
+        location: packed,
+        size: u32::from_le_bytes([record[14], record[15], record[16], record[17]]),
+        // The 18/19-byte records carry no trailing dword; the decoder's
+        // stack slot for it is never written (see fn/DynamicIndexDecodeEntries:
+        // the oracle observes it as zero, and the fixture pins that).
+        trailing: 0,
     }
 }
 
@@ -638,8 +826,80 @@ impl KeyState {
         self.found.then_some(self.chosen)
     }
 
+    /// The chosen entry as stored, even when the state is unfound: the
+    /// type-3 sink zeroes it and every other sink either replaces it or
+    /// leaves it, so an unfound state's entry is still observable in the
+    /// client's bytes at key-state `+0x18`.
+    pub fn raw_chosen(&self) -> ChosenEntry {
+        self.chosen
+    }
+
     pub fn intervals(&self) -> &IntervalSet {
         &self.intervals
+    }
+
+    /// Mutable access to the interval buffer, for the verify probe's
+    /// inverted-range case (end < begin), which the slice-based
+    /// [`Self::decode_entries`] cannot represent: the probe drives
+    /// clear/sink/normalize directly there.
+    pub fn intervals_mut(&mut self) -> &mut IntervalSet {
+        &mut self.intervals
+    }
+
+    /// A key state with the caller's found flag and chosen entry, and an
+    /// empty interval buffer. `DynamicIndexDecodeEntries` preserves the
+    /// found flag and chosen entry it is handed (only the interval count
+    /// is cleared), so a caller that builds the state itself starts here.
+    pub fn from_initial(found: bool, chosen: ChosenEntry) -> KeyState {
+        KeyState {
+            found,
+            chosen,
+            intervals: IntervalSet::default(),
+        }
+    }
+
+    /// `DynamicIndexDecodeEntries` (`0x1425209a0`): decode three record
+    /// sources into this state, in order, then normalize once.
+    ///
+    /// The sources are the client's, by their stride and decode:
+    ///
+    /// - `entries`: the sorted equal range, 18-byte records (`key[9]`,
+    ///   5-byte big-endian location, u32 little-endian size). The count is
+    ///   `(end - begin) / 18`; one record is sink type 1, more are type 2
+    ///   for the first and type 6 for each later record. Nothing is
+    ///   decoded for a null or empty range.
+    /// - `indirect`: the records a pointer array points at, each 19 bytes
+    ///   (`key[9]`, location, size, type). The type byte is the sink's;
+    ///   the caller resolves the pointers, the client dereferences them.
+    /// - `contiguous`: the same 19-byte records back to back.
+    ///
+    /// The interval count is cleared first; the found flag and the chosen
+    /// entry are preserved until a sink changes them. The final normalize
+    /// is the tail-jump to `DynamicIndexNormalizeIntervals` (`0x1425208d0`).
+    pub fn decode_entries(&mut self, entries: &[u8], indirect: &[[u8; 19]], contiguous: &[u8]) {
+        self.intervals.clear();
+        let mut records = entries.chunks_exact(ENTRY_SIZE);
+        match entries.len() / ENTRY_SIZE {
+            0 => {}
+            1 => {
+                let entry = decode_entry_18(records.next().expect("one 18-byte entry"));
+                self.sink(1, entry);
+            }
+            _ => {
+                let entry = decode_entry_18(records.next().expect("the first entry"));
+                self.sink(2, entry);
+                for record in records {
+                    self.sink(6, decode_entry_18(record));
+                }
+            }
+        }
+        for record in indirect {
+            self.sink(record[18], decode_entry_19(record));
+        }
+        for record in contiguous.chunks_exact(19) {
+            self.sink(record[18], decode_entry_19(record));
+        }
+        self.intervals.normalize();
     }
 
     /// Whether the absolute range is covered by the resident intervals.
@@ -650,11 +910,20 @@ impl KeyState {
 
     /// `DynamicIndexEntrySink` (`0x142520590`), one type byte at a time.
     ///
-    /// - 1: found, chosen, clear the intervals, append the interval (resident);
-    /// - 2: found, chosen, clear the intervals;
-    /// - 3: clear found and the chosen entry, clear the intervals;
-    /// - 4: clear the intervals, append the *current* chosen entry (resident);
-    /// - 5: clear the intervals;
+    /// The type byte arrives in `DL`; a `dec`/`cmp 6`/`ja` split sends
+    /// anything above 7 to the default exit (`0x1425206a2`), and a jump table
+    /// at `0x1425206a8` dispatches types 1-7 to their blocks. Type 6 shares
+    /// the resident-append tail with type 1 (jump-table entry `0x1425205d3`),
+    /// without the found/copy/clear prefix.
+    ///
+    /// - 1: found, chosen (all 16 bytes, `movups` at `0x1425205c5`), clear
+    ///   the intervals, append the interval (resident);
+    /// - 2: found, chosen (all 16 bytes), clear the intervals;
+    /// - 3: clear found, the chosen location and size, and the intervals;
+    ///   the trailing dword is *not* written and is preserved;
+    /// - 4: (after the log call the fixture's disabled logger returns from)
+    ///   clear the intervals, append the *current* chosen entry (resident);
+    /// - 5: (after the same log call) clear the intervals;
     /// - 6: append the interval (resident);
     /// - 7: append the interval (non-resident; normalizes immediately).
     ///
@@ -676,7 +945,10 @@ impl KeyState {
             }
             3 => {
                 self.found = false;
-                self.chosen = ChosenEntry::default();
+                // `mov qword [rbx+0x18], 0` and `mov [rbx+0x20], 0` only: the
+                // trailing dword at +0x24 is left in place.
+                self.chosen.location = 0;
+                self.chosen.size = 0;
                 self.intervals.clear();
             }
             4 => {
@@ -761,6 +1033,92 @@ impl ResolveStatus {
             ResolveStatus::NotResident => 3,
             ResolveStatus::PastEnd => 4,
         }
+    }
+}
+
+/// What one `DynamicIndexResolveRange` call writes and returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ResolveOutcome {
+    /// The client's status byte (0 found, 2 no entry, 3 not resident, 4 past
+    /// the chosen entry's end).
+    pub status: u8,
+    /// The 12 bytes the client stores through `out_range` (a u64 start and a
+    /// u32 length). Present for status 0 and 3: it is written before the
+    /// resident check.
+    pub range: Option<ResolvedRange>,
+    /// The 16 bytes the client stores through `out_entry`. Present only for
+    /// status 0.
+    pub entry: Option<ChosenEntry>,
+}
+
+/// `DynamicIndexResolveRange` (`0x1425115d0`): the whole call, from the fresh
+/// key state to the free.
+///
+/// Measured extent `0x1425115d0..0x1425116f2` (291 bytes through the `ret` at
+/// `0x1425116f1`), the declared `coverageWindow`. Signature
+/// `(segment, key, request, out_range, out_entry) -> status` (RCX segment, RDX
+/// key, R8 request, R9 out range, stack out entry). The client:
+///
+/// 1. builds a key state on its own stack with `DynamicIndexFindContextInit`
+///    (`0x142520520`) from the segment's `+0` and `+8` words (the interval
+///    allocator and logger, read only by the grow and log paths);
+/// 2. calls `DynamicIndexFindEntry` (`0x1425111a0`) with both out words null
+///    (`xor r9d, r9d` at `0x1425111621` and the zero store at
+///    `0x1425111624`), which fills the found byte at `+0x10`, the chosen entry
+///    at `+0x18` and the interval buffer;
+/// 3. `cmp byte ptr [rsp+0x50], sil` / `jne` (`0x1425111634`): a zero found
+///    byte returns 2;
+/// 4. `cmp rcx, r8` / `ja` (`0x142511165f`): `request.start > chosen.size`
+///    (the u32 at chosen `+8`, zero-extended) returns 4;
+/// 5. `cmp edx, -1` / `jne` (`0x1425111668`): a length of `0xffffffff` becomes
+///    `size - start` in 32-bit arithmetic;
+/// 6. `cmp rax, r8` / `ja` (`0x1425111676`): `start + len > size` returns 4;
+/// 7. the two out-range stores (`0x1425111680`, `0x1425111687`): the u32 length
+///    at `+8` and the absolute `chosen.location + start` at `+0`;
+/// 8. `test edx, edx` / `je` (`0x142511168a`): a zero length skips the
+///    resident check;
+/// 9. `DynamicIndexRangeIsResident` (`0x142520c60`) with its flag set to 1 and
+///    the out-range record; a zero answer returns 3 (`0x14251116a0`);
+/// 10. `test rbp, rbp` / `je` (`0x14251116ae`): the 16-byte chosen entry is
+///     written only when `out_entry` is non-null;
+/// 11. `DynamicIndexFindContextFree` (`0x142520570`), which frees the interval
+///     buffer only when it left the inline one (the declared grow gap).
+///
+/// Status 0 is the fall-through value: `xor esi, esi` before the lookup is the
+/// only place the return is cleared, so the success path returns the zero it
+/// started with. The key state is fresh per call, so this wrapper and
+/// production's [`SegmentEntries::resolve_range`] agree: both look the key up
+/// and then call [`KeyState::resolve`], where the whole bounds and residency
+/// body lives.
+pub fn resolve_range(
+    entries: &[u8],
+    page_table: &[u8],
+    page_count: u32,
+    key: &[u8; 9],
+    start: u64,
+    len: u32,
+) -> ResolveOutcome {
+    let mut state = KeyState::default();
+    let _ = find_entry(entries, page_table, page_count, key, &mut state);
+    match state.resolve(start, len) {
+        ResolveResult::Found { range, entry } => ResolveOutcome {
+            status: ResolveStatus::Found.code(),
+            range: Some(range),
+            entry: Some(entry),
+        },
+        ResolveResult::NotResident { range } => ResolveOutcome {
+            status: ResolveStatus::NotResident.code(),
+            range: Some(range),
+            entry: None,
+        },
+        ResolveResult::NoEntry => ResolveOutcome {
+            status: ResolveStatus::NoEntry.code(),
+            ..ResolveOutcome::default()
+        },
+        ResolveResult::PastEnd => ResolveOutcome {
+            status: ResolveStatus::PastEnd.code(),
+            ..ResolveOutcome::default()
+        },
     }
 }
 
@@ -2320,6 +2678,7 @@ mod tests {
                 entry: ChosenEntry {
                     location,
                     size: 0x100,
+                    trailing: 0,
                 },
             }
         );
@@ -2336,6 +2695,7 @@ mod tests {
                 entry: ChosenEntry {
                     location,
                     size: 0x100,
+                    trailing: 0,
                 },
             }
         );
@@ -2365,6 +2725,7 @@ mod tests {
                 entry: ChosenEntry {
                     location,
                     size: 0x100,
+                    trailing: 0,
                 },
             }
         );
@@ -2404,7 +2765,8 @@ mod tests {
             state.chosen(),
             Some(ChosenEntry {
                 location: header,
-                size: 0x100
+                size: 0x100,
+                trailing: 0,
             })
         );
         assert_eq!(
@@ -2421,6 +2783,7 @@ mod tests {
                 entry: ChosenEntry {
                     location: header,
                     size: 0x100,
+                    trailing: 0,
                 },
             }
         );

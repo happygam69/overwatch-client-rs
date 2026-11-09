@@ -1,0 +1,72 @@
+{
+ "id": "fn/CdnIndexFileParse",
+ "title": "tier-2 shipped code: the whole-file CDN index validation against CdnIndexFileParse (0x1424d9c90)",
+ "address": {
+  "v2b": "0x7ff7c71f9c90"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "cdn_index_file_parse",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "args": [
+  {
+   "name": "key",
+   "kind": "ptr",
+   "ptr_len": 16
+  },
+  {
+   "name": "file",
+   "kind": "ptr",
+   "ptr_len": 8192
+  },
+  {
+   "name": "len",
+   "kind": "u64"
+  },
+  {
+   "name": "descriptor",
+   "kind": "ptr",
+   "ptr_len": 48
+  }
+ ],
+ "returns": "u8",
+ "argFactory": "cdn_index_file_parse_fixture",
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4257,
+  "coverageWindow": 642,
+  "allowedImageReads": [
+   "0x7ff7c818b2c8-0x7ff7c818b2d8",
+   "0x7ff7c8339490-0x7ff7c8339570",
+   "0x7ff7c83395c0-0x7ff7c83395c8",
+   "0x7ff7c87e5f40-0x7ff7c87e5f48",
+   "0x7ff7c87e5f98-0x7ff7c87e5f9c",
+   "0x7ff7c87e5fa0-0x7ff7c87e5fa8"
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/container.rs::parse_index_file (with parse_index_footer, terminal_checksum_matches, key_checksum_matches and verify_page_checksums), built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the cdn_index_file_parse entry. The ledger binds the verdict to container.rs + the probe source + the git revision.",
+  "Oracle is CdnIndexFileParse at exe 0x1424d9c90, extent 0x1424d9c90..0x1424d9f12 (642 bytes, the `.pdata` extent), which is the declared coverageWindow. Signature: (const u8 *key, const u8 *data, u32 len, u8 *out) -> u8 status; `out` is the 0x30-byte derived-footer block the client fills.",
+  "The client's read, stage by stage: (1) `len < 0x14` returns 8; copy the last 20 bytes from `data + len - 0x14` into `out`, MD5 them with `out[12..20]` zeroed and compare the first 8 bytes with the remembered hash (a mismatch returns 8 and leaves the hash zeroed, 0x1424d9d34); restore the hash; version > 1 returns 8; checksum size > 16 returns 8; `pageSize = footer[3] << 10`, `entrySize = footer[4]+footer[5]+footer[6]`, both non-zero, `entriesPerPage = pageSize / entrySize`, `pageCount = (elements - 1 + entriesPerPage) / entriesPerPage`, `lastKeyBytes = pageCount * footer[6]`, `checksumBytes = pageCount * footer[7]`, and `len` must equal `checksumSize + 20 + (checksumSize + footer[6] + pageSize) * pageCount` in 32-bit arithmetic. (2) 0x1424d9e54: MD5 over the `lastKeyBytes + checksumBytes` bytes at `data + pageCount*pageSize` and compare its first `checksumSize` bytes with the terminal bytes that follow them; a mismatch returns 8. (3) 0x1424d9ed1: MD5(terminal + the 20 footer bytes) must equal the 16-byte `key`, compared as two u64s; a mismatch hex-encodes the key into a stack buffer and returns 8. (4) `CdnIndexPageChecksums(data, len, out)`'s status is returned unchanged.",
+  "The `out` block is an output channel: `out[0..20]` is the footer copy, `out[0x14]` page size, `out[0x18]` entry size, `out[0x1c]` entries per page, `out[0x20]` page count, `out[0x24]` last-key bytes, `out[0x28]` checksum bytes. The client writes nothing past +0x2c; the fixture's 0xA5 tail proves it.",
+  "Compared channels: AL (the harness's u8 return kind compares the low byte exactly), the key and file pointees (the client only reads them, so a candidate that wrote through either diverges), and the derived block, which the client writes.",
+  "Coverage gate is 100% over every site in the 642-byte window: the length gate, the header-MD5 mismatch, the zeroed-hash exit, the version and checksum-size gates, the page-size and entry-size gates, the exact-length gate, the terminal gate, both key qword compares, and the page-pass tail call.",
+  "allowedImageReads: six CRT data spans, none game state. 0x7ff7c818b2c8-0x7ff7c818b2d8 is the lowercase hex digit table the key-mismatch hex dump reads; 0x7ff7c8339490-0x7ff7c8339570 and 0x7ff7c87e5f98/0x7ff7c87e5fa0 are the memset/memcpy dispatch tables and feature flags the Md5Update/Md5Final blocks read (the same spans fn/Md5Update and fn/Md5Final declare); 0x7ff7c83395c0 is the memcpy dispatch table; 0x7ff7c87e5f40 is the CRT cookie __security_check_cookie reads. Measured by running all 300 corpus cases through the oracle and taking the union of reads_outside.",
+  "acknowledgedGaps: the client divides `pageSize / entrySize` with no zero guard, so a descriptor with `entrySize > pageSize` faults; the shipped parse_index_footer refuses that input with status 8 instead, and the fixture never produces it. The 32-bit products `pageCount * pageSize` and `lastKeyBytes + checksumBytes` wrap, which needs a page count in the millions; the fixture stays in a range where the client's own length check admits the file."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "an entry size larger than the page size",
+   "why": "The client divides by `entriesPerPage` without checking it for zero (0x1424d9e01 `div r9d`), so such a descriptor faults inside the oracle. parse_index_footer refuses it with status 8; the fixture never builds one."
+  },
+  {
+   "what": "a 32-bit wrap in `pageCount * pageSize` or `lastKeyBytes + checksumBytes`",
+   "why": "Both products are 32-bit in the client and would need a page count in the millions to wrap; the client's own exact-length check then admits a file whose bodies do not fit, and the client reads past its buffer. The fixture stays in the range where `len == checksumSize + 20 + (checksumSize + keyBytes + pageSize) * pageCount` describes a file that fits."
+  }
+ ]
+}

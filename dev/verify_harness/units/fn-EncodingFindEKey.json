@@ -1,70 +1,70 @@
 {
-  "id": "fn/EncodingFindEKey",
-  "title": "tier-2 shipped code: encoding ekey page lookup against the client's FUN_142498610",
-  "address": {
-    "v2b": "0x7ff7c71b8610"
+ "id": "fn/EncodingFindEKey",
+ "title": "tier-2 shipped code: encoding ekey page lookup against the client's FUN_142498610",
+ "address": {
+  "v2b": "0x7ff7c71b8610"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "encoding_find_ekey",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "args": [
+  {
+   "name": "info",
+   "kind": "ptr",
+   "ptr_len": 1024
   },
-  "image": "dev/data/offline_recover/module_offline.bin",
-  "entry": "encoding_find_ekey",
-  "candidateLoader": "cargo",
-  "candidateCrate": "ow-casc",
-  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
-  "suite": "casc",
-  "args": [
-    {
-      "name": "info",
-      "kind": "ptr",
-      "ptr_len": 1024
-    },
-    {
-      "name": "key",
-      "kind": "ptr",
-      "ptr_len": 32
-    },
-    {
-      "name": "key_len",
-      "kind": "u64"
-    },
-    {
-      "name": "out",
-      "kind": "ptr",
-      "ptr_len": 8
-    }
-  ],
-  "returns": "void",
-  "argFactory": "encoding_find_ekey_fixture",
-  "options": {
-    "iterations": 300,
-    "coverageThreshold": 100,
-    "mutationCount": 20,
-    "mutationKillRate": 1.0,
-    "seed": 4248
+  {
+   "name": "key",
+   "kind": "ptr",
+   "ptr_len": 32
   },
-  "notes": [
-    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/encoding.rs::find_ekey_record, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the encoding_find_ekey entry. The ledger binds the verdict to encoding.rs + the probe source + the git revision.",
-    "Oracle is FUN_142498610 at exe 0x142498610. Signature: (info*, key*, u8 key_len, u64* out). It zeroes *out, calls the page-index search FUN_142498880 with the ekey width and the caller's FULL key length, then scans the selected page from `page * page_bytes`. A record is `ekey[width]`, a big-endian u32 espec index and a big-endian u40 stored size; an espec index of 0xFFFFFFFF ends the page. The record comparison uses min(key_len, width), unlike the search's raw length.",
-    "The fixture embeds the info struct, the ekey page index and the page bodies in one arena buffer. The info's +0x40/+0x48 section pointers are absolute arena addresses; +0x68 holds the info buffer's own arena address (never read) so the probe can translate them. The out slot is compared, so the exact record address is proven, not merely hit/miss.",
-    "Return channel: `void` because the client's RAX on a miss can hold a transient body pointer while callers test only AL. The out slot is zeroed first and written only on a hit, so the memory channel is the caller-visible result.",
-    "The fixture pins an empty index, one/three pages, exact first keys, keys on the second record, keys between pages, below and above, a record after the 0xFFFFFFFF terminator (unreachable), duplicate keys (the first record wins), compare lengths 0/1/2, widths 1/2/4/8/16, and the raw-vs-min quirk: key_len = width + 1 makes the page search compare the first hash byte while the record scan compares only the width-byte key. Later cases sweep page counts 0..3, widths 1/2/4/8/16 and key lengths 0..=width + 1.",
-    "Coverage: the oracle window is the 238-byte FUN_142498610. The corpus reaches both edges of its search-result test, page-bound test, espec-terminator test, memcmp test and next-record test. The page search FUN_142498880 is a callee outside the window; its own branch sites are measured by fn/EncodingPageIndexSearch, which calls it directly with all five arguments (the fifth on the stack). This unit compares every page the search chooses.",
-    "Mutation: the mutated Rust body is find_ekey_record, which contains the search and the scan. Every mutant must be killed by the out address or the zero-on-miss channel.",
-    "Not tested: a short page body (the client reads past it; this reader stops), a null pointer, and the page-hash bytes (the lookup never reads them)."
-  ],
-  "knownEquivalentMutants": [
-    {
-      "kind": "cmp-flip <to<=",
-      "line": 991,
-      "rationale": "The ekey scan's loop bound `p < body.len()` is the client's `p < end` test. At `p == body.len()` the extra iteration reads the 4-byte espec tail with `body.get`, finds nothing, and breaks; it cannot read a byte, match a key, or change the out slot. The reader's bounds check is the only reason the mutant is not observable, and that check is the short-body safety edge the unit explicitly excludes. On every in-bounds body the two forms are the same walk. Line updated from 931 to 991: the declaration is line-keyed and the file grew below the loop, so the old line no longer named the mutated statement. The mutant is unchanged."
-    }
-  ],
-  "acknowledgedGaps": [
-    {
-      "what": "RAX's upper bits on a miss",
-      "why": "FUN_142498610 writes only AL; on the miss path RAX can still hold a transient page-body pointer. Callers test AL. The out slot is zeroed at entry and written only on a hit, so hit/miss and the exact record address are compared through the memory channel."
-    },
-    {
-      "what": "The branch sites inside the callee FUN_142498880",
-      "why": "The page search is called by FUN_142498610 and is inside this unit's behaviour, but its body is outside this unit's coverage window. It is measured separately by fn/EncodingPageIndexSearch, which calls 0x142498880 directly with its fifth argument on the stack and reaches both edges of all four of its conditional branches (4/4) with 11/11 mutants killed. This unit's channel is the page the search chose, seen from the caller, including the raw compare length the search uses."
-    }
-  ]
+  {
+   "name": "key_len",
+   "kind": "u64"
+  },
+  {
+   "name": "out",
+   "kind": "ptr",
+   "ptr_len": 8
+  }
+ ],
+ "returns": "void",
+ "argFactory": "encoding_find_ekey_fixture",
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 20,
+  "mutationKillRate": 1.0,
+  "seed": 4248
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/encoding.rs::find_ekey_record, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the encoding_find_ekey entry. The ledger binds the verdict to encoding.rs + the probe source + the git revision.",
+  "Oracle is FUN_142498610 at exe 0x142498610. Signature: (info*, key*, u8 key_len, u64* out). It zeroes *out, calls the page-index search FUN_142498880 with the ekey width and the caller's FULL key length, then scans the selected page from `page * page_bytes`. A record is `ekey[width]`, a big-endian u32 espec index and a big-endian u40 stored size; an espec index of 0xFFFFFFFF ends the page. The record comparison uses min(key_len, width), unlike the search's raw length.",
+  "The fixture embeds the info struct, the ekey page index and the page bodies in one arena buffer. The info's +0x40/+0x48 section pointers are absolute arena addresses; +0x68 holds the info buffer's own arena address (never read) so the probe can translate them. The out slot is compared, so the exact record address is proven, not merely hit/miss.",
+  "Return channel: `void` because the client's RAX on a miss can hold a transient body pointer while callers test only AL. The out slot is zeroed first and written only on a hit, so the memory channel is the caller-visible result.",
+  "The fixture pins an empty index, one/three pages, exact first keys, keys on the second record, keys between pages, below and above, a record after the 0xFFFFFFFF terminator (unreachable), duplicate keys (the first record wins), compare lengths 0/1/2, widths 1/2/4/8/16, and the raw-vs-min quirk: key_len = width + 1 makes the page search compare the first hash byte while the record scan compares only the width-byte key. Later cases sweep page counts 0..3, widths 1/2/4/8/16 and key lengths 0..=width + 1.",
+  "Coverage: the oracle window is the 238-byte FUN_142498610. The corpus reaches both edges of its search-result test, page-bound test, espec-terminator test, memcmp test and next-record test. The page search FUN_142498880 is a callee outside the window; its own branch sites are measured by fn/EncodingPageIndexSearch, which calls it directly with all five arguments (the fifth on the stack). This unit compares every page the search chooses.",
+  "Mutation: the mutated Rust body is find_ekey_record, which contains the search and the scan. Every mutant must be killed by the out address or the zero-on-miss channel.",
+  "Not tested: a short page body (the client reads past it; this reader stops), a null pointer, and the page-hash bytes (the lookup never reads them)."
+ ],
+ "knownEquivalentMutants": [
+  {
+   "kind": "cmp-flip <to<=",
+   "line": 1124,
+   "rationale": "The ekey scan's loop bound `p < body.len()` is the client's `p < end` test. At `p == body.len()` the extra iteration reads the 4-byte espec tail with `body.get`, finds nothing, and breaks; it cannot read a byte, match a key, or change the out slot. The reader's bounds check is the only reason the mutant is not observable, and that check is the short-body safety edge the unit explicitly excludes. On every in-bounds body the two forms are the same walk. Line updated from 991 to 1122, then to 1124 (an edit to two doc comments above the loop added two lines): the declaration is line-keyed and the file grew below the loop while other CASC units were ported, so the old line no longer named the mutated statement. The mutant is unchanged."
+  }
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "RAX's upper bits on a miss",
+   "why": "FUN_142498610 writes only AL; on the miss path RAX can still hold a transient page-body pointer. Callers test AL. The out slot is zeroed at entry and written only on a hit, so hit/miss and the exact record address are compared through the memory channel."
+  },
+  {
+   "what": "The branch sites inside the callee FUN_142498880",
+   "why": "The page search is called by FUN_142498610 and is inside this unit's behaviour, but its body is outside this unit's coverage window. It is measured separately by fn/EncodingPageIndexSearch, which calls 0x142498880 directly with its fifth argument on the stack and reaches both edges of all four of its conditional branches (4/4) with 11/11 mutants killed. This unit's channel is the page the search chose, seen from the caller, including the raw compare length the search uses."
+  }
+ ]
 }

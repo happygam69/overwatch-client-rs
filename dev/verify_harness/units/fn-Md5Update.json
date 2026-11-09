@@ -1,0 +1,56 @@
+{
+ "id": "fn/Md5Update",
+ "title": "tier-2 shipped code: the MD5 input buffer against Md5Update (0x1426a4f40)",
+ "address": {
+  "v2b": "0x7ff7c73c4f40"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "md5_update",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "args": [
+  {
+   "name": "ctx",
+   "kind": "ptr",
+   "ptr_len": 88
+  },
+  {
+   "name": "data",
+   "kind": "ptr",
+   "ptr_len": 4096
+  },
+  {
+   "name": "len",
+   "kind": "u64"
+  }
+ ],
+ "returns": "void",
+ "argFactory": "md5_update_fixture",
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4254,
+  "coverageWindow": 203,
+  "allowedImageReads": [
+   "0x7ff7c8339484-0x7ff7c83394c0",
+   "0x7ff7c8339514-0x7ff7c833951c",
+   "0x7ff7c87e5f98-0x7ff7c87e5f9c"
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/blte.rs::md5_update, the input buffering the shipped md5() composes its hash from, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the md5_update entry. The ledger binds the verdict to blte.rs + the probe source + the git revision.",
+  "Oracle is Md5Update at exe 0x1426a4f40, extent 0x1426a4f40..0x1426a500b (203 bytes, the `.pdata` extent), which is the declared coverageWindow. Signature: (ctx, const void *data, u64 len).",
+  "The client's four edges, read from the disassembly, are the ones the corpus pins: `0x1426a4f81 je` (fill != 0 && len >= 0x40 - fill: complete and transform the buffered block), `0x1426a4fb2 jb` (len >= 0x40: transform whole blocks straight from the input), `0x1426a4fd6 jne` (the block loop's back edge) and `0x1426a4fdb je` (a remainder exists: copy it to buf + fill).",
+  "Two details are load-bearing and both are in the compared bytes: `fill` is `(count as u32) & 0x3f` taken from the **pre-add** count (0x1426a4f58 `mov r15d, [rcx]`, 0x1426a4f63 `and r15d, 0x3f`), while `count` itself is advanced by the full 64-bit length first (0x1426a4f60 `add qword ptr [rcx], r8`). The unit's cases drive the count across the 32-bit boundary (0xFFFFFFFF and 0x100000007) so a candidate that mixed the two widths diverges.",
+  "The whole 88-byte context is the compared pointee, so the state words, the 64-byte buffer and the count are all on the mem channel. The data argument is returned unchanged as well: the client only reads the blocks it transforms directly from the caller's buffer (0x1426a4fc9 passes the input pointer to Md5Transform), so a candidate that wrote through it diverges. One case supplies a data buffer 16 bytes longer than `len` to pin that the bytes past the length are never touched.",
+  "The `data` ptr_len of 4096 is the corpus maximum; each case supplies exactly the bytes its `len` names plus, for one case, the 16-byte overhang. The oracle only sees the buffer the fixture builds, and the probe rejects `len` past the supplied buffer, so the declared maximum is a bound, not a per-case length.",
+  "Coverage gate is 100%: the 203-byte body has four conditional branches and the corpus exercises both edges of each (fill 0/5/32/63, lengths below/at/above the space, one block and many, empty and non-empty remainder).",
+  "allowedImageReads: the three spans are the CRT copying routines the client calls, not game state. 0x7ff7c8339484-0x7ff7c83394c0 and 0x7ff7c8339514-0x7ff7c833951c are inside memcpy/memset's AVX dispatch tables (the call at 0x1426a4f93 copies the buffered block), and 0x7ff7c87e5f98 is the CRT's memcpy feature flag. They were measured by running every corpus case through the oracle and taking the union of reads_outside; no other image address is read."
+ ],
+ "acknowledgedGaps": [],
+ "knownEquivalentMutants": []
+}

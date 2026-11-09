@@ -1,0 +1,83 @@
+{
+ "id": "fn/HexPairDecode",
+ "title": "tier-2 shipped code: the hex-pair decoder against HexPairDecode (0x14269ab80)",
+ "address": {
+  "v2b": "0x7ff7c73bab80"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "hex_pair_decode",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u64",
+ "argFactory": "hex_pair_decode_fixture",
+ "args": [
+  {
+   "name": "out",
+   "kind": "ptr",
+   "ptr_len": 32
+  },
+  {
+   "name": "count",
+   "kind": "u64"
+  },
+  {
+   "name": "text",
+   "kind": "ptr",
+   "ptr_len": 64
+  },
+  {
+   "name": "len",
+   "kind": "u64"
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4267,
+  "coverageWindow": 318,
+  "allowedImageReads": [],
+  "unreachableBranches": [
+   {
+    "site": "0x7ff7c73bab98",
+    "edge": "0x7ff7c73bacaf",
+    "why": "null text pointer (`test r8, r8; je`): arena pointers are never null, and a len of 0 covers the sibling guard at 0x14269aba1. The probe cannot construct a null pointer, so this edge cannot run in the oracle."
+   },
+   {
+    "site": "0x7ff7c73bac44",
+    "edge": "0x7ff7c73bac4b",
+    "why": "high-nibble value conversion fall-through to `xor ecx, ecx`: to reach it a character must pass the byte-range validation at 0x14269abe9..0x14269ac02 (exactly 0-9/a-f/A-F, as an al/dl byte test) yet fail all three 32-bit value tests at 0x14269ac29..0x14269ac44. No byte does: each byte range that passes validation is exactly one of those three value ranges, so a validated character is always a digit, a-f, or A-F and the xor edge is dead."
+   },
+   {
+    "site": "0x7ff7c73bac6c",
+    "edge": "0x7ff7c73bac74",
+    "why": "low-nibble value conversion fall-through to `xor eax, eax`: the same argument for the second character - validation at 0x14269ac08..0x14269ac27 admits exactly 0-9/a-f/A-F, which are exactly the three value ranges tested at 0x14269ac4d..0x14269ac6c, so a validated character never reaches the xor."
+   }
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/install.rs::hex_decode (with its hex_value leaf, used by parse_hex_key and parse_hex_key_id), built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the hex_pair_decode entry. The ledger binds the verdict to install.rs + the probe source + the git revision. The shipped helper matched the client operation for operation and needed no signature change: it already took (out, count, text-slice) where the slice length is the client's len, returned the bytes written, never zeroes out, and stops at need-a-pair, NUL (as a non-hex first character), a non-hex character, or count.",
+  "Oracle is HexPairDecode at exe 0x14269ab80, measured extent 0x14269ab80..0x14269acbe (318 bytes through the ret at 0x14269acbd), which is the declared coverageWindow. The .pdata extent is only 0x36 bytes (0x14269ab80..0x14269abb6); the rest is the chained body the merged project and rd.py read - the fn_extent root stops at the pdata seam. The next code at 0x14269acc0 is a separate thunk that jumps to 0x14269ab80 with r9 = -1. Signature: (u8 *out, u64 count, const char *text, u64 len) -> u64 written (RCX, RDX, R8, R9; the return is (cursor - text) >> 1 after a cqo, i.e. the bytes written).",
+  "The client's read: `test r8, r8; je` and `test r9, r9; je` return 0; `test rdx, rdx; je` (count 0) skips the loop and returns 0. Per pair: `offset >= len - 1` (jae, offset = cursor - text) ends the run, so an odd trailing character is never read; the first character is sign-extended (movsx) and a NUL ends the run; both characters pass three range tests in order - `cmp edx, 0x30` / `cmp dl, 0x39` for 0-9, `lea eax, [rdx - 0x61]; cmp al, 5` for a-f (a byte test on al), `sub dl, 0x41; cmp dl, 5` for A-F (a byte test on dl) - so high-bit bytes are rejected by the byte tests, not by the sign extension. Value conversion is 32-bit: a digit keeps its ASCII in ecx and `shl cl, 4` keeps only the low nibble (the digit), a-f subtracts 0x57, A-F subtracts 0x37, and the low nibble is the analogous eax value added to the shifted high byte; both are exactly (high << 4) + low in a byte, as the shipped helper writes. The loopback is `cmp r11, rbx; jb` (written < count, unsigned).",
+  "Compared channels: the 64-bit return (bytes written), the 32-byte out block and the read-only text. The fixture pre-fills out with 0xA5 sentinels, so the client's no-zeroing contract (only written bytes change), the partial writes before a stop, and the count stop are all compared; a decoded 0xa5 byte is also present so a sentinel value cannot hide a missing write.",
+  "Coverage gate is 100% over the window's sites: the len-0 and count-0 exits, the need-a-pair end (len 1, odd trailing, len truncation), the NUL first-character exit, all three first-character ranges and their below/above neighbours, the same for the second character, the digit/a-f/A-F value conversions for both nibbles, and the written<count loopback taken and not taken (count exact, count at capacity, count past the text). Three edges are declared dead above: the null-text exit and the two value-conversion xor fall-throughs.",
+  "allowedImageReads is empty: the function reads only its two buffers, no image constants (its hex ranges are immediates)."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "a null text pointer (r8 == 0)",
+   "why": "The client returns 0 at 0x14269ab98 (`test r8, r8; je 0x14269acaf`). The arena probe always supplies a non-null pointer, so this edge is declared unreachable above; a len of 0 (the sibling guard at 0x14269aba1) is covered and returns the same 0."
+  },
+  {
+   "what": "a count larger than the out buffer, or a len larger than the text buffer",
+   "why": "The client writes count bytes and reads len characters with no bounds checks; either overrun is a caller bug that would write/read past the arena. The probe rejects both and the fixture never builds one (count <= 32 = OUT_LEN, len <= len(text) <= 64)."
+  },
+  {
+   "what": "a null out pointer (rcx == 0)",
+   "why": "The client does not check rcx at all: with a non-zero count and a valid pair it would write to address 0 and fault. The arena probe always supplies a non-null out buffer, so this caller bug is not a tested path and the shipped helper, like the client, has no null check."
+  }
+ ]
+}

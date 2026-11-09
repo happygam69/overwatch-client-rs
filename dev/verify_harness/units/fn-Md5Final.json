@@ -1,0 +1,62 @@
+{
+ "id": "fn/Md5Final",
+ "title": "tier-2 shipped code: the MD5 padding and digest against Md5Final (0x1426a5010)",
+ "address": {
+  "v2b": "0x7ff7c73c5010"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "md5_final",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "args": [
+  {
+   "name": "ctx",
+   "kind": "ptr",
+   "ptr_len": 88
+  },
+  {
+   "name": "digest",
+   "kind": "ptr",
+   "ptr_len": 16
+  }
+ ],
+ "returns": "void",
+ "argFactory": "md5_final_fixture",
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4255,
+  "coverageWindow": 231,
+  "allowedImageReads": [
+   "0x7ff7c8339534-0x7ff7c8339570",
+   "0x7ff7c83395c0-0x7ff7c83395c8",
+   "0x7ff7c87e5f98-0x7ff7c87e5f9c",
+   "0x7ff7c87e5fa0-0x7ff7c87e5fa8"
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/blte.rs::md5_final, the padding and digest stage the shipped md5() composes its hash from, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the md5_final entry. The ledger binds the verdict to blte.rs + the probe source + the git revision.",
+  "Oracle is Md5Final at exe 0x1426a5010, extent 0x1426a5010..0x1426a50f7 (231 bytes, the `.pdata` extent), which is the declared coverageWindow. Signature: (ctx, u8 digest[16]).",
+  "The client's three conditional sites, read from the disassembly: 0x1426a5044 `jbe` (n = fill + 1 <= 0x38: one transform, pad to 0x38), 0x1426a504a `jae` under a fresh `cmp r8d, 0x40` at 0x1426a5046 (n >= 0x40, i.e. n == 0x40: no interior zeroing before the first transform) and 0x1426a508e `jae` (n >= 0x38, i.e. n == 0x38: nothing to zero to 0x38). The two `jae`s are why `fill = 0x37` and `fill = 0x3f` are pinned cases rather than random draws.",
+  "The message length is `count << 3` over the buffer's last eight bytes (0x1426a50b2 `shl rax, 3`, 0x1426a50b9 `mov qword ptr [rbx + 0x50], rax`) and the digest is the four chained words copied little-endian (0x1426a50c2..0x1426a50ec). Both are on the compared surface: the 88-byte context covers the length word and the padding, and the digest pointee starts at 0xA5 so a partial write of the 16 bytes diverges. Counts 0xFFFFFFFF and 1<<61 pin the wrapping shift.",
+  "allowedImageReads: the four measured spans are the CRT routines the client calls (the two `memset` calls at 0x1426a5063/0x1426a50a7 and the `memcpy`-family dispatch they share), not game state. They were measured by running every corpus case through the oracle and taking the union of reads_outside; no other image address is read.",
+  "Coverage gate is 100%: all three sites are exercised in both directions (fill 0, 1, 0x36, 0x37, 0x38, 0x3E, 0x3F)."
+ ],
+ "acknowledgedGaps": [],
+ "knownEquivalentMutants": [
+  {
+   "kind": "cmp-flip <to<=",
+   "line": 737,
+   "rationale": "Line 737 is `if filled < 0x38 {` inside the `filled <= 0x38` branch. Flipping it to `<=` widens the guard to the whole enclosing branch, so the mutant also takes the arm when filled == 0x38. That arm fills `ctx[0x18 + filled..0x18 + 0x38]`, which is the empty range at filled == 0x38, and `fill(0)` on an empty range writes nothing. For every other value inside the branch the two guards agree. So the mutant changes no byte of the context or the digest for any input; the client's own expression reaches the same state through `jae` skipping an empty memset."
+  },
+  {
+   "kind": "cmp-flip <to<=",
+   "line": 741,
+   "rationale": "Line 741 is `if filled < 0x40 {` inside the `filled > 0x38` branch, where filled can only be 0x39..0x40. Flipping it to `<=` adds only filled == 0x40, and the arm then fills `ctx[0x18 + 0x40..0x18 + 0x40]` (empty). For 0x39..0x3F the guards are identical, so no input can distinguish the two versions through the context, the digest or a fault."
+  }
+ ]
+}

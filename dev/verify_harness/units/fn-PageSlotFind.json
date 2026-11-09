@@ -1,0 +1,77 @@
+{
+ "id": "fn/PageSlotFind",
+ "title": "tier-2 shipped code: the page-cache slot lookup and eviction choice against PageSlotFind (0x1424fa440)",
+ "address": {
+  "v2b": "0x7ff7c721a440"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "page_slot_find",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u64",
+ "argFactory": "page_slot_find_fixture",
+ "args": [
+  {
+   "name": "cache",
+   "kind": "ptr",
+   "ptr_len": 12288
+  },
+  {
+   "name": "archive",
+   "kind": "u64"
+  },
+  {
+   "name": "page",
+   "kind": "u64"
+  },
+  {
+   "name": "len",
+   "kind": "u64"
+  },
+  {
+   "name": "out_usable",
+   "kind": "u64"
+  },
+  {
+   "name": "exclude",
+   "kind": "u64"
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 6421,
+  "coverageWindow": 247,
+  "allowedImageReads": [
+   "0x7ff7c87e5f40"
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/pagecache.rs::slot_find, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the page_slot_find entry. The ledger binds the verdict to pagecache.rs + the probe source + the git revision. The typed cache's own PageCache::find + PageCache::claim implement the same selection rule over its Slot structs; replacing that split with this single pass is held back by the caller (see the gap on PageCacheRead).",
+  "Oracle is PageSlotFind at exe 0x1424fa440, extent 0x1424fa440..0x1424fa536 (247 bytes through the ret at 0x1424fa536), which is the declared coverageWindow. v2b 0x7ff7c721a440 is 0x7ff7c4d20000 + (0x1424fa440 - 0x140000000). Signature: (cache *cache, u64 archive, u64 page, u32 len, u8 *out_usable, slot *exclude) -> slot* (RCX, RDX, R8, R9, then the two stack arguments at the caller's [rsp+0x28] and [rsp+0x30]).",
+  "The read, in one pass over the slots: out_usable is zeroed first (0x1424fa466); a zero count returns null (0x1424fa46e). Each slot is at base + i*0x70 with archive at +8, page at +0x10, stamp at +0x20, stored length at +0x28, the invalidated byte at +0x2d and the busy/failed byte at +0x2e. The MATCH test needs +0x2d == 0, archive and page equal, and either stored >= len or +0x2e != 0 (0x1424fa49a..0x1424fa4b6); a match ends the pass, is returned even when busy, and stores (byte [+0x2e] == 0) through out_usable (0x1424fa4e5). Otherwise the EVICTION candidate skips a busy slot and the excluded slot and takes the largest wrapping clock - stamp, a tie keeping the earlier slot because the compare is a strict ja with an existing candidate kept (0x1424fa4b8..0x1424fa4d3). The chosen slot bumps the clock: cache+0x20 = clock + 1 and slot+0x20 = clock + 1 (0x1424fa4ff..0x1424fa50a). Null choice writes nothing more and returns null.",
+  "Compared channels: the return (the slot's absolute arena address or 0), the whole 0x3000-byte blob (count, clock, the sixteen slot records, the out_usable byte) and the archive/page/len/exclude words. The blob's untouched bytes are sentinel, so a stray write is visible; the fixture pins each slot's other bytes to a per-slot pattern so a write into the wrong slot's stamp shows.",
+  "The fixture's declared cases walk every branch: an empty table; one matching slot that covers the request; a matching slot that is busy (returned with usable 0); a matching slot with a short stored length that is idle (not a match, so the eviction branch runs); archive-only and page-only matches; a slot invalidated while loading (skips the match test, becomes a candidate); three candidates with distinct distances (the oldest wins); three with equal distances (the lowest index wins); the oldest slot excluded (the next oldest wins); every slot busy (null); a match after a candidate was already picked; an excluded single candidate (null); the clock wrapping against stamps near u64::MAX; a clock behind every stamp; a match at the sixteenth slot; and sixteen candidates. The sweep after that varies the count 0..16, the stamps, the match flags and the exclude index.",
+  "Coverage: the 247-byte window holds twelve conditional branch sites - the zero-count exit, the invalidated test, the archive, page, stored-length and busy tests of the match, the busy and excluded skips of the eviction branch, the distance compare, the existing-candidate test, the loop back and the null-choice test. All twelve are driven to both edges, so the gate is 100%."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "a null out_usable pointer or null exclude",
+   "why": "The client writes through out_usable unconditionally, so the pointer must be readable; the probe passes an address inside the blob and the fixture never builds a null one. `exclude` is a slot address the client compares against, and null is representable there (no slot address equals 0), which the fixture uses.",
+   "address": "0x1424fa466"
+  },
+  {
+   "what": "the typed cache is not rewired onto this function",
+   "why": "PageCache::find + PageCache::claim implement the same rule over its typed Slot structs. The client's single pass differs in one observable way: a matching slot whose stored length is short but which is idle falls through to the eviction branch and can be chosen for reload, while a matching slot that is busy is *returned* with usable 0. Rewiring serve_fragment onto this function changes which slot is reused in the short-page case, and the caller that consumes the usable answer (PageCacheRead, 0x1424fb1c0) has not been read. Until it is, the typed split stays and this function is the client's pass, proved on its own.",
+   "address": "0x1424fb1c0"
+  },
+  {
+   "what": "the page bodies",
+   "why": "A slot's 0x70-byte record carries only the metadata this function reads; the page buffer it points to elsewhere is not touched by PageSlotFind, so the blob models the record alone."
+  }
+ ]
+}

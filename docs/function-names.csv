@@ -372,6 +372,8 @@ Overwatch.exe,0x142498880,0x142498880,EncodingPageIndexSearch,"Page-index binary
 
 Overwatch.exe,0x142498920,0x142498920,EncodingHeaderParse,"Parses the 22-byte EN header: key widths, page sizes and counts, and espec block size",casc,,
 
+Overwatch.exe,0x142498a70,0x142498a70,EncodingEspecStringIndex,"Builds the espec string index: last-byte gate (status 8), 32-bit NUL count, vector reserve, then appends every string start; called only by the encoding open",casc,,
+
 Overwatch.exe,0x1424a90e0,0x1424a90e0,BlteFrameHeaderParse,"Validates a BLTE frame header (type 0x0f or 0x10) and its MD5, and decodes the per-chunk stored and decoded sizes",casc,,
 
 Overwatch.exe,0x1424a9590,0x1424a9590,BlteFrameHeaderOpen,Wrapper that opens a BLTE frame header from a buffer,casc,,
@@ -531,7 +533,7 @@ Overwatch.exe,0x142520520,0x142520520,DynamicIndexFindContextInit,Initializes th
 
 Overwatch.exe,0x142520570,0x142520570,DynamicIndexFindContextFree,Frees the find/resolve context's interval buffer when it grew,casc,,
 
-Overwatch.exe,0x142520590,0x142520590,DynamicIndexEntrySink,Stores the first equal entry as the chosen location and appends later entries as intervals,casc,,
+Overwatch.exe,0x142520590,0x142520590,DynamicIndexEntrySink,"Dispatches one decoded entry by type byte (1-7) through the jump table at 0x1425206a8: sets/clears the chosen entry and appends intervals",casc,,
 
 Overwatch.exe,0x142520700,0x142520700,DynamicIndexAppendInterval,Adds an entry range pair to the key state's update buffer,casc,,
 

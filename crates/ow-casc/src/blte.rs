@@ -605,34 +605,158 @@ pub fn md5_transform(state: &mut [u32; 4], block: &[u8]) {
     state[3] = state[3].wrapping_add(d);
 }
 
-/// Standard MD5, the client's frame-header hash.
+/// The client's MD5 context: the argument `Md5Init` (`0x1426a5100`),
+/// `Md5Update` (`0x1426a4f40`) and `Md5Final` (`0x1426a5010`) read and write.
 ///
-/// `FUN_1426a5100` writes the four RFC 1321 init words, `FUN_1426a4f40` updates
-/// the byte count and buffers input, `FUN_1426a5010` appends `0x80`, zeroes to
-/// 56 mod 64, writes the bit length little-endian and emits the four state
-/// words little-endian. `FUN_1426ab530` is the 64-round block transform.
-fn md5(data: &[u8]) -> [u8; 16] {
-    let mut state = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
-    let mut blocks = data.chunks_exact(64);
-    for block in &mut blocks {
-        md5_transform(&mut state, block);
-    }
-    let remainder = blocks.remainder();
+/// The layout is the three functions' own offsets, not a guess:
+///
+/// * `+0x00` an eight-byte message byte count. `Md5Init` writes it with one
+///   `mov qword ptr [rcx], 0`; `Md5Update` adds the argument length to it and
+///   recovers the buffer fill as `(count as u32) & 0x3f`, so the high half
+///   only matters past 4 GiB.
+/// * `+0x08` the four chaining words, little-endian, written by four 4-byte
+///   stores in `Md5Init` and read by `Md5Transform`.
+/// * `+0x18` the 64-byte input buffer. `Md5Update` copies into it at
+///   `buf + fill`; `Md5Final` puts the `0x80` byte and the zero padding in it
+///   and writes the 64-bit message length over its last eight bytes
+///   (`+0x50..+0x58`).
+///
+/// The whole context is therefore 0x58 bytes. Neither function bounds-checks
+/// anything, so a context shorter than this is a caller bug, not a case the
+/// client handles.
+pub const MD5_CTX_SIZE: usize = 0x58;
 
-    let mut tail = [0u8; 128];
-    tail[..remainder.len()].copy_from_slice(remainder);
-    tail[remainder.len()] = 0x80;
-    let tail_len = if remainder.len() < 56 { 64 } else { 128 };
-    let bit_len = (data.len() as u64).wrapping_mul(8);
-    tail[tail_len - 8..tail_len].copy_from_slice(&bit_len.to_le_bytes());
-    for block in tail[..tail_len].chunks_exact(64) {
-        md5_transform(&mut state, block);
+/// The four chaining words at `ctx + 0x08`.
+fn md5_state(ctx: &[u8]) -> [u32; 4] {
+    let mut state = [0u32; 4];
+    for (index, word) in state.iter_mut().enumerate() {
+        *word = u32::from_le_bytes(ctx[8 + index * 4..12 + index * 4].try_into().unwrap());
     }
+    state
+}
 
-    let mut digest = [0u8; 16];
+/// Store the four chaining words back at `ctx + 0x08`.
+fn md5_write_state(ctx: &mut [u8], state: [u32; 4]) {
     for (index, word) in state.iter().enumerate() {
-        digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        ctx[8 + index * 4..12 + index * 4].copy_from_slice(&word.to_le_bytes());
     }
+}
+
+/// Transform one block held *in* the context's own buffer (`ctx + 0x18`).
+///
+/// `Md5Update` and `Md5Final` both pass that buffer straight to
+/// `Md5Transform`, so the split keeps the state and the block in one context
+/// without copying the block.
+fn md5_absorb_context(ctx: &mut [u8]) {
+    let (head, tail) = ctx.split_at_mut(0x18);
+    let mut state = md5_state(head);
+    md5_transform(&mut state, &tail[..0x40]);
+    md5_write_state(head, state);
+}
+
+/// The client's MD5 state initialiser (`Md5Init`, `0x1426a5100`).
+///
+/// One 8-byte zero store at `+0x00` (`mov qword ptr [rcx], 0` at
+/// `0x1426a511c`) and the four RFC 1321 words at `+0x08..+0x18` as four
+/// `mov dword ptr [rcx+disp], imm32` stores; nothing else in the context is
+/// touched, so the buffer is left holding whatever the caller had there until
+/// `Md5Update` fills it. The offsets are written base-plus-displacement
+/// because that is how the instructions encode them.
+pub fn md5_init(ctx: &mut [u8]) {
+    ctx[0..8].fill(0);
+    let base = 8;
+    ctx[base..base + 4].copy_from_slice(&0x6745_2301u32.to_le_bytes());
+    ctx[base + 4..base + 8].copy_from_slice(&0xefcd_ab89u32.to_le_bytes());
+    ctx[base + 8..base + 12].copy_from_slice(&0x98ba_dcfeu32.to_le_bytes());
+    ctx[base + 12..base + 16].copy_from_slice(&0x1032_5476u32.to_le_bytes());
+}
+
+/// The client's MD5 input buffer (`Md5Update`, `0x1426a4f40`).
+///
+/// The client's shape, operation for operation:
+///
+/// 1. `fill = (count as u32) & 0x3f` is read **before** the count is advanced,
+///    and the count is advanced by the whole argument length first.
+/// 2. If the buffer already holds bytes and the input covers the rest of the
+///    block, the block is completed (a `memcpy` at `0x1426a4f93`), transformed
+///    (`0x1426a4fa0`) and the input pointer moves past those bytes.
+/// 3. Every whole block left is transformed **straight from the input** (no
+///    copy; `0x1426a4fc9` inside a `do { } while (--blocks)` loop), so the
+///    input buffer is only ever read.
+/// 4. The remainder, if any, is copied to `buf + fill` (`0x1426a4fed`).
+///
+/// The `len == 0` case therefore touches nothing at all, and a call whose
+/// length lands exactly on the fill boundary transforms and leaves the buffer
+/// empty.
+pub fn md5_update(ctx: &mut [u8], data: &[u8]) {
+    let count = u64::from_le_bytes(ctx[0..8].try_into().unwrap());
+    let mut used = (count as u32 as usize) & 0x3f;
+    let total = count.wrapping_add(data.len() as u64);
+    ctx[0..8].copy_from_slice(&total.to_le_bytes());
+
+    let mut rest = data;
+    let space = 0x40 - used;
+    if used != 0 && rest.len() >= space {
+        ctx[0x18 + used..0x18 + 0x40].copy_from_slice(&rest[..space]);
+        md5_absorb_context(ctx);
+        rest = &rest[space..];
+        used = 0;
+    }
+    while rest.len() >= 0x40 {
+        let mut state = md5_state(ctx);
+        md5_transform(&mut state, &rest[..0x40]);
+        md5_write_state(ctx, state);
+        rest = &rest[0x40..];
+    }
+    if !rest.is_empty() {
+        ctx[0x18 + used..0x18 + used + rest.len()].copy_from_slice(rest);
+    }
+}
+
+/// The client's MD5 padding and digest (`Md5Final`, `0x1426a5010`).
+///
+/// The `0x80` terminator goes at `buf + fill`; `filled = fill + 1` then picks
+/// the padding shape:
+///
+/// * `filled <= 0x38`: zero up to `0x38` (nothing when `filled == 0x38`,
+///   which is the client's `jae 0x1426a50ac` falling past its `memset`) and
+///   transform once.
+/// * otherwise: zero up to `0x40` (nothing when `filled == 0x40`, the
+///   `jae 0x1426a5068` edge), transform, zero the whole `0x38` bytes and
+///   transform again.
+///
+/// The message length is then written as `count << 3` over the buffer's last
+/// eight bytes (`+0x50`) and the final transform's four words are copied out
+/// little-endian as the 16-byte digest.
+pub fn md5_final(ctx: &mut [u8], digest: &mut [u8]) {
+    let count = u64::from_le_bytes(ctx[0..8].try_into().unwrap());
+    let used = (count as u32 as usize) & 0x3f;
+    let filled = used + 1;
+    ctx[0x18 + used] = 0x80;
+    if filled <= 0x38 {
+        if filled < 0x38 {
+            ctx[0x18 + filled..0x18 + 0x38].fill(0);
+        }
+    } else {
+        if filled < 0x40 {
+            ctx[0x18 + filled..0x18 + 0x40].fill(0);
+        }
+        md5_absorb_context(ctx);
+        ctx[0x18..0x18 + 0x38].fill(0);
+    }
+    ctx[0x50..0x58].copy_from_slice(&count.wrapping_shl(3).to_le_bytes());
+    md5_absorb_context(ctx);
+    digest[..16].copy_from_slice(&ctx[8..0x18]);
+}
+
+/// Standard MD5, the client's frame-header hash, as the client composes it:
+/// `Md5Init` -> `Md5Update` -> `Md5Final` over the same 0x58-byte context.
+fn md5(data: &[u8]) -> [u8; 16] {
+    let mut ctx = [0u8; MD5_CTX_SIZE];
+    md5_init(&mut ctx);
+    md5_update(&mut ctx, data);
+    let mut digest = [0u8; 16];
+    md5_final(&mut ctx, &mut digest);
     digest
 }
 
@@ -779,6 +903,60 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(hex(&md5(input)), expected);
         }
+    }
+
+    /// The three client entry points are the shipped path: splitting the same
+    /// message at every boundary must produce the one-shot digest, because
+    /// the client streams container data through exactly this context.
+    #[test]
+    fn md5_streaming_matches_one_shot() {
+        let messages: [&[u8]; 6] = [
+            b"",
+            b"abc",
+            b"message digest",
+            b"abcdefghijklmnopqrstuvwxyz",
+            b"012345678901234567890123456789012345678901234567890123456789012345678901234567890",
+            b"The quick brown fox jumps over the lazy dog",
+        ];
+        for message in messages {
+            let expected = md5(message);
+            for split in 0..=message.len() {
+                let mut ctx = [0u8; MD5_CTX_SIZE];
+                md5_init(&mut ctx);
+                md5_update(&mut ctx, &message[..split]);
+                md5_update(&mut ctx, &message[split..]);
+                let mut digest = [0u8; 16];
+                md5_final(&mut ctx, &mut digest);
+                assert_eq!(digest, expected, "split at {split} of {message:?}");
+            }
+        }
+    }
+
+    /// The context offsets `Md5Update` and `Md5Final` depend on: an 8-byte
+    /// count at `+0x00`, the four RFC words at `+0x08`, and a buffer at
+    /// `+0x18` that `Md5Init` does not touch.
+    #[test]
+    fn md5_context_layout_is_the_clients() {
+        let mut ctx = [0xA5u8; MD5_CTX_SIZE];
+        md5_init(&mut ctx);
+        assert_eq!(&ctx[0..8], &[0u8; 8]);
+        assert_eq!(ctx[8..12], 0x6745_2301u32.to_le_bytes());
+        assert_eq!(ctx[12..16], 0xefcd_ab89u32.to_le_bytes());
+        assert_eq!(ctx[16..20], 0x98ba_dcfeu32.to_le_bytes());
+        assert_eq!(ctx[20..24], 0x1032_5476u32.to_le_bytes());
+        assert!(ctx[0x18..].iter().all(|byte| *byte == 0xA5));
+
+        // One buffered byte leaves the count at 1 and the byte at buf+0.
+        md5_update(&mut ctx, b"x");
+        assert_eq!(u64::from_le_bytes(ctx[0..8].try_into().unwrap()), 1);
+        assert_eq!(ctx[0x18], b'x');
+
+        // The padding terminator and the bit length are at the client's own
+        // offsets: `0x80` after the byte, `count << 3` over buf[0x38..0x40].
+        let mut digest = [0u8; 16];
+        md5_final(&mut ctx, &mut digest);
+        assert_eq!(u64::from_le_bytes(ctx[0x50..0x58].try_into().unwrap()), 8);
+        assert_eq!(hex(&digest), "9dd4e461268c8034f5c8564e155c67a6");
     }
 
     fn build_frame(frame_type: u8, records: &[FrameChunk]) -> Vec<u8> {

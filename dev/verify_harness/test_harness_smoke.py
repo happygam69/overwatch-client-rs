@@ -313,6 +313,25 @@ def test_mutate_hex_boundary():
           f"kinds={sorted({m.kind for m in mutants})}")
 
 
+def test_mutate_bool_negate():
+    src = (
+        "fn FUN_x(flag: bool) {\n"
+        "    if flag {\n"
+        "        return 1;\n"
+        "    }\n"
+        "    if !flag {\n"
+        "        return 2;\n"
+        "    }\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    mutants = generate_mutants(src, "FUN_x", count=12)
+    negated = [m for m in mutants if m.kind == "bool-negate" and "if !flag {" in m.source]
+    unnegated = [m for m in mutants if m.kind == "bool-negate" and "if flag {" in m.source]
+    check("mutate/bool-negate-generated", len(mutants) == 2 and bool(negated) and bool(unnegated),
+          f"kinds={sorted({m.kind for m in mutants})} n={len(mutants)}")
+
+
 def test_ledger_version_binding():
     e = LedgerEntry(
         unit_id="fn/t", status="verified", oracle_sha256="a", candidate_sha256="b",
@@ -436,6 +455,7 @@ def main() -> int:
     test_pdata_bounds()
     test_gen_pools()
     test_mutate_hex_boundary()
+    test_mutate_bool_negate()
     test_ledger_version_binding()
     test_runner_helpers()
     test_candidate_c_f64_u64()

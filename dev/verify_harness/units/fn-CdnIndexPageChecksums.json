@@ -1,0 +1,78 @@
+{
+ "id": "fn/CdnIndexPageChecksums",
+ "title": "tier-2 shipped code: the CDN index page-wise MD5 check against CdnIndexPageChecksums (0x1424d9f20)",
+ "address": {
+  "v2b": "0x7ff7c71f9f20"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "cdn_index_page_checksums",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "args": [
+  {
+   "name": "file",
+   "kind": "ptr",
+   "ptr_len": 8192
+  },
+  {
+   "name": "len",
+   "kind": "u64"
+  },
+  {
+   "name": "descriptor",
+   "kind": "ptr",
+   "ptr_len": 48
+  }
+ ],
+ "returns": "u8",
+ "argFactory": "cdn_page_checksums_fixture",
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4256,
+  "coverageWindow": 372,
+  "allowedImageReads": [
+   "0x7ff7c818b2c8-0x7ff7c818b2d8",
+   "0x7ff7c83395c0-0x7ff7c83395c8",
+   "0x7ff7c87e5f40-0x7ff7c87e5f48",
+   "0x7ff7c87e5f98-0x7ff7c87e5f9c",
+   "0x7ff7c87e5fa0-0x7ff7c87e5fa8"
+  ],
+  "unreachableBranches": [
+   {
+    "site": "0x7ff7c71fa02b",
+    "edge": "0x7ff7c71fa02d",
+    "why": "stack-allocation overflow guard in the checksum-mismatch path: `lea rax, [rbx + 0xf]; cmp rax, rbx; ja` where rbx = 2*checksumSize + 1 <= 511 (checksumSize is a byte), so the u64 addition never wraps. The fall-through (`mov rax, 0x0ffffffffffffff0`) is dead for every possible descriptor."
+   },
+   {
+    "site": "0x7ff7c71fa05e",
+    "edge": "0x7ff7c71fa060",
+    "why": "the same overflow guard for the second dynamic stack buffer on the mismatch path: rbx is still 2*checksumSize + 1 <= 511, so `cmp rax, rbx; ja` is always taken and the fall-through cannot execute."
+   }
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/container.rs::verify_page_checksums (with IndexFooter::from_descriptor for the 0x30-byte descriptor the probe decodes), built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the cdn_index_page_checksums entry. The ledger binds the verdict to container.rs + the probe source + the git revision.",
+  "Oracle is CdnIndexPageChecksums at exe 0x1424d9f20, extent 0x1424d9f20..0x1424da094 (372 bytes, the `.pdata` extent), which is the declared coverageWindow. Signature: (const u8 *file, u32 len, const Footer *footer) -> u8 status.",
+  "The client's read: `bodies = pageCount * pageSize` in 32-bit arithmetic (0x1424d9f5e `imul r8d, [r8+0x14]`); `len < bodies` returns 3; the checksum array starts at `file + lastKeyBytes + bodies` (both u32, zero-extended, added in 64 bits, 0x1424d9f6c..f77); `pageCount == 0` returns 0; each page hashes `file + (page*pageSize) as u32` over `pageSize` bytes with Md5Init/Update/Final and compares the first `checksumSize` bytes against the array at `file + lastKeyBytes + bodies + (page*checksumSize) as u32`; a mismatch returns 8; all matching returns 0. The two strides wrap in 32 bits, which is why the shipped function computes them itself instead of using IndexFooter::checksum_offset (the 64-bit form).",
+  "The descriptor is the 0x30-byte block CdnIndexFooterParse (0x1424d9af0, unit fn/CdnIndexFooterParse) writes: checksum size at +0x07, page size at +0x14, page count at +0x20, last-key bytes at +0x24. Only those four are read here; the fixture fills the rest consistently so a wrong offset diverges.",
+  "The mismatch path is a CRT error report: it allocates two stack buffers with __chkstk (0x1426c3ce0) and hex-encodes the stored and computed checksums into them (0x14269acd0), writing nothing outside the stack, then returns 8. It needed one harness capability: the oracle now maps a fake TEB at gs: with zero at gs:[0x10], so __chkstk returns without probing pages (HARNESS_VERSION 6). Before that the path faulted as an unmapped read at 0x10.",
+  "Compared channels: AL (the harness's u8 return kind compares the low byte exactly) and both pointees - the file and the descriptor, which the client only reads, so a candidate that wrote through either diverges.",
+  "Coverage gate is 100% over all six sites: the length gate (3), the zero-page exit, the match/mismatch edge, the loop back edge (one page vs four), and the two dynamic-allocation guards with one dead edge each declared above.",
+  "allowedImageReads: the five measured spans are CRT data, not game state - 0x7ff7c818b2c8-0x7ff7c818b2d8 is the 16-byte lowercase hex digit table the error path's encoder reads, 0x7ff7c83395c0-0x7ff7c83395c8 is the memcpy dispatch table, and 0x7ff7c87e5f40/0x7ff7c87e5f98/0x7ff7c87e5fa0 are the CRT cookie and its memcpy feature flags. They were measured by running every corpus case through the oracle and taking the union of reads_outside."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "a 32-bit wrap in the page or checksum stride",
+   "why": "The client multiplies page*pageSize and page*checksumSize in 32 bits, but reaching a product above 2^32 needs a page index in the millions, and the loop iterates pageCount times, so the wrap cannot be exercised within the oracle's step budget. The shipped function uses the same wrapping multiply (page.wrapping_mul(..) as u32), so a future fixture with a large page count would cover it; the current corpus does not."
+  },
+  {
+   "what": "a checksum size above 16",
+   "why": "The client's memcmp would read past its 16-byte digest into adjacent stack bytes, which has no stable value to compare. CdnIndexFileParse (0x1424d9c90) rejects checksumSize > 16 at 0x1424d9daa (`cmp r10b, 0x10; ja`), so no real descriptor reaches this function with a larger value; the fixture stays within 0..=16."
+  }
+ ]
+}

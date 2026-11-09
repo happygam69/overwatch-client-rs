@@ -11,6 +11,15 @@ Usage (library):
     o = EmuOracle(image_path, base=0x7ff7c4d20000)
     o.load_function(v2b_addr, max_size=0x2000)
     out = o.call(arg_specs, arg_values)   # see CallResult
+
+The process surface, not just the image: besides the image at `base`, the
+oracle maps the emulator stack, the argument arena, a `ret` sentinel page, the
+shadow-space page and a one-page fake TEB with `gs:` pointed at it. The TEB is
+there for the CRT: `__chkstk` reads the stack limit at `gs:[0x10]`, and with
+zero there it returns without probing - the behaviour of a process whose stack
+is committed - where an unmapped `gs:` faults (oracle fault `unmapped read at
+0x10`). Every mapped page except the image is reset before each call, so
+nothing carries between cases.
 """
 
 from __future__ import annotations
@@ -44,6 +53,16 @@ ARENA_SIZE = 0x1_0000
 
 SENTINEL = 0x0000_0003_0000_0000  # page of `ret` - return trap
 SHADOW_BASE = 0x0000_0003_1000_0000  # MS x64 shadow space for the call
+
+# A fake TEB, so the CRT helpers that read `gs:` can run. `__chkstk`
+# (`0x1426c3ce0`) is the reason this exists: it reads the stack limit at
+# `gs:[0x10]` and probes one page at a time down to the requested frame. With
+# zero there, every stack address is "above the limit", so it returns without
+# probing - which is what a process with a committed stack does. The page is
+# zeroed before every call, so a callee that wrote a TEB field cannot make one
+# case depend on the previous one.
+TEB_BASE = 0x0000_0004_0000_0000
+TEB_SIZE = 0x1000
 
 MAX_STEPS = 2_000_000
 
@@ -164,6 +183,7 @@ class EmuOracle:
             (ARENA_BASE, ARENA_BASE + ARENA_SIZE),
             (SENTINEL, SENTINEL + 0x1000),
             (SHADOW_BASE, SHADOW_BASE + 0x1000),
+            (TEB_BASE, TEB_BASE + TEB_SIZE),
             *self._extra_maps,
         ]
         return any(lo < b and a < hi for a, b in ranges)
@@ -184,6 +204,8 @@ class EmuOracle:
         u.mem_map(SENTINEL, 0x1000)
         u.mem_write(SENTINEL, b"\xC3" * 0x1000)
         u.mem_map(SHADOW_BASE, 0x1000)
+        u.mem_map(TEB_BASE, TEB_SIZE)
+        u.reg_write(x.UC_X86_REG_GS_BASE, TEB_BASE)
         return u
 
     def load_function(self, v2b_addr: int, max_size: int = 0x2000) -> bytes:
@@ -212,6 +234,10 @@ class EmuOracle:
         # what lets the runner cache and reuse results for identical args).
         u.mem_write(ARENA_BASE, b"\x00" * ARENA_SIZE)
         u.mem_write(STACK_BASE, b"\x00" * STACK_SIZE)
+        # The fake TEB is part of the reset, not of the mapping: a callee that
+        # wrote a TEB field must not change the next case's answer.
+        u.mem_write(TEB_BASE, b"\x00" * TEB_SIZE)
+        u.reg_write(x.UC_X86_REG_GS_BASE, TEB_BASE)
         # The controlled state region is re-seeded from its snapshot on every
         # call; the caller's per-case pointee writes below then specialise it.
         state_lo = state_hi = None

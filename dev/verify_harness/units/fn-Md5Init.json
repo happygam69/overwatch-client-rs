@@ -1,0 +1,45 @@
+{
+ "id": "fn/Md5Init",
+ "title": "tier-2 shipped code: the MD5 context initialiser against Md5Init (0x1426a5100)",
+ "address": {
+  "v2b": "0x7ff7c73c5100"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "md5_init",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "args": [
+  {
+   "name": "ctx",
+   "kind": "ptr",
+   "ptr_len": 88
+  }
+ ],
+ "returns": "void",
+ "argFactory": "md5_init_fixture",
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4253,
+  "coverageWindow": 36
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/blte.rs::md5_init, the initialiser the shipped md5() composes its hash from, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the md5_init entry. The ledger binds the verdict to blte.rs + the probe source + the git revision.",
+  "Oracle is Md5Init at exe 0x1426a5100. The body is six stores: `mov qword ptr [rcx], 0` at +0x1426a511c (the 64-bit message count) and four `mov dword ptr [rcx+8/0xc/0x10/0x14], imm32` for the RFC 1321 words (0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476), then `ret`. Nothing else in the context is written, which is why the fixture fills the 64-byte buffer with non-zero patterns.",
+  "Reading note: Md5Init has no `.pdata` unwind entry (the function register jumps from Md5Final's end 0x1426a50f7 to 0x1426a5130), yet 44 call sites target 0x1426a5100 exactly and the body ends in `ret` + `int3` padding. The extent is therefore 0x1426a5100..0x1426a5124 (36 bytes through the RET); coverageWindow is that measured extent rather than the 0x2000-byte sweep ceiling, which would count the next function's branches.",
+  "The 88-byte argument is the whole client context, so the channel proves both the offsets (count at +0x00, the four words at +0x08..+0x18) and that the buffer at +0x18 survives untouched. It is the layout fn/Md5Update and fn/Md5Final operate on.",
+  "Coverage: the body has no conditional branch at all, so the sweep discovers 0 sites and the stage reports 0/0 = 100%, the same shape as fn/Md5Transform. The mutation stage carries the unit: moving a store by four bytes, swapping two words or writing a wrong constant must change one of the 88 compared bytes.",
+  "The return register is not compared: the client leaves RAX untouched, so the initialiser's value is whatever the caller had there; nothing consumes it."
+ ],
+ "knownEquivalentMutants": [],
+ "acknowledgedGaps": [
+  {
+   "what": "the function has no `.pdata` extent",
+   "why": "The image declares no unwind record at 0x1426a5100, so the byte extent is measured from the disassembly (through the RET, 36 bytes) rather than read from `.pdata`. The address itself is not inferred: 44 call sites target it and the body is a complete store sequence ending in `ret`."
+  }
+ ]
+}

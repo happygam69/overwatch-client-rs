@@ -6,6 +6,194 @@ Rotation: this file holds the current entries. Older ones move verbatim to
 `docs/history/modlog-YYYY-MM.md` (one file per month) at each rotation; no
 entry is rewritten after the fact.
 
+## 2026-11-19 - Three CASC functions ported: the walls that were not walls
+
+- **`fn/ConfigKeyEntryParse` (`0x1424cebd0`, 481 B), verified.** 87.5%
+  both-edge (14/16 of 21 sites, five dead edges declared), 11/11 mutants plus
+  one declared equivalent. The `key-<id> = <key>` line read operation for
+  operation: the 32-bit span difference, the token scan bounded by `key_end`,
+  the 24-byte record appended *before* either parse, `ParseHexKeyId` then
+  `ParseHexKey`, and the disposition (`1` for a good id with 32 hex digits,
+  `0` for a short value). The vector grow is the declared gap - it recomputes
+  the capacity by multiplying the eight stack bytes holding the `key-` literal,
+  upper dword never written. It was previously logged as "cannot be a unit".
+- **`fn/DynamicIndexResolveRange` (`0x1425115d0`, 291 B), verified.** 100% of
+  seven branches, 5/5 mutants. The whole status machine (2 no entry, 4 twice,
+  3 not resident, 0 found), the `0xffffffff` length form, and the write order:
+  the out range before the resident check, the entry only on success and only
+  when non-null. Four flat segment fields, not the marshalling job the docs
+  feared.
+- **`fn/PageSlotFind` (`0x1424fa440`, 247 B), verified.** 100% of twelve
+  branches, 12/12 mutants, after shipping the client's single pass as
+  `pagecache::slot_find`: a match is returned even when the slot is busy (with
+  `out_usable` 0), and only otherwise does the same pass pick the largest
+  wrapping `clock - stamp`, ties to the lower index. The typed
+  `PageCache::find` + `claim` split stays until `PageCacheRead` (`0x1424fb1c0`)
+  is read; that gap is declared in the unit.
+- **The CASC suite is 30/30 verified.** `fn/EncodingFindEKey` was red for a
+  non-port reason: its `knownEquivalentMutants` entry is line-keyed and the
+  line had drifted from 991 to 1122, so the stage reported a survivor. The
+  declaration now names 1122 and says why it moved.
+- **Two stale claims corrected on sight.** `encoding.rs` said the helper at
+  `0x1426cce30` returns a string's length; the machine returns the address of
+  its NUL terminator (its callers only test it for zero).
+  `fn/CdnIndexPageSelect` said `CdnIndexPageResident` is "82 bytes of .pdata
+  extent whose whole-file path lives past that extent"; the merged register
+  measures 401 bytes with the whole-file path inside it.
+
+## 2026-11-18 - CASC state reconciled: 27 units, and the gate's frame check is green
+
+- **The CASC record now matches the machine.** `docs/casc-1to1.md` said fifteen
+  units, `docs/port-playbook.md` said 83 of 88 descriptors, and
+  `STATUS-handoff.md` said 18 verified / 36 open. Measured today:
+  `cli.py casc` is 27/27 verified in the ledger; `crate_coverage.py ow-casc`
+  reports 25 verified / 33 entries without a unit / 48 interiors / 7 code /
+  3 data over 116 cited addresses.
+- **`fn/HexPairDecode` has a row.** It was verified (100%, 12/12) but only
+  mentioned in prose; `docs/casc-1to1.md` section A now names the twenty-
+  seventh unit, its 318-byte extent and its declared gaps.
+- **`frame_check.py` is green again.** 18 citations in `docs/formats/casc.md`
+  and `STATUS-handoff.md` spelled the v2b address literally; both are outside
+  the history files the check exempts, so the gate failed. They are now
+  `<frame base> + RVA` forms. One of them, the `EncodingHeaderRead` v2b value,
+  was also wrong (below the v2b base); it is now derived from `0x1424d1b40`.
+- **`dev/INDEX.md` regenerated** (194 tools; the six newest fixtures were
+  missing), so `make_index.py --check` passes too.
+
+## 2026-11-17 - the espec string index
+
+- **`EncodingEspecStringIndex` (`0x142498a70`) is ported and wired** as
+  `encoding::espec_string_index`, with `fn/EncodingEspecStringIndex` wired
+  (probe arm, fixture, unit; the main session runs `cli.py`). It is the
+  encoding open's post-read step: last-byte gate returning 8 (an empty
+  block reads the byte at `base - 1`), a 32-bit NUL count, a vector
+  reserve to that count, and one walk appending every espec string start
+  after the length helper at `0x1426cce30`. `EncodingFile::parse` now
+  uses it for the tail check and entry count (29,694 on the install,
+  unchanged). **Declared gap:** the vector grow at `0x142388210` through
+  the allocator vtable; every fixture case pins the reserve and appends
+  to the no-grow path, tightest at equality.
+
+## 2026-11-17 - the boolean parser and the interval merge
+
+- **`ParseBoolString` (`0x1424d8800`) is verified** by
+  `fn/ParseBoolString`: the client's two eight-entry spelling tables, the
+  prefix rule, the `A..=Z`-only fold and the tri-state flag, at 9/9 branches
+  and 10/10 mutants (two fold-range mutants declared equivalent: no spelling
+  contains `z`). The shipped `install::parse_bool` stand-in - trimmed, exact
+  match, six spellings - is replaced by the client's expression; its call site
+  already trimmed, so no shipped behaviour moved except the accepted spellings
+  and the prefix rule.
+- **The harness gained an exe-frame unit**: `address.exe` plus
+  `base: 0x140000000` runs the image at its own link addresses, which a
+  function needs when it dereferences absolute pointers baked into image data
+  (the spelling tables). `crate_coverage` now counts such units.
+- **`DynamicIndexNormalizeIntervals` (`0x1425208d0`) is verified** by
+  `fn/DynamicIndexNormalizeIntervals` against the shipped
+  `IntervalSet::normalize`: 8/8 branches, 12/12 mutants, with pre-sorted
+  inputs (the client's own sort leaves its tail in an implementation-defined
+  order and `0x14251ff30` is not ported - declared).
+- Five functions were read and **cannot** be units: `BlteFrameHeaderParse`
+  (IAT allocator), `ConfigKeyEntryParse` (allocator vtable), the page-cache
+  entry points (the client's mutex), `PageSlotFind` (the crate splits the
+  client's single pass in two) and `DynamicIndexResolveRange` (needs the whole
+  segment object). Addresses and reasons are in `docs/casc-1to1.md`.
+
+## 2026-11-17 - the text key parsers
+
+- **`ParseHexKey` (`0x14248efd0`) and `ParseHexKeyId` (`0x14248f040`) are
+  ported and verified** by `fn/ParseHexKey` and `fn/ParseHexKeyId`: 364
+  differential cases each over the return, the read-only text, the target block
+  and the flag byte, 100% branch coverage (4/4 each), 5/5 mutants each. The
+  client's contract replaces the crate's `from_str_radix` loop: leading
+  whitespace is skipped, the decode stops at a zero byte or a non-hex
+  character, and the character count comes back to the caller. The keyring
+  field parser now decodes through `install::parse_hex_key`.
+- The `ParseHexKeyId` unit's first run left one surviving mutant
+  (`hex_decode(out, 8, ..)` widened to 9, invisible while every case has at
+  most 8 pairs); a case with 12 pairs now kills it.
+
+## 2026-11-17 - the whole-file CDN index validator
+
+- **`CdnIndexFileParse` (`0x1424d9c90`, 642 B) is ported and verified** by
+  `fn/CdnIndexFileParse`: 364 differential cases over every channel (AL, the
+  read-only key and file, and the 0x30-byte derived block), 100% branch
+  coverage (10/10), 5/5 mutants. The shipped `parse_index_file` composes
+  `parse_index_footer`, the terminal check, the key check and
+  `verify_page_checksums`; the two new helpers (`terminal_checksum_matches`,
+  `key_checksum_matches`) are now also what the streaming
+  `PageIndex::open_with_key` uses, so each check has one expression instead of
+  two. The unit pins the stage order and the derived block's bytes, including
+  the hash bytes a header rejection leaves zeroed.
+- **`CdnIndexPageResident` (`0x1424da590`, 401 B) is read but cannot be a
+  unit.** Its streamed branch is an HTTP range read plus a per-page MD5 of the
+  returned page, so those branch sites cannot run in the oracle; its
+  whole-file branch is two stores already exercised through
+  `fn/CdnIndexPageSelect`. Recorded as read, not verified, in
+  `docs/casc-1to1.md` and `docs/open-questions.md`.
+- Fixed `docs/open-questions.md`'s claim that `CdnIndexPageChecksums` "ignores
+  a mismatch" - it returns 8.
+
+## 2026-11-17 - the CDN page check, and a TEB for the oracle
+
+- **`CdnIndexPageChecksums` (`0x1424d9f20`) is ported and verified** by
+  `fn/CdnIndexPageChecksums`: 364 differential cases, 100% over 4/4 reachable
+  branch sites of 6 (two dynamic-allocation guards have one dead edge each,
+  proved dead for every byte-wide checksum size), 7/7 mutants. The status
+  machine is now the crate's: 3 when `len` is shorter than the 32-bit
+  `pageCount * pageSize`, 8 when a page's MD5 disagrees with the stored
+  checksum array at `lastKeyBytes + bodies`, 0 when all match. It hashes
+  through the three MD5 stages verified earlier, so that cluster now has its
+  consumer. `docs/formats/casc.md` and `docs/casc-1to1.md` said a mismatch was
+  "ignored"; it is a rejection - corrected.
+- **The oracle gained a fake TEB (`HARNESS_VERSION` 6).** The mismatch path is
+  a CRT error report that allocates two stack buffers with `__chkstk`
+  (`0x1426c3ce0`), which reads the stack limit at `gs:[0x10]`; an unmapped
+  `gs:` faulted as `unmapped read at 0x10`, so the status-8 edge could not be
+  emulated at all. The oracle now maps one TEB page, points `gs:` at it and
+  zeroes it before every call, so `__chkstk` returns without probing. No gate
+  changed, but the oracle did, so the version bump turns every older ledger
+  entry stale and `cli.py all` was re-run: **83 verified, 4 open, 1
+  scaffold** - the same four pre-existing opens (the two tier-1 C units
+  whose `gcc` exits silently, `fn/MeshSweep` at 61.1% coverage,
+  `fn/OrthonormalizeCameraBasis-state` divergent), so no verdict turned
+  red because of the TEB.
+- **`IndexFooter::from_descriptor`** is public now: it decodes the client's
+  0x30-byte derived-footer block at its own offsets, which is the descriptor
+  `CdnIndexPageChecksums` reads (`+0x07`, `+0x14`, `+0x20`, `+0x24`).
+- The read also found the zero-length compare rule: with `checksumSize` 0 the
+  client's `memcmp` never dereferences the checksum pointer, so a descriptor
+  whose array address lies past the buffer still returns 0. The Rust keeps that
+  case out of the slice machinery instead of faulting.
+
+## 2026-11-17 - MD5 finished: the client's three-stage context, verified
+
+- **`Md5Init` (`0x1426a5100`), `Md5Update` (`0x1426a4f40`) and `Md5Final`
+  (`0x1426a5010`) are ported at the client's own offsets** and verified by
+  `fn/Md5Init`, `fn/Md5Update` and `fn/Md5Final`: 364 differential cases each on
+  every channel, 100% branch coverage (0/0, 4/4 and 3/3 sites), 6/6, 8/8 and
+  9/9 mutants (two declared observationally equivalent — each only widens a
+  guard so an empty range is filled).
+- **The 0x58-byte context is now a declaration, not prose**: count at `+0x00`,
+  the four chaining words at `+0x08`, the 64-byte buffer at `+0x18`, and the
+  `count << 3` length word over buffer `+0x38`. `md5()` in `blte.rs` is the
+  client's composition of the three stages, so the RFC 1321 vectors run the
+  client's staging and the streaming path exists for callers that hash in
+  pieces.
+- **Reading notes recorded**: `Md5Init` has no `.pdata` extent (44 call sites
+  still target it; the coverage window is the measured 36-byte body), and
+  `Md5Update` takes `fill` from the pre-add count's low dword while advancing a
+  64-bit count.
+- **New tool `dev/crate_coverage.py`** answers "which client functions is this
+  crate about": every image address cited in a crate's source, resolved to
+  verified / entry / interior / code / data, with `--queue` printing the
+  unverified entries in the playbook's order. `ow-casc` cites 65 addresses (12
+  verified, 41 function entries pending); `ow-tank` cites 234 (22 verified, 83
+  pending).
+- **`python dev/verify_harness/cli.py casc`** is the row's gate and is green;
+  `docs/casc-1to1.md`, `docs/formats/casc.md`, `docs/systems-coverage.md` and
+  the MD5 entry in `docs/open-questions.md` are updated.
+
 ## 2026-11-17 - README re-ordered, and the status moved one click away
 
 - **The 173-line `## Status` section moved verbatim** to

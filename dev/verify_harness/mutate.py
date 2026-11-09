@@ -258,6 +258,16 @@ def generate_mutants(
                 rebuilt(code_part[: bm.start(1)] + str(mask | (mask << 1)) + code_part[bm.end(1) :]),
             )
 
+        # Boolean gate negation: `if flag {` <-> `if !flag {`. No other kind
+        # can touch a plain boolean condition; without this a body whose only
+        # control flow is such a gate yields zero mutants.
+        bool_m = re.search(r"\bif\s+(!?)\s*([A-Za-z_]\w*)\s*\{", code_part)
+        if bool_m:
+            bang, ident = bool_m.group(1), bool_m.group(2)
+            new_cond = f"if {ident} {{" if bang else f"if !{ident} {{"
+            add("bool-negate", lineno,
+                rebuilt(code_part[: bool_m.start()] + new_cond + code_part[bool_m.end():]))
+
         if len(mutants) >= count * 4:
             break
 

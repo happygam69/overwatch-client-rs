@@ -2312,7 +2312,7 @@ total `checksumSize + 20 + (checksumSize + keyBytes + pageSize) * pageCount`,
 all 32-bit. `CdnIndexFileParse` (`0x1424d9c90`) checks the terminal
 `MD5(last keys + checksums)`, the total length, and `MD5(terminal + footer)`
 against the index's 16-byte key; `CdnIndexPageChecksums` (`0x1424d9f20`)
-compares every page MD5 and ignores a mismatch. The four install indexes the
+compares every page MD5 and returns 8 on the first mismatch. The four install indexes the
 CDN config names all match the formula exactly (260,173,908 / 48,616,028 /
 576,828 / 90,668 B; 63,149 / 11,800 / 140 / 22 pages). The unit
 `fn/CdnIndexFooterParse` is verified (100% coverage, 12/12 mutants): the unit
@@ -2377,16 +2377,103 @@ than the footer describes are recorded as unreachable or uncovered. The
 duplicate-last-key early exit is also pinned by a committed Rust test
 (`container::tests::duplicate_last_keys_take_the_early_equal_page`).
 
-**What is still open in MD5.** `blte.rs`'s `md5()` is a single pass over the
-input, while the client stages `Md5Init` (`0x1426a5100`) -> `Md5Update`
-(`0x1426a4f40`) -> `Md5Final` (`0x1426a5010`) over a 0x58-byte state (byte
-count, four words, 64-byte buffer). The reader never models the client's
-buffering rule (`count & 0x3f`, transform when the input fills the buffer); a
-single pass produces the same digest for a buffer that is known in full, which
-is why nothing has broken yet. The staged form is the client's own and is the
-next unit (`fn/Md5Update`/`Init`/`Final`, three probe entries over the whole
-0x58-byte state; the earlier investigation measured the state layout and the
-image reads each one needs).
+**Two more CASC leaves verified, five walls measured (2026-11-17).**
+`fn/ParseBoolString` (`0x1424d8800`, 278 B) and
+`fn/DynamicIndexNormalizeIntervals` (`0x1425208d0`, 202 B) pass all five
+stages (100% branch coverage, 10/10 + 2 declared-equivalent and 12/12
+mutants). `ParseBoolString` is the harness's first **exe-frame** unit
+(`address.exe` + `base: 0x140000000`): its two spelling tables hold absolute
+link-time pointers, so a v2b copy faults on the first dereference. The port
+also corrected a shipped stand-in - `install::parse_bool` trimmed, matched
+exactly and had six spellings; the client has eight true and eight false
+spellings, a prefix rule and a tri-state result.
+
+The same reading pass measured five walls, now recorded in
+`docs/casc-1to1.md` so nobody re-reads them: `BlteFrameHeaderParse`
+(`0x1424a90e0`) allocates its chunk table through three IAT calls and cannot
+run in the oracle; `ConfigKeyEntryParse` (`0x1424cebd0`) grows its vector
+through an allocator vtable; `PageCacheInvalidateAll`/`PageCacheInvalidateRange`/
+`PageCacheClose`/`PageCacheInit` all execute the client's mutex
+(`0x142694c20`/`0x142694c50`); `PageSlotFind` (`0x1424fa440`) is lock-free but
+the crate splits the client's one pass into `PageCache::find` +
+`PageCache::claim`, so a unit needs the client's single-pass function in the
+shipped code first; and `DynamicIndexResolveRange` (`0x1425115d0`) operates on
+the whole segment object (`IndexSegment::resolve_range` builds the key state
+itself), which looked like a marshalling job - it is four flat segment fields
+and a fresh key state, so it is `fn/DynamicIndexResolveRange` (2026-11-19).
+
+**Three of those five walls are closed (2026-11-19).**
+`fn/ConfigKeyEntryParse` (`0x1424cebd0`, 481 B) earns 87.5% both-edge coverage
+and 100% of 11 scored mutants with the vector grow as its declared gap - the
+grow is the only impure path, and it recomputes the capacity by multiplying the
+eight stack bytes holding the `key-` literal, whose upper dword is never
+written, so no input can be compared there. `fn/DynamicIndexResolveRange`
+(`0x1425115d0`, 291 B) earns 100% of seven branches and 5/5 mutants: it reads
+four flat segment fields, builds the fresh key state and calls the same
+`KeyState::resolve` that production uses. `fn/PageSlotFind` (`0x1424fa440`,
+247 B) earns 100% of twelve branches and 12/12 mutants once the client's single
+pass is shipped as `pagecache::slot_find`; the typed `PageCache::find` +
+`claim` split stays until `PageCacheRead` (`0x1424fb1c0`) is read, because the
+client hands back a *matching busy* slot with usable 0, which the split cannot
+express. The CASC suite is 30/30 verified. Still walls: `BlteFrameHeaderParse`'s
+three IAT allocations and the four page-cache entry points that take the
+client's mutex (`0x142694c20`/`0x142694c50`).
+
+**The text key parsers are verified (2026-11-17).** `fn/ParseHexKey`
+(`0x14248efd0`, 102 B) and `fn/ParseHexKeyId` (`0x14248f040`, 106 B) pass all
+five stages: 364 differential cases over the return, the read-only text, the
+16- (or 8-) byte target and the 1-byte flag; 100% branch coverage (4/4 each);
+5/5 mutants each. The contract is now the crate's: zero the target and the
+flag, skip `0x20`/`0x09..=0x0d`, decode exactly 16 bytes (8) through the
+hex-pair leaf `0x14269ab80`, and return the characters consumed (`whitespace +
+32`, `+ 16`) or 0 on a short decode - with the partial decode left in place, as
+the client leaves it. `install::parse_hex_key` and `install::parse_hex_key_id`
+are the port, and the keyring field parser now decodes through
+`parse_hex_key`, so the text path has one hex decoder instead of a
+`from_str_radix` loop. `0x14269ab80` has seven call sites and its own branches
+sit outside these windows; it is now its own verified unit, `fn/HexPairDecode`.
+
+**The whole-file index validation is verified (2026-11-17).**
+`fn/CdnIndexFileParse` (`0x1424d9c90`, 642 B) passes all five stages: 364
+differential cases over every channel (AL, the read-only key and file, and the
+0x30-byte derived block the client writes), 100% branch coverage (10/10 over
+the window's ten sites), and 5/5 mutants killed. It pins the stage order - the
+footer block, the terminal `MD5(last keys + checksums)`, `MD5(terminal +
+footer)` against the 16-byte key, then `CdnIndexPageChecksums`'s status
+returned unchanged - and the derived block's bytes, including the hash bytes a
+header-MD5 rejection leaves zeroed. The shipped `parse_index_file` composes
+`parse_index_footer`, two new helpers (`terminal_checksum_matches`,
+`key_checksum_matches`) and `verify_page_checksums`; the streaming
+`PageIndex::open_with_key` now uses the same two helpers, so the checks have one
+expression. Two inputs are declared gaps: an entry size larger than the page
+size (the client divides by zero and faults; the port returns 8) and a 32-bit
+wrap of `pageCount*pageSize` or `lastKeyBytes+checksumBytes`.
+
+**`CdnIndexPageResident` cannot be a five-stage unit (2026-11-17).**
+`0x1424da590` (401 B) is read: whole-file mode caches `page` at `index+0xa0`
+and points `index+0x98` at `base + page*pageSize`; streamed mode starts an HTTP
+range read (`0x142522870`), waits on it (`0x142522380`), requires the full page,
+hashes it and compares `checksumSize` bytes against
+`index+0x88 + index+0x7c + checksumSize*page`, returning 8 on a mismatch and 1
+when the request never starts. Those branch sites can only run with the
+network stack present, so the unit could never reach 100% coverage; the
+whole-file branch it does contain is already exercised through
+`fn/CdnIndexPageSelect`, which calls it and pins both the cache-hit and the
+cache-miss edges. It stays read and documented, not verified.
+
+**MD5 is answered (2026-11-17).** `blte.rs`'s `md5()` used to be a single pass
+over the input while the client stages `Md5Init` (`0x1426a5100`) -> `Md5Update`
+(`0x1426a4f40`) -> `Md5Final` (`0x1426a5010`) over a 0x58-byte context (byte
+count, four words, 64-byte buffer). A single pass produces the same digest for
+a buffer known in full, so nothing had broken, but the client's buffering rule
+(`count & 0x3f`, transform when the input fills the buffer) was unmodelled.
+The three stages are now ported at the client's offsets and verified by
+`fn/Md5Init`, `fn/Md5Update` and `fn/Md5Final` (364 differential cases each;
+100%, 4/4 and 3/3 branch coverage; 6/6, 8/8 and 9/9 mutants with two declared
+equivalent), and `md5()` is their composition, so the RFC 1321 vectors run the
+client's staging. Two layout facts the units pin: `fill` comes from the
+**pre-add** count's low dword while the count advances 64-bit, and the final
+message length is `count << 3` written over the buffer's last eight bytes.
 
 **Next anchor.** `docs/casc-1to1.md`, `formats/casc.md`,
 `crates/ow-casc/src/pagecache.rs`, `crates/ow-casc/src/container.rs`,

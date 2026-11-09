@@ -1,0 +1,72 @@
+{
+  "id": "fn/EncodingEspecStringIndex",
+  "title": "tier-2 shipped code: the espec string-index build at 0x142498a70",
+  "address": {
+    "v2b": "0x7ff7c71b8a70"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "encoding_espec_string_index",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-casc",
+  "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+  "suite": "casc",
+  "args": [
+    {
+      "name": "obj",
+      "kind": "ptr",
+      "ptr_len": 12288
+    }
+  ],
+  "returns": "u8",
+  "argFactory": "encoding_unnamed_498a70_fixture",
+  "options": {
+    "iterations": 300,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.75,
+    "seed": 4281,
+    "coverageWindow": 217,
+    "allowedImageReads": [],
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c71b8aaa",
+        "edge": "0x7ff7c71b8ac5",
+        "why": "the `test r8d, r8d; je` count-zero skip at 0x142498aaa: an empty block never reaches it, because the last-byte read at 0x142498a99 uses the zero-extended 32-bit (count-1) offset and, for count 0, reads the byte at base+0xFFFFFFFF, which in the oracle arena is the 0xC3-filled sentinel page (non-zero), returning 8 first. The site runs on every non-empty case; the je-taken edge is dead in the oracle."
+      },
+      {
+        "site": "0x7ff7c71b8ad5",
+        "edge": "0x7ff7c71b8b28",
+        "why": "the `cmp count, 0; jbe` empty return at 0x142498ad5: same reason as above - an empty block returns 8 at the last-byte gate and never reaches this comparison, so the return-0 edge is dead in the oracle even though the site runs on every case."
+      },
+      {
+        "site": "0x7ff7c71b8afb",
+        "edge": "0x7ff7c71b8afd",
+        "why": "the append grow fall-through (`cmp size, capacity; jne` at 0x142498af8): every fixture case pins `nul_count <= capacity` and `size + nul_count <= capacity` (tightest is equality), so the reserve at 0x142388210 is a no-op and every pre-append size is below capacity. The grow path itself allocates through the allocator vtable at the vector's +0x0 (alloc +0x10, free +0x30) - a callee outside the system whose new buffer pointer cannot be compared byte for byte. The jne-taken edge (skip the grow) is what runs; the grow fall-through is the unit's declared gap."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/encoding.rs::espec_string_index, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the encoding_espec_string_index entry. The ledger binds the verdict to encoding.rs + the probe source + the git revision. EncodingFile::parse uses the same function (with the espec slice's own address as base, storing the pointers as string-start offsets) for its espec tail check and entry count, replacing the former last-byte-only check; the install test's 29,694 espec strings are unchanged.",
+    "Oracle is the unnamed function at exe 0x142498a70, measured extent 0x142498a70..0x142498b49 (217 bytes, the whole .pdata extent, ending at the ret at 0x142498b48), which is the declared coverageWindow. Its single caller is the encoding open step at 0x1424d16c0 (call at 0x1424d1728, on the sub-object at [rbx+0x88]); on a zero return the caller writes 1 at [sub-object +0x10]. Signature: (obj*) -> u8 in AL (RCX). The obj fields are the espec block size (u32 at +0x24), the block pointer (+0x28), and a pointer vector at +0x50 (allocator pointer +0x50, buffer +0x58, size u32 at +0x60, capacity u32 at +0x64).",
+    "The client's arithmetic, in order: read `block[count - 1]` and return 8 when it is not zero; the offset is the zero-extended 32-bit `count - 1` (`lea eax, [r8 - 1]` at 0x142498a95), so for count 0 the read lands at `base + 0xFFFFFFFF`, not `base - 1` - in the oracle arena that address is the 0xC3-filled sentinel page, so an empty block returns 8 and never reaches the empty return; count the NUL bytes into a 32-bit counter; call the shared vector reserve at 0x142388210 with (vec, nul_count), a no-op when `nul_count <= capacity`; return 0 when the block is empty (unreachable in the oracle, see above); then walk the block once, and at every NUL byte call the string-length helper at 0x1426cce30 on the current string start (base, or one past the previous NUL) - the helper returns the string's length, so return 8 when it is zero, i.e. for an empty string, before appending - and otherwise store the string start at `buffer[size * 8]`, increment the size, and advance the start to one past the NUL. The return is compared in AL (u8), as the callers use it.",
+    "Compared channels are the status byte and the whole 0x3000-byte blob pointee: the header fields that must not move (count, both pointers, allocator slot, capacity), the 0xA5 sentinel, the espec block (which the client never writes), and the pointer buffer carrying the appended absolute string pointers, the incoming prefix, and the 0xCCCCCCCCCCCCCCCC sentinel past the new size. The probe resolves the fixture's absolute arena addresses (ARENA_BASE 0x200000000) to offsets, runs the shipped function over the byte views, and writes the buffer and size back.",
+    "The fixture pins, first: empty blocks (which return 8 via the base+0xFFFFFFFF read whatever byte sits at base-1, with and without a non-zero incoming size), one element, one empty string (returns 8 with no writes), a NUL at the first byte (empty first string, 8 with no writes), an empty string after a non-empty one (8 with the earlier append kept), a NUL only at the last byte after a 255-byte prefix, unterminated blocks (with and without an internal NUL) that return 8 and write nothing, all-zero blocks (empty strings, 8 with no writes), consecutive terminators, high bytes, appends at a non-zero incoming size, and capacity exactly equal to the NUL count (the tightest no-grow reserve) and to size + NUL count (the tightest no-grow append). Random cases follow the same pinning.",
+    "Coverage: the window is the whole 217-byte function, so its eight conditional branches are measured: the last-byte jne, the count-zero je (taken edge declared dead above: empty never reaches it), the counting-loop jne, the empty jbe (taken edge declared dead above), the append-loop byte jne, the length-result je (now reached by the empty-string cases), the size-vs-capacity jne (grow edge declared above) and the append-loop jb. Both edges of the remaining branches are reached by the declared cases.",
+    "allowedImageReads is empty: on the no-grow path the function reads only its object, block and buffer - its constants are immediates (0, 8, the +1 advances). The two callees run in the oracle outside the window: the reserve at 0x142388210 returns without reading the allocator vtable when it is a no-op, and the length helper at 0x1426cce30 is a pure scan to the terminating NUL that never leaves the block, because the block is terminated.",
+    "Relations: the encoding open at 0x1424d16c0 is its only caller; EncodingHeaderParse (0x142498920) and EncodingPageIndexSearch (0x142498880) are neighbours, not callees."
+  ],
+  "acknowledgedGaps": [
+    {
+      "what": "the vector grow path (a reserve or an append that must allocate)",
+      "why": "When the NUL count exceeds the capacity at +0x64, or an append finds size == capacity, the client calls the shared vector grow at 0x142388210, which is chained past its 19-byte .pdata extent and allocates `max(capacity + capacity / 2, needed, 8) * 8` bytes through the allocator vtable at the vector's +0x50 (alloc at +0x10, copy with 0x142efe2b0, free at +0x30), then stores the new buffer at +0x58 and the new capacity at +0x64 (in elements). The allocator, its vtable and the new buffer pointer are outside the system and cannot be compared byte for byte against a Rust allocation; the shipped function panics there, the probe rejects a growing case with `grow-path-not-modelled`, and the fixture pins every case to the no-grow path. A fresh encoding object starts with an empty vector, so the production path always takes the reserve-then-append no-grow route this unit proves."
+    },
+    {
+      "what": "the empty block's return-0 path (0x142498ad5) and the count-zero skip (0x142498aaa)",
+      "why": "For count 0 the last-byte read uses the zero-extended (count-1) offset, landing at base+0xFFFFFFFF rather than base-1. With the fixture's block at ARENA_BASE+0x1000 that address is the last byte of the emulator's 0xC3-filled sentinel page, so the client returns 8 there and the two count-zero edges are dead in the oracle; they are declared unreachable. A parsed header rejects a zero espec size, so production never takes them either."
+    },
+    {
+      "what": "block and buffer sizes that leave the arena",
+      "why": "The client reads and writes through the raw pointers with no bounds checks, so a block size or capacity that runs past the supplied blob is a caller bug that would fault in the emulator. The probe rejects it and the fixture's blocks (at most 256 bytes) and capacities (at most 32 + 8) stay inside the 0x3000-byte blob."
+    }
+  ]
+}

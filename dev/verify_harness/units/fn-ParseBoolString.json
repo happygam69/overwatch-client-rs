@@ -1,0 +1,90 @@
+{
+ "id": "fn/ParseBoolString",
+ "title": "tier-2 shipped code: the client's tri-state boolean string parser against ParseBoolString (0x1424d8800)",
+ "address": {
+  "exe": "0x1424d8800"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "parse_bool_string",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u8",
+ "argFactory": "parse_bool_string_fixture",
+ "args": [
+  {
+   "name": "text",
+   "kind": "ptr",
+   "ptr_len": 64
+  },
+  {
+   "name": "len",
+   "kind": "u64"
+  },
+  {
+   "name": "flag",
+   "kind": "ptr",
+   "ptr_len": 1
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4263,
+  "coverageWindow": 278,
+  "allowedImageReads": [
+   "0x143472f10-0x143472f90",
+   "0x143070584-0x143070585",
+   "0x143472f90-0x143472f92",
+   "0x143472f94-0x143472f9a",
+   "0x143472fa0-0x143472fa7",
+   "0x143472fa8-0x143472fab",
+   "0x143054be0-0x143054be1",
+   "0x142f888f0-0x142f888f4",
+   "0x142f89298-0x142f89299",
+   "0x14304ad80-0x14304ad81",
+   "0x142fac4a8-0x142fac4ab",
+   "0x143472fb0-0x143472fb7",
+   "0x143472fb8-0x143472fc0",
+   "0x143472fc4-0x143472fc6",
+   "0x143470abc-0x143470abd",
+   "0x142f888f8-0x142f888fd",
+   "0x143468460-0x143468461"
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/install.rs::parse_bool_string (now the body of parse_bool, which the .build.info row reader calls), built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the parse_bool_string entry.",
+  "FRAME: this is the harness's first exe-frame unit (`address.exe` + `base: 0x140000000`). The function loads its 16 spelling pointers from two tables in .rdata (0x143472f10 and 0x143472f50), and those table entries are absolute link-time addresses. Run in the v2b frame the first dereference faults at 0x143070584 (the exe address of the spelling \"1\"); with the image at its own base both the RIP-relative table load and the baked pointer resolve.",
+  "Oracle is ParseBoolString at exe 0x1424d8800, extent 0x1424d8800..0x1424d8916 (0x116 = 278 bytes through the ret), which is the declared coverageWindow. Signature: (const char *text, size_t len, u8 *flag) -> u8.",
+  "The client's read: fold a byte with `LEA EAX,[RCX-0x41] / CMP EAX,0x19 / LEA EDX,[RCX+0x20] / CMOVA` (A..Z to lowercase, nothing else); walk the caller's (text,len) against each spelling in order, ending a walk on a difference, on the spelling's NUL (both sides then hold NUL), or on the caller's length running out; the true table is 8 entries at 0x143472f10 (`1 on enable enabled yes y true t`) and the false table 8 at 0x143472f50 (`0 off disable disabled no n false f`). A match writes 1 (true table) or 0 (false table) to the flag and returns 1; when all 16 fail it returns 0 and never writes the flag.",
+  "Consequences the fixture pins: the length test precedes the first byte, so the empty string reports true; the caller's text must be a PREFIX of a spelling, so \"tr\", \"enab\" and \"t\u0000\" match while \"enablex\" does not (the seventh byte is compared against the spelling's NUL) - the fixture caught exactly this in an early test comment; `on` is tried before `off`, so \"o\" is true and \"of\" false; nothing trims, so \" true\" and \"true \" match nothing and leave the flag at its 0xA5 sentinel.",
+  "Compared channels: the u8 return (AL; RAX's upper bits are contract-free, as its callers read only AL), the read-only text, and the 1-byte flag.",
+  "Coverage gate is 100% over the window's sites: both edges of the length test, the compare, the spelling-NUL test, the input-exhausted test, the 8-entry table walk (`CMP R9,0x40`) and the second table's duplicate of each."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "a len larger than the text buffer",
+   "why": "The client reads `len` bytes from the pointer it was given; a shorter buffer is a caller bug and would read past the arena. The probe rejects it and the fixture never builds one."
+  },
+  {
+   "what": "the tables' contents are image data, not tested values",
+   "why": "The 16 spellings and their order are read from the image (both tables dumped qword by qword) and listed in the notes above; the unit proves the parser against them, not that the install's config uses each spelling."
+  }
+ ],
+ "base": "0x140000000",
+ "knownEquivalentMutants": [
+  {
+   "kind": "cmp-flip <=to<",
+   "line": 225,
+   "rationale": "The fold's range is A..=Z. Both mutants exclude exactly one byte, 0x5A ('Z'), from folding - the compare becomes 0x41..0x59 and the bound becomes 0x18, which is the same set. The fold is applied to both sides of the walk, but no spelling in either table contains 'z' (the 16 are 1 on enable enabled yes y true t / 0 off disable disabled no n false f), and every byte a spelling does contain is below 0x41 after folding, so folding spelling bytes is a no-op. A 'Z' in the input therefore mismatches the same candidates with or without the fold: the only input that could tell them apart is one holding 0x5A exactly where a spelling holds 'z', and no such position exists. For every input the two programs agree on the return, the flag and the text."
+  },
+  {
+   "kind": "boundary -1",
+   "line": 225,
+   "rationale": "The fold's range is A..=Z. Both mutants exclude exactly one byte, 0x5A ('Z'), from folding - the compare becomes 0x41..0x59 and the bound becomes 0x18, which is the same set. The fold is applied to both sides of the walk, but no spelling in either table contains 'z' (the 16 are 1 on enable enabled yes y true t / 0 off disable disabled no n false f), and every byte a spelling does contain is below 0x41 after folding, so folding spelling bytes is a no-op. A 'Z' in the input therefore mismatches the same candidates with or without the fold: the only input that could tell them apart is one holding 0x5A exactly where a spelling holds 'z', and no such position exists. For every input the two programs agree on the return, the flag and the text."
+  }
+ ]
+}

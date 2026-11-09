@@ -130,6 +130,7 @@ fn find_range_and_duplicate_choice_match_the_install() {
                     Some(ChosenEntry {
                         location: first.packed(),
                         size: first.size,
+                        trailing: 0,
                     }),
                     "out_entry {key:02x?}"
                 );

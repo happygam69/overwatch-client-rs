@@ -1,808 +1,248 @@
-# STATUS
+# Handoff: finish `ow-casc` (30 entries without a unit)
 
-The living state: what works, what is open, and what comes next.
-`MODLOG.md` is the milestone history; `docs/formats/` holds findings and
-addresses; `docs/open-questions.md` is the work queue.
+## This session (2026-11-19): three more units, three walls closed
 
-## The gate
+The assignment below was the previous session's. This session continued the
+same loop on the top of the playbook queue and took three functions:
 
-```sh
-cargo xtask verify            # fmt, clippy, tests, tool index, deviation and address checks
-cargo xtask verify --fast     # without the install-reading tests
-```
+| unit | address | result |
+|---|---|---|
+| `fn/ConfigKeyEntryParse` | `0x1424cebd0` (481 B) | 87.5% both-edge (14/16 of 21 sites, 5 dead edges), 11/11 mutants + 1 declared equivalent |
+| `fn/DynamicIndexResolveRange` | `0x1425115d0` (291 B) | 100% (7/7), 5/5 |
+| `fn/PageSlotFind` | `0x1424fa440` (247 B) | 100% (12/12), 12/12 |
 
-`cargo xtask verify` is green on 2026-11-06, and the earlier failure of the
-install-reading `cdn_index_real` is understood: the install holds a **staged
-patch**. Its CDN config names a `265,946,028`-byte archive-group index written
-2026-10-31, while `_retail_/Overwatch.exe` is still the 2026-10-20 build that
-the pinned `260,173,908` byte index belongs to. The test now skips the pinned
-geometry for any named index newer than the executable and prints why, so it
-never pins a build that is not installed. When the agent activates that patch,
-the install and the Ghidra image must be re-checked together **before** any pin
-is updated.
+`cli.py casc` is **30/30 verified**. `cli.py all` is **98 verified, 3
+inconclusive, 1 divergent, 1 scaffold of 103 units** (98 of 99 distinct
+addresses); the five non-verified are the pre-existing ones listed below.
+`cargo xtask verify --fast` is green (fmt, clippy, 828 lib tests, tool index,
+deviation/frame/layout checks). `cargo xtask verify` (the install-reading
+half) does not finish on this machine because of a pre-existing slow test -
+see "Measured, not fixed" at the bottom.
 
-The gate had in fact been **red** for a different reason: the workspace member
-`crates/ow-engine` carried two fixture defects in `interface_map` (a free-list
-hook that left the slot in its bucket chain, so `find` walked a cycle forever,
-and a rehash test that expected a chain to survive a mask change that splits
-it). Both are fixed; `cargo xtask verify --fast` and the full suite are green.
-`verify --fast` now means "every library target" - the old three-crate list
-left `ow-sim`, `ow-render`, `ow-scene`, `ow-client` and `ow-engine` unrun - and
-CI runs the full gate on `windows-latest`, because `ow-render` is
-`#![cfg(windows)]`. See `MODLOG.md` under 2026-11-06.
+`crate_coverage.py ow-casc`: **28 verified / 30 `entry` without a unit / 84
+interior / 8 code / 3 data** over 153 cited addresses.
 
-## The image (audited 2026-11-04)
+## The assignment (previous session)
 
-The recovered bytes are exact; the analysis built on them has three measured
-defects with a repair list each. Full page: `docs/ghidra-image-audit.md`.
+"lets try to finish the rest with subagents, delegate them to work on the
+functions, they dont need to use /verify_harness/cli.py because they can block
+each other. when one batch is done you can verify yourself with cli.py and if
+we got problems reopen subagent to fix it. work autonomously with that loop
+until full casc is implemented and verified"
 
-- All 10 memory blocks hash-identical to `module_offline.bin`; `.pdata` intact
-  (201,246 entries, 0 broken unwind records, extents tile the code exactly).
-- 110 of 179 `noreturn` flags are provably wrong (the body contains `RET`):
-  11,552 call sites in 6,355 functions are hidden behind them. Repair first.
-- 25,184 functions stop at their real `.pdata` extent while the client's
-  `UNW_FLAG_CHAININFO` links the rest of the function (16.0 MB, 32% of
-  `.text`; 157 of 174 named functions). Read such a function only with that
-  in mind - the decompile is cut where the client says it continues.
-- 283 function objects sit on chained starts, 38 real starts have none.
-- `_RDATA` has no types, `.rdata` is 50.4% typed, only 4 functions have a
-  user-defined prototype.
+So the loop is: **delegate a batch → when the batch finishes, run the harness
+myself → if a unit fails, re-dispatch a fixer → repeat until `ow-casc` is
+fully implemented and verified.**
 
-The order of repair and the exact proof for each step are section 8 of the
-audit page; nothing there needs the image recovered again.
+## Current state (measured, `python dev/crate_coverage.py ow-casc`)
 
-## Current state
+- 25 verified / 33 `entry` without a unit / 48 interior / 7 code / 3 data
+  (116 cited addresses).
+- `cli.py casc` is 27/27 PASS in `dev/verify_harness/ledger.json`; the unit
+  count went 20 → 27 since the first draft of this page.
+- Newly verified since this page was written: `fn/BuildInfoSelectRow`,
+  `fn/EncodingEspecStringIndex`, `fn/DynamicIndexAppendInterval`,
+  `fn/DynamicIndexDecodeEntries`, `fn/DynamicIndexEntrySink`,
+  `fn/DynamicIndexFindEntry`, `fn/HexPairDecode`.
+- Last results this session: `fn/ParseBoolString` (9/9 branches, 10/10
+  mutants, 2 declared equivalent) and `fn/DynamicIndexNormalizeIntervals`
+  (8/8, 12/12).
 
-**Effect chunks are read from the client, not from the reference.** An effect's
-root chunk is `EFCT`; the client's kind table at `0x143610490` (0x34
-`{u32 tag, u32 slot}` records) and the component builder `FUN_142e4a780` define
-which chunk tags become runtime components and which payload bytes each one
-copies. `ow-tank::effect` is that layer: `Effect::parse` walks the chunk tree,
-`Chunk` carries the tag, the kind slot and the version, and the seven components
-that name a GUID have typed accessors at the client's offsets — `ECMD` (model
-`0x00C`, look `0x01A`, animation `0x006`), `ECEF` (`0x00D`), `ECEN` (`0x003`),
-`ECEC` (animation `0x006`, identifier `0x01C` at `+0x10`), `ECSO` (`0x02C`),
-`ECVS` (`0x078`) and `ECRR` (`0x00C`). This replaced a port of OWLib's effect
-structs, which describe pre-2.x payloads — every one of the ten sizes it claims
-is short (`ECMD` 24 vs 32, `ECEN` 16 vs 80, `ECPR` 40 vs 112, ...). Five tags
-OWLib reads (`ECMP`, `ECSS`, `ECAT`, `ESHT`, `ECCV`) have **no read site** in
-the image: their tag ids occur nowhere in either byte order and they are absent
-from the kind table, so no 1:1 reader for them exists here and they stay raw.
-`tests/effect_real.rs` parses the six effect types and asserts every GUID type,
-payload size and version; `docs/formats/effects.md` is the page.
+**Governing rule — playbook §10**: a system is done when every function on its
+path has a unit and a fresh `verified` verdict, **or is declared open for a
+specific read reason**. So the end state may legitimately include "read, open,
+because X" rows.
 
-**Two stale reference ports were retired in the same pass.** The model chunk
-table is `MOCL`/`CLTH`, not the `LCOM`/`HTLC` an earlier page wrote (the client
-compares `0x4d4f434c` and `0x434c5448`; `HTLC` occurs nowhere in the image and a
-census of all 32,280 models finds the seven tags `MDLC`, `MSTU`, `MRNM`, `mskl`,
-`MESD`, `CLTH`, `MOCL`). `MHRP` likewise has no tag constant and no model
-carries it, so the hardpoint chunk parser was deleted — this build's hardpoints
-are `STUModelHardPoint` instances in `MSTU`/look, which `hardpoint.rs` already
-reads.
+## The five walls (already read, already documented — do not re-read)
 
-**The model layer's descriptors are verified against the client.** The chunk
-sizing and load dispatchers (`0x141b5e1e0`, `0x141b5df70`) and their per-tag
-version gate (`MDLC 0x165`, `MRNM 0x1f`, `MSTU 2`), `MDLC`'s material list
-(`MdlcMaterialRead` `0x141b88cb0`) and `MSTU`'s `{u64 offset; u32 size}` header
-are read. `MRNM` end to end -- the fixup `FUN_141b893e0`, the runtime size
-`FUN_141b89390` and the runtime-block load `MrnmHandler` `0x141b88f10` -- is
-`crates/ow-tank/src/mrnm.rs`, pinned by `fn/MrnmFixup` (7/7 mutants),
-`fn/MrnmRuntimeSize` (6/6) and `fn/MrnmHandler` (12/12), every channel
-compared. Reading it corrected three things in `model.rs`: there is no 4x4
-`MDLC` bounding box (the field was invented and is removed), the `MSTU` size is
-a `u32` at `+0x08` and not a `u64`, and the runtime vertex-buffer record
-**zeroes** in-chunk stream pointers (only a separate vertex-data asset keeps
-its two GUIDs). The *vertex-element decode* and the mesh assembly remain the
-viewer's own reading and are open, not claimed (`docs/formats/model.md`).
+**Walls 2, 4 and 5 are closed (2026-11-19); walls 1 and 3 stand.** Each closed
+one failed only on a path that can be declared a gap: the vector grow (2), the
+single-pass rewrite that was missing from `pagecache.rs` (4), and a
+"marshalling job" that turned out to be four flat fields (5).
 
-**Bone indices are read on the file side and proven on the install.** The
-client's own `mskl` reader `MsklTableBuild` (`0x141b894d0`) is what sizes every
-table: 64-byte matrices, 48-byte poses, `bones_simple` ids, and the Lookup at
-payload `+80` as `remap_count` u16s — plus a `bones_abs` u16 table at `+88`
-that is the Lookup's exact inverse (`bone -> slot`, `0xFFFF` for a bone no slot
-names). `skin.rs` maps a vertex's raw blend index through the Lookup; the
-install says that direction is right and not just plausible: on all 7,328
-skinned model assets the Lookup is a permutation into `[0, bones_abs)` with no
-`0xFFFF` and no out-of-range entry, `remap_count` is the largest raw index plus
-one on 7,308 of them (the rest leave spare slots, none overflow), the table at
-`+88` is the exact inverse on all 7,328 with `0xFFFF` exactly on the unmapped
-bones, and the
-dominant influence's bone sits a median 0.122 m from its vertices through the
-Lookup versus 0.591 m through the raw index. `ow-tank example bonemap_probe`
-reproduces the numbers. Two things stay open: the client's *consumer* (whether
-it adds the submesh `BoneIdOffset` — always `0` here —, how it bounds the index,
-and whether `0xFFFF` means "unbound"; none is exercisable on this install), and
-the 454 models that declare a **second** four-wide blend-index set, whose
-eight weights sum to exactly 255 — `model.rs` reads only the first set, so the
-viewer drops those influences (`docs/ow-tank-1to1.md`).
+In `docs/casc-1to1.md` ("The same wall, measured (2026-11-17)"):
 
-**The engine layer has its first read crate.** `crates/ow-engine` models the
-`0x470`-byte engine object at `[0x143b7f410]`: `WorldBaseCtor` `0x141c507c0`
-and `WorldCtor` `0x1405838c0` field for field, the six value codecs with their
-inverses and round-trip proofs, and `RegisterWorldInterface` `0x141c52d10`
-with the array growth `0x140767da0` (the capacity word's bit 31 is a
-"borrowed" tag). It also carries `ConstructEngineSubsystems`' schedule as a
-per-row decode: the 65 slot stores of `+0x220..+0x448` in store order (source,
-producer, allocation size, vtables, store and registration site) and the
-21-entry tail attach list; `World` refuses the five offsets the function never
-writes. On top of that, `ow_engine::classes` carries the **35 constructors and
-their 96 vtable installs** read from each producer's own body: 70
-constructor-installed tables + 47 block-stored tables (disjoint, 117), the
-shared stub shown to be a base constructor rather than a class, and the
-six-sub-object aggregation at `+0x2f0`. 23 unit tests plus 14 schedule, 12
-layout and 8 class tests; `docs/formats/engine.md` is the page and
-`dev/engine_classes.md` the dossier. Three fields are written twice
-and each pair is "codec at zero, then the real value" — the arithmetic that
-proves which constants are encoded nulls. Next engine
-step is naming a class: the unit is a slot's own 15-entry table (44 of the 117
-tables are exactly 15 entries), and a name needs a method in those entries that
-calls a known subsystem API. The 20 registered constructions that never reach a
-slot are still unread.
+1. `BlteFrameHeaderParse` `0x1424a90e0` — chunk table allocated via three IAT
+   calls (`0x1424a92a4`, `0x1424a9301`, `0x1424a936c` → import slot
+   `0x143aafdc9`; type-`0x10` extras via `0x143aafdd0`). Oracle maps no heap.
+2. `ConfigKeyEntryParse` `0x1424cebd0` — grows its vector through an allocator
+   vtable (`[rax+0x10]` at `0x1424cec83`; free at `0x1424cecaf`). It does call
+   the verified `ParseHexKeyId` (`0x14248f040`).
+3. `PageCacheInvalidateAll` `0x1424fab50`, `PageCacheInvalidateRange`
+   `0x1424fabd0`, `PageCacheClose` `0x1424f9eb0`, `PageCacheInit` `0x1424f8790`
+   — execute the client mutex `0x142694c20`/`0x142694c50` inside the window.
+4. `PageSlotFind` `0x1424fa440` — lock-free, but the client does the key-hit
+   test and the LRU-victim choice in **one** pass that returns the chosen slot,
+   touches it and writes a `failed` flag; the crate splits it into
+   `PageCache::find` + `PageCache::claim` (called from `read`). A unit needs the
+   client's single-pass function written into the shipped `pagecache.rs` first.
+5. `DynamicIndexResolveRange` `0x1425115d0` — operates on the whole segment
+   object; the crate's `IndexSegment::resolve_range` builds the key state
+   itself. A marshalling job, not a body read.
 
-**The one client launches the real practice range.** `ow-client` and
-`ow-scene` are workspace members. The default launch resolves a
-`STUMapHeader` by `m_mapName` (`Maps\TrainingRoom\Training Room - Practice`),
-takes the first paired variation whose `STUGameMode.displayName` is exactly
-`Practice Range`, and loads the 34 chunks the client's map loader requests for
-scene map `0x080000000f69002e`. No chunk seed, capture or synthetic course is
-the default. This selection is a **viewer default**: the current image has no
-client-side mode→variation selector (see "Open").
+Plus the already-declared: `CdnIndexPageResident` `0x1424da590` (HTTP range
+read in streamed mode) and `PageReadPlan` `0x1424faa20` (container lock).
 
-**Hero selection is live as a declared viewer default.** The practice mode's own
-roster is read: its teams carry the empty marker, so every hero asset is
-selectable, and the asset's own fields are read on top of that — its display
-name (`STUHero.m_0EDCE350`, a type-`0x07C` string), its playable marker
-(`m_64DC571F`; the roster is **135 hero assets, 54 playable and 81 NPC**, and
-the range's `Training Bot` is a *named* NPC, so the marker and not the name
-filters), and its movement row through `m_gameplayEntity` (`MoverRow`: forward
-`19452F15`, side, back, crouch, terminal fall `B74245E8`). `ow-client
---list-heroes` prints that roster with each hero's forward speed. On a live
-launch with a terminal the client prints the roster and reads one pick
-(`--hero <name|index>` skips the prompt, `--no-hero` skips it); the pick places
-the hero's **own first-person model and weapons** in the scene, uses the hero's
-forward base speed as the walk's wish magnitude (Tracer/Genji/Anran read 6.0
-m/s) and its terminal fall as the clamp. The pick itself is **not** claimed: the
-real client's pick is a CEF page value, and what binds runtime variable 940 and
-the spawn write are still open (`docs/formats/frontend-pipeline.md` sections
-4a-4c, `docs/open-questions.md` item 18). The view model is drawn at the
-camera's own transform each frame (pinned by a unit test) and the weapons by
-the FP skin's bind-pose bone frame; the first-person **animation** is not read,
-so the arms are in bind pose.
+## Measured, not fixed (2026-11-19)
 
-The client **walks**. It runs the read per-frame velocity law over the map's own
-collision: the level collider only (`MAP_CHUNK_COLLISION`'s tail element:
-203,999 vertices, 236,957 BVH nodes, 343,474 triangles in the client's mesh
-record layout and world coordinates, `ow_tank::collision_level`, install test
-`collision_level_real`; `RangeWorld::level`). The per-model `STU_537E56E4`
-blocking volumes at the map chunk's 3,018 placements are **not** in the walk
-world: their read consumer is a query that writes nothing and their Domino body
-route hangs off a collision component whose attach is unread, and adding them
-was measured (2026-11-15) to cost `0.31` m of a `5.5` m walk, `0.461` m of drift
-and a `0.78` m climb in the flat spawn room
-(`docs/formats/character-controller.md`). `ow_sim::walk` sweeps the level body
-with the verified type-3 mesh leaf, and `ow-client`'s `walk::Walker` runs
-`MoverStateVector`, `MoverRampVector`, `frame::update_frame` and `MoverAdvance`
-each frame with the camera following the body. `--walk-test` is the numbers-only
-proof: `5.500` m forward in one second at 5.5 m/s, `0.000` m drift, the
-six-second tour within 1 mm of its starting height. Combat and camera behaviour make
-no claim yet. `ow-sim` holds the verified movement, Domino body and
-camera-basis arithmetic, the read per-frame velocity law (`ow-sim::frame`), the
-fan's composition and the type-3 mesh narrowphase.
+- `crates/ow-casc/tests/index_find_real.rs::find_range_and_duplicate_choice_match_the_install`
+  takes **1154 s (19 min) and passes**. It walks every install key group and
+  calls `Store::location_of` + `Store::resolve_range` twice per group; each call
+  rebuilds the segment's whole 18-byte entry buffer
+  (`SegmentEntries::key_state`) and a fresh `KeyState`, so a 1.1M-key install
+  means tens of GB of copying. It is the reason plain `cargo xtask verify`
+  needs ~25 minutes here, not a failure. Pre-existing (the test predates this
+  session and nothing here touches `key_state`), and not fixed: the honest fix
+  is a `key_state`-free resolve path, which is a perf change, not a port.
+- The `ow-tank` install tests (`component_payload_sizes_match_the_client`,
+  `effect_assets_parse_and_every_component_keeps_the_clients_widths`,
+  `a_model_carries_no_brush_container_chunk`) are the same shape: each runs
+  for minutes, so a non-`--fast` `cargo xtask verify` is a ~30-minute job on
+  this machine even when everything passes.
 
-The four stages around that chain that are open, each declared and not
-substituted (item 1b of `docs/open-questions.md`): the input stage (buttons ->
-local wish), the character sweep's Domino aftermath (shape transform and pair
-lanes), the movement asset (speed/jump/gravity), and the player spawn selector.
+## Next: work in batches, not one unit at a time
 
-**Walls (2026-11-10).** The operator's report ("i can go through walls")
-reproduced and is fixed in the code this project owns: the slide's plane
-projection lifted the body off a wall whose normal carries `0.09` of up, and
-`snap_to_floor` lifted it onto surfaces the probe found *above* the centre
-(`0.15-0.19 m` in one frame). Now a contact steeper than
-`walk::WALKABLE_SLOPE` (`0.7`) cannot raise a walk, and the snap only lowers.
-`ow-client --walk-test` walks at five flat walls from the spawn: closest
-approach to the wall's plane `+0.005 m`, climb `+0.01 m` (before: `-0.245 m` and
-`+0.40 m`). `--wall-audit` is the map-wide version. `0.7` is our number - the
-client's slope limit is unread - and is open.
+Six hours produced three units, and four of those hours were gate runs, not
+porting. The loop for the remaining 30 `ow-casc` entries:
 
-**Corners (2026-11-15).** The operator's second report ("a corner lets me
-through, a flat wall does not") reproduced in a unit test: a diagonal push into
-a right-angle corner crossed the second wall by `3` cm on the first frame. The
-slide leaves the body exactly tangent to the second wall and the verified leaf
-reports nothing for a sweep that starts on or inside a surface, so the residual
-was applied in full. `ow_sim::walk` now uses the leaf's own "already inside"
-mode (`block+0x72`) at `radius - CONTACT_SKIN` as a penetration test
-(`World::overlap`), pushes the body out (`depenetrate`), and on a miss moves to
-the depenetrated target instead of applying the residual. Map-wide
-`--wall-audit` near-vertical tunnels: `174 -> 27` of `8,741` legs. The response
-stage is still the stand-in, so it stays open.
+1. Take 6-8 leaves from `crate_coverage.py ow-casc --queue` at once. A
+   delegate per function: read the body, transcribe to Rust, write the
+   fixture, write the unit JSON. Delegates do **not** run the harness.
+2. The main session owns the two shared files (`verify_probe.rs` arms,
+   `candidate_rust.py` rows) and runs `cli.py fn/<Id>` per unit as results
+   arrive (20-60 s each).
+3. One `cli.py casc` at the end of the batch, detached to a log. Never
+   `cli.py all` for progress: stage 5 rebuilds the crate per mutant, so a full
+   run is about an hour.
+4. `cargo xtask verify --fast` per batch; the full one once, detached, at
+   handoff.
+5. An entry blocked by an IAT import (allocator or the client mutex
+   `0x142694c20`/`0x142694c50`) is written `open` with its address and one line
+   of why, and the batch moves on.
 
-**The jump is shipped** (2026-11-16). The earlier record
-("`FUN_140cc1440` is control-flow-flattened") is withdrawn: the function is read
-in full and is the jump / crouch stage, with no gravity or fall in it. Two read
-layers make the jump:
+## The candidate list (33 entries)
 
-- `ow_sim::jump` (16 tests) - the take-off: button bit 6 of `body+0xdc`, the
-  state file word `body+0x10d0` and its five transitions, the gate, and the
-  impulse `target = sum_i body[0x1150][i]*row_i + body[0x1510]`, `rise` along
-  `body+0xc0`, `body[0x1150] = (d0, d1, d2, d2)`. `rise` has two branches:
-  `(along + body[0x60c]) - along` when the body is airborne and rising, else
-  `body[0x60c] - along`; the lane sums are three-lane. The anchor `body+0x1510`
-  has no writer anywhere in `.text`, so on the ground the world lane becomes
-  `body+0x60c`; that value is the mover component's `0xEC289987`, `6.0` for all
-  55 playable heroes (`ow_tank::entity::mover_takeoff_lane_of`, install test on
-  the whole roster).
-- `ow_sim::air` (15 tests) - the arc: per airborne tick
-  `MoverApplyForces` (`0x140cb1990`) / `MoverGravityStage` (`0x140cb2b00`) runs
-  `MoverAirDrag` (`0x140cb2010`) and then adds
-  `dt * (-10.0 * body[0x610]) * up` into `body+0x1150` through
-  `MoverAccumulateWorldVector` (`0x140c993e0`). The `-10.0` is the image
-  constant at `0x1431161f8` behind the `.pdata`-less gate `0x14202fb00`; `up` is
-  `body+0xc0..0xcc`; `body+0x610` is component `+0xe8` (`0xC2C40969`, `1.75` for
-  all but Jetpack Cat's `0.30`), so the acceleration is `-17.5 m/s^2`. The drag
-  is the quadratic term on the up lane with the terminal from
-  `body+0x614`/`body+0x618` (rise terminal absent roster-wide, so the rise is a
-  clean parabola) and its time step is the body's own `0x140ca72b0`
-  (`(f32)(i64)body[0xe8] * 1e-6`), not the caller's `dt`.
+From `python dev/crate_coverage.py ow-casc --top 100`, the `entry` rows not
+yet verified. Addresses are **exe-frame** (image base `0x140000000`).
 
-**Verified, 2026-11-16**: six differential units cover the jump's leaves -
-`fn/MoverOnTakeoff`, `fn/MoverOnLanding`, `fn/MoverOnGround`,
-`fn/MoverEnterAir`, `fn/MoverPropertyRecords` (`0x140cb3990`) and
-`fn/MoverVectorRecords` (`0x140cb3b10`), each at 100% branch coverage and 100%
-mutation kill. They found two real defects in the first cut (`NOT_ON_GROUND`
-wrongly held bit 19, and the take-off did not clear bit 10 when its flag was 0),
-both fixed. The whole of `FUN_140cc1440` is **not** a unit - its middle third is
-obfuscated dispatch and the impulse arithmetic is inline - so the take-off is
-transcribed and tested, not bit-exactly proved. The vertical law has no unit
-yet either (it is a five-lane transcribed expression, tested by the golden
-trace and by `--walk-test`).
+| addr | name | impl file | note |
+|---|---|---|---|
+| 0x14269ab80 | HexPairDecode | install | **DONE** (`fn/HexPairDecode`) |
+| 0x1424aec30 | BuildInfoSelectRow | install | **DONE** (`fn/BuildInfoSelectRow`; the real extent runs to `0x1424aed7b`+) |
+| 0x14248f2a0 | BuildInfoLoadFromInstall | install | path building; likely FS/vtable-dependent; verify |
+| 0x1424c1030 | — | install | chained fragment (0x890 stack frame); verify extent |
+| 0x142498a70 | EncodingEspecStringIndex | encoding | **DONE** (`fn/EncodingEspecStringIndex`; the vector grow is the declared gap) |
+| 0x1424d1c60 | EncodingSectionsRead | encoding | read |
+| 0x1424d1b40 | EncodingHeaderRead | encoding | 281 B; read |
+| 0x1425208d0 | DynamicIndexNormalizeIntervals | index | **DONE** (`fn/DynamicIndexNormalizeIntervals`) |
+| 0x142520700 | DynamicIndexAppendInterval | index | **DONE** (`fn/DynamicIndexAppendInterval`; the capacity grow is the declared gap) |
+| 0x142520590 | DynamicIndexEntrySink | index | **DONE** (`fn/DynamicIndexEntrySink`) |
+| 0x1425209a0 | DynamicIndexDecodeEntries | index | **DONE** (`fn/DynamicIndexDecodeEntries`) |
+| 0x14250fcf0 | DynamicIndexSegmentParse | index | 1240 B; read |
+| 0x1425111a0 | DynamicIndexFindEntry | index | **DONE** (`fn/DynamicIndexFindEntry`) |
+| 0x142501b40 | DynamicKeyStateLookup | index | 0x13e; read |
+| 0x14250e400 | DynamicIndexSegmentOpen | index | 0x5c; read |
+| 0x14250c8f0 | DynamicContainerOpenArchive | cdn | 0x1e4; read |
+| 0x1424f9bf0 | PageSlotPublish | pagecache | 0xe; tiny |
+| 0x1424a6df0 | — | pagecache | 0xc; trampoline — read the whole body (`0x1424a6df0`→`lea r8,[rcx+0x58]`+…) |
+| 0x1424a7d70 | — | pagecache | 0x33; read |
+| 0x1424d6e50 | BlteBlockReadLz4 | blte | calls external LZ4 (`0x142efecf0`-style); likely open |
+| 0x1424a90e0 | BlteFrameHeaderParse | blte | **wall 1** |
+| 0x1424cebd0 | ConfigKeyEntryParse | install | **wall 2** |
+| 0x1424da590 | CdnIndexPageResident | container | **open** (HTTP) |
+| 0x1424fab50 | PageCacheInvalidateAll | pagecache | **wall 3** |
+| 0x1424fabd0 | PageCacheInvalidateRange | pagecache | **wall 3** |
+| 0x1424f9eb0 | PageCacheClose | pagecache | **wall 3** |
+| 0x1424f8790 | PageCacheInit | pagecache | **wall 3** |
+| 0x1424fa440 | PageSlotFind | pagecache | **wall 4** |
+| 0x1425115d0 | DynamicIndexResolveRange | index | **wall 5** |
+| 0x1424faa20 | PageReadPlan | pagecache | **open** (container lock) |
+| 0x1424fb1c0 | PageCacheRead | pagecache | read |
+| 0x1424fb1c0 | (same) | | |
+| 0x1424fa540 | PageLoad | pagecache | read |
+| 0x1424fbf00 | ContainerReaderInit | pagecache | read |
+| 0x1424fcd20 | DynamicContainerReadPage | pagecache/cdn | read |
+| 0x1424f48d0 | DynamicContainerRead | cdn | read |
+| 0x1424ccc00 | BuildConfigParse | install | 6784 B, 256 call sites — the big one; last |
 
-`--walk-test` on the practice range now lands the jump inside the read law's
-numbers: take-off `6.0` m/s, apex `0.979` m at frame 19 (law `0.979`), air
-`0.667` s (law `0.669`), back on the spawn floor. What is still open around the
-arc: `FUN_140cb2220`'s phase-5 plane projections (ground only, skeleton level),
-the bit-24-clear transform path, the 0x40-record producer (**runtime data** -
-filled from the body constructor's arguments, whose only other reference is a
-data pointer at `0x142fdbee8`), and the live position (the swept solve's
-contact-to-position rule; the walk's verified sweep and floor probe stand in).
-Anchors: `docs/open-questions.md` "The jump law",
-`docs/formats/character-controller.md` "The vertical law".
-The practice map ships no player spawn record, so `ow-client` starts the walker
-on the map's own spawn-room trigger volume (centre `(71.169, 0.948, 53.110)`,
-collision floor `-4.006`) as a declared viewer default; `--spawn x y z`
-overrides it. The selector itself is still unread.
+The ordering hint from the queue tool (proved callees first, then smallest
+body): `CdnIndexPageResident`, `BlteFrameHeaderParse`,
+`ConfigKeyEntryParse`, `DynamicIndexSegmentParse`, `EncodingHeaderRead`,
+`DynamicIndexAppendInterval`, `DynamicIndexDecodeEntries`, `BuildConfigParse`,
+then the small leaves.
 
-## History
+## Method (from `docs/port-playbook.md`)
 
-Rotated 2026-11-17. The older half of "Current state" and the per-unit evidence
-ledger ("Exact today") moved verbatim to
-`docs/history/status-handoff-2026-11-17.md`. The live per-system state is
-`docs/systems-coverage.md`; the live queue is `docs/open-questions.md`.
+For each function:
+1. **Read** it: `python dev/fn_extent.py <addr>` (`.pdata` extent + chains),
+   `python dev/rd.py <start> <end>` (capstone disassembly), and the merged
+   Ghidra decompile via `dev/ghidra_run`. Follow the machine, not the C.
+   **Chained fragments matter**: several `.pdata` extents are tiny because the
+   real body lives further down (e.g. `0x1424aec30` runs to `0x1424aed7b`+).
+2. **Transcribe** into the crate file named above, operation for operation:
+   same widths, wrapping arithmetic, byte views for structures, floats as raw
+   bits. If a callee is outside the system (allocator, CRT, HTTP, mutex),
+   declare it an open stage with the address — never a plausible default.
+3. **Wire the probe**: one match arm per entry in
+   `crates/ow-casc/src/bin/verify_probe.rs`, and register in
+   `dev/verify_harness/candidate_rust.py` (`ENTRY_SOURCES` = files the ledger
+   binds, `ENTRY_MUTATION` = the symbol mutants edit).
+4. **Fixture** `dev/verify_harness/<name>_fixture.py` with `make_args(i)`:
+   declared cases first (`i < len(SPECIALS)`) sitting exactly on branches and
+   constants, then deterministic generation. Pointers are arena offsets;
+   lengths/counts must stay tied to buffers (the client has no bounds checks).
+5. **Unit** `dev/verify_harness/units/fn-<Name>.json`. Addresses are **v2b**
+   (the v2b frame base plus the RVA; the delta is stated at the top of
+   `dev/verify_harness/runner.py`); the exception — a function dereferencing an
+   absolute pointer baked into image data — uses
+   `{"address": {"exe": "0x14…"}, "base": "0x140000000"}` (see
+   `fn/ParseBoolString`). `coverageWindow` = the function's own byte extent.
+   `allowedImageReads` lists every image address the code reads.
+6. **Run** `python dev/verify_harness/cli.py fn/<Name>`.
 
-## Open
+### IMPORTANT: no two agents in the same checkout at once
 
-- **The tier-1 C units cannot run on this machine:** MSYS2's `gcc` (15.2.0,
-  ucrt64) exits 1 with no output for any input, including
-  `int f(void){return 1;}`; `cc1.exe --version` is silent too. Two units
-  (`fn/AnimTimeWrap`, `fn/CurveKeySampleDual`) are blocked by it. Reinstall with
-  `pacman -S --overwrite mingw-w64-ucrt-x86_64-gcc` (or repair the install), then
-  `python dev/verify_harness/cli.py all` must go from 79 to 81.
-- **Model vertex elements:** `MRNM`'s descriptors and runtime block are
-  verified, but the client's consumer of the element array -- the function
-  that decodes semantic/format/packed-offset bytes and builds the D3D12 input
-  layout -- is **open** (R10 in `formats/renderer.md`). `ow-tank`'s decode and
-  its index remap/compacted vertex array are the viewer's, listed in
-  `ow-tank-1to1.md` section A. `MDLC` has no differential unit yet (its two
-  source pointers are absolute; the harness's relocation model only expresses
-  the payload base).
-- **Map variation choice:** the client has no mode→variation selector. The
-  field hashes `0xD97BC44F`/`0x78715D57` occur only in the registration
-  functions and the header class hash only in the asset-type descriptor init;
-  the map arrives as type-`0x002` GUIDs in the level-load message (Jam
-  `0x501B`, `0x14063b3f0` → `0x140618b30` → `0x14077b7d0`). What is open is
-  the producer of that message, including which input it uses. A
-  `(mode, identifier)` pair can name two scene maps, so the practice-range
-  launch affinity is a viewer default, not a missing client rule.
-- **Bundle directory producer:** our bundle index scans the manifest's
-  type-`0x09C` records; the client builds a directory blob in its content
-  database (`FUN_141fd53a0`, `0x141fd53a0`). One non-1:1 stage remains.
-- **Streaming policy:** which chunks load when is not read.
-- **Gameplay:** movement is live (`--walk-test` is its proof); combat, camera
-  application, view model, retarget, Pose2d VM and the fire loop/damage remain
-  open. The mover's arithmetic leaves are ground-truth verified (above),
-  including the wish spring and the state-lookup leaf, and the live per-frame
-  velocity law is read and implemented (`ow-sim::frame`). What is still open
-  around the live walk: the wish producer
-  (`FUN_140cb86c0`'s fan evaluation and selection), the character sweep's
-  Domino aftermath, the movement asset (speed/jump/gravity) and the spawn
-  selector. The viewer default for the practice range is the map's spawn-room
-  trigger volume, floor `y = -4.006` (`docs/formats/maps.md`).
-  The old approximations are deleted.
-- **Materials:** the viewer is not the client's renderer; 55 placeholder draws
-  remain diagnostics, not a finished material path. Texture parsing is now
-  differentially verified, but the loader `0x141dacf00` and the chunk accessors
-  (`0x142e38730`/`40`/`50`, `0x142255e10`) are read/install-checked rather than
-  oracle-emulated, and the sampler and material application remain open.
-- **D3D11 renderer stages D6-D10:** the 53 open replay opcodes (deferred
-  constant-buffer/shader-resource caches, the per-draw `FUN_142674980` state
-  flush, resource copies and the query/annotation path), the cache population,
-  the outer caller of the shared frame slots, the
-  D3D11 fence/query wait body, the engine-ring consumer, the draw-list builder
-  and the writer of the batch item arrays, the input-element producer, the
-  material -> shader-group -> tier join, constant contents and the adapter
-  preference sort. The batch record layout and transfers are implemented in
-  `ow-render::batch`, but the consumer that turns them into draws is open.
-  `0x0c`/`0x0d` are implemented; the queued-SRV binder remains. A client
-  D3D11 capture is **impossible** under the anti-cheat, so there is no
-  captured-state or image oracle. D4/D5 are read and synthetically tested; D6-D10
-  are not implemented, and D10 is not provable.
-- **CASC CDN index:** read and install-tested. `CdnIndexFooterParse`
-  (`0x1424d9af0`) is a verified unit: fixed 20-byte footer, header MD5,
-  `pageSize = footer[3] << 10`, `entrySize = offset + size + key`,
-  `pageCount = ceil(elements / entriesPerPage)`, exact total length. Its AL
-  status is compared through the harness's `u8` return kind (success 0, every
-  reject 8), so the final length gate is covered. `CdnIndexFileParse`
-  (`0x1424d9c90`) checks the terminal `MD5(last keys + checksums)` and
-  `MD5(terminal + footer)` against the index's own key; `CdnIndexPageChecksums`
-  (`0x1424d9f20`) compares every page MD5. All four config-named indexes match
-  the formula: archive group 260,173,908 B / 63,149 pages / 9,914,328 entries,
-  patch group 48,616,028 / 11,800 / 1,923,358, file index 576,828 / 140 /
-  28,374, patch file index 90,668 / 22 / 4,426 (the install is mid-patch, so
-  the install test currently skips the pinned geometry and says so).
-  **The last-key page selection is read and verified:** `CdnIndexPageSelect`
-  (`0x1424da730`) is a lower bound with an early equal exit over the last-key
-  array, a `page == pageCount` miss, a record scan capped by the element count,
-  and the size/offset decode by the footer widths; `CdnIndexPageResident`
-  (`0x1424da590`) is pointer arithmetic in whole-file mode, or an HTTP range
-  read with a full-page requirement and a per-page MD5 reject (status 8) in
-  streamed mode; `CdnResolveLocation` (`0x1424b0cc0`) splits the ordinal/offset
-  and falls back to the file index. `ow-casc::container::find_page` follows the
-  expression. A one-off install check walked all 63,149 + 11,800 last keys and
-  606 records; each selects its own page. The unit `fn/CdnIndexPageSelect` is
-  verified (14/14 mutants, whole-file mode; the duplicate-last-key early exit
-  is pinned by a committed unit test). Still open: the batch wrappers
-  `0x1424b0e50`/`0x1424b0ef0` are expression-level only, the config-to-slot
-  wiring is an inference, and the port reads whole files so the streamed
-  branch is read but not implemented.
-- **CASC byte census:** `cargo run --release -p ow-casc --bin census` walks
-  every salt-0 record (full stride-1 scan, frame headers and mode bytes only)
-  and measures 84,463,293,804 index bytes, 84,373,987,087 chunk bytes, split
-  N/Z/E = 10.50%/85.96%/3.54% of chunk bytes. The 43,061 `E` chunks (3.54% of
-  chunk bytes, 3.42% of decoded bytes) carry 11 key ids, none in the 63-key
-  keyring, so 22,506 records (1.96%) cannot be decoded at all. A `--stride N`
-  sample reproduces the committed `blte_real` figures, and the test asserts the
-  per-mode byte sum equals the frame headers' declared total.
-- **Remaining CASC units:** the page selection is no longer open. The archive
-  page cache is read and install-tested: 16 slots of `0x10000` bytes from the
-  `.cmf` open params, key `(archive ordinal, page-aligned archive offset)`, a
-  head/whole-page-run/tail plan, minimum-stamp eviction, and short-read
-  zero-fill. The page-table writer is read but not implemented (no read-path
-  caller; its type-3 calls write uninitialised stack bytes). The page-cache
-  plan (`PageReadPlan`, `0x1424faa20`) passed 364 differential cases but is not
-  a pure leaf: it takes the container lock twice and AddRefs the archive
-  handle, so the three refcount branches never execute under the null handle
-  the oracle can build (3/6); it is not among the verified units. The encoding
-  page lookup is read and verified: `EncodingPageIndexSearch` (`0x142498880`),
-  `EncodingFindCKey` (`0x142498540`) and `EncodingFindEKey` (`0x142498610`) are
-  three units; the search's fifth argument is a stack argument, which the
-  oracle supports. `EncodingResolve` (`0x142498700`) is read and has no
-  standalone unit; the two finds prove its parts. The search picks the last
-  page whose first key is `<=` the key; the ckey scan stops on a zero low count
-  byte; the ekey scan stops on a `0xFFFFFFFF` espec index; the resolve takes the
-  ckey `u32` as the decoded size and the ekey `u40` low 32 bits as the stored
-  size. The whole-file read path does **no** page-hash check; the streamed path
-  does, and the port takes the whole-file path. Units `fn/EncodingFindCKey` and
-  `fn/EncodingFindEKey` are verified (100% coverage, 100% mutants);
-  `0x142498880` is the `fn/EncodingPageIndexSearch` unit; its fifth argument is
-  a stack argument, which the oracle supports. The encoding section
-  read (`EncodingSectionsRead`, `0x1424d1c60`) is read and implemented: five
-  sections in the client's order, the client's 32-bit wrapping arithmetic, the
-  range gate with a status-14 short read, and the espec tail check plus NUL
-  count (`FUN_142498a70`, status 8). The install walk covers 16,025 + 10,519
-  pages, 1,714,571 ckey entries, 1,714,573 ekeys, 1,714,573 espec entries,
-  29,694 strings and 26,544 MD5 page hashes
-  (`crates/ow-casc/tests/encoding_real.rs`, about 3 s in a debug build), plus
-  193,863,820,123 decoded bytes and 99,356,850,082 stored bytes. It has no
-  harness unit: the allocator vtable, the five I/O requests and the container
-  lock are not a plain buffer. The segment parse/load
-  (`DynamicIndexSegmentParse` `0x14250fcf0` / `DynamicIndexSegmentLoad`
-  `0x14250fc60`) is read and mirrored: mode 2 is a synchronous `ReadFile` into
-  an allocator buffer, the other modes map a read-only view, and both share the
-  parse body; `ow-casc`'s `fs::read` is the mode-2 path. The validation order
-  and the `block_size / 18` floor match, with synthetic rejection tests and all
-  sixteen files parsed. The page-table writer (`DynamicIndexPageInsert`,
-  `0x142511d20`) is read and documented but not implemented: the type-3
-  callers pass a null range and write location/size from uninitialised stack
-  slots, the writer is allocator/I/O state, and the read path never calls it.
-  The BLTE frame header and `N`/`Z`/`E`/`4` blocks are read
-  and install-tested; type `0x10` is absent and no outer `4` block was
-  observed, so `4` is synthetic-only here (E inner modes are unreadable), and
-  `A`/`F` are not block modes. The bucket
-  fold, segment/archive selection, the 18-byte entry search with the
-  first-duplicate choice, the key-state interval merge/resident resolve
-  (`0x142520c60`/`0x142520700`/`0x1425208d0`/`0x1425115d0`), the page-table
-  layout/hash/linear lookup, and the BLTE frame/block path are read and tested;
-  all 2,560 install pages are zero, so the page hit path is synthetic-only.
-  `docs/casc-1to1.md` is the register.
+Sub-agents share the working tree and the harness binds verdicts to the
+working-tree contents, so **never run more than one in parallel**. Do them
+one at a time.
 
-## Next
+- The sub-agent writes: crate source, probe arm, `candidate_rust.py`,
+  fixture, unit JSON.
+- It does **not** run `cli.py` for other units; it may run its own unit
+  (and `cargo build --release --bin verify_probe -p ow-casc`).
+- The main session (me) runs `cli.py casc`, then `cargo xtask verify` and
+  the docs, and re-dispatches a fixer if a unit fails.
+- Updates: `docs/formats/casc.md`,
+  `docs/casc-1to1.md` (the verified table), `docs/systems-coverage.md`,
+  `docs/open-questions.md`, `STATUS-handoff.md`, `MODLOG.md`;
+  `python dev/make_index.py` after adding tools; `python dev/crate_coverage.py
+  ow-casc` to see the count move.
 
-0. **The frontend pipeline — the page<->engine contract is read in full; the
-   host's two doors are next.** The menu, mode selector, character selector and
-   custom-game browser are web pages in an embedded CEF browser, so there is no
-   native menu logic to port. The contract is `RouteBrowserMessage`
-   (`0x142ed1be0`, 4092 bytes, three `.pdata` fragments; the middle fragment's
-   function was created 2026-11-08 with the operator's approval): it parses the
-   JSON envelope, requires the integer `type` field and dispatches **50 numbered
-   messages** - service `0x00..0x1a` (host -> browser: create with `start_url`,
-   navigate, cookie, URL allow-list, register javascript variable, call
-   javascript callback, zoom, focus, scheme handler) and client `0x1b..0x31`
-   (browser -> host: `OnReady`, `OnPageLoadBegin`, `OnPageLoadCompleted`,
-   `OnDataPost` `0x21`, `OnRegisteredFunctionCalled` `0x23`,
-   `OnJavascriptDialog` `0x2e`, `OnJavascriptConsoleMessage` `0x2f`,
-   `OnSchemeLoadBegin` `0x30`). The dev overlay is **Dear ImGui, docking
-   branch**, shipped in the image (`imgui.ini`, `Debug##Default`,
-   `Click to break in debugger!`, the dock-node strings), its own labels encoded
-   with the CVar table. Mode/hero rules are the `CustomGame.proto` schema
-   (`0x1435f1767`: `CGGameRulesetTeam.heroesArrayIsWhitelist`/`heroGUIDs`/
-   `numTeamMembers`, `CGPregameOptions.enableHeroDraft*`). Native stages: map
-   start (`0x14054fbe0` -> `0x14055a0f0` -> `0x14055abc0`/`0x14055a8c0`) and the
-   player array (`0x14214dcc0`, 640 call sites).
-   **Open:** the producer of the host's `+0x218` (`onDataPost`) and `+0x238`
-   (`onRegisteredFunctionCalled`) slots - the front end's actual gameplay entry;
-   `0x14055abc0`/`0x14055a8c0`; the player array's write side (a store census,
-   not a caller list). The character selector's **roster is now read** (2026-11-09):
-   each mode team's `m_availableHeroes` (`0x59C86C8D`) is the empty marker
-   `STU_D1DC7C55` (every hero; Practice Range) or a whitelist `STU_3C14F504` /
-   `STU_C45DE560` whose `m_heroes` (`0x056D3E39`) names them (Mei's Snowball
-   Offensive = one hero); all four pool classes are runtime component types
-   (stubs `0x1402dc690`..`0x1402dc990`). Shipped as `ow_tank::hero_select`, tests
-   `crates/ow-tank/tests/hero_select_real.rs`. **The mode's applied hero is read
-   too** (2026-11-09): every team controller graph carries one
-   `STUStatescriptStateHero` (`0x91428992`) whose `hero` input is
-   `STUConfigVarDynamic` (`0x4B093107`) `m_identifier` **940** - 12 of the 13
-   hero nodes on the whole install read it, the thirteenth ("Assault") writes a
-   literal hero. Shipped as `ow_tank::graph::hero_states_of` +
-   `hero_select::mode_team_scripts`, 4 tests in
-   `crates/ow-tank/tests/hero_pick_real.rs`. **Still open: what binds runtime
-   variable 940** (the dynamic-variable table and its store - that store is the
-   pick), the pool component's consumer, the spawn write. Details:
-   `docs/formats/frontend-pipeline.md` sections 4a/4b, queue entry 18.
+### Per-unit loop (main session)
+1. Pick next from the table (proved callees first).
+2. `acp_delegate` a `worker` with a self-contained task: the address, the
+   playbook path, the crate file, the five required files, and the rule
+   "if it cannot be a five-stage unit, say which address blocks it and put
+   the read in the docs instead".
+   **Watch for**: the agent's result file arriving as a completion
+   notification — fetch with `acp_delegate_wait(runId)`; a failed run keeps
+   its output file and can be resumed with `resumeFrom`.
+3. When it returns, run `python dev/verify_harness/cli.py fn/<Name>`
+   (my own run, ~2–5 min with a warm probe).
+4. If it fails: `acp_delegate` a `reviewer`/`worker` with the exact failure
+   text (stage, divergence, branch site, survivor mutant, and the playbook
+   §8 symptom table), fix, re-run.
+5. If it passes: docs + count + next.
 
-0. **The engine object — read and modelled; its subsystems are not.**
-   `crates/ow-engine` models the client's engine object: the `0x470`-byte
-   allocation `0x140585220` creates and publishes in `[0x143b7f410]`, both
-   constructors (`0x141c507c0`, `0x1405838c0`) with all 44 field offsets and
-   every written value, the address codecs and their inverses
-   (`0x140543a40`, `0x1405674e0`, `0x1405437f0`, `0x1405838a0`, plus the inline
-   one in `0x141c52d10`), the interface array at `+0x188` with its
-   half-again growth and borrowed tag, and `ConstructEngineSubsystems`'
-   schedule (`0x140554220`: 65 slot stores decoded row by row, plus the
-   21-entry tail attach list), and the 35 constructors with their 96 vtable
-   installs. 23 unit, 14 schedule, 12 layout and 8 class tests,
-   `cargo test -p ow-engine`.
-   **Not implemented:** the *meaning* of the schedule — a name for any of the
-   35 constructors or 117 tables. The unit is a slot's own 15-entry table; 44
-   of the 117 are exactly 15 entries and two lengths are still unread. Also
-   unread: the 20 registered objects that never reach a slot, and the creation
-   step's five callees (`0x141c57c40`, `0x141c52fc0`, the
-   `0x141b33e20`/`0x141c61a80` debug pair, `0x141c51cc0`, `0x141c56970`).
-   Details: `docs/formats/engine.md`, `dev/engine_classes.md`, queue entry 0 in
-   `docs/open-questions.md`.
+### Standing rules
+- Never commit (AGENTS.md hard rule 4). Never stage beyond the task.
+- No new `FIT-*` markers (`cargo xtask verify` fails on them).
+- `.gitignore` is a whitelist.
+- Docs record addresses + conclusions, never disassembly/decompiled code.
+- "not tested" if not tested. If two attempts fail, write STATUS-handoff.md.
 
-0. **Movement, the wish producer — `solve` exists; four stages still open.**
-   `ow-sim::fan::solve` runs the read composition: the `body+0x659` gate, both
-   endpoints (`point + seed*dir`, `point - speed*dir`, `body+0xcc` scaling the
-   `w` lane), `cos(turn_limit)` as the facing threshold, the ring → refine →
-   back-transform order, and both reflection bytes (`|=` then assignment).
-   The five helpers are read: `0x1426cd3d0` is `cosf`, `0x140ca7400` is the
-   cone angle in degrees clamped to `[0, 1.5707844]`, `0x140c9f110` returns a
-   zero quad (the extrapolation is zero), `0x141ae3eb0` is the shape's box
-   corner + extent, `0x140cc2290` is the mesh-face refinement.
-   Still **not** implemented, and each is behind the seam rather than faked:
-   (a) the evaluator `0x1420328c0` in Rust - it now **runs offline**, on the
-   range's real geometry: `dev/probe_candidate_evaluator.py` drives the
-   client's whole chain (`0x1420328c0` -> `0x14203dae0` -> `0x142cc45a0` ->
-   `0x142cbd510` -> `0x142cc1610` -> `0x142caed30` -> `0x14202bc90`) against a
-   built world. `crates/ow-tank/examples/mesh_world_dump.rs` emits the 272
-   distinct shapes **and 3,017 placed instances** of them (one per model-group
-   entry, each with the entry's translation and rotation), and the probe writes
-   each placement into the owner pool `[record+0x2a0]`, which is where
-   `ShapeWorldTransform` reads a shape's world frame. With the pinned shape
-   alone the run reproduces `mesh_world_real`'s pinned hit exactly (point
-   `(0.99500012, 4.0, 0.99500012)`, normal `(0, 1, 0)`, fraction
-   `0x3e8051b8`, triangle `7`); with **all 3,017 in one broadphase** the answer
-   record is **byte for byte the same** as the single-instance run, now in map
-   coordinates (point `(23.947973, -19.990925, 31.369896)`, normal
-   `(0.360226, 0.926024, 0.112766)`, fraction `0x3e8051b8`, triangle `6`). The
-   guard's "two encodings" question is closed (one body, one null-byte canary).
-   The **placeable transform is read**: the scene component's vtable `+0x20`
-   slot `0x142003720` -> `0x142000620` -> component `+0xd0`/`+0xf0` ->
-   `OwnerCreateBody` `0x142cc3d90` -> `ShapeWorldTransform` `0x142cb8b80`;
-   `docs/formats/character-controller.md` carries the addresses. The leaf is
-   now **implemented and verified** as `ow_sim::collide::shape_world_transform`
-   / `fn/ShapeWorldTransform` (328 cases, every channel, branch coverage 100%,
-   9/9 mutants killed), and it returns `[position, quaternion]` - the exact
-   `xform` the three narrowphase primitives take. Two emulator NaN fidelities
-   are recorded there rather than worked around: unicorn answers an invalid
-   operation with `0x7fc00000` where x86 gives `0xffc00000`, and it does not
-   always return the destination's NaN for two-NaN `ADDPS`/`SUBPS`; the
-   hardware answer is pinned by a Rust test. The narrowphase wrapper
-   `0x142cc1610` is **implemented and verified** as
-   `ow_sim::collide::shape_narrowphase` / `fn/ShapeNarrowphase` (264 cases,
-   every channel, coverage 3/3 reachable of 7 sites, 11/12 mutants;
-   `formats/shape-narrowphase.md`). The BVH walk that feeds it, the query
-   driver `0x142cbd510`, is **implemented and verified** as
-   `ow_sim::collide::query_driver` / `fn/QueryDriver` (208 cases, every
-   channel, coverage 10/10 reachable of 11 sites with one declared dead edge,
-   11/12 mutants). Its one open path is the worklist's growth: past the inline
-   `0x100` entries the push reallocs through the global allocator object at
-   `0x144188200`, which is zero in the offline image, so the realloc's copy and
-   the free stay unproven while the push and pop order are pinned by the
-   passes that stay inside the buffer.
-   Its dispatch label `0x142cb8d60` is a real entry point inside the transform's
-   extent and takes a **fifth** argument, the query block; the per-type pool
-   base and stride are `0`/`+0x2d0`/`0x20`, `1`/`+0x2e8`/`0x30`,
-   `2`/`+0x300`/`0x50`, `3`/`+0x318`/`0x50` (`MeshSweepEntry` `0x142caed10` ->
-   `0x142caed30`) and everything else, negative types included, `+0x330`/`0x50`.
-   The type-3 composition question is **closed**: there is no single mesh-world
-   pointer. The `0x50`-byte element is `{scale[4], 1/scale[4], root at `+0x20`,
-   vertices at `+0x28`, triangles at `+0x30`}` with absolute pointers, so the
-   world is the address space they live in, and the corpus now drives type-3
-   cases (6 hits). `block+0x70` is the `u16` mask each triangle's `+0x1c` is
-   tested against. Still open
-   here: the serialised mapping from the `STUModelComponentInstanceData` stream
-   to that triple (class `0x936A1A00` is not in the reference class list) and
-   the geometry variant table for negative ids. The **Rust four-pass driver
-   exists**:
-   `ow-sim::collide::query_driver` walks the island's `0x40`-byte shape entries
-   behind a `QueryWorld` seam, with both rejections, the worklist order, the
-   `1`/`2` answers and the two folds, and 5 tests. It returns the folded motion
-   quad, not a hit count - there is no counter in `0x142cbd510`.
-   (b) pass 0's `MoverWishQueryCached` cache (`0.004` per lane — the test is
-   `fan::memo_matches`, the cache is not); (c) the shape-ring branch behind the
-   global `_DAT_1439b07b8`; (d) the mesh-face pass. 145 `ow-sim` units.
-   Pass 3 is read exactly (`ow-sim::fan::back_snap`, 2 tests): one snap of the
-   accepted direction's `y` lane onto the plane through the direction with the
-   direction as its normal - **not** a five-candidate loop - gated by
-   `s = -dot(n, end-start) < 1.1920928955e-4` and `0 <= t <= 1`.
-   **The stage order is closed (2026-11-07).** `0x140cb86c0` is one `.pdata`
-   entry with no chained fragments, and it branches instead of running a fixed
-   pass list: gate `byte[body+0x659]` → pass 0 → either the **shape pass**
-   (when a shape resolved and `byte[body+0x655]` is clear, five probes, never
-   reaches the pentagon) or the **ring**, whose flavour is chosen by
-   `byte[0x1439b07b8]` - set: one evaluator over `n` quads, then
-   `kind <= 1` → snap, else pentagon; clear: `n` single evaluations with no
-   pentagon and no snap. So the pentagon follows the batch ring (the old
-   "pentagon precedes the ring" reading was address order, not control flow),
-   the snap reads the batch ring's endpoints, and the incremental ring's later
-   stores cannot reach it. Map and gates:
-   `docs/formats/character-controller.md`, *The stage order inside
-   `0x140cb86c0`*; working note `dev/data/notes/fan_stage_map.md`. Two doc
-   errors were corrected on the way: the snap's floor is `0x38fa0000`, not
-   FLT_EPSILON, and `t0` is `hsum(n*start) - hsum(record+0x00, n)`, not
-   `dot(start - out_dir, n)`. `back_snap` already had both right.
-   **Next, in order:** (1) the shape pass `0x140cb8e4e` - **read**: the
-   corner builder `0x141ae3eb0`
-   (`min = centre - (half_x,0,half_x,0)`, `far = min + (half_x,half_y,half_x,0)`)
-   and the five probe quads are done and unit-tested as
-   `ow_sim::fan::corner_pair` / `shape_probes`; every register is identified
-   (`xmm11` = seed endpoint, `xmm10` = floored seed, `xmm12` = speed), so each
-   probe sweeps `quad[i] + (s±seed/speed)*dir`; only the loop itself is not yet
-   written in Rust; (2) pass 0
-   `0x140cc1870` - **closed 2026-11-07**: key + `0.004` memo
-   (`memo_matches`), block clone `0x140a01560`, two probes at layer masks `1`
-   and `0x0e`, min score where a **miss scores 1.0** (`ow_sim::fan::pass_zero`,
-   `PASS_ZERO_MASKS`), and the cache store skipped when `record+0x20 != 0`;
-   (3) the incremental ring - **read**, including its hand-rolled pair rotation
-   (`A' = A*sin + B*cos`, `B' = B*sin - A*cos`) and the point update
-   `record0+0x00 - offset`; the current `solve` already matches it; (4) the
-   batch ring, **closed**: read with the Ghidra decompiler, the block's
-   `+0x490`/`+0x498` ptr/count are carried to `desc+0x28`/`+0x30`
-   (`0x14203dae0`) and then to query `+0x30`/`+0x38` (`0x142cc45a0`) and are
-   **never read** - `0x142cbd510` walks the domino's own islands at
-   `domino+0x1b0+0x44` in four passes and ignores both offsets. So no
-   list-shaped seam is needed and `CandidateSolver` is the right shape. The
-   ledger's earlier "consumer unread" line was based on a linear `.pdata`
-   corpus listing that desyncs on the jump table at `0x14202c580`; that corpus
-   is not a flow-based decode and greps over it prove nothing in table-rich
-   regions. One question remains and is cheap: why the composer fills the list
-   (watch whether `+0x498` is ever non-zero once the ring is ported);
-   (5) the pentagon and the snap behind `kind <= 1` - **closed**: the dispatch
-   is `ow_sim::fan::batch_tail` (`0x142cba720` returns the kind, `0x140cb9864`
-   snaps it at `1`), and both sub-passes were already ported
-   (`refine_pentagon`, `back_snap`); what remains is only their position in
-   the composer, which the batch ring gates; then the `ow-client` wiring.
-
-0a. **The map blob holds the chunk payloads (2026-11-03).**
-   `LoadMapAssetChunks` (`0x141ff5c80`) stores one handle per chunk in the map
-   asset blob, and the completion `0x142e49400` decodes each handle into the
-   payload pointer: **`+0x2F8` is the collision chunk**, `+0x300` pathing,
-   `+0x308` streaming, `+0x310`/`+0x318`/`+0x320` slots `0x20`/`0x1F`/`0x23`,
-   and `+0x2F0` the extra-chunk payload array. `+0x410` is the "loaded" byte.
-   So the collision payload is reachable from the map blob without another
-   asset lookup, and `+0x2F8` is the exact handoff the missing sector consumer
-   must read. `DmWorldConstruct` sizes a `0x58`-stride pool at `world+0x348`
-   (from description `+0x40 + +0x44`) and `0x142cc2ae0` walks it with `0x58`
-   stride and `0xC0`-stride records at `world+0x2B8`; the chunk's `0x58`
-   sector records are pointer-based, the world's are index-based. Next: the
-   consumer of `map+0x2F8` (likely a job lambda without `.pdata`, like the
-   completion itself), and the map blob's full header (bounds + the three
-   asset refs at `+0xB8`).
-
-0a. **The node record is read field by field (2026-11-03).**
-   `0x14202c660` (`WorldBaseInitFromRecord`) reads the record at `+0x00` (id to
-   the state record `+0x170`), `+0x10` (flags to `[node+0x454]`), `+0x18` (a
-   Domino **settings** description: rotation copied to `[node+0x630]`, two
-   worlds allocated from it), `+0x28`..`+0x48` (copied), `+0x50` (decoded asset
-   ref), `+0x60`..`+0x8f` (node `+0x878`..`+0x8a4`) and `+0x90` (copied).
-   `DmWorldConstruct` reads the description as a pool count per element at `+0x20`..`+0x70`
-   plus a rotation at `+0x10`; `ConstructDominoWorld` reads the same object plus
-   its layer count, child list and pointers. So the description is a capacity
-   template, not the map's geometry, and a node's worlds start empty of shapes.
-   The init's own `OwnerCreateBody` descriptor is constant (no shape source),
-   so the node's body gets no shape from the init. The 0x300 object the init
-   allocates on flag `0x20` is a separate state record (`0x142026e20`, no
-   vtable, id at `+0x170`), not the builder's scene component. The record's
-   **producer** is still the anchor; it must now be a writer that supplies a
-   settings description, not a placement.
-
-0a. **The map's entity components are named by data (2026-11-03).** Each
-   entity placeable's component record is `{u32 component id, u32 offset}`; the
-   STU asset at the offset names the component's data class.
-   `crates/ow-tank/examples/map_entity_probe.rs` reads the range: 550 entities,
-   644 records, 13 ids, 6 named (`0x02` `STUModelComponentInstanceData` on 475
-   entities, `0x03` `STUStatescriptComponentInstanceData`, `0x06`
-   `STUWaypointInstanceData`, `0x0b` `STUTargetTagInstanceData`, `0x10`
-   `STUECAISpawnerInstanceData`, `0x11` `STUECHintPointInstanceData`). None of
-   the 13 data classes is a collision component, which matches the collision
-   component attaching at the node rather than from entity data. The 0x300
-   scene component (the collision builder's second argument) is the **model
-   component** by role and by the 475-entity count, recorded as a hypothesis.
-   Next: the node-side attach driver (the type allocator's caller).
-
-0a. **Cells → shapes: the brush path is closed, the cell path is a specific
-   question now.** `AppendCollisionEntryFromBrushSource` (`0x14213a510`) is read
-   end to end — brush snapshot, `BrushTreeToMesh`, the leaf/chord-scale area
-   test, then one `0x60` entry per mesh piece with `MeshToColliderFaces` filling
-   `entry+0x20` and the handle going to `geometry+0xf8`. The geometry object's
-   layout is recovered (`+0xb0` sources, five vector headers at `+0xf8`,
-   `+0x108`, `+0x118`, `+0x128`, `+0x138`). The cheap reading of the 17 cell
-   arrays is excluded by measurement, and a whole-image scan shows the entry
-   count `+0x114` is written in only three places, none of them on the cell
-   path — so **the chunk does not feed the `0x60` entries**. The `+0x118` vector
-   is no alternative: its append helper `FUN_1421360a0` builds `0x100`-byte
-   elements and has exactly one caller, the brush ingest. This node class is
-   brush-only; next anchor is the class that owns the chunk component the
-   bytes-fixup writes (`sub+0x68` slot `0x1e`, `sub+0x08` slot `0x22`).
-   Three false `noreturn`s (`0x141bb00e0`, `0x142ced8f0`, `0x142efe2b0`) were
-   truncating every allocating function in the geometry module; the mechanical
-   audit recipe is in `docs/ghidra-project.md`. `FinishMapChunkAsset`
-   (`0x141ff54e0`) was truncated the same way and is now 964 bytes that
-   decompile end to end, confirming the slot `0x1e`/`0x22` cell dispatch.
-   Two consumer hypotheses are ruled out: the geometry object (brush-only) and
-   `FUN_1420c63b0` (no code caller, no plain pointer — its data xrefs are
-   internal switch tables). **Handoff for this thread:** the fixup rewrites the
-   cells in place, the cell block is `StuLoadSubAssets(cache, chunk->payload[0],
-   0) + 0x68` (slot `0x1e`) or `+ 0x08` (`0x22`), so the consumer is whatever
-   reads that sub-asset and walks 17 arrays — and `ow_tank::collision` already
-   has that shape from real data to check it against.
-
-1. Read the producer of the level-load GUID lists (`docs/open-questions.md`
-   item 11.1): who resolves a map request to Jam `0x501B`'s four vectors, and
-   whether the local practice-range session builds it in-process.
-2. Movement: the ramp, command, wish-spring, forward-, inverse-transform,
-   copy-wrapper, state-lookup, state-vector, settings-default,
-   settings-apply and 37-kind modifier-evaluator leaves are verified, and the
-   live per-frame velocity law (`state_transform(wish) + ramp_vector(body)`)
-   is read and implemented as `ow-sim::frame`. The state lookup is implemented
-   in `ow-sim::state` for the leaf path; its parent `+0x298` and pose paths
-   are still open. The config path is
-   read at the value level: `0x1405a87d0` defaults, `0x140c862e0` asset apply,
-   `ConstructMoverBody` for the `+0x688`/`+0x68c` clamp pair and
-   `FUN_140cc079d` for `+0x10ec`. Still open there: the asset producer and the
-   body's copy of the block. The settings apply and the 37-kind
-   `ApplyStateModifiers` are verified; the world slot resolves both handle
-   kinds, and the character velocity chain (`0x142cbd1b0` -> `0x142cf5810`
-   -> `0x142cd5370` -> `0x142cd4bc0`) is verified on the no-shape path, and
-   the four shape-bound leaves, the `0x142cb9030` dispatcher and the
-   shape-list walk with contact id `-1` are verified.
-
-   **The three movement gaps left, in the order worth attacking:**
-   1. *The wish producer* — `FUN_140cb86c0` (`0x140cb86c0`): the fan's
-      arithmetic is now read and implemented (`ow-sim::fan`: both seed
-      terms, the `+0.1` bias, the speed
-      `((min(|body[0x1150].xyz|, max3(cap)) * 1.1) * (body[0xe8]*1e-6 * E))`
-      floored by `body[0x5cc]`, the radius
-      `max(body[0x65c], 0.35) * body[0x5b8] - 0.015`, the 72° and `2π/N`
-      rotations, both acceptance rules, the gate and the three exits). The
-      **candidate evaluator `0x1420328c0` is a collision query**: it wraps
-      `0x14203dae0`, whose reachable code is now mapped (prologue
-      `0x14203dae0..0x14203dbd9` + body `0x14203de51..0x14203e0fe`; the rest
-      is junk) and read: geometry from `world+0x620`, the result record the
-      fan reads back, a 0x71-byte query struct from the descriptor object,
-      then `0x142cc45a0` (62-byte handle dispatcher) or `0x14212db80`
-      (78 bytes). Its opaque guard is pointer-keyed (the world pointer's low
-      byte through the nibble table `0x1433d158`). The query is now read down
-      to its narrowphase: `0x142cc45a0` decodes the `u16` handle from
-      `[geometry+0x31f8]` through `0x1442a0bc0` to a domino record, builds the
-      `{record, [obj+0x58], hit_policy, [obj+0x60], island_slot}` descriptor
-      and the `0x78`-byte query block, and calls **`0x142cbd510`**, the
-      four-pass sweep over one island's shape list: `0x142cd5540` (the
-      start/end/expansion, verified as `fn/CollisionSweepBounds`), an AABB
-      test, a moving-box separation test (`|d x b - e*h - b x d| - 2*(e*h) >
-      0.005`), `0x140d24b60` (the query's own worklist push, not a broadphase
-      grow) for children, and `0x142cc1610` for leaves (world transform
-      `0x142cb8b80`, layer filter `0x142cbb350`, type dispatch `0x142cb8d60`
-      to `0x142ccdf40`/`0x142ccd7b0`/`0x142cd3c80`/`0x142caed10`/
-      `0x142cd0ae0`). The five primitives are inventoried (0x4ec, 0x78a, 0x3f0,
-      a 0x1a thunk to `0x142caed30`, 0xc00) and `0x142cb8b80` is read (a
-      static pool copy, or a normalised pose quaternion). The evaluator's hit
-      policy is the constant `0x14202c580` -> `0x14202bc90`. The thunk is
-      byte-exact and the narrowphase fixes the contract (`callback(&hit,
-      packedShapeDescriptor, answerRecord)`, permuted into `(hit, packed,
-      record)`), so the policy's **arguments are read**; its body is **read
-too** (2026-11-02): the `ADD`/`ROR 0x22` chain is a **pointer decode**, the far
-      branch targets are junk-filler obfuscation, and a linear sweep decodes
-      the 1797 bytes to exactly their end (427 instructions, no data islands).
-      The contract is `(hit, packed, ctx)` -> 1 no hit / 2 accepted / 3
-      rejected, with three gates (`world = 0x1420c2360(ctx)`, the
-      `0x1420af950` layer+exclusion filter, the decoded-key dedupe against
-      `[world+0x240]`), a mode switch on `hit+0x34` (0 = presence, 1 = fill the
-      0x50-byte record at `[hit+0x10]`, >= 2 = classify through `hit[0]`), and
-      three outputs (`hit+0x30` score, `hit+0x38` flag, `hit+0x39`). What is
-      left is **data, not code**: the policy queries a Domino world, and the
-      range's world is filled from the **model mesh** holders (161 models,
-      272 shapes; `ow_tank::model_body` + `mesh_world_real` already assemble
-      them) only if the node gate `[node+0x454] & 0x200` passes. The gate's
-      word comes from the node creation record's `+0x10`, to be read at the
-      asset-preload service's `vtable+0x38` (the all-preloads-done callback;
-      check 17 in `formats/static-collision.md`), so **a candidate cannot yet
-      be scored**
-      for real and the wish producer and character collision are the same
-      read. Also open: the generic helpers
-      `0x1426cd3d0`/`0x1426de990`, the per-pass record layouts and the
-      `0x141c5d780(object, byte)` query chain.
-   2. *The velocity→position stage* — who turns the controller velocity into
-      a sweep: the Domino tick's kinematic branch or a per-frame
-      `0x142cbcee0` call. The character body's Domino parameters (mass,
-      inv-mass, damping, gravity) and the tick dt/substep counts are open.
-   3. *Collision* — the contact response slot `[service+0x40]`, the `>= 4`
-      contact branch (`0x140ca8643`), the type-3 mesh path (`0x142cae5a0`),
-      the contact event (`0x142cf32d0`) and the **descriptor producer** that
-      turns the collision chunk's sector table into shape descriptors. The
-      chunk payload is now read as data (`formats/maps.md`, "The collision
-      chunk payload"); the sweep itself, the contact list layout and the
-      projection into `body+0x19b8` are read.
-
-   `MoverAdvance` is reachable only from `MoverInvoker`, which has no code
-   caller (single vtable reference), so its integration expression is not on
-   the live path; it stays open, not dead, until an indirect-call sweep
-   proves it.
-3. Then camera, animation retarget, combat and collision in that order.
-4. Renderer: `0x0c`/`0x0d` are implemented; next is the `0x16..0x1b` cache
-   population, then the queued-SRV binder, the pass writer and the draw list.
-5. Model render-mesh consumer: read the function that consumes a runtime
-   vertex-buffer record (the element array it copies at `+0x1c`, the element's
-   packed offset/format) and builds the input layout -- the R10 row. Until
-   then `ow-tank`'s vertex decode stays declared open. A `MdlcMaterialRead`
-   differential unit needs the harness to express an absolute pointer inside
-   the fixture, which it cannot today.
-
-## Key files
-
-- `docs/rebuild-plan.md` - stage order and current gates.
-- `docs/open-questions.md` - the work queue.
-- `docs/formats/character-controller.md` - mover component, current-image path.
-- `docs/movement-plan.md` - the movement pipeline, the stage table and what
-  `ow-client` needs.
-- `docs/formats/domino.md` - physics tick and integration.
-- `docs/formats/weapons.md` - combat data and statescript join.
-- `docs/formats/camera.md` - camera surface, FOV, near/far, input.
-- `docs/formats/animation.md` - clips, sampler, blend tree, view model.
-- `docs/formats/maps.md` - map header, bundle, resolver and practice range.
-- `docs/formats/engine.md` - the engine object, its constructors and codecs.
-- `crates/ow-engine/` - the engine object model.
-- `docs/deviations.md` - legacy non-1:1 code.
-- `docs/systems-coverage.md` - every system and its next anchor.
-- `dev/INDEX.md` - analysis tools.
+### Hard rules from AGENTS.md (project)
+1 to 1 or not at all: a feature is implemented only if the client's code was
+read from the complete `Overwatch.exe` Ghidra image, the implementation
+follows it operation for operation, and a test proves identity. Behaviour
+source is the current image only; data source is the operator's installation.

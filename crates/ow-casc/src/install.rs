@@ -205,14 +205,94 @@ fn resolve_layout(given: &Path) -> Result<(PathBuf, Option<String>)> {
 /// The file is the same `!TYPE:WIDTH` table shape as `.build.info`; the
 /// reference install's `_retail_/.flavor.info` is `Product Flavor!STRING:0`
 /// followed by `pro`.
-/// The client's boolean parser (`0x1424d8800`) accepts these true spellings;
-/// everything else writes zero. The decimal `1` is what `.build.info` uses,
-/// but a build is free to write any of them.
+/// The client's boolean parser (`ParseBoolString`, `0x1424d8800`).
+///
+/// A case-insensitive **prefix** match, first against eight true spellings and
+/// then against eight false ones, in the client's table order. A match writes
+/// `out` - 1 from the true table, 0 from the false one - and returns 1; when no
+/// spelling matches it returns 0 and leaves `out` untouched, so the caller sees
+/// "no answer" instead of "false".
+///
+/// The comparison walks both sides per byte, folding `A..=Z` only, so the
+/// caller's text must be a **prefix** of a spelling: `""` matches (the length
+/// check is before the first byte), `"o"` matches `on` before `off` is ever
+/// tried, `"enab"` matches `enable`, and `"enablex"` matches nothing because
+/// its seventh byte is compared against the spelling's NUL. A leading space
+/// matches nothing either: nothing in the client trims here.
+pub fn parse_bool_string(text: &[u8], len: usize, out: &mut u8) -> u8 {
+    /// The client's fold: `LEA EAX,[RCX-0x41] / CMP EAX,0x19 / LEA EDX,[RCX+0x20]
+    /// / CMOVA EDX,ECX` - a byte in `A..=Z` becomes lowercase.
+    fn fold(c: u8) -> u32 {
+        if u32::from(c).wrapping_sub(0x41) <= 0x19 {
+            u32::from(c) + 0x20
+        } else {
+            u32::from(c)
+        }
+    }
+    /// One spelling: walk both sides until a difference, either NUL, or the
+    /// end of the caller's `len`.
+    fn heads_match(text: &[u8], len: usize, spelling: &[u8]) -> bool {
+        let mut i = 0;
+        let mut left = len;
+        let mut j = 0;
+        loop {
+            if left == 0 {
+                return true;
+            }
+            let a = fold(text[i]);
+            i += 1;
+            left -= 1;
+            let b = fold(spelling[j]);
+            j += 1;
+            if a != b {
+                return false;
+            }
+            if b == 0 {
+                return true;
+            }
+        }
+    }
+    // The client's two tables, in order (`0x143472f10` and `0x143472f50`).
+    const TRUE_SPELLINGS: [&[u8]; 8] = [
+        b"1\0",
+        b"on\0",
+        b"enable\0",
+        b"enabled\0",
+        b"yes\0",
+        b"y\0",
+        b"true\0",
+        b"t\0",
+    ];
+    const FALSE_SPELLINGS: [&[u8]; 8] = [
+        b"0\0",
+        b"off\0",
+        b"disable\0",
+        b"disabled\0",
+        b"no\0",
+        b"n\0",
+        b"false\0",
+        b"f\0",
+    ];
+    for (flag, table) in [(1u8, &TRUE_SPELLINGS), (0u8, &FALSE_SPELLINGS)] {
+        for spelling in table {
+            if heads_match(text, len, spelling) {
+                *out = flag;
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+/// The client's boolean parser applied to one config field.
+///
+/// The field is already trimmed by the table reader, and the client has no
+/// third answer here: a spelling that matches nothing leaves `flag` at its
+/// default, which is `false` - the same result the client's callers get from
+/// their zeroed flag byte.
 fn parse_bool(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on" | "enable" | "enabled"
-    )
+    let mut flag = 0u8;
+    parse_bool_string(value.as_bytes(), value.len(), &mut flag) != 0 && flag != 0
 }
 
 fn read_flavor(path: &Path) -> Option<String> {
@@ -224,6 +304,92 @@ fn read_flavor(path: &Path) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
+/// Row stride of a `.build.info` row in the client's table: 0xb0 bytes per
+/// row (`imul rbx, rax, 0xb0` at `0x1424aec7d` and `imul r11, rax, 0xb0` at
+/// `0x1424aed1a`).
+pub const BUILD_INFO_ROW_STRIDE: usize = 0xb0;
+
+/// The client's row choice over already-extracted products, by row index.
+///
+/// `BuildInfoSelectRow` (`0x1424aec30`, measured extent
+/// `0x1424aec30..0x1424aed8b`, 0x15b bytes through the `ret` at
+/// `0x1424aed8a`; the `.pdata` root is only `0x1424aec30..0x1424aec6a`)
+/// takes the table in RCX (rows pointer at `+0x20`, count `u32` at `+0x28`)
+/// and the flavor pointer in RDX (null allowed), and returns a row pointer
+/// or null. The count is `esi = [rcx+0x28]`; a zero count returns null at
+/// once (`test esi, esi` / `je 0x1424aed7b`). A null flavor pointer or a
+/// flavor whose first byte is zero (`test rdx, rdx` / `je`, then
+/// `test dil, dil` / `je` to `0x1424aecf1`) takes the no-flavor path; any
+/// other flavor is compared byte for byte (first-char pre-check at
+/// `0x1424aeca2`, then the walk at `0x1424aecb0`), case-sensitively, with
+/// no trimming or folding. Product is the qword at row `+0` (not Branch
+/// at `+8`); a null Product pointer selects the default at `0x142f7aa00`,
+/// whose first byte is zero, so it compares as the empty string
+/// (`cmovne` at `0x1424aec8d` and `0x1424aed2e`). The active byte is at
+/// row `+0x10`.
+///
+/// With a flavor it returns the first active row whose Product equals it;
+/// the match stores the row pointer and returns it. Without a flavor it
+/// takes the first row's Product as the baseline, requires every row
+/// (active or not) to equal it - the compare runs before the active test,
+/// so a mixed-product table returns null even when the differing row is
+/// inactive - and returns the last active row. An empty flavor is the
+/// no-flavor path, so `Some("")` behaves as `None`.
+pub fn select_build_info_index(
+    products: &[&[u8]],
+    active: &[bool],
+    flavor: Option<&[u8]>,
+) -> Option<usize> {
+    if products.is_empty() {
+        return None;
+    }
+    let flavor = flavor.filter(|f| !f.is_empty() && f[0] != 0);
+    match flavor {
+        Some(flavor) => (0..products.len()).find(|&i| active[i] && products[i] == flavor),
+        None => {
+            let first = products[0];
+            if products.iter().any(|product| *product != first) {
+                return None;
+            }
+            (0..products.len()).rev().find(|&i| active[i])
+        }
+    }
+}
+
+/// The byte view of `BuildInfoSelectRow` over one table blob.
+///
+/// `table` is the RCX object: the rows pointer (u64) at `+0x20` and the
+/// row count (u32) at `+0x28`. Every pointer inside the blob is absolute
+/// against `table_base` (the arena base the probe models the blob at);
+/// a null Product pointer is the client's empty-string default. Returns
+/// the selected row's byte offset from the rows base (`index * 0xb0`), or
+/// `None` for the client's null return.
+pub fn select_build_info_row(
+    table: &[u8],
+    table_base: u64,
+    flavor: Option<&[u8]>,
+) -> Option<usize> {
+    let count = u32::from_le_bytes(table[0x28..0x2c].try_into().unwrap());
+    let rows_base = u64::from_le_bytes(table[0x20..0x28].try_into().unwrap());
+    let rows_off = rows_base.wrapping_sub(table_base) as usize;
+    let mut products: Vec<&[u8]> = Vec::with_capacity(count as usize);
+    let mut active: Vec<bool> = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let row_off = rows_off + (i as usize) * BUILD_INFO_ROW_STRIDE;
+        let product_ptr = u64::from_le_bytes(table[row_off..row_off + 8].try_into().unwrap());
+        if product_ptr == 0 {
+            products.push(&[]);
+        } else {
+            let off = product_ptr.wrapping_sub(table_base) as usize;
+            let rest = &table[off..];
+            let end = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
+            products.push(&rest[..end]);
+        }
+        active.push(table[row_off + 0x10] != 0);
+    }
+    select_build_info_index(&products, &active, flavor).map(|i| i * BUILD_INFO_ROW_STRIDE)
+}
+
 /// The client's row choice (`BuildInfoSelectRow`, `0x1424aec30`).
 ///
 /// The first field of a row is **Product** (descriptor offset 0; Branch is
@@ -232,22 +398,11 @@ fn read_flavor(path: &Path) -> Option<String> {
 /// row to carry the same Product and returns the **last active** row;
 /// a mixed-product table has no answer and the client returns null.
 fn select_build_info(rows: &[BuildInfo], flavor: Option<&str>) -> Result<BuildInfo> {
-    let selected = match flavor {
-        Some(flavor) => rows.iter().find(|row| row.active && row.product == flavor),
-        None => {
-            let product = &rows
-                .first()
-                .ok_or_else(|| Error::Parse("empty .build.info".into()))?
-                .product;
-            if rows.iter().all(|row| &row.product == product) {
-                rows.iter().rev().find(|row| row.active)
-            } else {
-                None
-            }
-        }
-    };
-    selected
-        .cloned()
+    let products: Vec<&[u8]> = rows.iter().map(|row| row.product.as_bytes()).collect();
+    let active: Vec<bool> = rows.iter().map(|row| row.active).collect();
+    let index = select_build_info_index(&products, &active, flavor.map(str::as_bytes));
+    index
+        .map(|i| rows[i].clone())
         .ok_or_else(|| Error::Parse("no usable branch row".into()))
 }
 
@@ -579,17 +734,268 @@ fn parse_keyring(text: &str) -> BTreeMap<u64, [u8; 16]> {
     keys
 }
 
+/// The client's hex-pair decoder: `0x14269ab80`, read operation for operation.
+///
+/// Decodes up to `count` bytes from `text` into `out`, two characters per byte,
+/// and returns the bytes written. A pair needs two characters (the client's
+/// `index >= len - 1` guard), a zero byte ends the run, a character outside
+/// `0-9a-fA-F` ends it, and the loop leaves as soon as `count` bytes are done.
+/// A short result is the caller's only signal that the text ran out or held a
+/// non-hex character. The client shifts the high character with `shl cl, 4` on
+/// a byte, so a digit's ASCII value keeps only its low nibble - which is the
+/// digit's value - so values are used directly here.
+///
+/// Signature: the probe supplies `text` as exactly its `len` characters
+/// (`&text[..len]`), so the slice length is the client's `len` (r9). The
+/// client returns 0 itself for a null or zero-length text and for a zero
+/// count; an empty slice and a zero count give the same 0 here. A null text
+/// pointer cannot be represented by the arena probe and is a declared gap
+/// in `fn/HexPairDecode`.
+pub fn hex_decode(out: &mut [u8], count: usize, text: &[u8]) -> usize {
+    let mut written = 0;
+    let mut at = 0;
+    while written < count {
+        if at + 1 >= text.len() {
+            break;
+        }
+        let Some(high) = hex_value(text[at]) else {
+            break;
+        };
+        let Some(low) = hex_value(text[at + 1]) else {
+            break;
+        };
+        out[written] = (high << 4) + low;
+        written += 1;
+        at += 2;
+    }
+    written
+}
+
+/// One hex digit's value, or `None` for anything else: the three range tests of
+/// `0x14269ab80` (`0x30..=0x39`, then `0x61..=0x66`, then `0x41..=0x46`).
+fn hex_value(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// The leading whitespace of a key string: space, tab, LF, VT, FF or CR, the
+/// client's `cmp al, 0x20` then `sub al, 9; cmp al, 4` test at `0x14248eff0`.
+fn leading_whitespace(text: &[u8]) -> usize {
+    text.iter()
+        .take_while(|c| **c == b' ' || c.wrapping_sub(b'\t') <= 4)
+        .count()
+}
+
+/// The client's 16-byte key parser: `ParseHexKey` (`0x14248efd0`), read
+/// operation for operation.
+///
+/// Zeroes `out`, zeroes `flag`, skips leading whitespace and decodes exactly 16
+/// bytes from what follows. Returns the characters consumed - `whitespace + 32`
+/// - or 0 when the decode produced fewer than 16 bytes.
+///
+/// The client reads `len` characters from `text`; a `len` past the buffer is a
+/// caller bug here as well.
+pub fn parse_hex_key(text: &[u8], len: usize, out: &mut [u8; 16], flag: &mut u8) -> usize {
+    out.fill(0);
+    *flag = 0;
+    let skip = leading_whitespace(&text[..len]);
+    if hex_decode(out, 16, &text[skip..len]) == 16 {
+        skip + 32
+    } else {
+        0
+    }
+}
+
+/// The client's 8-byte id parser: `ParseHexKeyId` (`0x14248f040`), read operation
+/// for operation. The same body as [`parse_hex_key`] with an 8-byte target: the
+/// success count is `whitespace + 16`.
+pub fn parse_hex_key_id(text: &[u8], len: usize, out: &mut [u8; 8], flag: &mut u8) -> usize {
+    out.fill(0);
+    *flag = 0;
+    let skip = leading_whitespace(&text[..len]);
+    if hex_decode(out, 8, &text[skip..len]) == 8 {
+        skip + 16
+    } else {
+        0
+    }
+}
+
+/// The whitespace set every scan in the config line parser uses: `0x20`, or a
+/// byte `c` with `c.wrapping_sub(9) <= 4` - the client's `cmp al, 0x20`
+/// follows-by-`sub al, 9` / `cmp al, 4` pair (TAB, LF, VT, FF, CR).
+fn config_space(c: u8) -> bool {
+    c == b' ' || c.wrapping_sub(9) <= 4
+}
+
+/// One appended config key entry: the client's 24-byte record.
+pub const CONFIG_KEY_ENTRY_SIZE: usize = 24;
+
+/// `ConfigKeyEntryParse` (`0x1424cebd0`): one `key-<id> = <key>` config line.
+///
+/// The client's argument is a context object whose `+8` field points at a
+/// vector `{allocator, base, count: u32 @+0x10, capacity: u32 @+0x14}`; the
+/// vector holds `{u64 id, [u8; 16] key}` records of 24 bytes. The four span
+/// arguments are raw pointers, so this byte view takes one arena blob (the
+/// context at offset 0) and the four absolute addresses the client was handed,
+/// exactly as it holds them: the span length it tests is a **32-bit**
+/// subtraction of two pointers (`sub eax, edx`), which an inverted span makes
+/// large, while the scans that follow compare the full 64-bit pointers.
+///
+/// The disposition is the client's `AL`: `0` handled, `1` not handled. The
+/// entry is appended **before** either field is parsed, so a line that fails
+/// the id parse still grows the vector by one zeroed record.
+///
+/// Stage by stage, with the instruction that decides each one:
+///
+/// 1. `cmp byte ptr [rdx], 0x6b` / `jne` (`0x1424cebdd`, `0x1424cebe3`): the
+///    key span must start with `k`.
+/// 2. `sub eax, edx` / `cmp eax, 4` / `jbe` (`0x1424cebf4`, `0x1424cebfe`):
+///    the span length is the 32-bit pointer difference; four or fewer is not
+///    a key line.
+/// 3. `mov eax, dword ptr [rdx]` / `cmp eax, 0x2d79656b` (`0x1424cec04`,
+///    `0x1424cec0a`): the first four bytes are `key-`, compared as a
+///    little-endian dword.
+/// 4. The token scan (`0x1424cec19..0x1424cec34`) starts at `key_begin + 4`
+///    and stops at `key_end`, at `0x20`, or at any other [`config_space`]
+///    byte; that end is `token_end`.
+/// 5. The vector grow (`cmp eax, ecx` / `jne` at `0x1424cec42`): when the
+///    count equals the capacity the client reallocates through the allocator
+///    vtable (`[[vec]] + 0x10` alloc, `+0x30` free) and recomputes the
+///    capacity by multiplying the eight bytes at `[rsp+0x48]` - the `key-`
+///    tag literal, whose high dword is never written - by
+///    `0xaaaaaaaaaaaaaaab`. That block is outside the system: this function
+///    panics there and the unit declares the edge dead.
+/// 6. The append (`0x1424cecdd..0x1424ced13`): three zeroed qwords at
+///    `base + count * 24`, then `count + 1` stored back (32-bit).
+/// 7. `ParseHexKeyId(p, token_end - p, entry, &flag)` (`0x1424ced38`) over the
+///    first non-whitespace byte of the token; a non-zero `flag` returns `1`
+///    (`0x1424ced42`) and a zero consumed count returns `1` (`0x1424ced47`).
+///    The client's parser only ever zeroes `flag`, so that edge is dead.
+/// 8. `val_begin >= val_end` returns `0` (`0x1424ced51`); otherwise the leading
+///    whitespace is skipped (`0x1424ced53..0x1424ced67`, running off the end
+///    returns `0`).
+/// 9. `ParseHexKey(q, val_end - q, entry + 8, &flag)` (`0x1424ced8c`): a
+///    non-zero `flag` returns `0` (`0x1424ced96`), a non-zero consumed count
+///    returns `1` (`0x1424ced9b`), and a zero consumed count returns `0`
+///    (`0x1424ceda1`).
+///
+/// So a line whose id parses and whose value is 32 hex digits returns `1`, and
+/// a line whose value is too short returns `0` - the disposition is not the
+/// parse result. `ow-casc` has no caller yet: the client's config-line
+/// dispatcher (which splits a line into these two spans) is not read, and the
+/// crate's own keyring reader stays as it is until it is.
+pub fn config_key_entry_parse(
+    blob: &mut [u8],
+    blob_base: u64,
+    key_begin: u64,
+    key_end: u64,
+    val_begin: u64,
+    val_end: u64,
+) -> u8 {
+    // A pointer into the blob, as an index. Every span the client was handed
+    // is inside the arena the probe copies, so a pointer outside it is a
+    // fixture error, not an edge.
+    let at = |p: u64| (p.wrapping_sub(blob_base)) as usize;
+    let kb = at(key_begin);
+    // 1-3. The key span: `k`, longer than four bytes in 32-bit pointer
+    // arithmetic, and `key-`.
+    if blob[kb] != b'k' {
+        return 1;
+    }
+    if (key_end as u32).wrapping_sub(key_begin as u32) <= 4 {
+        return 1;
+    }
+    if u32::from_le_bytes(blob[kb..kb + 4].try_into().unwrap()) != 0x2d79_656b {
+        return 1;
+    }
+    // 4. The token end: the first whitespace at or after `key_begin + 4`.
+    let mut token_end = key_begin.wrapping_add(4);
+    while token_end < key_end && !config_space(blob[at(token_end)]) {
+        token_end = token_end.wrapping_add(1);
+    }
+    // 5. The vector object.
+    let vec_ptr = u64::from_le_bytes(blob[8..16].try_into().unwrap());
+    let vec = at(vec_ptr);
+    let count = u32::from_le_bytes(blob[vec + 0x10..vec + 0x14].try_into().unwrap());
+    let capacity = u32::from_le_bytes(blob[vec + 0x14..vec + 0x18].try_into().unwrap());
+    if count == capacity {
+        // The two compares the client makes: `cmp eax, ecx` / `jne` at
+        // 0x1424cec44 skips this block unless the count equals the capacity,
+        // and `cmp r8d, ecx` / `jbe` at 0x1424cec51 skips the grow unless
+        // count + 1 exceeds it (32-bit, so the wrap at 0xffffffff skips too).
+        if count.wrapping_add(1) > capacity {
+            panic!(
+                "config_key_entry_parse: vector grow at 0x1424cec53 is outside the system \
+                 (allocator vtable and a capacity computed from uninitialised stack bytes)"
+            );
+        }
+    }
+    // 6. The append.
+    let base = u64::from_le_bytes(blob[vec + 8..vec + 0x10].try_into().unwrap());
+    let entry = at(base) + count as usize * CONFIG_KEY_ENTRY_SIZE;
+    blob[entry..entry + CONFIG_KEY_ENTRY_SIZE].fill(0);
+    blob[vec + 0x10..vec + 0x14].copy_from_slice(&count.wrapping_add(1).to_le_bytes());
+    // 7. The id: the first non-whitespace byte of the token onward.
+    let mut p = key_begin.wrapping_add(4);
+    while p < token_end && config_space(blob[at(p)]) {
+        p = p.wrapping_add(1);
+    }
+    if p >= token_end {
+        return 1;
+    }
+    let from = at(p);
+    let upto = at(token_end);
+    let mut id = [0u8; 8];
+    let mut flag = 0u8;
+    let consumed = parse_hex_key_id(&blob[from..upto], upto - from, &mut id, &mut flag);
+    blob[entry..entry + 8].copy_from_slice(&id);
+    if flag != 0 {
+        return 1;
+    }
+    if consumed == 0 {
+        return 1;
+    }
+    // 8. The value span.
+    if val_begin >= val_end {
+        return 0;
+    }
+    let mut q = val_begin;
+    while config_space(blob[at(q)]) {
+        q = q.wrapping_add(1);
+        if q >= val_end {
+            return 0;
+        }
+    }
+    // 9. The key.
+    let from = at(q);
+    let upto = at(val_end);
+    let mut key16 = [0u8; 16];
+    let mut flag = 0u8;
+    let consumed = parse_hex_key(&blob[from..upto], upto - from, &mut key16, &mut flag);
+    blob[entry + 8..entry + CONFIG_KEY_ENTRY_SIZE].copy_from_slice(&key16);
+    if flag != 0 {
+        return 0;
+    }
+    if consumed != 0 {
+        return 1;
+    }
+    0
+}
+
 fn parse_key(hex: &str) -> Option<[u8; 16]> {
-    // ASCII before the two-byte slicing below: a multi-byte character is a
-    // parse failure, not a panic.
-    if hex.len() != 32 || !hex.is_ascii() {
-        return None;
-    }
+    // The client's parser, with one extra demand: a keyring field must be
+    // consumed entirely, so trailing text is a parse failure rather than a
+    // silently ignored tail (the client's `ParseHexKey` callers walk a cursor
+    // and consume the count, which this one-shot wrapper does not).
+    let text = hex.as_bytes();
     let mut out = [0u8; 16];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
-    }
-    Some(out)
+    let mut flag = 0u8;
+    let consumed = parse_hex_key(text, text.len(), &mut out, &mut flag);
+    (consumed == text.len()).then_some(out)
 }
 
 #[cfg(test)]
@@ -621,6 +1027,32 @@ mod tests {
             rows.iter().map(|r| r.active).collect::<Vec<_>>(),
             vec![true, false, true]
         );
+    }
+
+    #[test]
+    fn boolean_parser_is_a_prefix_match_with_no_third_answer_to_callers() {
+        // The client's walk: eight true spellings then eight false ones, a
+        // match at either side's end, and the flag written only on a match.
+        let mut flag = 0xEE;
+        assert_eq!(parse_bool_string(b"t", 1, &mut flag), 1);
+        assert_eq!(flag, 1);
+        assert_eq!(parse_bool_string(b"enab", 4, &mut flag), 1);
+        assert_eq!(flag, 1);
+        // The text must be a prefix of a spelling, not the other way round.
+        flag = 0xEE;
+        assert_eq!(parse_bool_string(b"enablex", 7, &mut flag), 0);
+        assert_eq!(flag, 0xEE);
+        assert_eq!(parse_bool_string(b"OFF", 3, &mut flag), 1);
+        assert_eq!(flag, 0);
+        // `on` is tried before `off`; nothing trims.
+        assert_eq!(parse_bool_string(b"o", 1, &mut flag), 1);
+        assert_eq!(flag, 1);
+        assert_eq!(parse_bool_string(b"of", 2, &mut flag), 1);
+        assert_eq!(flag, 0);
+        // No match: status 0 and the flag untouched.
+        flag = 0xEE;
+        assert_eq!(parse_bool_string(b" true", 5, &mut flag), 0);
+        assert_eq!(flag, 0xEE);
     }
 
     #[test]
@@ -657,6 +1089,72 @@ mod tests {
     /// last 8 bytes with `0x14248f040` and the value's 16 bytes with
     /// `0x14248efd0`. The id is addressed as a little-endian u64 by the BLTE
     /// E-block lookup, so the written big-endian hex appears byte-swapped.
+    /// The client's key text leaves: whitespace skip, then 16 (or 8) decoded
+    /// bytes, with the consumed character count as the success signal.
+    #[test]
+    fn hex_key_parsers_skip_whitespace_and_report_the_count() {
+        let mut out = [0u8; 16];
+        let mut flag = 0u8;
+        assert_eq!(
+            parse_hex_key(b"0123456789abcdef0123456789abcdef", 32, &mut out, &mut flag),
+            32
+        );
+        assert_eq!(out[0], 0x01);
+        assert_eq!(out[15], 0xef);
+
+        // Leading whitespace is skipped and counted; the case of the digits and
+        // a tail past the 32 consumed characters are both accepted.
+        assert_eq!(
+            parse_hex_key(
+                b" \t\r\nABCDEF0123456789abcdef0123456789 tail",
+                41,
+                &mut out,
+                &mut flag
+            ),
+            36
+        );
+        assert_eq!(out[0], 0xab);
+
+        // A non-hex character or a NUL stops the run: the count is 0, the
+        // output is zeroed first, and bytes decoded before the stop stay
+        // (the client decodes in place too).
+        out = [0xEEu8; 16];
+        assert_eq!(
+            parse_hex_key(b"0123456789abcdef0123456789abcdeg", 32, &mut out, &mut flag),
+            0
+        );
+        assert_eq!(out[15], 0x00);
+        out = [0xEEu8; 16];
+        let mut planted = b"0123456789abcdef0123456789abcdef".to_vec();
+        planted[16] = 0x01;
+        assert_eq!(parse_hex_key(&planted, 32, &mut out, &mut flag), 0);
+        assert_eq!(out[8], 0x00);
+        out = [0xEEu8; 16];
+        assert_eq!(parse_hex_key(b"   ", 3, &mut out, &mut flag), 0);
+        assert_eq!(out, [0u8; 16]);
+        out = [0xEEu8; 16];
+        assert_eq!(
+            parse_hex_key(b"0123456789abcdef0123456789abcde", 31, &mut out, &mut flag),
+            0
+        );
+        assert_eq!(&out[..8], &[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
+        assert_eq!(&out[8..15], &[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd]);
+        assert_eq!(out[15], 0x00);
+
+        let mut id = [0u8; 8];
+        assert_eq!(
+            parse_hex_key_id(b" 0011223344556677", 17, &mut id, &mut flag),
+            17
+        );
+        assert_eq!(id, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]);
+        assert_eq!(
+            parse_hex_key_id(b"001122334455667", 15, &mut id, &mut flag),
+            0
+        );
+        assert_eq!(&id[..7], &[0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        assert_eq!(id[7], 0x00);
+    }
+
     #[test]
     fn keyring_spellings_have_opposite_byte_order() {
         let key = parse_key("000102030405060708090a0b0c0d0e0f").expect("16-byte key");

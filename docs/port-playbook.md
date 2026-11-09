@@ -22,7 +22,7 @@ below exists to make that checkable rather than believable.
 | triage `entry` | 238 | reachable from outside the system: port as a cluster head |
 | triage `inline` | 2,312 | only meaningful inside a caller: port with it |
 | triage `thunk` / `trivial` | 6 / 5 | wrappers and one-liners: port with the head |
-| verified today | 79 of 83 descriptors | `python dev/verify_harness/cli.py all` |
+| verified today | 98 of 103 unit ids (99 distinct addresses) | `python dev/verify_harness/cli.py all` |
 
 One unit = one client function address, one Rust function, one descriptor, one
 verdict. The verdict is bound by SHA-256 to the oracle bytes, the candidate
@@ -49,6 +49,17 @@ Prefer, in this order:
 2. `unit` state with zero callees and few image reads (the ladder is cheapest);
 3. small `entry` heads that unlock a cluster;
 4. `inline` bodies only together with the function that owns them.
+
+For the **data crates** (`ow-casc`, `ow-tank`) the corpus triage does not
+apply: its scope is the forward closure of the *gameplay* tags, and `casc`/`stu`
+are deliberately outside it. Their scope is what the crate itself cites —
+`python dev/crate_coverage.py ow-casc` resolves every image address in
+`crates/ow-casc/**/*.rs` against the function register and the units, and
+`--queue` prints the unverified entries in the order below (most proved
+callees, then smallest body). Every address a crate cites is either a function
+with a unit, a function without one, an interior of a registered function, or
+data — the report says which, so "which functions is this crate about" is a
+measurement, not a recollection.
 
 Do not start a unit whose inputs you cannot construct. A unit needs a fixture
 that can build every input the client's code branches on.
@@ -226,6 +237,12 @@ Rules that matter:
 
 - **Every address in a unit file is in the v2b frame**, not the image frame - the
   two differ by a fixed delta (stated at the top of `dev/verify_harness/runner.py`).
+  The exception is a function that dereferences an **absolute pointer baked
+  into image data** (a spelling table, a vtable, a string pointer): a v2b copy
+  faults on the first dereference because the stored value is the link-time
+  address. Such a unit writes `"address": {"exe": "<image address>"}` plus
+  `"base": "0x140000000"`, runs the image at its own base, and lists its
+  `allowedImageReads` in the exe frame. `fn/ParseBoolString` is the example.
   Copy an address from an existing unit (`units/fn-BuildMoverPhysicsCommand.json`)
   rather than converting by hand; `dev/frame_check.py` rejects v2b addresses in
   prose, which is why this page shows placeholders. `coverageWindow` is the
@@ -331,6 +348,7 @@ image is CRT, STL, compiler helpers, middleware and rendering.
 | data formats and values | `crates/ow-tank/src/bin/*`, `crates/ow-tank/examples/*` |
 | is an address readable | `python dev/pe_layout.py --addr <addr>` |
 | names ↔ addresses | `docs/function-names.csv`, `python dev/gh_apply_names.py` |
+| which functions a data crate covers | `python dev/crate_coverage.py <crate> [--queue]` |
 | the gate | `cargo xtask verify` (`--fast` skips install-reading tests) |
 | tool index | `python dev/make_index.py` after adding a script |
 
@@ -366,12 +384,26 @@ image is CRT, STL, compiler helpers, middleware and rendering.
 
 ---
 
-## 13. State of this playbook's own tools (2026-11-17)
+## 13. State of this playbook's own tools (2026-11-19)
 
-- `cli.py all`: **79 verified, 4 open, 1 scaffold**. Open: two tier-1 C units
-  blocked by a broken local `gcc` (`cc1.exe` exits silently), `fn/MeshSweep` at
-  61.1% branch coverage, `fn/OrthonormalizeCameraBasis-state` missing its
-  guest-pointer probe arm. `fn/MoverAdvance` is a declared scaffold.
+- `cli.py all`: **98 verified, 4 open, 1 scaffold**. Open: `fn/AnimTimeWrap`
+  and `fn/CurveKeySampleDual`, two tier-1 C units blocked by a broken local
+  `gcc` (`cc1.exe` exits silently); `fn/MeshSweep` at 61.1% branch coverage;
+  and `fn/OrthonormalizeCameraBasis-state`, whose guest-pointer probe arm is
+  missing (it reports `divergent`). `fn/MoverAdvance` is a declared scaffold.
+  All five are pre-existing, not regressions.
+- `cli.py casc` is **30/30 verified**: the three newest units are
+  `fn/ConfigKeyEntryParse`, `fn/DynamicIndexResolveRange` and
+  `fn/PageSlotFind` (2026-11-19), which took `ow-casc` from twenty-seven.
+- A unit's `knownEquivalentMutants` is **line-keyed**, so any edit above the
+  mutated statement silently re-arms the mutant and the unit goes red for a
+  non-port reason (`fn/EncodingFindEKey`, 991 -> 1122 -> 1124; the last move
+  was two lines added to a doc comment). Re-state the line and say why it
+  moved; do not delete the declaration.
+- Do not use `cli.py all` to check progress: stage 5 rebuilds the crate once
+  per mutant, so a full run is roughly an hour. `cli.py casc`, one unit id, or
+  a detached run writing to a file are the cheap paths; `cargo xtask verify`
+  does not include the harness.
 - The merged project `C:/Temp/owread` is the reading source: 25,588 of 25,638
   chain roots own their full contiguous code with a measured seam; 41 have no
   seam (0 named) and 9 are blocked by objects with no `.pdata` extent.

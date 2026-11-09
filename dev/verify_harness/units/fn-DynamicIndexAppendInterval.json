@@ -1,0 +1,69 @@
+{
+ "id": "fn/DynamicIndexAppendInterval",
+ "title": "tier-2 shipped code: the interval append against DynamicIndexAppendInterval (0x142520700)",
+ "address": {
+  "v2b": "0x7ff7c7240700"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "dynamic_index_append_interval",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "void",
+ "argFactory": "dynamic_index_append_interval_fixture",
+ "args": [
+  {
+   "name": "obj",
+   "kind": "ptr",
+   "ptr_len": 8192
+  },
+  {
+   "name": "entry",
+   "kind": "ptr",
+   "ptr_len": 16
+  },
+  {
+   "name": "resident",
+   "kind": "u64"
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 20,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4272,
+  "coverageWindow": 449,
+  "allowedImageReads": [],
+  "unreachableBranches": [
+   {
+    "site": "0x7ff7c724073a",
+    "edge": "0x7ff7c7240740",
+    "why": "the capacity-grow fall-through (`cmp eax, [rcx+0x134]; jb`): every fixture case pins capacity > count + 1 (tightest is count + 2), and the grow path itself calls the log function at 0x1424f8440 plus the allocator vtable at [obj] (+0x18 alloc, +0x30 free) with memset/memcpy - callees outside the system whose new base pointer cannot be compared byte for byte. The `jb`-taken edge (no grow) is what runs; the grow edge is the unit's declared gap."
+   }
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/index.rs::IntervalSet::append, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the dynamic_index_append_interval entry. The ledger binds the verdict to index.rs + the probe source + the git revision. IntervalSet::append matched the client operation for operation and needed no change: (start, +1)/(start + (u32)len, -1) resident or (start, -0x40000000)/(start + (u32)len, +0x40000000) non-resident, 64-bit wrapping end add, 32-bit neg, count incremented twice, normalize called immediately iff the resident flag's low byte is zero. DynamicIndexNormalizeIntervals is unchanged.",
+  "Oracle is DynamicIndexAppendInterval at exe 0x142520700, measured extent 0x142520700..0x1425208c1 (449 bytes through the ret at 0x1425208c0), which is the declared coverageWindow. The .pdata extent is only 0x11 bytes (0x142520700..0x142520711); the body is the chained continuation - DynamicIndexEntrySink (0x142520590) tail-jumps to 0x142520700, the grow path joins the common append at 0x14252083c, and the non-resident path tail-jumps to DynamicIndexNormalizeIntervals at 0x1425208d0. The next code at 0x1425208d0 is that callee, outside the window. Signature: (key_state *obj, const entry *entry, u8 resident) -> void (RCX, RDX, R8B). The entry is the 16-byte chosen-entry record: u64 start at +0, u32 len at +8.",
+  "The client's read (no-grow path): count = [obj+0x130] (32-bit), capacity = [obj+0x134]; `cmp count + 1, capacity; jb` skips the grow. Delta = resident ? 1 : 0xc0000000 (cmovne on the flag's low byte); the first event is written at base + 16*count with count incremented, the second at the new count with start + (u32)len (a 64-bit add of the 32-bit length) and neg delta, count incremented again. Only the 8-byte start and 4-byte delta of each record are written - the 4 padding bytes stay. `test r12b, r12b; jne` returns when resident, else tail-jumps to the normalize. No other object field is written on this path: the base at +0x128 and capacity at +0x134 are untouched.",
+  "Compared channels: one 0x2000-byte blob pointee for obj+events (0x138-byte header at 0 with count at +0x130 that moves and base at +0x128 / capacity at +0x134 that must not; base holds relative 0x1000 with a reloc at +0x128 rebase-masked on both sides; 0xA5 sentinel 0x138..0x1000; the 4096-byte event buffer at 0x1000 carrying the two appended records, the normalized prefix for a non-resident append, the pre-normalize tail past the new count, and 0xA5/0xCC beyond), the read-only 16-byte entry as a separate pointee, and resident in R8 (3-arg ABI: RCX obj, RDX entry, R8B resident). The probe rebuilds the pre-normalize tail from the appended pair because the client's normalize leaves the sorted array's tail in place; for a non-resident case the fixture keeps the appended pair strictly after every existing start, so the sort is a no-op and the tail is deterministic - the same restriction fn/DynamicIndexNormalizeIntervals declares. Resident cases may be unsorted, duplicated or wrapping, because the resident path never sorts.",
+  "Coverage gate is set at 20, the measured both-edge coverage of the no-grow body: of the 6 conditional branches in the window (0x14252073a jb, and inside the grow path 0x142520790 jne, 0x1425207bf je, 0x1425207dd jne, 0x142520811 je, plus 0x1425208ac jne for resident-vs-normalize), the resident branch has both edges and the grow branches never run, so 1 of 5 non-declared sites is fully covered. The four grow-interior sites are not declared unreachable because that declaration requires the site to have run; they are part of the declared gap below. The main session confirms the measured figure when it runs the unit.",
+  "allowedImageReads is empty: on the no-grow path the function reads only its object, entry and event buffer - its constants are immediates (1, 0xc0000000, the field offsets). The normalize callee runs in the oracle outside the window, as it does for fn/DynamicIndexNormalizeIntervals."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "the capacity-grow path (capacity <= count + 1)",
+   "why": "When `count + 1 >= [obj+0x134]` the client at 0x142520740 calls the log function at 0x1424f8440, doubles the capacity, allocates `capacity * 16` bytes through the vtable at [obj] (+0x18), zeroes it with 0x142efe950, copies the old events with 0x142efe2b0, frees the old buffer through the vtable (+0x30) unless it is the inline buffer at obj+0x28, then stores the new base at +0x128 and the new capacity at +0x134. The allocator, the log function and the new base pointer are outside the system and cannot be compared byte for byte against a Rust Vec; the Rust Vec has no observable capacity contract and the initial client capacity of 16 is not part of any decode result. Every fixture case pins capacity > count + 1, the probe rejects a growing case, and the `jb` edge into the grow path is declared unreachable above. The production callers (DynamicIndexDecodeEntries, the sink types 1/4/6/7) always start from the initial capacity against a cleared count, and IntervalSet::append is the no-grow body."
+  },
+  {
+   "what": "a non-resident append whose pair is not after every existing start",
+   "why": "The non-resident path tail-calls the normalize, whose sort (0x14251ff30) leaves the events it drops in its own implementation-defined order; the tail past the new count cannot be compared byte for byte, exactly as fn/DynamicIndexNormalizeIntervals declares. The fixture keeps the appended pair strictly after every existing start for every non-resident case, so the sort is a no-op. Resident appends never sort and carry the unsorted and duplicate cases instead."
+  },
+  {
+   "what": "a count + 2 event run past the 4096-byte event buffer",
+   "why": "The client writes two records at count and count + 1 with no bounds check, through the base pointer at +0x128; a count that overruns the supplied buffer is a caller bug that would write past the arena. The probe rejects it and the fixture's counts stay tied to the buffer (at most 64 existing events plus the appended pair, far inside 256 records)."
+  }
+ ]
+}

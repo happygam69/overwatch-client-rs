@@ -634,6 +634,105 @@ fn i32_at(fields: &[u8; HEADER_FIELDS_SIZE], at: usize) -> i32 {
     i32::from_le_bytes(fields[at..at + 4].try_into().expect("4-byte field"))
 }
 
+/// The client's espec string-index build (`FUN_142498a70`, `0x142498a70`),
+/// operation for operation on the no-grow path.
+///
+/// The client takes one pointer, to a struct whose fields are `block size`
+/// (`u32` at `+0x24`, here `block.len()`), `block pointer` (`u64` at `+0x28`,
+/// here `base`), and a pointer vector at `+0x50` (`buffer` at `+0x58`, `size`
+/// at `+0x60`, `capacity` at `+0x64`, here `index`, `size` and `capacity`).
+/// In order, it:
+///
+/// 1. reads the block's last byte - `block[count - 1]` - and returns 8 when it
+///    is not zero. The offset is a zero-extended 32-bit `count - 1`
+///    (`lea eax, [r8 - 1]` at `0x142498a95`), so for an empty block the read
+///    lands at `base + 0xFFFF_FFFF`, not at `base - 1`: in the oracle arena
+///    that address is the `0xC3`-filled sentinel page, so an empty block
+///    returns 8 there and never reaches the empty return at `0x142498ad5`.
+///    A parsed header rejects a zero espec size, so the empty block is
+///    never reached in production either; this function returns 8 for it.
+/// 2. counts the block's NUL bytes into a 32-bit counter;
+/// 3. reserves the vector to that count (the shared vector grow at
+///    `0x142388210`, a no-op when `count <= capacity`);
+/// 4. returns 0 when the block is empty (unreachable, see 1);
+/// 5. walks the block once, and at every NUL byte calls the string-length
+///    helper (`0x1426cce30`, which returns the address of the string's NUL
+///    terminator, not its length - the client only tests it for zero) on the
+///    current string start, returning 8 when that terminator is the string
+///    start itself - an empty string, i.e. a NUL at the block start or right
+///    after the previous NUL - before appending, and otherwise appends the
+///    string start (`base + offset`, wrapping) at `index[size]` and increments
+///    `size`. A string start is the block base, or one past the previous NUL.
+///    Appends already made stay made when a later empty string returns 8.
+///
+/// The grow path - a reserve that must allocate, or an append at
+/// `size == capacity` - goes through the allocator vtable of the vector at
+/// `+0x50` (alloc at `[[vec]] + 0x10`, free at `+0x30`, via `0x142388210`),
+/// which is outside this system; like `page_index_search` on a short index,
+/// this function panics rather than inventing a buffer. The verify probe
+/// rejects a growing case, and every fixture case pins
+/// `nul_count <= capacity` with the appends never reaching `capacity`.
+///
+/// `index` must hold `capacity` slots. The slice reader [`EncodingFile`]
+/// calls this with the espec slice's own address as `base`, then stores
+/// the string-start offsets (`pointer - base`).
+pub fn espec_string_index(
+    block: &[u8],
+    base: u64,
+    _before: u8,
+    index: &mut [u64],
+    size: &mut u32,
+    capacity: u32,
+) -> u8 {
+    // The client's last-byte read `block[count - 1]` at `0x142498a99`, with
+    // the offset a zero-extended 32-bit `count - 1`. For an empty block the
+    // read lands at `base + 0xFFFF_FFFF` (the arena sentinel, byte `0xC3`),
+    // not at `base - 1`, so the empty block returns 8 before any write.
+    if block.is_empty() {
+        return ESPEC_NOT_TERMINATED as u8;
+    }
+    if block.last().copied().unwrap_or(0) != 0 {
+        return ESPEC_NOT_TERMINATED as u8;
+    }
+
+    // The NUL count, in the client's 32-bit counter.
+    let nul_count = block.iter().filter(|&&b| b == 0).count() as u32;
+    // The reserve call: a no-op when `nul_count <= capacity`, an allocator
+    // vtable grow otherwise (the declared open path).
+    if nul_count > capacity {
+        panic!("espec_string_index: vector grow at 0x142388210 is outside the system");
+    }
+
+    // Walk the block; `start` is the current string's address, exactly as
+    // the client advances `r14` to one past each NUL.
+    let mut start = base;
+    let mut string_start = 0usize;
+    for (offset, &byte) in block.iter().enumerate() {
+        if byte != 0 {
+            continue;
+        }
+        // The helper at `0x1426cce30` returns the address of the string's NUL
+        // terminator (its byte loop and its 0x7efefefe/0x81010101 word test
+        // both produce `start + length`), so a zero answer means the string is
+        // empty. Here no NUL lies between the string start and this one, so
+        // the terminator is `base + offset` and the test is
+        // `offset == string_start`; the client returns 8 before the append.
+        if offset == string_start {
+            return ESPEC_NOT_TERMINATED as u8;
+        }
+        // The append: at `size == capacity` the client reserves `size + 1`
+        // through the allocator vtable (the declared open path).
+        if *size == capacity {
+            panic!("espec_string_index: vector grow at 0x142388210 is outside the system");
+        }
+        index[*size as usize] = start;
+        *size = size.wrapping_add(1);
+        start = base.wrapping_add(offset as u64).wrapping_add(1);
+        string_start = offset + 1;
+    }
+    0
+}
+
 #[derive(Debug)]
 pub struct EncodingFile<'a> {
     pub ckey_size: usize,
@@ -644,6 +743,10 @@ pub struct EncodingFile<'a> {
     n_ck_pages: usize,
     n_es_pages: usize,
     espec: &'a [u8],
+    /// String-start offsets in `espec`, built by `espec_string_index`
+    /// (`FUN_142498a70`): the client stores the absolute pointers, this
+    /// slice reader stores them as offsets from the block base.
+    espec_index: Vec<u64>,
     ck_index: &'a [u8],
     ck_bodies: &'a [u8],
     es_index: &'a [u8],
@@ -669,10 +772,31 @@ impl<'a> EncodingFile<'a> {
         let ekey_size = header.ekey_width() as usize;
 
         // `FUN_142498a70`, the client's post-read step: the espec block is a
-        // run of NUL-terminated strings and its last byte must be zero.
-        if sections.espec.last() != Some(&0) {
+        // run of NUL-terminated strings whose last byte must be zero, and
+        // the string-start index is built from its NUL bytes. The header
+        // parser rejects a zero espec size, so the block is never empty
+        // here and `before` is never read. The index buffer holds the whole
+        // block, so the reserve and every append are no-grow. This slice
+        // reader stores the client pointers as offsets from the block base.
+        let espec_base = sections.espec.as_ptr() as u64;
+        let mut espec_index = vec![0u64; sections.espec.len()];
+        let mut espec_size = 0u32;
+        let espec_capacity = u32::try_from(sections.espec.len()).unwrap_or(u32::MAX);
+        if espec_string_index(
+            sections.espec,
+            espec_base,
+            0,
+            &mut espec_index,
+            &mut espec_size,
+            espec_capacity,
+        ) != 0
+        {
             return Err(Error::EspecNotTerminated);
         }
+        for pointer in espec_index.iter_mut() {
+            *pointer = pointer.wrapping_sub(espec_base);
+        }
+        espec_index.truncate(espec_size as usize);
 
         // The client's header parser accepts every key width 1..=16 and the
         // section reader uses `width + 16` for an index entry. The record walk
@@ -730,6 +854,7 @@ impl<'a> EncodingFile<'a> {
             n_ck_pages: header.ckey_to_ekey_page_count() as usize,
             n_es_pages: header.ekey_to_espec_page_count() as usize,
             espec: sections.espec,
+            espec_index,
             ck_index: sections.ckey_page_index,
             ck_bodies: sections.ckey_page_bodies,
             es_index: sections.ekey_page_index,
@@ -748,10 +873,18 @@ impl<'a> EncodingFile<'a> {
         self.espec
     }
 
-    /// Number of NUL-terminated strings in the espec block. `FUN_142498a70`
-    /// counts the same bytes to size its string index.
+    /// Number of NUL-terminated strings in the espec block: the length of
+    /// the string index `FUN_142498a70` built, whose NUL count it counted.
     pub fn espec_entry_count(&self) -> usize {
-        self.espec.iter().filter(|&&b| b == 0).count()
+        self.espec_index.len()
+    }
+
+    /// The espec string index: the offset of every NUL-terminated string's
+    /// start in the espec block, in order. `FUN_142498a70` stores the
+    /// absolute pointers (`base + offset`); this slice reader stores the
+    /// offsets.
+    pub fn espec_string_offsets(&self) -> &[u64] {
+        &self.espec_index
     }
 
     pub fn ckey_page_count(&self) -> usize {
@@ -1021,20 +1154,23 @@ mod tests {
         h[7..9].copy_from_slice(&4u16.to_be_bytes());
         h[9..13].copy_from_slice(&1u32.to_be_bytes());
         h[13..17].copy_from_slice(&1u32.to_be_bytes());
-        h[18..22].copy_from_slice(&1u32.to_be_bytes());
+        h[18..22].copy_from_slice(&2u32.to_be_bytes());
         h
     }
 
-    /// A minimal well-formed file: one 4 KiB page on each side, a one-byte
-    /// espec block, and zero-count page bodies (a zero count ends a page).
+    /// A minimal well-formed file: one 4 KiB page on each side, a two-byte
+    /// espec block (`a\0`, one non-empty string - an empty string is
+    /// rejected by `FUN_142498a70`), and zero-count page bodies (a zero
+    /// count ends a page).
     fn minimal_file() -> Vec<u8> {
         let h = header();
-        let ck_index = HEADER_SIZE + 1;
+        let ck_index = HEADER_SIZE + 2;
         let ck_bodies = ck_index + PAGE_INDEX_ENTRY;
         let es_index = ck_bodies + 4096;
         let es_bodies = es_index + PAGE_INDEX_ENTRY;
         let mut out = vec![0u8; es_bodies + 4096];
         out[..HEADER_SIZE].copy_from_slice(&h);
+        out[HEADER_SIZE] = b'a';
         out
     }
 
@@ -1247,6 +1383,11 @@ mod tests {
         blob[9..13].copy_from_slice(&0x0800_0000u32.to_be_bytes());
         blob[13..17].copy_from_slice(&0x0800_0000u32.to_be_bytes());
         blob[18..22].copy_from_slice(&0x16u32.to_be_bytes());
+        // The 22-byte espec block must be non-empty strings (`a\0` x 11),
+        // or the espec index build rejects it before the count check.
+        for i in 0..11 {
+            blob[22 + 2 * i] = b'a';
+        }
 
         let mut fields = [0u8; HEADER_FIELDS_SIZE];
         assert_eq!(write_header_fields(&blob, &mut fields), 0);
@@ -1576,18 +1717,18 @@ mod tests {
         h[7..9].copy_from_slice(&4u16.to_be_bytes());
         h[9..13].copy_from_slice(&3u32.to_be_bytes());
         h[13..17].copy_from_slice(&3u32.to_be_bytes());
-        h[18..22].copy_from_slice(&1u32.to_be_bytes());
+        h[18..22].copy_from_slice(&2u32.to_be_bytes());
 
         let ck_keys = [key(0x10), key(0x40), key(0x80)];
         let es_keys = [key(0xA0), key(0xB0), key(0xC0)];
 
-        let ck_index = HEADER_SIZE + 1;
+        let ck_index = HEADER_SIZE + 2;
         let ck_bodies = ck_index + 3 * PAGE_INDEX_ENTRY;
         let es_index = ck_bodies + 3 * 4096;
         let es_bodies = es_index + 3 * PAGE_INDEX_ENTRY;
         let mut out = vec![0u8; es_bodies + 3 * 4096];
         out[..HEADER_SIZE].copy_from_slice(&h);
-        out[HEADER_SIZE] = 0;
+        out[HEADER_SIZE] = b'a';
 
         for (page, first) in ck_keys.iter().enumerate() {
             // The hash bytes are deliberately wrong; the client's lookup never
@@ -1830,7 +1971,7 @@ mod tests {
     #[test]
     fn parse_rejects_an_espec_block_without_a_trailing_nul() {
         let mut file = minimal_file();
-        file[HEADER_SIZE] = b'x';
+        file[HEADER_SIZE + 1] = b'x';
         let err = EncodingFile::parse(&file).expect_err("espec tail");
         assert!(matches!(err, Error::EspecNotTerminated));
         assert_eq!(err.status(), Some(8));
@@ -1840,19 +1981,119 @@ mod tests {
     #[test]
     fn espec_entry_count_counts_the_nul_bytes() {
         // The header's espec size is the big-endian u32 at 18..22. Build a
-        // file with a six-byte block `a\0bb\0\0` (three strings, the last
-        // empty) and the minimal one-page sections after it.
-        let mut full = vec![0u8; HEADER_SIZE + 6];
+        // file with a seven-byte block `a\0bb\0c\0` (three strings) and the
+        // minimal one-page sections after it.
+        let mut full = vec![0u8; HEADER_SIZE + 7];
         full[..HEADER_SIZE].copy_from_slice(&header());
-        full[18..22].copy_from_slice(&6u32.to_be_bytes());
-        full[HEADER_SIZE..].copy_from_slice(b"a\0bb\0\0");
-        let ck_index = HEADER_SIZE + 6;
+        full[18..22].copy_from_slice(&7u32.to_be_bytes());
+        full[HEADER_SIZE..].copy_from_slice(b"a\0bb\0c\0");
+        let ck_index = HEADER_SIZE + 7;
         let ck_bodies = ck_index + PAGE_INDEX_ENTRY;
         let es_index = ck_bodies + 4096;
         let es_bodies = es_index + PAGE_INDEX_ENTRY;
         full.resize(es_bodies + 4096, 0);
         let parsed = EncodingFile::parse(&full).expect("valid synthetic file");
-        assert_eq!(parsed.espec(), b"a\0bb\0\0");
+        assert_eq!(parsed.espec(), b"a\0bb\0c\0");
         assert_eq!(parsed.espec_entry_count(), 3);
+        assert_eq!(parsed.espec_string_offsets(), &[0, 2, 5]);
+    }
+
+    /// `FUN_142498a70` (`0x142498a70`): the last-byte gate, the empty-block
+    /// read at `base + 0xFFFF_FFFF`, the empty-string reject, the
+    /// string-start appends at the running size, and the tightest no-grow
+    /// capacity.
+    #[test]
+    fn espec_string_index_builds_the_client_index() {
+        let mut index = [0xCCu64; 8];
+        let mut size = 0u32;
+        assert_eq!(
+            espec_string_index(b"ab\0c\0d\0", 0x1000, 0, &mut index, &mut size, 8),
+            0
+        );
+        assert_eq!(size, 3);
+        assert_eq!(index[..3], [0x1000, 0x1003, 0x1005]);
+        // Slots past the new size are untouched.
+        assert_eq!(index[3], 0xCC);
+
+        // An unterminated block returns 8 and writes nothing, even though
+        // it contains a NUL: the last-byte gate runs first.
+        let mut index = [0xCCu64; 8];
+        let mut size = 0u32;
+        assert_eq!(
+            espec_string_index(b"ab\0cd", 0x1000, 0, &mut index, &mut size, 8),
+            ESPEC_NOT_TERMINATED as u8
+        );
+        assert_eq!(size, 0);
+        assert_eq!(index, [0xCCu64; 8]);
+
+        // An empty string returns 8 at its NUL, before its append; appends
+        // already made stay made. `a\0\0`: `a` is appended, then the empty
+        // second string returns 8.
+        let mut index = [0xCCu64; 8];
+        let mut size = 0u32;
+        assert_eq!(
+            espec_string_index(b"a\0\0", 0x1000, 0, &mut index, &mut size, 8),
+            ESPEC_NOT_TERMINATED as u8
+        );
+        assert_eq!(size, 1);
+        assert_eq!(index[0], 0x1000);
+        // A leading NUL is an empty first string: 8 with no writes at all.
+        let mut index = [0xCCu64; 8];
+        let mut size = 0u32;
+        assert_eq!(
+            espec_string_index(b"\0", 0x1000, 0, &mut index, &mut size, 8),
+            ESPEC_NOT_TERMINATED as u8
+        );
+        assert_eq!(size, 0);
+        assert_eq!(index, [0xCCu64; 8]);
+
+        // An empty block: the last-byte read is at `base + 0xFFFF_FFFF`
+        // (zero-extended `count - 1`), not at `base - 1`, so it returns 8
+        // whatever byte sits at `base - 1`, with the size untouched.
+        let mut index = [0xCCu64; 8];
+        let mut size = 3u32;
+        assert_eq!(
+            espec_string_index(b"", 0x1000, 0, &mut index, &mut size, 8),
+            ESPEC_NOT_TERMINATED as u8
+        );
+        assert_eq!(size, 3);
+        assert_eq!(
+            espec_string_index(b"", 0x1000, 0x41, &mut index, &mut size, 8),
+            ESPEC_NOT_TERMINATED as u8
+        );
+        assert_eq!(size, 3);
+
+        // Appends land at the incoming size, and capacity == the NUL count
+        // is the tightest no-grow case (the reserve is a no-op and every
+        // pre-append size is below capacity).
+        let mut index = [0xCCu64; 4];
+        let mut size = 1u32;
+        assert_eq!(
+            espec_string_index(b"a\0b\0c\0", 0x2000, 0, &mut index, &mut size, 4),
+            0
+        );
+        assert_eq!(size, 4);
+        assert_eq!(index, [0xCC, 0x2000, 0x2002, 0x2004]);
+    }
+
+    /// Both grow edges are the allocator-vtable path at `0x142388210`,
+    /// outside this system; the function panics instead of inventing one.
+    #[test]
+    #[should_panic(expected = "vector grow")]
+    fn espec_string_index_panics_on_the_reserve_grow() {
+        let mut index = [0u64; 2];
+        let mut size = 0u32;
+        // Three NULs against a capacity of two: the reserve must grow.
+        let _ = espec_string_index(b"a\0b\0c\0", 0x1000, 0, &mut index, &mut size, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "vector grow")]
+    fn espec_string_index_panics_on_the_append_grow() {
+        let mut index = [0u64; 3];
+        let mut size = 2u32;
+        // The reserve passes (two NULs <= 3), but the second append finds
+        // `size == capacity` and must grow.
+        let _ = espec_string_index(b"a\0b\0", 0x1000, 0, &mut index, &mut size, 3);
     }
 }

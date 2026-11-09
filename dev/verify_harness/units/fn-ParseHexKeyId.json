@@ -1,0 +1,62 @@
+{
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u64",
+ "id": "fn/ParseHexKeyId",
+ "title": "tier-2 shipped code: the client's 8-byte hex id parser against ParseHexKeyId (0x14248f040)",
+ "address": {
+  "v2b": "0x7ff7c71af040"
+ },
+ "entry": "parse_hex_key_id",
+ "argFactory": "parse_hex_key_id_fixture",
+ "args": [
+  {
+   "name": "text",
+   "kind": "ptr",
+   "ptr_len": 64
+  },
+  {
+   "name": "len",
+   "kind": "u64"
+  },
+  {
+   "name": "out",
+   "kind": "ptr",
+   "ptr_len": 8
+  },
+  {
+   "name": "flag",
+   "kind": "ptr",
+   "ptr_len": 1
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4262,
+  "coverageWindow": 106,
+  "allowedImageReads": []
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/install.rs::parse_hex_key_id (with the same hex_decode, hex_value and leading_whitespace leaves), built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the parse_hex_key_id entry.",
+  "Oracle is ParseHexKeyId at exe 0x14248f040, extent 0x14248f040..0x14248f0aa (106 bytes through the ret), which is the declared coverageWindow. Signature: (const char *text, size_t len, u8 out[8], u8 *flag) -> size_t consumed.",
+  "The client's read is ParseHexKey's body with an 8-byte target: zero the 8-byte out (one qword store) and `*flag`, skip `0x20`/`0x09..=0x0d`, call 0x14269ab80(out, 8, text + ws, len - ws), and return `ws + 0x10` when exactly 8 bytes decoded, else 0.",
+  "Compared channels: the 64-bit return, the read-only text, the 8-byte out block and the 1-byte flag, all pre-filled with 0xA5 so the zeroing and partial writes are visible.",
+  "Coverage gate is 100% over the window's sites: the same whitespace and length edges as ParseHexKey at the 8-byte width."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "a len larger than the text buffer",
+   "why": "The client reads `len` bytes from the pointer it was given; a shorter buffer is a caller bug and would read past the arena. The probe rejects it and the fixture never builds one."
+  },
+  {
+   "what": "the decoder's own branches (0x14269ab80)",
+   "why": "They are inside the call, so they are outside this unit's coverage window; they run in the oracle and their effect is compared through the 16-byte output. 0x14269ab80 has 7 call sites and is a candidate for its own unit."
+  }
+ ]
+}

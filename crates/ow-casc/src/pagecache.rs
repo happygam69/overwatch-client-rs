@@ -451,17 +451,32 @@ enum FragmentOutcome {
     Bypass,
 }
 
+/// Copy one fragment out of a loaded page, as the publish step of
+/// `PageSlotPublish` (`0x1424f9bf0`) does for a head or tail fragment: first
+/// a full-length copy from `page + in_page`, then the served count is
+/// `stored - in_page` (32-bit wrapping) when that is unsigned-below the
+/// fragment length and the full length otherwise, and the bytes past the
+/// served count are zero-filled. When `stored < in_page` the wrapping
+/// difference is above the length, so the whole fragment is served from
+/// whatever the page buffer holds there (stale bytes on a reused slot);
+/// the earlier saturating form reported zero instead. Returns the served
+/// count, which the client stores at the fragment's served word.
 fn copy_fragment(slot: &Slot, fragment: Fragment, out: &mut [u8]) -> u32 {
     let start = fragment.dest as usize;
     let end = start + fragment.len as usize;
     let page_offset = fragment.in_page as usize;
-    let available = (slot.stored as usize).saturating_sub(page_offset);
-    let copied = available.min(fragment.len as usize);
-    out[start..start + copied].copy_from_slice(&slot.data[page_offset..page_offset + copied]);
-    if copied < fragment.len as usize {
-        out[start + copied..end].fill(0);
+    let len = fragment.len as usize;
+    out[start..end].copy_from_slice(&slot.data[page_offset..page_offset + len]);
+    let available = slot.stored.wrapping_sub(fragment.in_page);
+    let served = if available < fragment.len {
+        available
+    } else {
+        fragment.len
+    };
+    if served < fragment.len {
+        out[start + served as usize..end].fill(0);
     }
-    copied as u32
+    served
 }
 
 /// One head or tail fragment of the read plan.
@@ -508,6 +523,114 @@ fn put_u32(raw: &mut [u8], at: usize, value: u32) {
 
 fn put_u64(raw: &mut [u8], at: usize, value: u64) {
     raw[at..at + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+/// One page-cache slot record's stride in the client's table.
+pub const SLOT_STRIDE: usize = 0x70;
+
+/// `PageSlotFind` (`0x1424fa440`): the one pass that both looks a page up and
+/// picks the slot to replace.
+///
+/// Measured extent `0x1424fa440..0x1424fa536` (247 bytes through the `ret` at
+/// `0x1424fa536`), the declared `coverageWindow`. Signature
+/// `(cache, archive, page, len, out_usable, exclude) -> slot` (RCX cache, RDX
+/// archive, R8 page, R9 len, then the stack arguments `out_usable` and
+/// `exclude`); the return is a slot pointer or null. This byte view takes the
+/// cache object blob (whose absolute pointers are relative to `table_base`),
+/// the slot table as the client's `0x70`-byte records, and the excluded slot as
+/// an absolute address (`0` for the client's null, which no slot address can
+/// equal). It returns the chosen slot's absolute address and the byte the
+/// client stores through `out_usable`.
+///
+/// The client's fields, all read by offset: the count is the u32 at cache
+/// `+8`, the last-use clock the u64 at `+0x20` and the slot base the u64 at
+/// `+0x28`; a slot's archive is the qword at `+8`, its page the qword at
+/// `+0x10`, its stamp the qword at `+0x20`, its stored length the u32 at
+/// `+0x28`, and two bytes follow - `+0x2d` (invalidated while a load was in
+/// flight) and `+0x2e` (busy or failed). `+0x2c` is never read here.
+///
+/// The pass, in one loop over the slots (`0x1424fa490`):
+///
+/// * the MATCH test (`0x1424fa49a..0x1424fa4b6`): `+0x2d == 0` and the archive
+///   and page are equal and (`stored >= len` or `+0x2e != 0`). A match ends the
+///   loop, is returned whether or not it is busy, and stores
+///   `(byte [slot+0x2e] == 0)` through `out_usable` - so a matching slot that
+///   is busy is handed back with usable 0 rather than skipped.
+/// * the EVICTION candidate (`0x1424fa4b8..0x1424fa4d3`): otherwise, skip a
+///   busy slot (`+0x2e != 0`), skip the excluded slot, and take the slot with
+///   the largest wrapping `clock - stamp`; a tie keeps the earlier (lower
+///   index) change because the compare is a strict `ja` and an existing
+///   candidate is kept unless the new distance is strictly larger.
+///
+/// The chosen slot then bumps the clock: `cache+0x20 = clock + 1` and
+/// `slot+0x20 = clock + 1` (`0x1424fa4ff..0x1424fa50a`). A null choice writes
+/// nothing but `out_usable` (already 0) and returns null. A zero count exits
+/// with null before the loop (`0x1424fa46e`).
+///
+/// `out_usable` is written to zero before anything else (`0x1424fa466`), so
+/// this returns the byte to store even on the paths that leave it at 0.
+pub fn slot_find(
+    table: &mut [u8],
+    table_base: u64,
+    archive: u64,
+    page: u64,
+    len: u32,
+    exclude: u64,
+) -> SlotChoice {
+    let count = get_u32(table, 8) as usize;
+    let base = get_u64(table, 0x28).wrapping_sub(table_base) as usize;
+    let exclude_off = exclude.wrapping_sub(table_base) as usize;
+    let mut usable = 0u8;
+    // `usize::MAX` is the client's null candidate pointer, and 0 its `rdi`
+    // (the best distance so far).
+    let mut best_index = usize::MAX;
+    let mut best_distance = 0u64;
+    let mut chosen_index = usize::MAX;
+    for index in 0..count {
+        let at = base + index * SLOT_STRIDE;
+        if table[at + 0x2d] == 0
+            && get_u64(table, at + 8) == archive
+            && get_u64(table, at + 0x10) == page
+            && (get_u32(table, at + 0x28) >= len || table[at + 0x2e] != 0)
+        {
+            usable = u8::from(table[at + 0x2e] == 0);
+            chosen_index = index;
+            break;
+        }
+        if table[at + 0x2e] != 0 || at == exclude_off {
+            continue;
+        }
+        let distance = get_u64(table, 0x20).wrapping_sub(get_u64(table, at + 0x20));
+        if best_index == usize::MAX || distance > best_distance {
+            best_distance = distance;
+            best_index = index;
+        }
+    }
+    let index = if chosen_index != usize::MAX {
+        chosen_index
+    } else {
+        best_index
+    };
+    if index == usize::MAX {
+        return SlotChoice { slot: 0, usable };
+    }
+    let at = base + index * SLOT_STRIDE;
+    let next = get_u64(table, 0x20).wrapping_add(1);
+    put_u64(table, 0x20, next);
+    put_u64(table, at + 0x20, next);
+    SlotChoice {
+        slot: table_base + at as u64,
+        usable,
+    }
+}
+
+/// The two answers `PageSlotFind` leaves behind: the slot it chose (its
+/// absolute address, or 0 for null) and the byte it stores through
+/// `out_usable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotChoice {
+    pub slot: u64,
+    pub usable: u8,
 }
 
 /// Write the client's `0xb0`-byte read plan, field for field.
@@ -879,6 +1002,34 @@ mod tests {
         assert_eq!(outcome, Outcome::Served(served));
         assert_eq!(source.ops, vec![(5, 0, PAGE_SIZE)]);
         assert_eq!(cache.resident()[0].2, 0x1800);
+    }
+
+    /// `PageSlotPublish` (`0x1424f9bf0`) with `stored < in_page`: the
+    /// wrapping served count is above the fragment length, so the whole
+    /// fragment is copied from the page buffer and reported served in
+    /// full - not zero-filled from a saturating difference. The buffer
+    /// here carries stale bytes from an earlier full page, as a reused
+    /// client slot would.
+    #[test]
+    fn a_fragment_starting_after_the_stored_bytes_serves_from_the_buffer() {
+        let mut slot = Slot::new();
+        for (index, byte) in slot.data.iter_mut().enumerate() {
+            *byte = (index % 251) as u8;
+        }
+        slot.stored = 0x100;
+        let fragment = Fragment {
+            page: 0,
+            in_page: 0x2000,
+            len: 0x40,
+            dest: 0,
+        };
+        let mut out = vec![0xAAu8; 0x40];
+        let served = copy_fragment(&slot, fragment, &mut out);
+        assert_eq!(served, 0x40);
+        assert_eq!(
+            &out[..],
+            &page_pattern(0, PAGE_SIZE as usize)[0x2000..0x2040]
+        );
     }
 
     /// A zero-length read reports 0 without touching the archive or the cache.

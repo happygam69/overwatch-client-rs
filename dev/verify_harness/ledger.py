@@ -37,7 +37,13 @@ LEDGER_PATH = os.path.join(os.path.dirname(__file__), "ledger.json")
 #    mutants in four warm cargo target slots per crate. Each build is forced
 #    dirty with `cargo clean -p` and the artifact is copied out per mutant.
 #    Same gates, same classification; see dev/verify_harness/PERFORMANCE.md.
-HARNESS_VERSION = "5"
+# 6: the oracle maps a fake TEB and points `gs:` at it, zeroed before every
+#    call, so CRT helpers that read the stack limit can run. `__chkstk`
+#    (`0x1426c3ce0`) reads `gs:[0x10]` and returns immediately with zero there
+#    instead of probing pages; before this, any function that allocated a
+#    dynamic stack frame faulted as an unmapped read at 0x10. No gate changed,
+#    but the oracle did, so every older entry is stale.
+HARNESS_VERSION = "6"
 
 
 def sha256_bytes(b: bytes) -> str:

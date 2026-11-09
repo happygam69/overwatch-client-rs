@@ -1,0 +1,49 @@
+{
+ "id": "fn/DynamicIndexNormalizeIntervals",
+ "title": "tier-2 shipped code: the client's interval merge against DynamicIndexNormalizeIntervals (0x1425208d0)",
+ "address": {
+  "v2b": "0x7ff7c72408d0"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "dynamic_index_normalize",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "void",
+ "argFactory": "dynamic_index_normalize_fixture",
+ "args": [
+  {
+   "name": "obj",
+   "kind": "ptr",
+   "ptr_len": 312
+  },
+  {
+   "name": "events",
+   "kind": "ptr",
+   "ptr_len": 4096
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4271,
+  "coverageWindow": 202,
+  "allowedImageReads": []
+ },
+ "notes": [
+  "Inputs are pre-sorted by start and duplicate starts carry identical bytes, so the client sort is a no-op and the tail beyond the new count is deterministic on both sides; `IntervalSet::normalize` also truncates its Vec, so the probe writes the emitted prefix back over the input and leaves the tail alone - exactly the client's forward compaction."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "an unsorted input buffer",
+   "why": "The client's sort (0x14251ff30) leaves the events it drops in its own implementation-defined order, and the four bytes after each emitted event are only defined by that order. The Rust port sorts with sort_unstable_by_key, a different algorithm, so an unsorted case's tail bytes cannot be compared; 0x14251ff30 is not ported and the client's callers only read the first `count` events. Every case here is pre-sorted, which makes the sort a no-op on both sides and the whole buffer deterministic."
+  },
+  {
+   "what": "the sort itself (0x14251ff30)",
+   "why": "It is a call inside the window: the oracle runs the client's bytes for it, the candidate runs Rust's sort. The unit therefore proves the merge algebra and the compaction, not the sort's implementation."
+  }
+ ]
+}
