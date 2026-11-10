@@ -524,8 +524,17 @@ pub fn load(payload: &[u8], default_byte: u8, payload_base: u64, dst_base: u64) 
         let source = payload
             .get(elements..elements + bytes)
             .ok_or(Error::Malformed("element array runs past the end"))?;
-        out[runtime::vertex_buffer::ELEMENTS..runtime::vertex_buffer::ELEMENTS + bytes]
-            .copy_from_slice(source);
+        // The element array lives inside the 0xf8-byte runtime record, at
+        // +0x1c, so at most 0xdc bytes fit. A count above 27 is a descriptor
+        // this record cannot hold; reject it rather than panic on the copy.
+        let dst = runtime::vertex_buffer::ELEMENTS;
+        let end = dst
+            .checked_add(bytes)
+            .ok_or(Error::Malformed("element array overflows the record"))?;
+        if end > runtime::VERTEX_STRIDE {
+            return Err(Error::Malformed("element array overflows the record"));
+        }
+        out[dst..end].copy_from_slice(source);
 
         if src[vertex_buffer::FLAGS] & 0x10 == 0 {
             // The streams are payload offsets and stay in the source
@@ -791,5 +800,20 @@ mod tests {
         let mut d = synth();
         d[header::SUBMESHES..header::SUBMESHES + 8].fill(0);
         assert!(load_payload(&d, 0).is_err());
+    }
+
+    #[test]
+    fn an_element_count_past_the_record_is_rejected_not_a_panic() {
+        let mut d = synth();
+        // 28 elements * 8 bytes = 224, but the 0xf8-byte record holds only
+        // 0xdc (220) bytes of elements at +0x1c. The client's writer never
+        // emits a count this large; a descriptor that does is malformed and
+        // must be a refusal, not a slice-index panic.
+        d[0x100 + vertex_buffer::ELEMENT_COUNT] = 28;
+        let loaded = load_payload(&d, 0);
+        assert!(
+            loaded.is_err(),
+            "a count that overflows the record must be a refusal"
+        );
     }
 }

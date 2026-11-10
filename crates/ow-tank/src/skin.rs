@@ -214,42 +214,46 @@ impl Skin {
     /// The bind-time world matrices with a pose applied, which is the step a
     /// caller wants when it needs bone *positions* (a test, or a retarget)
     /// rather than skinning matrices.
+    ///
+    /// This is the rotation-only case of [`Skin::posed_world_full`], and it is
+    /// the same rule: a pose replaces the bind's **local** matrix,
+    /// `local' = T(pose_t) · R(pose_r) · S(local_s)`. A rotation-only pose
+    /// carries no translation, so the bone's own local translation and scale
+    /// stay and only its local rotation is replaced.
     pub fn posed_world(&self, pose: &dyn Fn(usize) -> Option<Quat>) -> Vec<Mat4> {
-        // **Read from the client's own pose path.** `FUN_7ff614edc560` (in
-        // `clipobj.exe`) fills a 16-byte-per-bone array with the *clip
-        // evaluator's* output — `func_0x7ff614e92700(clip, &out, bone, …)`
-        // writes an **absolute rotation for that bone**, not a delta — and
-        // `FUN_7ff614ed98d0` blends that quaternion into the bone's 0x30-byte
-        // pose slot. Nothing in that path composes a parent-relative rotation.
+        // **The read rule** (`docs/formats/animation.md`, "Skinning"): a pose
+        // replaces the bind's *local* matrix. The pose slot's rotation lane is
+        // the bone's own rotation relative to its parent — the install says so:
+        // the blend-card clips' *position* tracks land on `skin.local`'s
+        // translations (`tests/blend_bind_check.rs`: all 79 c50 records within
+        // 5.6 cm of some skin-local, 45 within 1 mm, and the values are
+        // centimetres where an absolute placement would be ~1.5 m), so the pose
+        // is a local transform and its rotation is the local rotation.
         //
-        // So a pose is an **absolute bone rotation that replaces the bind
-        // rotation**, and the parent-relative transform is *derived from it
-        // afterwards*:
+        // The earlier implementation replaced the **absolute** rotation
+        // (`T(bind_t) · R(pose) · S(bind_s)`) and then re-derived *every* bone's
+        // parent-relative transform from the posed absolutes. That second step
+        // is the defect: for an unposed bone `c` whose parent `p` is posed it
+        // computed `local'(c) = inverse(absolute'(p)) · absolute(c)`, so
+        // `world'(c) = world'(p) · local'(c)` collapsed back to `absolute(c)` —
+        // the parent's pose cancelled and **a posed bone's children did not
+        // follow**. (Deriving only a *posed* bone's local, and leaving an
+        // unposed bone's bind local alone, is the same absolute reading done
+        // right; it is not the same matrix, and it is not the read rule either.)
         //
-        //     absolute'(b) = T(bind_t(b)) · R(pose(b)) · S(bind_s(b))
-        //     local'(b)    = inverse(absolute'(parent)) · absolute'(b)
-        //
-        // Three earlier attempts all composed the pose into `local` — the
-        // derived *delta* — and all three distorted the mesh: dropping the bind
-        // rotation and rebuilding, then post-multiplying a pivot, then
-        // pre-multiplying it. The pivot was never the issue; the *matrix it was
-        // applied to* was. Bind pose looks fine either way, because the palette
-        // is the identity regardless — which is why only a pose exposed it.
-        let mut absolute = self.absolute.clone();
-        for (bone, a) in absolute.iter_mut().enumerate() {
+        // Three earlier attempts composed the pose into `local` as a *delta*
+        // and all three distorted the mesh: dropping the bind rotation and
+        // rebuilding, then post-multiplying a pivot, then pre-multiplying it.
+        // The pivot was never the issue; the *matrix it was applied to* was.
+        // Bind pose looks fine either way, because the palette is the identity
+        // regardless — which is why only a pose exposed it.
+        let mut local = self.local.clone();
+        for (bone, l) in local.iter_mut().enumerate() {
             if let Some(rotation) = pose(bone) {
-                let (scale, _rot, translation) = a.to_scale_rotation_translation();
-                *a = Mat4::from_translation(translation)
+                let (scale, _rot, translation) = l.to_scale_rotation_translation();
+                *l = Mat4::from_translation(translation)
                     * Mat4::from_quat(rotation)
                     * Mat4::from_scale(scale);
-            }
-        }
-        // Derive the parent-relative transforms from the posed absolutes.
-        let mut local = absolute.clone();
-        for bone in 0..absolute.len() {
-            let parent = self.parents.get(bone).copied().unwrap_or(-1);
-            if parent >= 0 && (parent as usize) < absolute.len() {
-                local[bone] = absolute[parent as usize].inverse() * absolute[bone];
             }
         }
         compose(&self.parents, &local)
@@ -257,20 +261,14 @@ impl Skin {
 
     /// The **full-transform** variant of [`Skin::posed_world`]: the pose replaces
     /// the bind's *local matrix* per bone (`local'(b) = T(pose_t) · R(pose_r) ·
-    /// S(local_s)`), then the chain composes as always. This is the semantics the
-    /// live pose trace backs: the 64-byte bone records are whole `3×4` matrices
-    /// per bone, and the blend-card clips' position tracks land on
-    /// `skin.local`'s translations (the nearest-neighbour gate on c50 measured
-    /// record i ↔ local bone i almost exactly). Scale stays the local's own,
-    /// because no measured clip carries a pose scale other than the bind's.
+    /// S(local_s)`), then the chain composes as always.
+    ///
+    /// This is the read rule (`docs/formats/animation.md`, "Skinning"), and the
+    /// install measures it: the blend-card clips' position tracks land on
+    /// `skin.local`'s translations (`tests/blend_bind_check.rs`), so the pose is
+    /// a local transform. Scale stays the local's own, because no measured clip
+    /// carries a pose scale other than the bind's.
     pub fn posed_world_full(&self, pose: &dyn Fn(usize) -> Option<(Quat, Vec3)>) -> Vec<Mat4> {
-        // **Read from the client's own pose path.** `FUN_7ff614edc560` (in
-        // `clipobj.exe`) fills a 16-byte-per-bone array with the *clip
-        // evaluator's* output — `func_0x7ff614e92700(clip, &out, bone, …)`
-        // writes an **absolute rotation for that bone**, not a delta — and
-        // `FUN_7ff614ed98d0` blends that quaternion into the bone's 0x30-byte
-        // pose slot. The full 3×4 records of the live pose trace are the per-bone
-        // *local* matrices, so the full pose replaces `local` (see above).
         let mut local = self.local.clone();
         for (bone, l) in local.iter_mut().enumerate() {
             if let Some((rotation, translation)) = pose(bone) {
@@ -549,13 +547,29 @@ mod tests {
             before.length(),
             after.length()
         );
-        // Under the measured absolute formulation a pose touches only this bone's
-        // own transform; an unposed descendant keeps its bind position.
-        let grandchild_bind = bind[3].w_axis.truncate();
-        let grandchild_posed = posed[3].w_axis.truncate();
+        // The bone's own joint did not travel: the rotation is about it.
         assert!(
-            grandchild_posed.abs_diff_eq(grandchild_bind, 1e-3),
-            "an unposed descendant moved: {grandchild_bind:?} -> {grandchild_posed:?}"
+            posed[2]
+                .w_axis
+                .truncate()
+                .abs_diff_eq(bind[2].w_axis.truncate(), 1e-5),
+            "the posed bone's joint moved"
+        );
+        // Its child follows, through the child's own bind local:
+        //     world'(c) = world'(p) · local_bind(c)
+        // The old absolute-rotation path re-derived the child's local from the
+        // posed absolutes and the parent's pose cancelled, so the child stayed
+        // at its bind position.
+        let t_local3 = skin.local[3].to_scale_rotation_translation().2;
+        let offset_posed = posed[3].w_axis.truncate() - posed[2].w_axis.truncate();
+        let offset_want = posed[2].to_scale_rotation_translation().1 * t_local3;
+        assert!(
+            offset_posed.abs_diff_eq(offset_want, 1e-4),
+            "the child did not follow: got {offset_posed:?}, want {offset_want:?}"
+        );
+        assert!(
+            (posed[3].w_axis.truncate() - bind[3].w_axis.truncate()).length() > 1e-3,
+            "the child stayed in bind pose"
         );
         // the unposed parent is untouched
         assert!(bind[1].abs_diff_eq(posed[1], 1e-5), "parent moved");
@@ -563,34 +577,50 @@ mod tests {
 
     #[test]
     fn the_pose_pivot_is_multiplied_on_the_left() {
-        // **This is the test that was missing.** The earlier two tests passed
-        // with the multiplication order wrong, because they only checked that
-        // a bone keeps its distance from its parent and that something moved —
-        // both of which a post-multiplied pivot also satisfies. The order is
-        // pinned directly: pre-multiplying rotates the bone's *children* about
-        // the joint in parent space, so a child's world position must be the
-        // joint rotated by the pose, exactly. Post-multiplying puts the same
-        // rotation in the wrong space and does not reproduce that.
+        // **This is the test that was missing.** The read rule is
+        // `local' = T(pose_t) · R(pose_r) · S(local_s)`: the pivot (the bone's own
+        // translation) is the **left** operand, so the rotation happens about
+        // the joint. The earlier version of this test only checked that an
+        // unposed bone did not move, which a post-multiplied pivot
+        // (`R(pose) · T(pivot)`) also satisfies. The order is pinned directly by
+        // recovering the posed local and comparing its translation with the
+        // bind local's.
         let skin = Skin::from_skeleton(&chain());
         let bind = skin.bind_world();
         let angle = std::f32::consts::FRAC_PI_2;
-        let rot = Quat::from_rotation_z(angle);
-        let posed = skin.posed_world(&|b| if b == 1 { Some(rot) } else { None });
+        // About x, so the two orders differ: bone 2's local translation is
+        // along z, which a z rotation would leave alone.
+        let rot = Quat::from_rotation_x(angle);
+        let posed = skin.posed_world(&|b| if b == 2 { Some(rot) } else { None });
 
-        // Bone 2's joint, as a point in bone 1's frame.
-        let joint_bind = bind[2].w_axis.truncate();
-        let origin_bind = bind[1].w_axis.truncate();
-        let _offset_bind = joint_bind - origin_bind;
-
-        // Under the measured absolute formulation, posing bone 1 does not move
-        // unposed bones: bone 2 keeps its bind position.
-        let expected = bind[2].w_axis.truncate();
-        let got = posed[2].w_axis.truncate();
+        // Bone 1 is unposed, so world'(2) = world(1) · local'(2).
+        let local2 = bind[1].inverse() * posed[2];
+        let (scale2, rot2, trans2) = local2.to_scale_rotation_translation();
+        let bind_local2 = skin.local[2].to_scale_rotation_translation().2;
+        // The pivot stayed: T is on the left of R.
         assert!(
-            got.abs_diff_eq(expected, 1e-4),
-            "an unposed bone moved:
-  got      {got:?}
-  expected {expected:?}"
+            trans2.abs_diff_eq(bind_local2, 1e-5),
+            "the pivot moved: {bind_local2:?} -> {trans2:?}"
+        );
+        // ... and it is not the pre-multiplied form R(pose) · T(pivot).
+        let premultiplied = rot * bind_local2;
+        assert!(
+            (trans2 - premultiplied).length() > 1e-3,
+            "the pivot looks pre-multiplied: {trans2:?} vs {premultiplied:?}"
+        );
+        // The rotation really is the pose, and the scale is the local's own.
+        assert!(rot2.abs_diff_eq(rot, 1e-5), "rotation: {rot2:?}");
+        assert!(
+            scale2.abs_diff_eq(glam::Vec3::ONE, 1e-5),
+            "scale: {scale2:?}"
+        );
+        // The bone's own joint did not travel.
+        assert!(
+            posed[2]
+                .w_axis
+                .truncate()
+                .abs_diff_eq(bind[2].w_axis.truncate(), 1e-5),
+            "the joint moved"
         );
     }
 
@@ -607,17 +637,36 @@ mod tests {
                 None
             }
         });
+        let joint = posed[1].w_axis.truncate();
         let child_bind = bind[2].w_axis.truncate();
         let child_posed = posed[2].w_axis.truncate();
-        // An unposed descendant keeps its bind position.
+        // The posed bone's own joint stayed put.
         assert!(
-            child_posed.abs_diff_eq(child_bind, 1e-3),
-            "an unposed descendant moved"
+            joint.abs_diff_eq(bind[1].w_axis.truncate(), 1e-5),
+            "the posed bone's joint moved"
         );
-        // ... but the posed bone itself has moved
+        // Its child followed, through the child's bind local:
+        //     world'(c) = world'(p) · local_bind(c)
+        let t_local2 = skin.local[2].to_scale_rotation_translation().2;
+        let offset_posed = child_posed - joint;
+        let offset_want = posed[1].to_scale_rotation_translation().1 * t_local2;
         assert!(
-            max_difference(&posed[1], &bind[1]) > 1e-3,
-            "the posed bone did not move"
+            offset_posed.abs_diff_eq(offset_want, 1e-4),
+            "the child did not follow: got {offset_posed:?}, want {offset_want:?}"
+        );
+        // ... and it is not still at its bind position.
+        assert!(
+            (child_posed - child_bind).length() > 1e-3,
+            "the child stayed in bind pose"
+        );
+        // The grandchild follows too (it hangs off bone 2, which is unposed, so
+        // it rides bone 2's world).
+        let t_local3 = skin.local[3].to_scale_rotation_translation().2;
+        let grand_posed = posed[3].w_axis.truncate();
+        let grand_want = child_posed + posed[2].to_scale_rotation_translation().1 * t_local3;
+        assert!(
+            grand_posed.abs_diff_eq(grand_want, 1e-4),
+            "the grandchild did not follow: got {grand_posed:?}, want {grand_want:?}"
         );
     }
 
@@ -820,12 +869,25 @@ mod tests {
         // Untouched bones stay put — the root, and bone 1 above the rotation.
         assert!((posed(0) - head(&bind, 0)).length() < 1e-5);
         assert!((posed(1) - head(&bind, 1)).length() < 1e-5);
-        // The rotated bone's skinning matrix changes; its unposed descendants stay.
+        // The rotated bone's skinning matrix changes ...
         assert!(max_difference(&palette[2], &Mat4::IDENTITY) > 0.2);
-        let moved_descendant = (posed(3) - head(&bind, 3)).length();
+        // ... and its child follows: `skin(b) · (bind world origin)` is exactly
+        // `world'(b)`'s origin, for the posed bone and for the descendant that
+        // rides it. (This assertion used to require the descendant to stay put,
+        // which is the defect: the old absolute-rotation path re-derived every
+        // bone's local from the posed absolutes and the parent's pose cancelled.)
+        let world = skin.posed_world(&|bone| (bone == 2).then_some(roll));
+        for b in [2usize, 3] {
+            let want = world[b].transform_point3(glam::Vec3::ZERO);
+            let got = posed(b);
+            assert!(
+                (got - want).length() < 1e-5,
+                "bone {b}: skinning head {got:?} vs posed world {want:?}"
+            );
+        }
         assert!(
-            moved_descendant < 1e-4,
-            "an unposed descendant moved {moved_descendant}"
+            (posed(3) - head(&bind, 3)).length() > 1e-3,
+            "the descendant stayed in bind pose"
         );
     }
 

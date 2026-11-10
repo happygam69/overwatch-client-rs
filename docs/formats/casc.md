@@ -240,6 +240,38 @@ earlier note said was not found**; it is reached only in the footer-only mode.
 `ow-casc` reads whole index files, so it takes the whole-file branch; the
 streamed branch is read and documented but not implemented by the port.
 
+**The HTTP range-read start/wait pair read, no harness unit.** The start
+(`0x142522870`, 401 bytes, `0x142522870..0x142522a01`) calls an IAT slot at
+`0x14252289c` (`call qword ptr [rip + 0xa0afde]`), the allocator vtable
+`[rax + 0x18]` at `0x1425228d1`, the mutex `0x142694c20` at `0x14252292d`, three
+helpers `0x142523310`/`0x142522050`/`0x142522170`, the unlock `0x142694c50` at
+`0x1425229bc`, and the WinHTTP read `0x142521d70` at `0x1425229cd`. The wait
+(`0x142522380`, 532 bytes, `0x142522380..0x142522594`) locks the mutex at
+`0x1425223a0`, calls the IAT slots at `0x142522465`/`0x142522479`/`0x142522567`,
+the helpers `0x142523220`/`0x142521b30`, and the vtable `[rax + 0x30]` at
+`0x142522576`. The blockers are the IAT slots (zero in the offline image) and
+the mutex on every path; the WinHTTP read is the network stack. No probe arm,
+fixture or unit JSON was wired; the request shape (range offset and length,
+full-page requirement, checksum reject) is read from `CdnIndexPageResident`,
+and the shipped CDN transport is a TACTLib port with no real endpoint test.
+
+**The CDN range-request builder (`0x1424c1030`) read, no harness unit.** The
+shipped `cdn.rs` already names it as the source of the `Range: bytes=<start>-<end>`
+header. Measured extent `0x1424c1030..0x1424c1390` (0x360 = 864 bytes; the
+`.pdata` root is only `0x1424c1030..0x1424c1063`, 0x33 bytes, and the body
+chains past it; no `ret` inside the root). It allocates through `0x142c10da0`
+at `0x1424c104e`, logs through `0x142c10df0` at `0x1424c1073`, assigns the
+URL string through `0x142697790` at `0x1424c118d`, formats the range with
+`0x14237f410` (`%s%llu-` / `%s%llu-%llu`), and calls `0x142c110c0` at
+`0x1424c10bb`. The blocker is the allocator path: `0x142c10da0` calls
+`0x142c18c60`, whose first IAT call at `0x142c18c7d` is a zero slot in the
+offline image, so the function cannot run past `0x1424c104e`; the log path
+`0x142c10df0` -> `0x142c18f20` has its own IAT at `0x142c1999c`, and
+`0x142c110c0` has an IAT at `0x142c110d0`. No probe arm, fixture or unit JSON
+was wired; the shipped `Range: bytes=<start>-<end>` request is the TACTLib
+port's own formatting, install-tested against the mock server, not a port of
+this function.
+
 `CdnResolveLocation` (`0x1424b0cc0`) is the caller: it tries the archive-group
 index at `client+0x48` (patch `+0x118`), splits the 6-byte offset into
 `ordinal = off >> (shift*8)` and `off & mask`, and copies the 16-byte archive
@@ -572,6 +604,75 @@ implements that rejection and does not split the range. No entry in this
 install crosses a `2^30` boundary, so `(packed + 0x1e) >> 30` equals
 `packed >> 30` for every key.
 
+**`DynamicContainerOpenArchive` read, no harness unit.** Measured extent
+`0x14250c8f0..0x14250cad4` (0x1e4 = 484 bytes; the whole `.pdata` root, chain 1,
+`ret` at `0x14250cad3`). Signature `(container /*RCX*/, out_file /*RDX*/,
+archive /*R8*/, arg4 /*R9*/, ...) -> file*` (further arguments on the stack at
+`[rsp+0x400]` and above). It locks the per-container mutex at
+`container+0x58` through the mutex IAT `0x142694c20` at `0x14250c960` on every
+path and unlocks through `0x142694c50` at `0x14250caa8`; the lookup
+`0x14251cc30`, the `data.%03d` name format `0x141ce29a0`, the file open
+`0x14251c6a0`, and the refcount release `call qword ptr [rax + 8]` at
+`0x14250ca04`/`0x14250ca75`/`0x14250ca90`. The blocker is the mutex IAT:
+`0x142694c20` is a zero IAT slot in the offline image, so the call faults on
+the first instruction of every path. No probe arm, fixture or unit JSON was
+wired; the shipped archive-number cache and `data.NNN` selection are the
+install-tested read, not a port of this function.
+
+**`DynamicContainerReadPage` read, no harness unit.** Measured extent
+`0x1424fcd20..0x1424fce96` (0x176 = 374 bytes; the whole `.pdata` root, chain 1,
+`ret` at `0x1424fce95`). Signature `(container /*RCX*/, out_status /*RDX*/,
+offset u64 /*R8*/, len u32 /*R9D*/) -> u32 status`. It shifts the offset right
+by the shift byte at `container+0x1d0`, rejects an archive above `0x3fe` or a
+range whose first and last byte are not in the same archive with status 10,
+returns 0 for a zero length, calls the archive filter `0x1424fcc80`, opens the
+archive through `DynamicContainerOpenArchive` (`0x14250c8f0`) at `0x1424fcdf2`
+and reads through `ArchiveRead` (`0x1424f9fe0`) at `0x1424fce43`. The blocker
+is the open archive's mutex IAT at `0x14250c960` (reached from `0x1424fcdf2`)
+and `ArchiveRead`'s own IAT/vtable state. No probe arm, fixture or unit JSON
+was wired; `Store::read_payload` implements the client's `(packed + 0x1e,
+size - 0x1e)` range and the status-10 rejection, install-tested.
+
+**`DynamicContainerRead` read, no harness unit.** Measured extent
+`0x1424f48d0..0x1424f4b30` (0x260 = 608 bytes; the `.pdata` root is only
+`0x1424f48d0..0x1424f491f`, 0x4f bytes, and the body chains past it; no `ret`
+inside the root). Signature `(container /*RCX*/, key[9] /*RDX*/, request
+/*R8*/, out_range /*R9*/, ...) -> u32 status`. It calls the key lookup
+`DynamicKeyStateLookup` (`0x142501b40`) at `0x1424f4993` (the per-bucket
+mutex and the declared-open segment open), the page read
+`DynamicContainerReadPage` (`0x1424fcd20`) at `0x1424f4a4b`, the cache
+maintenance `0x1424fff70`/`0x1424f9eb0`/`0x1424fab50`/`0x1424f9f90`, and the
+logger `0x1424f8440` at `0x1424f4ab5`. The blocker is the open chain: the
+mutex IAT at `0x142501bd4` reached from `0x1424f4993`, then the page read's
+mutex and `ArchiveRead`'s IAT/vtable. No probe arm, fixture or unit JSON was
+wired; `Store::read_payload` is the client's `(packed + 0x1e, size - 0x1e)`
+request through the shipped page cache, install-tested.
+
+**`ArchiveRead` read, no harness unit.** Measured extent
+`0x1424f9fe0..0x1424fa0f8` (0x118 = 280 bytes; the whole `.pdata` root, chain 1,
+`ret` at `0x1424fa0f7`). Signature `(container /*RCX*/, out /*RDX*/, offset
+u64 /*R8*/, len u32 /*R9D*/) -> u32 status`. For a range whose offset and length
+are both page-aligned it calls the IAT read `0x14269e470` at `0x1424fa088` and
+`0x1424fbec0`; otherwise it calls `PageCacheRead` (`0x1424fb1c0`) at
+`0x1424fa05c`; the refcount release `call qword ptr [rax + 8]` at
+`0x1424fa0b9`/`0x1424fa0de`. The blocker is the IAT read at `0x14269e470` (a
+zero slot in the offline image) and the vtable release. No probe arm, fixture
+or unit JSON was wired; the shipped page cache's aligned bypass and fragment
+copy are install-tested.
+
+**The page-cache logger (`0x1424f8440`) and the shared vector grow
+(`0x142388210`) are read, no harness unit.** The logger (302 bytes,
+`0x1424f8440..0x1424f856e`) reads three image constants (a word, a double and
+a byte at `rip+0xf7c4d8`/`0xf7c4c8`/`0xf7c4c6`), calls `0x142efe950`, four log
+sinks `0x14250c6f0`/`0x14250c6d0`/`0x14250c6b0`/`0x14250c650`, and the logger's
+indirect `call rax` at `0x1424f8549`; the blocker is that indirect call. The
+vector grow (135 bytes, `0x142388210..0x142388297`) reserves through the
+allocator vtable `call qword ptr [rax + 0x10]` at `0x142388251`, copies
+through `0x142efe2b0`, and frees through `call r8` at `0x142388279`; the
+blocker is the allocator vtable. Neither has a probe arm, fixture or unit
+JSON; the fixture loggers are disabled (level 0) and the shipped vectors keep
+ their capacity, so the grow path is a declared gap of the units that call it.
+
 ### Archive page cache
 
 `DynamicContainerReadPage` (`0x1424fcd20`) opens the archive and hands the
@@ -606,7 +707,7 @@ unit JSON was wired for it; it stays read and open, not faked.
 
 **Geometry.** The page cache does not read its geometry from the index header.
 The `.cmf` database open params carry the slot count at `+0x78` and the page
-size at `+0x7c` (`DatabaseOpenApplyParams`, `0x1424a6df0`, copies the 0xa0-byte
+size at `+0x7c` (`DatabaseOpenApplyParams`, `0x1424a6df0`, copies the 0x1a0-byte
 params to `reader+0x58`); the open path at `0x141fd20f0` sets `+0x78 = 0x10`
 and `+0x7c = 0` ("use the default"), and `DatabaseOpenConfigureCache`
 (`0x1424a7d70`) substitutes `0x10000` for a zero page size. This install
@@ -614,6 +715,48 @@ therefore runs **16 slots of 0x10000 bytes** (1 MiB). `PageCacheInit` allocates
 one page buffer per slot; the slot record is `0x70` bytes and the page table is
 a separate `0x38`-byte object holding the lock, the last-use clock at `+0x20`,
 the slot array at `+0x28`, and the closed flag at `+0x30`.
+
+**`DatabaseOpenApplyParams` read, no harness unit.** Measured extent
+`0x1424a6df0..0x1424a716e` (0x37e = 894 bytes; the `.pdata` root is only
+`0x1424a6df0..0x1424a6dfc`, 12 bytes, and the body chains past it; first
+instruction `mov [rsp+8], rcx`, no `ret` - the exit at `0x1424a7169` is a
+tail-jump to `0x1424c4480`). Signature `(reader /*RCX*/, params /*RDX*/) ->
+void`. The first 0x1a0 bytes are a three-iteration 0x80-byte `movups` copy
+from `params` to `reader+0x58` plus a 0x20-byte tail (the old note's
+"0xa0-byte params" was wrong; the copy is 0x180 + 0x20). The rest is string
+and vector state: it assigns three param strings through `0x142697790`
+(at `reader+0x1f8`, `+0x218` and `+0x3a8`, storing the character pointers at
+`+0x80`, `+0x98` and `+0xb0`), appends the
+`data.NNN` names into two vectors through `0x1424a7350`/`0x1424a7170` and
+`0x1426978a0`, and tail-jumps through `0x1424c4480`. The tail-jump is the
+blocker: `0x1424c4480` at `0x1424c44ab` does `jmp qword ptr [rax + 8]`
+through the object's vtable (and its siblings call `[r9+0x40]`/`[r9+0x38]`),
+so the oracle cannot run the exit; the vector reserves also call the allocator
+vtable at `0x1424a739a`/`0x1424a71ba` when a count exceeds the capacity. No
+probe arm, fixture or unit JSON was wired; the shipped page-cache geometry is
+the install-tested `16 x 0x10000` read from the `.cmf` open params, not a port
+of this function.
+
+**`DatabaseOpenConfigureCache` read, no harness unit.** Measured extent
+`0x1424a7d70..0x1424a7f1b` (0x1ab = 427 bytes; the `.pdata` root is only
+`0x1424a7d70..0x1424a7da3`, 0x33 bytes, and the body chains past it; first
+instruction `push rbx`, `ret` at `0x1424a7f1a`). Signature `(reader /*RCX*/,
+params /*RDX*/) -> u8 status`. It returns 3 for a null `params+0x10`; otherwise
+it takes the string length through the verified `strlen` (`0x1426cce30`),
+assigns the string through `0x142697790`, builds a 0x60-byte stack parameter
+block from `params+0x18/+0x20/+0x24/+0x28/+0x2c/+1/+8` (substituting `0x10000`
+for a zero page size at `+0x28`), maps the params' mode byte through a jump
+table (0->0, 1->2, 2->5, 3->1, else 0), and calls the container constructor
+`0x1424f3ee0` at `0x1424a7ea4`. The constructor is the blocker: it calls the
+allocator vtable at `0x1424f4085` (`call qword ptr [rax + 0x18]`) and
+`0x1424f4352` (`call qword ptr [rax + 0x30]`), the mutex `0x142694c30` at
+`0x1424f4149`, and `ContainerReaderInit` (`0x1424fbf00`, itself declared open),
+so the oracle cannot run the call. On a zero return it stores `params+1` at
+`reader+0x49` and `params+8` at `reader+0x40`; on a non-zero return it maps
+the status through `0x1424a8e50` and, for status 9 with the flag at
+`reader+0x18`, calls `0x1424d4ee0`. No probe arm, fixture or unit JSON was
+wired; the shipped `16 x 0x10000` geometry is the install-tested conclusion,
+not a port of this function.
 
 **Key.** A page is keyed by `(archive number, page-aligned archive offset)`.
 The archive number is the qword at `handle+0x18` that
@@ -630,13 +773,25 @@ flag), the whole-page run at `+0x58` (flag, page `+0x60`, dest `+0x68`, len
 `+0x70`) and the tail at `+0x78` (dest, page `+0x80`, len `+0x88`, slot, in-page
 `+0x98`, flag). The cache reader (`PageCacheRead`, `0x1424fb1c0`) then:
 
-1. looks the head page up (`PageSlotFind`, `0x1424fa440`) and copies the
-   fragment on a hit;
-2. on a head miss loads the whole page (`PageLoad`, `0x1424fa540`);
-3. reads the whole-page run with **one direct read** because the cache's
+1. looks the head page up (`PageSlotFind`, `0x1424fa440`, called at
+   `0x1424fb301`) and copies the fragment on a hit;
+2. looks the tail page up the same way (called at `0x1424fb355`) and copies
+   it on a hit - **both lookups run under the table lock, before any load**;
+3. on a head miss loads the whole page (`PageLoad`, `0x1424fa540`, called at
+   `0x1424fb3a4`);
+4. reads the whole-page run with **one direct read** because the cache's
    non-blocking flag (`cache+0x10`, set to 1 by the open path) is set;
-4. looks the tail page up and loads it the same way, but only when the
-   whole-page run was read completely.
+5. loads the tail page the same way (called at `0x1424fb594`), but only when
+   the tail was not served and the whole-page run was read completely.
+
+The two lookups are not free: `PageSlotFind` bumps `page_table+0x20` and the
+chosen slot's stamp on **every** call, hit or victim (`0x1424fa4ff..
+0x1424fa50a`), so a cold head read costs two passes and the slot the lookup
+touched is the freshest one. `PageLoad`'s own pass therefore skips it, and
+the cache fills every other slot: after 17 distinct pages only slots
+1,3,5,7,9,11,13,15 are resident, holding pages 16,9,10,11,12,13,14,15. The
+`PageSlotFind` victim rule itself is unchanged - the usable slot with the
+largest wrapping `clock - stamp`, ties to the lowest index.
 
 The completion (`PageLoadComplete`, `0x1424fadf0`, and
 `PageSlotPublish`, `0x1424f9bf0`) copies the full fragment from
@@ -732,6 +887,21 @@ is not 2; this install's read-only mode 2 skips the whole block, so the cache is
 never closed or flushed during a read here. The cache is also filtered by an
 archive-number set (`0x1424fcc80`) only in non-mode-2 opens; mode 2 skips that
 check too.
+
+**The archive-number set.** `ArchiveSetContains` (`0x1424fcc80`, 150 B,
+`0x1424fcc80..0x1424fcd16`, no `.pdata` entry) is verified by
+`fn/ArchiveSetContains`. The set is the 0x28-byte object at `reader+0x238`:
+heads at `+0` (u32 entry indices, `-1` ends a chain), keys at `+8`, next at
+`+0x10`, `bucket_count` u32 at `+0x20`. The reader zero-extends the archive
+number into `u64` (`mov r9, rdx` at `0x1424fcc87`), applies the splitmix64
+finalizer (`h ^= h>>33; h *= 0xff51afd7ed558ccd; h ^= h>>33;
+h *= 0xc4ceb9fe1a85ec53`), takes the bucket `((h>>33) ^ (u32)h) &
+(bucket_count - 1)`, and walks the chain comparing the 8-byte key. A null set
+or heads, a head of `-1`, or a chain that ends at `-1` returns 0. The unit
+covers 5/5 branches and kills 9/11 mutants; the two survivors are the first
+hash shift's ±1 boundaries, equivalent because the input is a zero-extended
+u32 (so `h >> 32` and `h >> 34` are both 0). The set's construction and the
+mode-2 skip are the declared gap.
 
 **Statuses.** A page or direct read reports 0 with the bytes actually read; a
 short read at the archive's end is not an error. A read failure is status 8 at
@@ -1390,6 +1560,55 @@ Block modes:
   caller's keyring;
 - `4` — LZ4 (`BlteBlockReadLz4`, `0x1424d6e50`);
 - anything else is status 8.
+
+`BlteBlockReadStored` (`0x1424d7850`) is verified by `fn/BlteBlockReadStored`
+(merged extent `0x1424d7850..0x1424d792b`, 220 bytes; the `.pdata` root is
+only `0x1424d7850..0x1424d78cc` and the body chains past it). The reader is a
+streaming copy with a one-byte state flag: it zeroes both out counters, returns
+3 for a null `dst`/`src`, consumes the mode byte when the state flag at
+`+0x10` is non-zero (status 0 for a `src_len` below 1, status 8 for a mode
+other than `N`), returns 0 for a zero `dst_len` or an exhausted `src`, and
+otherwise copies `min(end - src, dst_len)` bytes through the CRT `memcpy`
+(`0x142efe2b0`), adding the length to both counters and to the state dword at
+`+0xc`. The unit covers 5/7 reachable branches (the two null-pointer tests are
+declared unreachable: the harness gives every pointer a non-null arena
+address) and kills 12/12 mutants. `BlteBlockRead` (`0x1424d61b0`) reaches it
+through the object vtable slot `[rax + 8]` at `0x1424d668a`.
+
+The other three block readers are read, no harness unit:
+
+- `BlteBlockReadZlib` (`0x1424d7ca0`) calls the client's own inflate
+  (`0x1425233d0`, 0x193c = 6,460 bytes, a pure image body: its only callees
+  are the helpers `0x142528250`/`0x142527e70`/`0x142525030`/`0x142528700`/
+  `0x142528cc0` and the CRT `memcpy` at `0x142efe2b0`). The function itself is
+  unit-able, but the shipped `decode` uses `flate2`, which is a
+  reference-derived implementation, not a port of that body; a unit over the
+  shipped path would prove only that the two agree on valid streams.
+
+  **A port exists and is not yet correct.** `crates/ow-casc/src/inflate.rs`
+  (2,233 lines) is a from-scratch port of that body (the client's zlib 1.3, `inflate 1.3
+  Copyright 1995-2023` at image `0x143477751`), with the client's `z_stream`
+  layout (`state` at `+0x28`, `zalloc`/`zfree` at `+0x30`/`+0x38`, the
+  skip-checksum bit at `+0x50`) and the `0x1bf0`-byte `inflate_state`
+  (`+0x90 lens[320]`, `+0x310 work[288]`, `+0x550 codes[1444]`). Its callees
+  are identified: `0x142528250` crc32, `0x142527e70` adler32,
+  `0x142525030` updatewindow, `0x142528700` inflate_table, `0x142528cc0`
+  inflate_fast, and the CRT `memcpy` `0x142efe2b0`. Two bugs were found and
+  fixed while porting: the `CODELENS` pass did not drop the code's bits after
+  reading it, and the Huffman lookup did not re-read the entry after pulling
+  bytes, so a lookup made with fewer than `lenbits` bits buffered named the
+  wrong entry. It still fails on a repetitive payload (two zero bytes at
+  record 686 of `"000000\n000001\n..."`, 20 000 records, and wrong bytes
+  at the same place at levels 6 and 9) and on the install suite
+  (`blte_real`, `inflate: -5`). **The `Z` path therefore stays on `flate2`**
+  until the port is correct and has a harness unit (`fn/Inflate`); nothing
+  here is claimed as 1:1.
+- `BlteChunkDecrypt` (`0x1424d68a0`) calls the caller's keyring through
+  `call r9` at `0x1424d6911` and `call r10` at `0x1424d69e7`; the keyring is
+  a runtime object the oracle cannot construct.
+- `BlteBlockReadLz4` (`0x1424d6e50`) allocates through the IAT slot reached
+  by `call qword ptr [rip + 0x15d8dd1]` at `0x1424d6ff1`, then calls
+  `Lz4Decompress` (`0x1426207f0`).
 
 `BlteBlockRead` (`0x1424d61b0`) accepts an `E` IV of 0..8 bytes, not only 4/8.
 `FUN_1424eb510`, the top-level direct reader, has the same four modes and

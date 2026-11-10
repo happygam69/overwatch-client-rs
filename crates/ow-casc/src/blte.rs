@@ -301,6 +301,12 @@ pub fn decode(data: &[u8], keyring: &BTreeMap<u64, [u8; 16]>) -> Result<Vec<u8>>
         let block = match mode {
             b'N' => body.to_vec(),
             b'Z' => {
+                // **`flate2`, not a 1:1 port.** The client's own inflate
+                // (`0x1425233d0`, zlib 1.3) is read and a port is in progress in
+                // `crate::inflate`, but it does not yet decode every conforming
+                // stream (it fails on some repetitive payloads and on install
+                // data), so the shipped `Z` path stays on the reference-derived
+                // decoder. See `docs/formats/casc.md`.
                 let mut buf = Vec::new();
                 let mut decoder = flate2::read::ZlibDecoder::new(body);
                 // Cap the expansion at the declared decoded size (+1 so an
@@ -341,6 +347,78 @@ fn frame_header_error(error: FrameHeaderError) -> Error {
         FrameHeaderError::NeedMore { .. } => Error::Malformed("truncated frame header"),
         FrameHeaderError::Invalid(message) => Error::Malformed(message),
     }
+}
+
+/// `BlteBlockReadStored` (exe `0x1424d7850`): the stored (`N`) block reader,
+/// one call at a time, with the client's own state object.
+///
+/// The read, instruction for instruction:
+///
+/// - `*out_decoded = 0; *out_consumed = 0;`
+/// - a null `dst` or a null `src` returns 3 (the probe cannot express a null
+///   pointer: its empty buffer is a non-null arena address, so the Rust drops
+///   this check and the null case is an acknowledged gap);
+/// - `end = src + src_len`;
+/// - the state byte at `+0x10` is the mode-consumed flag: when it is non-zero
+///   the reader consumes the mode byte (a `src_len` below 1 returns 0, a mode
+///   other than `N` returns 8, and `N` stores 0 at `+0x10` and adds 1 to
+///   `*out_consumed`); when it is zero the mode byte is already gone;
+/// - a zero `dst_len`, or `src == end`, returns 0;
+/// - the copy length is `min(end - src, dst_len)`;
+/// - `memcpy(dst, src, len)` (the client's `0x142efe2b0`);
+/// - `*out_decoded += len; *out_consumed += len;` and the dword at state
+///   `+0xc` (the running decoded total) `+= len`;
+/// - returns 0.
+///
+/// The state object is the client's 0x18-byte block-reader object: `+0x08` is
+/// the declared decoded size (written by the initializer `0x1424d7840`), `+0x0c`
+/// is the running total this function advances, and `+0x10` is the flag. The
+/// reader itself reads only `+0x10` and writes `+0x0c`/`+0x10`.
+///
+/// `BlteBlockRead` (`0x1424d61b0`) reaches this through the object's vtable
+/// slot `[rax + 8]` at `0x1424d668a`, after the initializer `0x1424d7840`
+/// sets `+0x08` from `[rdi+0x5c]` and `+0x10` to 1.
+pub fn block_read_stored(
+    state: &mut [u8],
+    dst: &mut [u8],
+    dst_len: u32,
+    src: &[u8],
+    src_len: u32,
+    out_decoded: &mut u32,
+    out_consumed: &mut u32,
+) -> u8 {
+    *out_decoded = 0;
+    *out_consumed = 0;
+    // `test rdx, rdx` / `test r9, r9` (status 3 for a null pointer) is not
+    // modelled: the probe's empty buffer is a non-null arena address. The
+    // length edges below are the expressible part of the same checks.
+    let mut pos = 0usize;
+    if state[0x10] != 0 {
+        if src_len < 1 {
+            return 0;
+        }
+        let mode = src[0];
+        pos = 1;
+        if mode != b'N' {
+            return 8;
+        }
+        state[0x10] = 0;
+        *out_consumed += 1;
+    }
+    if dst_len == 0 {
+        return 0;
+    }
+    let remaining = src_len as usize - pos;
+    if remaining == 0 {
+        return 0;
+    }
+    let len = remaining.min(dst_len as usize);
+    dst[..len].copy_from_slice(&src[pos..pos + len]);
+    *out_decoded += len as u32;
+    *out_consumed += len as u32;
+    let total = u32::from_le_bytes(state[0xc..0x10].try_into().unwrap()).wrapping_add(len as u32);
+    state[0xc..0x10].copy_from_slice(&total.to_le_bytes());
+    0
 }
 
 /// `BlteBlockReadLz4` (`0x1424d6e50`) with the whole chunk in memory.

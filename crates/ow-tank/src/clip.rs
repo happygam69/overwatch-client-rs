@@ -1837,6 +1837,76 @@ pub fn decode_bone_tracks(body: &[u8], frames: u16) -> Vec<BoneTrack> {
     out
 }
 
+/// SSE `MINSS`: `a` when `a < b`, otherwise `b`.
+///
+/// `<` is false on NaN, so a NaN first source falls through to the second
+/// source. That is the client's `minss`, not `f32::min` (which would return
+/// the non-NaN operand).
+fn minss(a: f32, b: f32) -> f32 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+/// SSE `MAXSS`: `a` when `a > b`, otherwise `b`. NaN falls through to the
+/// second source, as in [`minss`].
+fn maxss(a: f32, b: f32) -> f32 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+/// x86 `CVTTSS2SI r32, xmm`: truncate toward zero, returning the integer
+/// indeterminate `0x80000000` for NaN, ±infinity and anything outside `i32`.
+/// Rust's `as i32` saturates instead, which is a different function.
+fn cvttss2si(x: f32) -> i32 {
+    if x.is_nan() || x >= 2147483648.0 || x < -2147483648.0 {
+        i32::MIN
+    } else {
+        x as i32
+    }
+}
+
+/// The client's animation-time wrap, `AnimTimeWrap` (`0x140b91ef0`).
+///
+/// `range` is the animation node's `float[4]`: `[0]` is the minimum, `[1]` the
+/// maximum (and the period when wrapping), `[2]` is not read by the wrap, and
+/// `[3]`'s bits are the node's flag dword. **Bit 0** of that dword selects the
+/// truncating modular wrap; with the bit clear the value is clamped with SSE
+/// `minss`/`maxss`, so a NaN input falls through to the bound rather than
+/// propagating.
+///
+/// The truncating wrap is `t - (float)(int)(t / max) * max`, *not* `t.fract()`
+/// or `rem_euclid`: for a negative `t` the truncating form stays negative
+/// (`-1.5` over a period of `2` gives `-1.5`), where a Euclidean remainder
+/// would give `+0.5`. That difference is what the harness fixture's
+/// flag-bit-sweep cases pin.
+///
+/// Verified as `fn/AnimTimeWrap` and its tier-2 Rust twin
+/// `fn/AnimTimeWrap-rust`; the tests below are that unit's own discriminating
+/// cases.
+///
+/// The range is the animation **node record's** own first 16 bytes, which the
+/// sampler passes straight to the wrap (`0x140b9a790`: the node pointer is
+/// loaded and `AnimTimeWrap(node, t)` is called on it). It is runtime state,
+/// not a clip-header field, so [`PoseClip::frame_at`] can only supply the
+/// clip's own range and the clear-flag branch.
+pub fn anim_time_wrap(range: [f32; 4], t: f32) -> f32 {
+    let min = range[0];
+    let max = range[1];
+    let flag = range[3].to_bits();
+    if flag & 1 != 0 {
+        let n = cvttss2si(t / max);
+        t - (n as f32) * max
+    } else {
+        maxss(minss(t, max), min)
+    }
+}
+
 /// A decoded clip ready to pose a rig with.
 ///
 /// **The bone pairing is positional**, matching the reference implementation:
@@ -1884,9 +1954,19 @@ impl PoseClip {
     }
 
     /// The frame number at a time in seconds, wrapped into the clip's range.
+    ///
+    /// This is the client's `AnimTimeWrap` (`0x140b91ef0`) over the clip's own
+    /// range `[0, frames]` with the node's flag dword **clear** — the read's
+    /// clamp branch. The wrap branch needs the animation node's flag (bit 0 of
+    /// the dword at node `+0x0c`), and the node record is runtime state the
+    /// clip header does not carry, so it is not invented here; a caller that
+    /// has a read range calls [`anim_time_wrap`] directly.
+    ///
+    /// There is no `+1`: the stored keys are `abs(index) % (frames + 1)`, so
+    /// they are 0-based and frame 0 is a real key.
     pub fn frame_at(&self, seconds: f32) -> f32 {
         let n = self.frames.max(1) as f32;
-        (seconds * self.fps).rem_euclid(n) + 1.0
+        anim_time_wrap([0.0, n, 0.0, 0.0], seconds * self.fps)
     }
 }
 
@@ -3044,10 +3124,11 @@ impl BlendPose {
     }
 
     /// The frame a time lands on (the same wrap rule `PoseClip::frame_at`
-    /// uses).
+    /// uses: the client's `AnimTimeWrap` over `[0, frames]` with the flag
+    /// clear).
     pub fn frame_at(&self, seconds: f32) -> f32 {
         let n = self.frames.max(1) as f32;
-        (seconds * self.fps).rem_euclid(n) + 1.0
+        anim_time_wrap([0.0, n, 0.0, 0.0], seconds * self.fps)
     }
 
     /// One record's `{rotation, translation}` at `seconds`, interpolated
@@ -3923,5 +4004,114 @@ mod kind_dispatch_tests {
         for (got, want) in mid_neg.iter().zip(mid) {
             assert!((got - want).abs() < 1e-5);
         }
+    }
+}
+
+#[cfg(test)]
+mod time_wrap_tests {
+    use super::*;
+
+    /// The node's `float[4]` range: `[min, max/period, slot2, flag-as-bits]`.
+    fn range(min: f32, max: f32, flag: u32) -> [f32; 4] {
+        [min, max, 0.0, f32::from_bits(flag)]
+    }
+
+    /// The harness unit's own discriminating cases, flag bit 0 clear: the
+    /// read's clamp branch, `maxss(minss(t, max), min)`.
+    #[test]
+    fn the_flag_clear_branch_is_the_clients_clamp() {
+        let cases: [(f32, f32, u32, f32); 12] = [
+            (0.0, 2.0, 0b00, 5.5),           // -> 2.0
+            (0.0, 2.0, 0b10, 5.5),           // bit 1 only: still clamp -> 2.0
+            (0.0, 2.0, 0b10, -1.5),          // negative -> 0.0
+            (0.0, 2.0, 0b10, 2.0),           // exactly max -> 2.0
+            (1.0, 4.0, 0b10, 7.25),          // nonzero min -> 4.0
+            (0.0, 2.0, 0b100, 5.5),          // bit 2 only: clamp -> 2.0
+            (0.0, 2.0, 0x8000_0000, 5.5),    // sign bit only: clamp -> 2.0
+            (-2.0, 2.0, 0b10, 3.5),          // negative min -> 2.0
+            (0.0, 1.0, 0b10, 0.4),           // inside -> 0.4
+            (0.0, 2.0, 0b10, 0.0),           // zero -> 0.0
+            (0.0, 0.0, 0b10, 5.5),           // degenerate min == max -> 0.0
+            (0.0, 2.0, 0b10, f32::INFINITY), // +inf -> 2.0
+        ];
+        let want = [
+            2.0f32, 2.0, 0.0, 2.0, 4.0, 2.0, 2.0, 2.0, 0.4, 0.0, 0.0, 2.0,
+        ];
+        for ((min, max, flag, t), want) in cases.into_iter().zip(want) {
+            assert_eq!(
+                anim_time_wrap(range(min, max, flag), t),
+                want,
+                "clamp range=({min}, {max}) flag={flag:#b} t={t}"
+            );
+        }
+        // NaN falls through to the second source of minss, so the clamp lands
+        // on the max rather than propagating NaN.
+        assert_eq!(anim_time_wrap(range(0.0, 2.0, 0b10), f32::NAN), 2.0);
+    }
+
+    /// Flag bit 0 set: the read's truncating modular wrap,
+    /// `t - (float)(int)(t / max) * max`.
+    #[test]
+    fn the_flag_set_branch_is_the_clients_truncating_wrap() {
+        let cases: [(f32, f32, u32, f32); 8] = [
+            (0.0, 2.0, 0b01, 5.5),           // 5.5 - 2*2 = 1.5
+            (0.0, 2.0, 0b11, 5.5),           // both bits: wrap -> 1.5
+            (0.0, 2.0, 0xff_ff_ff_ff, 5.5),  // all bits: wrap -> 1.5
+            (0.0, 2.0, 0b01, -1.5),          // -1.5 - 0*2 = -1.5 (truncating!)
+            (0.0, 2.0, 0b01, 7.25),          // 7.25 - 3*2 = 1.25
+            (0.0, 2.0, 0b01, 2.0),           // exactly one period -> 0.0
+            (0.0, 2.0, 0b01, 0.0),           // 0.0
+            (0.0, 2.0, 0b01, f32::INFINITY), // cvttss2si(inf) = INT_MIN -> inf
+        ];
+        let want = [1.5f32, 1.5, 1.5, -1.5, 1.25, 0.0, 0.0, f32::INFINITY];
+        for ((min, max, flag, t), want) in cases.into_iter().zip(want) {
+            assert_eq!(
+                anim_time_wrap(range(min, max, flag), t),
+                want,
+                "wrap range=({min}, {max}) flag={flag:#b} t={t}"
+            );
+        }
+        // A negative t stays negative: `rem_euclid` and `fract` would both give
+        // +0.5 here, which is the false start the audit records.
+        assert!((anim_time_wrap(range(0.0, 2.0, 0b01), -1.5) - -1.5).abs() < 1e-6);
+        assert!(anim_time_wrap(range(0.0, 2.0, 0b01), f32::NAN).is_nan());
+    }
+
+    /// The wrap test is `& 1`, not `& 3`: with bit 1 set and bit 0 clear the
+    /// client clamps. This is the mask-widen mutant the harness fixture exists
+    /// to kill.
+    #[test]
+    fn only_flag_bit_zero_selects_the_wrap() {
+        let t = 5.5;
+        assert_eq!(anim_time_wrap(range(0.0, 2.0, 0b00), t), 2.0);
+        assert_eq!(anim_time_wrap(range(0.0, 2.0, 0b10), t), 2.0);
+        assert_eq!(anim_time_wrap(range(0.0, 2.0, 0b01), t), 1.5);
+    }
+
+    /// `frame_at` routes through the read wrap with the clip's own range and
+    /// the flag clear, and carries no `+1`: the stored keys are 0-based.
+    #[test]
+    fn frame_at_clamps_to_the_clip_range() {
+        let clip = PoseClip {
+            tracks: vec![],
+            frames: 21,
+            fps: 30.0,
+        };
+        assert_eq!(clip.frame_at(0.0), 0.0);
+        assert_eq!(clip.frame_at(1.0 / 30.0), 1.0);
+        assert_eq!(clip.frame_at(0.5), 15.0);
+        // overshoot clamps to the last keyed frame; negative clamps to the first
+        assert_eq!(clip.frame_at(1.0), 21.0);
+        assert_eq!(clip.frame_at(-1.0), 0.0);
+
+        let blend = BlendPose {
+            records: vec![],
+            ids: vec![],
+            frames: 21,
+            fps: 30.0,
+        };
+        assert_eq!(blend.frame_at(0.5), 15.0);
+        assert_eq!(blend.frame_at(1.0), 21.0);
+        assert_eq!(blend.frame_at(-1.0), 0.0);
     }
 }

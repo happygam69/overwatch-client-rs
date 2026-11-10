@@ -198,9 +198,17 @@ lanes. The functions are `0x141b812c0` (blender), `0x141b82d70`
 (normaliser) and `0x141b81240` (slot allocator; scale rests at 1, third lane
 at 0).
 
-Skinning: a pose replaces the bind's local matrix
-(`local' = T(pose_t) * R(pose_r) * S(local_s)`); the absolute-rotation path
-remains for the rotation-only case.
+Skinning: a pose replaces the bind's **local** matrix
+(`local' = T(pose_t) * R(pose_r) * S(local_s)`), for the rotation-only case
+(`Skin::posed_world`) and the full case (`Skin::posed_world_full`) alike.
+The install measures it: the blend-card clips' *position* tracks land on
+`skin.local`'s translations (`crates/ow-tank/tests/blend_bind_check.rs`), so
+the pose is a local transform and its rotation is the bone's own local
+rotation. The earlier absolute-rotation formulation
+(`absolute' = T(bind_t) · R(pose) · S(bind_s)`, then re-deriving every bone's
+local from the posed absolutes) is **wrong**: for an unposed child of a posed
+parent it computes `inverse(absolute'(p)) · absolute(c)`, so the parent's pose
+cancels and a posed bone's children did not follow.
 
 ## Kind dispatch
 
@@ -210,6 +218,15 @@ node, branches on its kind byte, then runs time wrap/clamp, keyframe search +
 lerp, dual sample, and optional noise from a static table. Flags at node
 `+0xc`: `0x8000` scalar, `0x4000` blend, `0x2000` replace, `0x1000` vec4.
 Wrap shaping at `+0x24`: 0 none, 2 mirror, 3 ping-pong, 4 square, 5 inverse.
+**Open:** the function that reads `+0x24` has not been located. The sampler
+`FUN_140b9a790` (the only direct caller of `AnimTimeWrap`, `0x140b91ef0`) does
+not read `+0x24` at all, and the keyframe-search helper it calls (`0x140b90c00`)
+takes only `(out, keys, time)`. Treat the shaping as open until the reader is
+named. The wrap itself is read and shipped: `AnimTimeWrap` is a min/max clamp
+(`maxss(minss(t, max), min)`) when the node flag dword's bit 0 is clear, and a
+truncating modular wrap (`t - (float)(int)(t / max) * max`) when it is set; the
+range is the node record's own first 16 bytes (`+0x00` min, `+0x04` max,
+`+0x08` slot2/noise index, `+0x0c` the flag dword).
 
 ## FP blend tree
 

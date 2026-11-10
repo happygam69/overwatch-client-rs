@@ -12,8 +12,8 @@ different run; it is not evidence. Code whose only citation is a capture is
 **open**, not read. See `provenance.md`.
 
 **"Verified" has one meaning here:** a differential-harness unit passes all
-five stages against the client's bytes. As of 2026-11-05 the harness ledger
-has **77 units and sixteen targeting `ow-tank`**, all `verified`, including
+five stages against the client's bytes. As of 2026-11-10 the harness ledger
+has **103 verified units and sixteen targeting `ow-tank`**, including
 `fn/ChunkGuid`, `fn/MapChunkCellBytesFixup` and `fn/BundleLookup` (section D),
 `fn/BundleDirectoryLookup` (section E, a verified consumer), the three `MRNM`
 units and six texture leaves, and `fn/CmfKey154504` / `fn/CmfIv154504`

@@ -23,6 +23,7 @@ pub mod cdn;
 pub mod container;
 pub mod encoding;
 pub mod index;
+pub mod inflate;
 pub mod install;
 pub mod pagecache;
 

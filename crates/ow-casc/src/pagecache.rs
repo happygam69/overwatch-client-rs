@@ -31,13 +31,20 @@
 //! offset to its page end), a run of whole pages, and a tail fragment. The
 //! reader (`PageCacheRead`, `0x1424fb1c0`):
 //!
-//! 1. looks the head page up in the cache and copies the fragment on a hit;
-//! 2. on a head miss loads the whole page (`0x1424fa540`), which copies the
-//!    fragment and zero-fills any part the archive did not supply;
-//! 3. reads the whole-page run with one **direct** read because the cache's
-//!    non-blocking flag (`cache+0x10`, set to 1 by the open path) is set;
-//! 4. looks the tail page up and loads it the same way, but only when the
-//!    whole-page run was read completely.
+//! 1. looks the head page up and copies the fragment on a usable hit;
+//! 2. looks the tail page up the same way, before any load;
+//! 3. loads the whole head page (`0x1424fa540`) when the head was not served,
+//!    which copies the fragment and zero-fills any part the archive did not
+//!    supply;
+//! 4. reads the whole-page run with one **direct** read, but only when the
+//!    head was served completely;
+//! 5. loads the tail page the same way, but only when the tail was not served
+//!    and the whole-page run was read completely.
+//!
+//! The whole-page run is one direct read because the cache's non-blocking flag
+//! (`cache+0x10`, set to 1 by the open path) is set; the client also direct-
+//! reads when the destination is page-aligned and the flag is clear. This
+//! install always takes the direct path.
 //!
 //! A range whose offset and length are both page-aligned never enters the
 //! cache: `ArchiveRead` (`0x1424f9fe0`) sends it straight to the archive
@@ -45,14 +52,23 @@
 //!
 //! ## Eviction
 //!
-//! `PageSlotFind` (`0x1424fa440`) scans the fixed 16-slot table. A usable slot
-//! whose key matches *and* whose stored length covers the fragment is a hit;
-//! its stamp is set to the incremented table clock (`page_table+0x20`). A miss
-//! (including a key match whose stored length is too short) takes the usable
-//! slot with the smallest stamp — the smallest `clock - stamp`, ties to the
-//! lowest index — bumps its stamp, and reloads it. Slots marked busy/failed
-//! (`+0x2e != 0`) are never evicted; with the non-blocking flag set, no usable
-//! slot means the caller falls back to a direct read instead of waiting.
+//! `PageSlotFind` (`0x1424fa440`) is one pass over the fixed 16-slot table: a
+//! slot is a match when its invalid byte is clear, its key equals the request,
+//! and either its stored length covers the fragment or it is busy/failed. A
+//! match ends the pass and is returned even when busy, with usable 0; only
+//! when no slot matches does the same pass pick the eviction victim - the
+//! usable slot with the largest wrapping `clock - stamp`, ties to the lowest
+//! index. The chosen slot's stamp is set to the incremented table clock
+//! (`page_table+0x20`). Slots marked busy/failed (`+0x2e != 0`) are never
+//! evicted; with the non-blocking flag set, no usable slot means the caller
+//! falls back to a direct read instead of waiting.
+//!
+//! The bump is unconditional, so the two lookups in the read path cost two
+//! passes: the slot the head lookup touched becomes the freshest one and the
+//! `PageLoad` pass skips it. A cold read therefore fills every other slot -
+//! after 17 distinct pages only slots 1,3,5,7,9,11,13,15 hold pages
+//! 16,9,10,11,12,13,14,15. This is the client's behaviour, not a defect here;
+//! `eviction_is_least_recently_used` pins it.
 //!
 //! The client's per-table lock, per-slot event and in-flight bit are real, but
 //! a single-threaded reader cannot observe them. This module is synchronous and
@@ -73,6 +89,8 @@ use std::io;
 pub const PAGE_SIZE: u32 = 0x10000;
 /// Number of page slots (`params+0x78`).
 pub const SLOT_COUNT: usize = 16;
+/// Offset of the first slot record in the client's page-table byte view.
+const SLOT_TABLE_SLOT_OFFSET: usize = 0x100;
 
 /// One underlying archive read issued by the cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,42 +324,95 @@ impl PageCache {
         }
 
         let plan = Plan::new(offset, len);
+        let head_len = plan.head.map_or(0, |head| head.len);
+        let middle_len = plan.middle.map_or(0, |middle| middle.len);
         let mut head_served = 0u32;
         let mut middle_served = 0u32;
         let mut tail_served = 0u32;
 
+        // `PageCacheRead` (`0x1424fb1c0`) looks the head and tail pages up
+        // first, under the table lock, and only then loads what the lookups
+        // missed. The order is observable in the slot stamps: a tail hit
+        // bumps its stamp before the head load bumps the head slot's.
         if let Some(head) = plan.head {
-            match self.serve_fragment(archive, head, out, &mut read_at)? {
-                FragmentOutcome::Served(bytes) => head_served = bytes,
-                FragmentOutcome::Bypass => return Ok(Outcome::Bypass),
-            }
-            if head_served < head.len {
-                return Ok(Outcome::Served(head_served));
-            }
+            head_served = self.lookup(archive, head, out);
         }
-
-        if let Some(middle) = plan.middle {
-            self.record(false, archive, middle.page, middle.len);
-            let end = middle.dest as usize + middle.len as usize;
-            middle_served =
-                read_at(archive, middle.page, &mut out[middle.dest as usize..end])? as u32;
-            if middle_served < middle.len {
-                return Ok(Outcome::Served(head_served + middle_served));
-            }
-        }
-
         if let Some(tail) = plan.tail {
-            match self.serve_fragment(archive, tail, out, &mut read_at)? {
-                FragmentOutcome::Served(bytes) => tail_served = bytes,
-                FragmentOutcome::Bypass => return Ok(Outcome::Bypass),
+            tail_served = self.lookup(archive, tail, out);
+        }
+
+        // A head fragment the lookup did not serve is loaded whole. The
+        // client calls `PageLoad` (`0x1424fa540`), which re-runs the same
+        // single pass and then reads the page.
+        if let Some(head) = plan.head {
+            if head_served == 0 {
+                match self.load_fragment(archive, head, out, &mut read_at)? {
+                    FragmentOutcome::Served(bytes) => head_served = bytes,
+                    FragmentOutcome::Bypass => return Ok(Outcome::Bypass),
+                }
             }
         }
 
-        Ok(Outcome::Served(head_served + middle_served + tail_served))
+        // The whole-page run is read only when the head was served completely.
+        if let Some(middle) = plan.middle {
+            if head_served == head_len {
+                self.record(false, archive, middle.page, middle.len);
+                let end = middle.dest as usize + middle.len as usize;
+                middle_served =
+                    read_at(archive, middle.page, &mut out[middle.dest as usize..end])? as u32;
+            }
+        }
+
+        // The tail is loaded only when it was not served and the whole-page
+        // run was read completely.
+        if let Some(tail) = plan.tail {
+            if tail_served == 0 && middle_served == middle_len {
+                match self.load_fragment(archive, tail, out, &mut read_at)? {
+                    FragmentOutcome::Served(bytes) => tail_served = bytes,
+                    FragmentOutcome::Bypass => return Ok(Outcome::Bypass),
+                }
+            }
+        }
+
+        // The client's served word: the head's short count, else the head plus
+        // the middle's short count, else all three.
+        let served = if head_served < head_len {
+            head_served
+        } else if middle_served < middle_len {
+            head_served + middle_served
+        } else {
+            head_served + middle_served + tail_served
+        };
+        Ok(Outcome::Served(served))
     }
 
-    /// Serve one head or tail fragment, from a hit or by loading its page.
-    fn serve_fragment<F>(
+    /// One `PageSlotFind` (`0x1424fa440`) pass for a head or tail fragment.
+    /// Returns the bytes served from a usable hit, or 0 when the pass chose
+    /// no usable slot - a busy match (usable 0) or no slot at all.
+    fn lookup(&mut self, archive: u32, fragment: Fragment, out: &mut [u8]) -> u32 {
+        let min_len = fragment.in_page + fragment.len;
+        let (mut table, base) = self.slot_table();
+        let choice = slot_find(
+            &mut table,
+            base,
+            u64::from(archive),
+            fragment.page,
+            min_len,
+            0,
+        );
+        self.absorb_table(&table, base, choice.slot);
+        if choice.slot == 0 || choice.usable == 0 {
+            return 0;
+        }
+        let index = table_index(choice.slot, base);
+        copy_fragment(&self.slots[index], fragment, out)
+    }
+
+    /// `PageLoad` (`0x1424fa540`) for one head or tail fragment: the same
+    /// single pass, then a whole-page read when the pass did not hand back a
+    /// usable slot. `Bypass` is the client's no-slot path: `PageLoad` sets
+    /// the caller's flag and `ArchiveRead` direct-reads the range.
+    fn load_fragment<F>(
         &mut self,
         archive: u32,
         fragment: Fragment,
@@ -352,19 +423,27 @@ impl PageCache {
         F: FnMut(u32, u64, &mut [u8]) -> io::Result<usize>,
     {
         let min_len = fragment.in_page + fragment.len;
-        if let Some(index) = self.find(archive, fragment.page, min_len) {
-            self.touch(index);
-            copy_fragment(&self.slots[index], fragment, out);
-            return Ok(FragmentOutcome::Served(fragment.len));
-        }
-
-        let Some(index) = self.claim(archive, fragment.page) else {
-            // Every slot is busy/failed. The install's `cache+0x10` is 1
-            // (non-blocking), so the client asks for a direct read instead of
-            // waiting; the single-threaded reader never reaches this state.
+        let (mut table, base) = self.slot_table();
+        let choice = slot_find(
+            &mut table,
+            base,
+            u64::from(archive),
+            fragment.page,
+            min_len,
+            0,
+        );
+        self.absorb_table(&table, base, choice.slot);
+        if choice.slot == 0 {
             return Ok(FragmentOutcome::Bypass);
-        };
-        self.touch(index);
+        }
+        let index = table_index(choice.slot, base);
+        if choice.usable != 0 {
+            return Ok(FragmentOutcome::Served(copy_fragment(
+                &self.slots[index],
+                fragment,
+                out,
+            )));
+        }
         self.load(index, archive, fragment.page, read_at)?;
         Ok(FragmentOutcome::Served(copy_fragment(
             &self.slots[index],
@@ -373,47 +452,38 @@ impl PageCache {
         )))
     }
 
-    /// Find a usable slot whose key matches and whose stored length covers
-    /// `min_len`. Returns `None` when the key matches a busy/failed slot or
-    /// when the stored length is too short.
-    fn find(&self, archive: u32, page: u64, min_len: u32) -> Option<usize> {
-        self.slots.iter().position(|slot| {
-            !slot.invalid
-                && slot.archive == archive
-                && slot.page == page
-                && slot.usable()
-                && slot.stored >= min_len
-        })
-    }
-
-    /// Pick the usable slot with the smallest stamp (ties to the lowest
-    /// index), ignoring busy/failed ones. This is the eviction rule of
-    /// `PageSlotFind` (`0x1424fa440`): the largest `clock - stamp` wins.
-    fn claim(&mut self, archive: u32, page: u64) -> Option<usize> {
-        let mut best: Option<(usize, u64)> = None;
+    /// The client's page-table byte view: the 0x38-byte header (count at +8,
+    /// clock at +0x20, slot base at +0x28) followed by the sixteen 0x70-byte
+    /// slot records. `PageSlotFind` reads and writes this shape; the typed
+    /// slots are the source of truth and `absorb_table` copies the clock and
+    /// the chosen slot's stamp back.
+    fn slot_table(&self) -> (Vec<u8>, u64) {
+        let mut table = vec![0u8; SLOT_TABLE_SLOT_OFFSET + SLOT_COUNT * SLOT_STRIDE];
+        put_u32(&mut table, 8, SLOT_COUNT as u32);
+        put_u64(&mut table, 0x20, self.clock);
+        let base = table.as_ptr() as u64;
+        put_u64(&mut table, 0x28, base + SLOT_TABLE_SLOT_OFFSET as u64);
         for (index, slot) in self.slots.iter().enumerate() {
-            if !slot.usable() {
-                continue;
-            }
-            let distance = self.clock.wrapping_sub(slot.stamp);
-            if best.is_none_or(|(_, best_distance)| distance > best_distance) {
-                best = Some((index, distance));
-            }
+            let at = SLOT_TABLE_SLOT_OFFSET + index * SLOT_STRIDE;
+            put_u64(&mut table, at + 8, u64::from(slot.archive));
+            put_u64(&mut table, at + 0x10, slot.page);
+            put_u64(&mut table, at + 0x20, slot.stamp);
+            put_u32(&mut table, at + 0x28, slot.stored);
+            table[at + 0x2d] = u8::from(slot.invalid);
+            table[at + 0x2e] = u8::from(slot.failed);
         }
-        let (index, _) = best?;
-        let slot = &mut self.slots[index];
-        slot.archive = archive;
-        slot.page = page;
-        slot.stored = 0;
-        slot.populated = true;
-        slot.invalid = false;
-        Some(index)
+        (table, base)
     }
 
-    /// `page_table+0x20++`, `slot+0x20 = clock`.
-    fn touch(&mut self, index: usize) {
-        self.clock = self.clock.wrapping_add(1);
-        self.slots[index].stamp = self.clock;
+    /// Copy `PageSlotFind`'s clock and chosen-slot stamp writes back into the
+    /// typed slots. The pass writes nothing else.
+    fn absorb_table(&mut self, table: &[u8], base: u64, chosen: u64) {
+        self.clock = get_u64(table, 0x20);
+        if chosen != 0 {
+            let index = table_index(chosen, base);
+            let at = SLOT_TABLE_SLOT_OFFSET + index * SLOT_STRIDE;
+            self.slots[index].stamp = get_u64(table, at + 0x20);
+        }
     }
 
     /// Read a whole page into the slot. A short read stores the bytes actually
@@ -449,6 +519,11 @@ impl PageCache {
 enum FragmentOutcome {
     Served(u32),
     Bypass,
+}
+
+/// The typed-slot index of an absolute slot address from `slot_find`.
+fn table_index(slot: u64, base: u64) -> usize {
+    ((slot - base - SLOT_TABLE_SLOT_OFFSET as u64) / SLOT_STRIDE as u64) as usize
 }
 
 /// Copy one fragment out of a loaded page, as the publish step of
@@ -515,6 +590,28 @@ fn get_u32(raw: &[u8], at: usize) -> u32 {
 
 fn get_u64(raw: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(raw[at..at + 8].try_into().expect("8 bytes"))
+}
+
+/// `get_u32` for a plain-buffer harness surface: an out-of-range read yields
+/// `0` instead of panicking. The client has no bounds check (a wild index
+/// faults the oracle); the fixture models the arrays the client allocates, so
+/// the unmutated function never leaves them. A mutant that walks off an array
+/// then answers through entry `0` - which the fixture can make discriminating -
+/// rather than killing the probe.
+fn get_u32_or(raw: &[u8], at: usize) -> u32 {
+    at.checked_add(4)
+        .and_then(|end| raw.get(at..end))
+        .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")))
+        .unwrap_or(0)
+}
+
+/// `get_u64` for a plain-buffer harness surface: an out-of-range read yields
+/// `u64::MAX`, a value no `u32` archive number can equal. See `get_u32_or`.
+fn get_u64_or(raw: &[u8], at: usize) -> u64 {
+    at.checked_add(8)
+        .and_then(|end| raw.get(at..end))
+        .map(|b| u64::from_le_bytes(b.try_into().expect("8 bytes")))
+        .unwrap_or(u64::MAX)
 }
 
 fn put_u32(raw: &mut [u8], at: usize, value: u32) {
@@ -747,6 +844,85 @@ impl Plan {
     }
 }
 
+/// `ArchiveSetContains` (`0x1424fcc80`): is an archive number in the reader's
+/// open-archive set?
+///
+/// The set is the `0x28`-byte object pointed to by `reader+0x238`:
+///
+/// ```text
+/// +0x00 u64 heads   bucket heads: u32 entry indices, -1 ends a chain
+/// +0x08 u64 keys    the archive numbers, indexed by entry
+/// +0x10 u64 next    the next entry index: u32, -1 ends a chain
+/// +0x18 u64         (not read here)
+/// +0x20 u32 bucket_count
+/// ```
+///
+/// `reader` is the reader object's bytes and `arena_base` the address the blob
+/// was placed at, so the client's absolute pointers become offsets. The archive
+/// number arrives in `EDX` (a `u32`) and is zero-extended into the `u64` key
+/// comparison, exactly as `mov r9, rdx` does at `0x1424fcc87`.
+///
+/// The read, instruction for instruction:
+///
+/// * `0x1424fcc80` `mov r8, [rcx+0x238]` - the set pointer; a null set returns
+///   0 (`0x1424fcc8d` -> `0x1424fcd13`).
+/// * `0x1424fcc93` `mov r10, [r8]` - the heads array; a null heads returns 0
+///   (`0x1424fccc6`).
+/// * `0x1424fcca0..0x1424fccc2` - the splitmix64 finalizer
+///   `h ^= h >> 33; h *= 0xff51afd7ed558ccd; h ^= h >> 33;
+///   h *= 0xc4ceb9fe1a85ec53` over the zero-extended archive number.
+/// * `0x1424fccd6..0x1424fcce8` - the bucket index
+///   `((h >> 33) ^ (u32)h) & (bucket_count - 1)`, with `bucket_count` the u32
+///   at `set+0x20`.
+/// * `0x1424fcceb` `mov eax, [r10+rdx*4]` - the head entry; `-1` returns 0.
+/// * `0x1424fccfa` `cmp qword [keys+entry*8], r9` - the key compare; a match
+///   returns 1 (`0x1424fcd0c` -> `setne al`).
+/// * `0x1424fcd04` `mov eax, [next+entry*4]` - the next entry; `-1` returns 0,
+///   anything else loops (`0x1424fcd0a`).
+///
+/// The array reads go through `get_u32_or`/`get_u64_or` (see their comments);
+/// the client's own reads are unchecked. The set's `bucket_count` is a power of
+/// two in every client allocation, so `bucket_count - 1` is the bucket mask.
+pub fn archive_set_contains(reader: &[u8], arena_base: u64, archive_number: u32) -> bool {
+    let set_ptr = get_u64_or(reader, 0x238);
+    if set_ptr == 0 {
+        return false;
+    }
+    let set = set_ptr.wrapping_sub(arena_base) as usize;
+    let heads_ptr = get_u64_or(reader, set);
+    let mut h = u64::from(archive_number);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    if heads_ptr == 0 {
+        return false;
+    }
+    let bucket_count = get_u32_or(reader, set.wrapping_add(0x20));
+    let index = ((h >> 33) ^ u64::from(h as u32)) & u64::from(bucket_count.wrapping_sub(1));
+    let keys_ptr = get_u64_or(reader, set.wrapping_add(8));
+    let next_ptr = get_u64_or(reader, set.wrapping_add(0x10));
+    let heads = heads_ptr.wrapping_sub(arena_base) as usize;
+    let keys = keys_ptr.wrapping_sub(arena_base) as usize;
+    let next = next_ptr.wrapping_sub(arena_base) as usize;
+    let mut entry = get_u32_or(reader, heads.wrapping_add((index as usize).wrapping_mul(4)));
+    if entry == u32::MAX {
+        return false;
+    }
+    loop {
+        if get_u64_or(reader, keys.wrapping_add((entry as usize).wrapping_mul(8)))
+            == u64::from(archive_number)
+        {
+            return true;
+        }
+        entry = get_u32_or(reader, next.wrapping_add((entry as usize).wrapping_mul(4)));
+        if entry != u32::MAX {
+            continue;
+        }
+        return false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -832,7 +1008,14 @@ mod tests {
             }]
         );
         assert_eq!(source.ops, vec![(4, 0, PAGE_SIZE)]);
-        assert_eq!(cache.resident(), vec![(4, 0, PAGE_SIZE, 1)]);
+        // The stamp is 2, not 1: `PageCacheRead` (`0x1424fb1c0`) calls
+        // `PageSlotFind` (`0x1424fa440`) for the head lookup at `0x1424fb301`
+        // and `PageLoad` (`0x1424fa540`) runs the same pass again at
+        // `0x1424fb3a4`. Each pass bumps `page_table+0x20` and the chosen
+        // slot's stamp (`0x1424fa4ff..0x1424fa50a`), so a cold read touches
+        // the clock twice and the page lands in the slot the second pass
+        // picks, not the one the lookup picked.
+        assert_eq!(cache.resident(), vec![(4, 0, PAGE_SIZE, 2)]);
 
         let mut out2 = vec![0u8; len as usize];
         let outcome = cache
@@ -841,7 +1024,8 @@ mod tests {
         assert_eq!(outcome, Outcome::Served(len));
         assert_eq!(out2, out);
         assert_eq!(source.ops.len(), 1, "a hit must not touch the archive");
-        assert_eq!(cache.resident(), vec![(4, 0, PAGE_SIZE, 2)]);
+        // The hit is the lookup's own pass, so it bumps the stamp once more.
+        assert_eq!(cache.resident(), vec![(4, 0, PAGE_SIZE, 3)]);
     }
 
     /// The alignment rule: offset and length both page multiples bypass the
@@ -874,7 +1058,8 @@ mod tests {
                 .expect("read"),
             Outcome::Served(0x100)
         );
-        assert_eq!(cache.resident(), vec![(1, offset, PAGE_SIZE, 1)]);
+        // Stamp 2 for the same double-pass reason as above.
+        assert_eq!(cache.resident(), vec![(1, offset, PAGE_SIZE, 2)]);
     }
 
     /// An unaligned range spanning pages: head page, one direct whole-page
@@ -950,7 +1135,21 @@ mod tests {
             );
         }
         let resident = cache.resident();
-        assert_eq!(resident.len(), SLOT_COUNT);
+        // Eight, not sixteen. `PageSlotFind` bumps the clock and the chosen
+        // slot's stamp on every call, and `PageCacheRead` calls it for the
+        // head lookup before `PageLoad` calls it again, so the slot the
+        // lookup touched is the freshest one and the load's pass skips it.
+        // The client therefore fills every other slot: after 17 distinct
+        // pages the resident set is slots 1,3,5,7,9,11,13,15 holding pages
+        // 16,9,10,11,12,13,14,15.
+        assert_eq!(resident.len(), SLOT_COUNT / 2);
+        let mut pages: Vec<u64> = resident.iter().map(|(_, page, _, _)| *page).collect();
+        pages.sort_unstable();
+        let expected: Vec<u64> = [9, 10, 11, 12, 13, 14, 15, 16]
+            .iter()
+            .map(|index| *index * PAGE_SIZE as u64)
+            .collect();
+        assert_eq!(pages, expected);
         assert!(
             resident.iter().all(|(_, page, _, _)| *page != 0),
             "page 0 must be the evicted slot"
@@ -965,11 +1164,14 @@ mod tests {
             .read(3, 0x10, 0x10, &mut out, |a, o, b| source.read(a, o, b))
             .expect("reload");
         assert_eq!(source.ops, vec![(3, 0, PAGE_SIZE)], "page 0 reloads");
-        // Page 1 was the next-oldest and is evicted by the reload.
-        assert!(!cache
-            .resident()
+        // The reload's own lookup bumps a slot before `PageLoad` picks the
+        // victim, so page 0 lands in slot 3 and evicts page 9 - not page 1,
+        // which the fill pattern had already evicted.
+        let resident = cache.resident();
+        assert!(resident.iter().any(|(_, page, _, _)| *page == 0));
+        assert!(!resident
             .iter()
-            .any(|(_, page, _, _)| *page == PAGE_SIZE as u64));
+            .any(|(_, page, _, _)| *page == 9 * PAGE_SIZE as u64));
     }
 
     /// A hit requires the whole fragment to be inside the bytes the archive

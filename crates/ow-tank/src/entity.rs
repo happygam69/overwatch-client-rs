@@ -671,9 +671,11 @@ pub fn loadouts_of(data: &GameData, hero_index: u32) -> Result<Vec<Ability>> {
 /// An inline `teStructuredDataAssetRef<T>[]` field: an `i32` count then that
 /// many 16-byte references, each deobfuscated with the field hash.
 ///
-/// The element layout is the typed layer's (`ow_stu/src/types.rs`): the GUID
-/// sits at `+8` of each 16-byte element. Callers validate the GUIDs against
-/// the registry (`loadout_guids_of_hero` keeps only `0x09E` hits), so a wrong
+/// The element layout is the typed layer's (`ow_stu/src/types.rs`): each
+/// 16-byte `teStructuredDataAssetRef` carries an 8-byte pad and the GUID at
+/// `+8` (the typed reader does `rd_u64(blob, at + 8)`, and `unlocks.rs` /
+/// `sound.rs` read `k * 16 + 8`). Callers validate the GUIDs against the
+/// registry (`loadout_guids_of_hero` keeps only `0x09E` hits), so a wrong
 /// stride surfaces as an empty list rather than wrong abilities.
 fn ref_array_field(stu: &mut Stu, instance: usize, field_hash: u32) -> Vec<u64> {
     let Some((offset, _)) = stu.field_bytes(instance, field_hash) else {
@@ -689,8 +691,8 @@ fn ref_array_field(stu: &mut Stu, instance: usize, field_hash: u32) -> Vec<u64> 
     let mut out = Vec::with_capacity(count as usize);
     for k in 0..count as usize {
         // Absolute offset: the ref's own bytes, deobfuscated with the
-        // *array's* field hash.
-        if let Some(target) = stu.asset_ref_at(base + 4 + k * 16, field_hash) {
+        // *array's* field hash. The GUID is the element's second qword.
+        if let Some(target) = stu.asset_ref_at(base + 4 + k * 16 + 8, field_hash) {
             out.push(target);
         } else {
             break;
@@ -997,5 +999,84 @@ mod tests {
         assert_eq!(Value::Float(2.0).as_i32(), Some(2));
         assert_eq!(Value::Bool(true).as_i32(), None);
         assert_eq!(Value::Unread(0x1234).as_i32(), None);
+    }
+
+    /// The inverse of `ow_stu::deobfuscate`: the reader XORs with the field
+    /// hash and checksum, then applies four byte swaps. The swaps are disjoint
+    /// transpositions, so applying them to the desired GUID and XORing gives
+    /// the stored form a reader recovers.
+    fn obfuscate(header_checksum: u64, field_hash: u32, guid: u64) -> u64 {
+        let mut bytes = guid.to_le_bytes();
+        bytes.swap(0, 3);
+        bytes.swap(7, 1);
+        bytes.swap(2, 6);
+        bytes.swap(4, 5);
+        let mixed = (field_hash as u64) | ((field_hash as u64) << 32);
+        u64::from_le_bytes(bytes) ^ mixed ^ header_checksum
+    }
+
+    #[test]
+    fn an_inline_ref_array_reads_the_guid_at_the_element_plus_8() {
+        use ow_stu::crc;
+
+        const INSTANCE_HASH: u32 = 0x000E_0001;
+        const FIELD_HASH: u32 = 0x000E_0002;
+        const GUID0: u64 = 0x1122_3344_5566_7788;
+        const GUID1: u64 = 0x99AA_BBCC_DDEE_FF00;
+
+        // A minimal v2 asset: one instance whose one field is an inline array
+        // of two 16-byte references. The GUID is the element's second qword;
+        // the first qword carries a decoy the old element-start reading
+        // returned.
+        let mut blob = vec![0u8; 200];
+        let put =
+            |b: &mut [u8], at: usize, bytes: &[u8]| b[at..at + bytes.len()].copy_from_slice(bytes);
+        put(&mut blob, 0, &1i32.to_le_bytes()); // one instance record
+        put(&mut blob, 4, &40i32.to_le_bytes());
+        put(&mut blob, 8, &0i32.to_le_bytes()); // no inline-array bag
+        put(&mut blob, 12, &0i32.to_le_bytes());
+        put(&mut blob, 16, &1i32.to_le_bytes()); // one field bag
+        put(&mut blob, 20, &64i32.to_le_bytes());
+        put(&mut blob, 24, &0i32.to_le_bytes()); // dynamic block empty
+        put(&mut blob, 28, &0i32.to_le_bytes());
+        put(&mut blob, 32, &120i32.to_le_bytes()); // data offset
+        put(&mut blob, 40, &INSTANCE_HASH.to_le_bytes());
+        put(&mut blob, 44, &0u32.to_le_bytes());
+        put(&mut blob, 48, &(-1i32).to_le_bytes());
+        put(&mut blob, 52, &80i32.to_le_bytes());
+        put(&mut blob, 56, &1i32.to_le_bytes()); // one bag in the array
+        put(&mut blob, 60, &64i32.to_le_bytes());
+        put(&mut blob, 64, &1i32.to_le_bytes()); // one field in the bag
+        put(&mut blob, 68, &72i32.to_le_bytes());
+        put(&mut blob, 72, &FIELD_HASH.to_le_bytes());
+        put(&mut blob, 76, &4i32.to_le_bytes());
+        // The instance payload: bag index 0, then the array's count.
+        put(&mut blob, 120, &0i32.to_le_bytes());
+        put(&mut blob, 124, &2i32.to_le_bytes());
+        // Element 0 at 128, element 1 at 144; the GUID is at +8 in each.
+        let checksum = crc::crc64(&blob[0..36]);
+        put(
+            &mut blob,
+            128,
+            &obfuscate(checksum, FIELD_HASH, 0xDEAD).to_le_bytes(),
+        );
+        put(
+            &mut blob,
+            136,
+            &obfuscate(checksum, FIELD_HASH, GUID0).to_le_bytes(),
+        );
+        put(
+            &mut blob,
+            144,
+            &obfuscate(checksum, FIELD_HASH, 0xBEEF).to_le_bytes(),
+        );
+        put(
+            &mut blob,
+            152,
+            &obfuscate(checksum, FIELD_HASH, GUID1).to_le_bytes(),
+        );
+
+        let mut stu = ow_stu::Stu::parse(blob).expect("synthetic STU parses");
+        assert_eq!(ref_array_field(&mut stu, 0, FIELD_HASH), vec![GUID0, GUID1]);
     }
 }

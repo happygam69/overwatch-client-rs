@@ -124,6 +124,15 @@ pub fn body_entry_offset(index: u32) -> usize {
 mod tests {
     use super::*;
 
+    /// The table base is the client's own global (`0x1442a0bc0`), recorded in
+    /// `docs/formats/static-collision.md` and `crates/ow-sim/src/world.rs`.
+    /// A regrouped literal that drops a digit reads 0x98000 bytes into the
+    /// wrong global, so pin the exact value.
+    #[test]
+    fn the_world_table_is_the_documented_global() {
+        assert_eq!(WORLD_TABLE, 0x1442a0bc0);
+    }
+
     /// The store addend and the load addend are exact inverses modulo `2^64`;
     /// that identity is what makes the allocator's encoded pointer readable by
     /// `OwnerCreateBody`. If either constant were transcribed wrongly, this

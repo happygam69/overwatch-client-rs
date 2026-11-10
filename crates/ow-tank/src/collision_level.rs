@@ -191,7 +191,6 @@ pub fn parse(payload: &[u8]) -> Result<LevelMesh, String> {
             return Err("the root node's box is inverted".into());
         }
     }
-    let mut worst = 0i32;
     for triangle in triangles.chunks_exact(crate::mesh_world::TRIANGLE_LEN) {
         for lane in 0..3 {
             let corner = i32::from_le_bytes(
@@ -199,15 +198,16 @@ pub fn parse(payload: &[u8]) -> Result<LevelMesh, String> {
                     .try_into()
                     .expect("a triangle record holds three corners"),
             );
-            if corner > worst {
-                worst = corner;
+            // Every corner is checked, not just the largest: tracking only a
+            // maximum lets a record like (-1, 5, 6) through, and the sweep then
+            // silently reports no hit for that triangle instead of a parse
+            // error.
+            if corner < 0 || corner as usize >= vertex_count {
+                return Err(format!(
+                    "a triangle corner indexes {corner}, the vertex array holds {vertex_count}"
+                ));
             }
         }
-    }
-    if worst < 0 || worst as usize >= vertex_count {
-        return Err(format!(
-            "a triangle corner indexes {worst}, the vertex array holds {vertex_count}"
-        ));
     }
 
     Ok(LevelMesh {
@@ -230,4 +230,50 @@ pub fn parse(payload: &[u8]) -> Result<LevelMesh, String> {
         root: (root_low, root_high),
         mask,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal `MAP_CHUNK_COLLISION` payload: ten vertices, one node, one
+    /// triangle, then the sector array and the tail, tiled exactly as the
+    /// parser requires. The triangle's three corners are the argument.
+    fn synth_level(corners: [i32; 3]) -> Vec<u8> {
+        let mut d = vec![0u8; 0x1b0];
+        let put =
+            |b: &mut [u8], at: usize, bytes: &[u8]| b[at..at + bytes.len()].copy_from_slice(bytes);
+        put(&mut d, 0x08, &1i32.to_le_bytes()); // count_a: one sector
+        put(&mut d, 0x0c, &1i32.to_le_bytes()); // count_b: one tail
+        put(&mut d, 0x20, &0x120u64.to_le_bytes()); // sector array at 0x120
+        put(&mut d, 0x28, &0x178u64.to_le_bytes()); // tail at 0x178
+                                                    // The root node's box: low (0,0,0), high (1,1,1).
+        put(&mut d, 0xec, &1.0f32.to_le_bytes());
+        put(&mut d, 0xf0, &1.0f32.to_le_bytes());
+        put(&mut d, 0xf4, &1.0f32.to_le_bytes());
+        // The triangle's three corners.
+        for (lane, corner) in corners.iter().enumerate() {
+            put(&mut d, 0x100 + lane * 4, &corner.to_le_bytes());
+        }
+        // The tail.
+        put(&mut d, 0x178, &0xe0u64.to_le_bytes()); // nodes
+        put(&mut d, 0x180, &0x40u64.to_le_bytes()); // vertices
+        put(&mut d, 0x188, &0x100u64.to_le_bytes()); // triangles
+        put(&mut d, 0x190, &1u32.to_le_bytes()); // node count
+        put(&mut d, 0x194, &10u32.to_le_bytes()); // vertex count
+        put(&mut d, 0x198, &1u32.to_le_bytes()); // triangle count
+        put(&mut d, 0x1a8, &0x1FFFu32.to_le_bytes()); // mask
+        d
+    }
+
+    #[test]
+    fn a_negative_corner_is_refused_even_when_the_others_are_in_range() {
+        // (-1, 5, 6): the old check tracked only the largest corner, so the
+        // negative index passed and the sweep silently reported no hit.
+        assert!(parse(&synth_level([-1, 5, 6])).is_err());
+        // The in-range record the old check accepted still parses.
+        assert!(parse(&synth_level([0, 5, 6])).is_ok());
+        // A corner past the vertex array is refused on its own.
+        assert!(parse(&synth_level([0, 5, 10])).is_err());
+    }
 }

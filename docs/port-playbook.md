@@ -74,7 +74,7 @@ while these three shapes fault on the first instruction:
 
 | shape in the `.asm` | why it cannot run | example |
 |---|---|---|
-| `call qword ptr [rip + …]` | an import thunk: the IAT slot is zero in the offline image, so the call jumps to 0 | the page-cache locks `0x142694c20` / `0x142694c50` |
+| `call qword ptr [rip + …]` | an import thunk: the offline IAT slot holds an unrelocated RVA (e.g. `0x03843c96` at `0x142f2d5f8`), not a mapped address, so the call faults | the page-cache locks `0x142694c20` / `0x142694c50` |
 | `call qword ptr [reg + off]`, `call reg` | a virtual slot: the object and its table have to be modelled first | `PageReadPlan`'s release at `[rcx+8]` / `call r8` |
 | `syscall`, `int 0x2b` | kernel transition | - |
 

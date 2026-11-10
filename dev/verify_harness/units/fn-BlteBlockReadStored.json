@@ -1,0 +1,90 @@
+{
+ "id": "fn/BlteBlockReadStored",
+ "title": "tier-2 shipped code: the client's stored BLTE block reader against 0x1424d7850",
+ "address": {
+  "v2b": "0x7ff7c71f7850"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "block_read_stored",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u8",
+ "argFactory": "blte_block_read_stored_fixture",
+ "args": [
+  {
+   "name": "state",
+   "kind": "ptr",
+   "ptr_len": 24
+  },
+  {
+   "name": "dst",
+   "kind": "ptr",
+   "ptr_len": 16
+  },
+  {
+   "name": "dst_len",
+   "kind": "u64"
+  },
+  {
+   "name": "src",
+   "kind": "ptr",
+   "ptr_len": 24
+  },
+  {
+   "name": "src_len",
+   "kind": "u64"
+  },
+  {
+   "name": "out_decoded",
+   "kind": "ptr",
+   "ptr_len": 4
+  },
+  {
+   "name": "out_consumed",
+   "kind": "ptr",
+   "ptr_len": 4
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 6157,
+  "coverageWindow": 220,
+  "allowedImageReads": [
+   "0x7ff7c8339480-0x7ff7c83395d4"
+  ],
+  "unreachableBranches": [
+   {
+    "site": "0x7ff7c71f787a",
+    "edge": "0x7ff7c71f7919",
+    "why": "the null-dst test (`test rdx,rdx`). The harness gives every ptr arg a non-null arena address, so rdx is never 0 and the status-3 return is unreachable in the fixture; a true null pointer cannot be expressed (see the acknowledged gap)."
+   },
+   {
+    "site": "0x7ff7c71f7883",
+    "edge": "0x7ff7c71f7919",
+    "why": "the null-src test (`test r9,r9`), same non-null arena address reason as the null-dst site."
+   }
+  ]
+ },
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/blte.rs::block_read_stored, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the block_read_stored entry. The ledger binds the verdict to blte.rs + the probe source + the git revision.",
+  "Oracle is BlteBlockReadStored at exe 0x1424d7850, merged extent 0x1424d7850..0x1424d792b (220 bytes through the ret at 0x1424d792b). The .pdata root is only 0x1424d7850..0x1424d78cc (0x7c bytes) and the body chains past it; the merged extent is the declared coverageWindow. v2b 0x7ff7c71f7850 is 0x7ff7c4d20000 + (0x1424d7850 - 0x140000000).",
+  "Signature (MS x64): (state /*RCX*/, dst /*RDX*/, dst_len u32 /*R8D*/, src /*R9*/, src_len u32 /*stack5*/, out_decoded u32* /*stack6*/, out_consumed u32* /*stack7*/) -> u8 status. BlteBlockRead (0x1424d61b0) reaches it through the object vtable slot [rax + 8] at 0x1424d668a, after the initializer 0x1424d7840 sets state+0x08 from [rdi+0x5c] and state+0x10 to 1.",
+  "The read, instruction for instruction: *out_decoded = 0; *out_consumed = 0; `test rdx,rdx` / `test r9,r9` return 3 for a null dst/src; end = src + src_len; `cmp byte ptr [rsi+0x10], 0` / `je` skips the mode byte when the flag is zero; otherwise `cmp edx,1` / `jb` returns 0 for a src_len below 1, the mode byte is loaded and compared with 0x4e ('N'), a mismatch returns 8, and 'N' stores 0 at state+0x10 and increments *out_consumed; `test r8d,r8d` / `je` returns 0 for a zero dst_len; `cmp r9,rcx` / `je` returns 0 when src == end; the copy length is `min(end - src, dst_len)` (`sub ecx,r9d` / `cmp ecx,r8d` / `cmovb r8d,ecx`); `memcpy(dst, src, len)` is the client's 0x142efe2b0; *out_decoded += len; *out_consumed += len; the dword at state+0xc += len; return 0.",
+  "The state object is the client's 0x18-byte block-reader object: +0x08 is the declared decoded size (written by the initializer 0x1424d7840, never read by the reader), +0x0c is the running decoded total the reader advances, and +0x10 is the mode-consumed flag. The fixture seeds +0x08 with a sentinel so an unexpected write to it is observable.",
+  "Compared channels: the u8 return (the client's AL; every reject is `MOV AL,8` or `MOV AL,3`, success is `XOR AL,AL`), the state buffer, the dst buffer, and both out dwords. The out buffers start at 0xdeadbeef so the client's opening zero-store is observable.",
+  "The fixture's declared cases walk every branch: a flag-set reader with an empty dst buffer and dst_len 0 (status 0), an empty src buffer with src_len 0 (status 0), a non-'N' mode (status 8), a src exhausted by the mode byte (status 0); a flag-clear reader (the mode skip); a full copy, a partial copy (dst_len below the remainder), a copy shorter than dst_len, a running state total, a wrapping state total (0xFFFFFFFF + 2), a declared +0x08 sentinel, and dst buffers longer than dst_len. The sweep after that varies the flag, the total, the declared size, the source length and the dst length.",
+  "Coverage: the 220-byte window holds eight conditional branch sites - the two null-pointer tests, the mode-flag test, the src_len<1 test, the mode=='N' test, the dst_len==0 test, the src==end test, and the cmovb. All eight are driven to both edges by the declared cases, so the gate is 100%.",
+  "allowedImageReads is the CRT memcpy's jump table (0x142efe2b0 reads its length-indexed dispatch at 0x143619480 + len*4, i.e. 0x7ff7c8339480-0x7ff7c83395d4 for the lengths this fixture uses). The function itself reads only its arguments and the caller's stack - no image constants, no cookie; the body is a leaf and the memcpy is a direct call the oracle resolves inside the image."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "a null dst or a null src (the client's status-3 path)",
+   "why": "The client distinguishes the pointer from the length (`test rdx,rdx` / `test r9,r9` vs `test r8d,r8d` / `cmp edx,1`). The harness gives every ptr arg a non-null arena address, so an empty buffer is a non-null pointer to an empty region and a true null cannot be expressed. The Rust therefore drops the null checks and the fixture drives the adjacent length edges (dst_len == 0 and src_len < 1) instead."
+  }
+ ]
+}

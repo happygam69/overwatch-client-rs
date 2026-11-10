@@ -2401,8 +2401,9 @@ range and write location/size from uninitialised stack slots; it is
 allocator/I/O state the read path never calls. Type `0x10` is absent and no
 outer `4` block was observed; the `E` inner modes are unreadable with this
 install's 63-key keyring, so LZ4's proof is synthetic only. The page-cache
-plan is not a pure leaf: its body takes the container lock twice and AddRefs
-the archive handle through `*(handle)+8`, so its unit cannot earn the
+plan is not a pure leaf: its body does the atomic refcount AddRef/Release on
+the archive handle and calls the handle's release vtable slot through
+`*(handle)+8` when the count drops to 1, so its unit cannot earn the
 five-stage word; the three refcount branches never execute under the null
 handle the oracle can construct (coverage 3/6; a branch that never ran cannot
 be declared dead). The unit was removed rather

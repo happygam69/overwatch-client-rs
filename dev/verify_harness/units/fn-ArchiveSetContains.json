@@ -1,0 +1,67 @@
+{
+ "id": "fn/ArchiveSetContains",
+ "title": "tier-2 shipped code: the reader's open-archive set membership against ArchiveSetContains (0x1424fcc80)",
+ "address": {
+  "v2b": "0x7ff7c721cc80"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "archive_set_contains",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-casc",
+ "candidateProbe": "crates/ow-casc/src/bin/verify_probe.rs",
+ "suite": "casc",
+ "returns": "u8",
+ "argFactory": "archive_set_contains_fixture",
+ "args": [
+  {
+   "name": "reader",
+   "kind": "ptr",
+   "ptr_len": 12288
+  },
+  {
+   "name": "archive_number",
+   "kind": "u64"
+  }
+ ],
+ "options": {
+  "iterations": 300,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 0.75,
+  "seed": 4711,
+  "coverageWindow": 150,
+  "allowedImageReads": []
+ },
+ "knownEquivalentMutants": [
+  {
+   "kind": "boundary +1",
+   "line": 819,
+   "rationale": "`h ^= h >> 33` over the zero-extended archive number: the input is `mov r9, rdx` (a u32 zero-extended into u64), so h < 2^32 and `h >> 34` is 0 exactly as `h >> 33` is. The XOR is a no-op in the original and in the widened mutant; the finalizer's second shift (after the first multiply, where h is a full 64-bit value) is the one that affects the bucket index. No input can observe the first shift's amount."
+  },
+  {
+   "kind": "boundary -1",
+   "line": 819,
+   "rationale": "same proof as boundary +1: `h >> 32` is also 0 for every h < 2^32, so the narrowed mutant is observationally equivalent."
+  }
+ ],
+ "notes": [
+  "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-casc/src/pagecache.rs::archive_set_contains, built by cargo and called by crates/ow-casc/src/bin/verify_probe.rs through the archive_set_contains entry. The ledger binds the verdict to pagecache.rs + the probe source + the git revision. The function is a pure, callee-free leaf: it reads the reader's open-archive set and writes nothing, so the shipped cache and the install path can call it directly.",
+  "Oracle is ArchiveSetContains at exe 0x1424fcc80, extent 0x1424fcc80..0x1424fcd16 (150 bytes through the second ret at 0x1424fcd15; there is no .pdata entry, so the coverageWindow is the measured body), v2b 0x7ff7c721cc80 = 0x7ff7c4d20000 + (0x1424fcc80 - 0x140000000). Signature: (reader /*RCX*/, archive_number /*EDX*/) -> bool (AL). The two call sites (0x1424fc404..0x1424fc409 in ContainerReaderInit's open path and 0x1424fcda1..0x1424fcda6 in DynamicContainerReadPage) both do `mov edx, ebx; mov rcx, rdi; call 0x1424fcc80`, so the reader is the container reader object and the archive number is the u32 being opened/read.",
+  "The read, instruction for instruction: the set pointer at reader+0x238 (0x1424fcc80, null -> 0 at 0x1424fcc8d/0x1424fcd13); the heads array at set+0 (0x1424fcc93, null -> 0 at 0x1424fccc6); the splitmix64 finalizer h ^= h>>33; h *= 0xff51afd7ed558ccd; h ^= h>>33; h *= 0xc4ceb9fe1a85ec53 over the zero-extended archive number (0x1424fcca0..0x1424fccc2); the bucket index ((h>>33) ^ (u32)h) & (bucket_count-1) with bucket_count the u32 at set+0x20 (0x1424fccd6..0x1424fcce8); the head entry heads[index] (0x1424fcceb, -1 -> 0 at 0x1424fccf2); the key compare keys[entry] == archive_number (0x1424fccfa, a match -> 1 at 0x1424fcd0c); and the next entry next[entry] (0x1424fcd04, -1 -> 0 at 0x1424fcd0a, else loop at 0x1424fccf8). The set object is the client's 0x28 bytes: heads at +0, keys at +8, next at +0x10, bucket_count at +0x20.",
+  "Compared channels: the return byte (AL, compared through the harness's u8 channel because the client leaves RAX's upper bits holding the hash) and the whole 0x3000-byte blob. The function writes nothing, so the blob is compared unchanged; its untouched bytes are sentinel, so a stray write is visible. The probe returns the bool as a u64 and hands the blob back.",
+  "The fixture's declared cases drive every conditional branch to both edges: the null set and the null heads (the two early exits), an empty bucket (head -1), a single match and a single mismatch, two- and three-entry chains with the match at the head, the middle and the tail, collisions of two and three archive numbers in one bucket (bc=16: 0/30/79; bc=256: 0/170/568), bucket counts 1..256, two buckets in one table, and the u32 edges (0, 0x80000000, 0xffffffff). Two cases are shaped for the inverted-check mutants: an empty bucket whose entry 0 holds the queried archive, and a chain that ends at -1 while entry 0 holds the queried archive. The sweep afterwards varies the bucket count, the chain length and the key placement.",
+  "Coverage: the 150-byte window holds five conditional branch sites - the null-set test, the null-heads test, the head -1 test, the key compare and the next -1 test. All five are driven to both edges by the declared cases, so the gate is 100%."
+ ],
+ "acknowledgedGaps": [
+  {
+   "what": "the client's unchecked array reads",
+   "why": "The client indexes heads, keys and next without bounds checks; a wild index faults the oracle. The plain-buffer surface cannot model that, so the candidate reads through get_u32_or/get_u64_or, which return 0 / u64::MAX out of range. Every fixture case keeps the client's own reads in bounds, so the unmutated function is identical; the safe reads only change what a mutant that walks off an array does (it answers instead of killing the probe).",
+   "address": "0x1424fcceb"
+  },
+  {
+   "what": "the set's construction and the mode-2 skip",
+   "why": "ArchiveSetContains is only the membership test. The set is built by the reader's open path (the caller at 0x1424fc404) and consulted again by DynamicContainerReadPage (0x1424fcda6) only when the container mode is not 2; this install's read-only mode 2 skips the check, as docs/formats/casc.md records. The insert/erase and the bucket-count growth are not part of this function and stay where the open path is documented.",
+   "address": "0x1424fc404"
+  }
+ ]
+}

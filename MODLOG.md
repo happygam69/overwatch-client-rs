@@ -6,6 +6,75 @@ Rotation: this file holds the current entries. Older ones move verbatim to
 `docs/history/modlog-YYYY-MM.md` (one file per month) at each rotation; no
 entry is rewritten after the fact.
 
+## 2026-11-10 - the page cache's read path, and four audit P0 rows
+
+`PageCacheRead` (`0x1424fb1c0`) is now followed operation for operation, and
+reading it overturned the recorded order. The client locks the table, calls
+`PageSlotFind` (`0x1424fa440`) for the **head** (`0x1424fb301`), then for the
+**tail** (`0x1424fb355`), unlocks (`0x1424fb37e`), and only then calls
+`PageLoad` (`0x1424fa540`) for the head (`0x1424fb3a4`) and the tail
+(`0x1424fb594`). `docs/formats/casc.md` and the module doc both put the tail
+lookup at the tail's load; the disassembly says otherwise. The difference is
+observable: `PageSlotFind` bumps `page_table+0x20` and the chosen slot's stamp
+on **every** call (`0x1424fa4ff..0x1424fa50a`), so the lookup's pass makes its
+slot the freshest and `PageLoad`'s pass skips it. A cold read therefore fills
+every other slot - after 17 distinct pages only slots 1,3,5,7,9,11,13,15 are
+resident, holding pages 16,9,10,11,12,13,14,15. Three unit tests and the
+install test `page_cache_real` encoded the old single-pass behaviour and now
+pin the client's. `eviction_is_least_recently_used` keeps its name: the victim
+rule is unchanged (largest wrapping `clock - stamp`, ties to the lowest
+index), only the stamp sequence differs. The `table+0x30` closed flag is set
+to 0 by `PageCacheInit` (`0x1424f88e1`), so the lookups are on.
+
+The same pass closed four rows of `docs/audit-ow-tank.md`:
+
+* **P0-6** - `clip.rs` ships `anim_time_wrap`, the client's `AnimTimeWrap`
+  (`0x140b91ef0`) operation for operation: `maxss(minss(t, max), min)` when the
+  node flag dword's bit 0 is clear, `t - (float)(int)(t / max) * max` when it is
+  set, with SSE NaN fall-through and `cvttss2si`'s integer indeterminate. Both
+  `frame_at` implementations route through it over `[0, frames]` with the flag
+  clear, and the `+1` is gone - the stored keys are 0-based. The wrap branch
+  stays unreachable from `frame_at` because the flag lives in the animation
+  node record, which the clip header does not carry; the read range is the
+  node's first 16 bytes (`+0x00` min, `+0x04` max, `+0x08` slot2/noise,
+  `+0x0c` flags). The `+0x24` wrap shaping is **open** - the sampler
+  `FUN_140b9a790` does not read it.
+* **P0-7 / P0-8** - `Skin::posed_world` now replaces the bind's **local**
+  matrix, the same rule as `posed_world_full`, and the three tests that had
+  been adjusted to the old absolute-rotation behaviour assert the read rule
+  again. The old path derived every bone's local from the posed absolutes, so
+  a posed bone's children did not follow.
+* **P0-10** - `read_placeable` bounds its reads by the placeable's declared
+  `size`.
+* **P0-13** - `Kind::type_id` now returns the client's table id (`Option<u8>`),
+  and `Model`/`SingleModel` return `None`: the client's table at `0x1439aa320`
+  has no `0x02` and no `0x08`, and its dispatch is by **slot**
+  (`ChunkSlotForGuid`, `0x141b32e70`), not by id.
+
+The `Z` block path was also attacked. The client's inflate at `0x1425233d0`
+is zlib 1.3 (`inflate 1.3 Copyright 1995-2023` at image `0x143477751`), and a
+from-scratch port now sits in `crates/ow-casc/src/inflate.rs` with the
+client's `z_stream` and `0x1bf0`-byte `inflate_state` layouts and all five
+helpers identified (`0x142528250` crc32, `0x142527e70` adler32,
+`0x142525030` updatewindow, `0x142528700` inflate_table, `0x142528cc0`
+inflate_fast). Two real bugs were found and fixed - the `CODELENS` pass did
+not drop the code's bits, and the Huffman lookup did not re-read the entry
+after pulling bytes - but the port still fails on a repetitive payload (two
+zero bytes at record 686) and on the install suite (`inflate: -5`). The `Z`
+path therefore stays on `flate2`; the port is documented as incomplete in the
+module doc and in `docs/formats/casc.md`, with the failing case kept as an
+`#[ignore]`d test. No `fn/Inflate` harness unit exists, so nothing about the
+port is claimed as 1:1.
+
+Verified: `cargo test -p ow-casc --lib` (135 passed, 1 ignored by design),
+`cargo test -p ow-casc --test page_cache_real` (1 passed),
+`cargo test -p ow-casc --test blte_real` (1 passed, 238 s), `cargo clippy -p ow-casc --all-targets --
+-D warnings` clean, `cargo test -p ow-tank --lib` (389 passed), `cargo test -p
+ow-tank --test mapchunk_kinds` (16 passed), `cargo test -p ow-scene --test
+skin_pose_gate` (7 passed in 1765 s - the real 200-bone rig, where the two
+pose formulations genuinely differ). The unscoped `cargo xtask verify` was
+**not run** (suspended).
+
 ## 2026-11-19 - gate: the unscoped `verify` is suspended by the operator
 
 The full run costs over an hour (seven install suites are 98% of the test

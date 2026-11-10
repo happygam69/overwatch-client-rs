@@ -7,13 +7,19 @@
 //! the model on screen. These use Tracer's real 200-bone rig, where the
 //! formulations genuinely differ.
 //!
-//! The formulation is not ours: it is read from the client's own pose path in
-//! `D:/ow-dumps/clipobj.exe` — `FUN_7ff614edc560` fills a 16-byte-per-bone
-//! array from the clip evaluator (`func_0x7ff614e92700`, an **absolute**
-//! rotation per bone), `FUN_7ff614ed98d0` blends that quaternion into a
-//! 0x30-byte pose slot, and no parent-relative rotation is composed anywhere in
-//! that path. So a pose replaces the bind rotation in the **absolute** matrix
-//! and the parent-relative delta is derived from the result.
+//! The formulation is not ours: it is the read rule recorded in
+//! `docs/formats/animation.md` — *a pose replaces the bind's local matrix*,
+//! `local' = T(pose_t) · R(pose_r) · S(local_s)`. The install measures it: the
+//! blend-card clips' position tracks land on `skin.local`'s translations
+//! (`ow-tank/tests/blend_bind_check.rs`), so the pose is a local transform and
+//! its rotation is the bone's local rotation.
+//!
+//! An earlier version of this file claimed the evaluator writes an **absolute**
+//! rotation and derived every bone's parent-relative transform from the posed
+//! absolutes. That derivation is the defect: for an unposed child of a posed
+//! parent it computes `inverse(absolute'(p)) · absolute(c)`, which cancels the
+//! parent's pose, so a posed bone's children did not follow. The tests below
+//! used to assert that cancellation; they now assert the read property.
 //!
 //! Skips itself (rather than failing) when the install is not readable.
 
@@ -61,10 +67,29 @@ fn real_rig_bind_pose_leaves_every_matrix_at_identity() {
     );
 }
 
+/// The posed bone and every bone whose parent chain runs through it.
+fn subtree_of(skin: &ow_tank::skin::Skin, root: usize) -> Vec<bool> {
+    let mut in_subtree = vec![false; skin.parents.len()];
+    for b in 0..skin.parents.len() {
+        let mut at = b as i16;
+        for _ in 0..skin.parents.len() {
+            if at < 0 {
+                break;
+            }
+            if at as usize == root {
+                in_subtree[b] = true;
+                break;
+            }
+            at = skin.parents[at as usize];
+        }
+    }
+    in_subtree
+}
+
 #[test]
-fn real_rig_a_posed_bone_leaves_every_other_bone_bit_identical() {
+fn real_rig_a_posed_bone_moves_only_itself_and_its_descendants() {
     // The property that matters on screen: posing one bone must not disturb any
-    // other bone's skinning matrix. Vertices weighted only to untouched bones
+    // bone *outside its own subtree*. Vertices weighted only to untouched bones
     // then stay exactly where they were, which is what stops limbs tearing.
     let Some(skin) = load() else { return };
     let roots = skin.parents.iter().filter(|p| **p < 0).count();
@@ -74,9 +99,11 @@ fn real_rig_a_posed_bone_leaves_every_other_bone_bit_identical() {
     let deep = deep_bone(&skin);
     let q = glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_3);
     let posed = skin.palette(&|b| if b == deep { Some(q) } else { None });
+    let subtree = subtree_of(&skin, deep);
+    assert!(subtree[deep]);
 
     for b in 0..skin.parents.len() {
-        if b == deep {
+        if subtree[b] {
             continue;
         }
         let d = max_diff(&bind[b], &posed[b]);
@@ -85,6 +112,11 @@ fn real_rig_a_posed_bone_leaves_every_other_bone_bit_identical() {
             "bone {b} moved by {d} while posing bone {deep} alone"
         );
     }
+    // The subtree really did move, so the loop above is not vacuous.
+    assert!(
+        max_diff(&bind[deep], &posed[deep]) > 1e-3,
+        "posing bone {deep} changed nothing"
+    );
 }
 
 #[test]
@@ -121,10 +153,11 @@ fn real_rig_a_posed_bone_keeps_its_own_joint_in_place() {
         "posing bone 2 moved its own joint from {joint_bind:?} to {joint_posed:?}"
     );
 }
-/// Which bone indices do the *wrongly moved* vertices reference? If they are
-/// all one bone, or all above some index, that names the fault directly.
+/// A posed bone moves its own vertices **and its descendants'**: the pose is a
+/// local transform, so the subtree rides it. A vertex may only move if one of
+/// its influences is the posed bone or a descendant of it.
 #[test]
-fn real_mesh_a_posed_bone_moves_only_its_own_vertices() {
+fn real_mesh_a_posed_bone_moves_only_its_subtree_vertices() {
     let Some(scene) = ow_scene::build(&["--hero".into(), "3".into(), "--hero-only".into()]).ok()
     else {
         eprintln!("no install / no hero 3; skipping");
@@ -153,6 +186,8 @@ fn real_mesh_a_posed_bone_moves_only_its_own_vertices() {
         ]
     };
 
+    let subtree = subtree_of(skin, bone);
+
     let mut moved = 0usize;
     let mut wrongly = 0usize;
     let mut worst = 0.0f32;
@@ -170,7 +205,7 @@ fn real_mesh_a_posed_bone_moves_only_its_own_vertices() {
             if slot == 0 || slot >= bind.len() {
                 continue;
             }
-            if slot - 1 == bone {
+            if subtree[slot - 1] {
                 touches = true;
             }
             for c in 0..3 {
@@ -189,7 +224,7 @@ fn real_mesh_a_posed_bone_moves_only_its_own_vertices() {
             }
         }
     }
-    eprintln!("PROBE moved {moved}; {wrongly} do NOT reference bone {bone} (worst {worst_wrong:.4} m); correct moves up to {worst:.4} m");
+    eprintln!("PROBE moved {moved}; {wrongly} do NOT reference bone {bone} or its descendants (worst {worst_wrong:.4} m); subtree moves up to {worst:.4} m");
     assert!(
         moved > 100,
         "posing bone {bone} moved only {moved} vertices"

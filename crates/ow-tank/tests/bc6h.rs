@@ -272,10 +272,21 @@ fn a_bc6h_texture_decodes_end_to_end_and_writes_a_dds() {
 
     let dds = t.to_dds().expect("dds");
     assert_eq!(&dds[0..4], b"DDS ");
-    // A DX10 header: fourCC "DX10" at the pixel format's fourCC slot (76 + 8,
-    // after the 4-byte magic) and a 20-byte extension block whose first word is
-    // the DXGI id. 95 = BC6H_UF16, and the block run follows it.
-    assert_eq!(&dds[88..92], b"DX10");
+    // A DX10 header: the pixel format sits at file 76 (header 0x48), so its
+    // fourCC slot is file 84..88, and a 20-byte extension block follows the
+    // 128-byte header. Its first word is the DXGI id. 95 = BC6H_UF16, and the
+    // block run follows it.
+    assert_eq!(
+        u32::from_le_bytes(dds[76..80].try_into().unwrap()),
+        32,
+        "pf dwSize"
+    );
+    assert_eq!(
+        u32::from_le_bytes(dds[80..84].try_into().unwrap()),
+        0x4,
+        "pf dwFlags = FOURCC"
+    );
+    assert_eq!(&dds[84..88], b"DX10");
     let dxgi = u32::from_le_bytes([dds[128], dds[129], dds[130], dds[131]]);
     assert_eq!(dxgi, 95, "DXGI 95 is BC6H_UF16");
     // The DX10 block, after the 128-byte DDS header: dxgiFormat at +0,

@@ -59,13 +59,16 @@ re-run `casc` after a commit if you need a fresh binding.
 | `DynamicIndexResolveRange` | `0x1425115d0` | `fn/DynamicIndexResolveRange` | verified: 100% (7/7 branches), 5/5 | the whole status machine: 2 no entry, 4 `start > size`, 4 `start + len > size`, the `0xffffffff` length form, the out range written before the resident check (so status 3 carries it), and the entry written only on success and only when its pointer is non-null. The interval grow, the pointer-array grow, the allocator free and a live logger are the declared gaps, the same set `fn/DynamicIndexFindEntry` declares |
 | `PageSlotFind` | `0x1424fa440` | `fn/PageSlotFind` | verified: 100% (12/12 branches), 12/12 | the client's single pass: a match (invalid byte clear, archive and page equal, stored covers the length or the slot is busy) ends the pass and is returned even when busy with `out_usable` 0, and only otherwise does the pass pick the largest wrapping `clock - stamp`, skipping busy slots and the excluded one, ties to the lower index. The chosen slot bumps the clock and its stamp. The typed `PageCache::find` + `claim` split is not rewired onto it yet: the caller that consumes the usable answer (`PageCacheRead`, `0x1424fb1c0`) is unread |
 
+| `ArchiveSetContains` | `0x1424fcc80` | `fn/ArchiveSetContains` | verified: 100% (5/5 branches), 9/11 + 2 declared equivalent | the open-archive set membership leaf: the set pointer at `reader+0x238`, the heads array at `set+0`, the splitmix64 finalizer over the zero-extended archive number, the bucket index `((h >> 33) ^ (u32)h) & (bucket_count - 1)` with `bucket_count` the u32 at `set+0x20`, and the bucket chain walk (keys at `+8`, next at `+0x10`, `-1` ends). The two surviving mutants are the first hash shift's ±1 boundaries, declared equivalent: the input is a zero-extended u32, so `h >> 32` and `h >> 34` are both 0 and the first XOR is a no-op. The set's construction and the mode-2 skip are the declared gap |
+| `BlteBlockReadStored` | `0x1424d7850` | `fn/BlteBlockReadStored` | verified: 100% (5/7 reachable branches, two dead edges declared), 12/12 | the stored block reader as a streaming copy with a one-byte state flag: zeroes both out counters, status 3 for a null `dst`/`src`, consumes the mode byte when the flag at `+0x10` is non-zero (status 0 for `src_len < 1`, status 8 for a mode other than `N`), status 0 for a zero `dst_len` or an exhausted `src`, otherwise `memcpy` of `min(end - src, dst_len)` through the CRT `0x142efe2b0` and the length added to both counters and the state dword at `+0xc`. The two null-pointer tests are declared unreachable (the harness gives every pointer a non-null arena address). `BlteBlockRead` reaches it through the object vtable slot `[rax + 8]` at `0x1424d668a` |
+
 These are the only CASC functions for which the five-stage word "verified" is
-earned: the table's twenty-nine rows plus the leaf below. The rest of the
+earned: the table's thirty-one rows plus the leaf below. The rest of the
 container is not.
 
 `HexPairDecode` (`0x14269ab80`, 318 bytes through the `ret` at `0x14269acbd`)
 is the hex-pair leaf under both text key parsers, and `fn/HexPairDecode` is
-the thirtieth unit: verified, 100% of its reachable branches, 12/12
+the thirty-first unit: verified, 100% of its reachable branches, 12/12
 mutants, with the shipped `install::hex_decode` as the candidate. Signature
 `(u8 *out, u64 count, const char *text, u64 len) -> u64 written`; it stops at
 `offset >= len - 1` (an odd trailing character is never read), at a NUL first
@@ -294,9 +297,11 @@ reproduces a sample, and `crates/ow-casc/tests/blte_real.rs` asserts that the
 bytes classified across modes equal the frame headers' declared total.
 
 The page-cache plan (`PageReadPlan`, `0x1424faa20`) is not a pure leaf: its
-body takes the container lock twice (`LOCK()`/`UNLOCK()`) and AddRefs the
-archive handle through `*(handle)+8`. That lock is why its unit cannot earn
-the five-stage word (coverage 3/6; a branch that never ran cannot be declared
+body does the atomic refcount AddRef/Release on the archive handle
+(`lock inc [r8+8]` / `lock xadd [rcx+8],eax` at `0x1424faa76`/`0x1424faa89`)
+and calls the handle's release vtable slot `*(handle)+8` at `0x1424faa97`
+when the count drops to 1. That release is why its unit cannot earn the
+five-stage word (coverage 3/6; a branch that never ran cannot be declared
 dead). The unit was removed rather than shipped with a weakened gate.
 
 **The same wall, measured (2026-11-17).** Three more page-cache entry points

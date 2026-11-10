@@ -33,9 +33,10 @@
 use std::io::{self, BufRead, Write};
 
 use ow_casc::blte::{
-    md5_final, md5_init, md5_transform, md5_update, salsa20, salsa20_state_init, MD5_CTX_SIZE,
+    block_read_stored, md5_final, md5_init, md5_transform, md5_update, salsa20, salsa20_state_init,
+    MD5_CTX_SIZE,
 };
-use ow_casc::bytes::client_memcmp;
+use ow_casc::bytes::{client_memcmp, client_strlen};
 use ow_casc::container::{
     decode_page_record, parse_index_file, parse_index_footer, select_page, select_page_batch,
     verify_page_checksums, IndexFooter, INDEX_FOOTER_SIZE, PAGE_MISS,
@@ -53,7 +54,7 @@ use ow_casc::install::{
     parse_hex_key_id, select_build_info_row,
 };
 
-use ow_casc::pagecache::slot_find;
+use ow_casc::pagecache::{archive_set_contains, slot_find};
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     if s == "-" {
@@ -899,6 +900,30 @@ fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), St
                 vec![index, keys_blob, out_found, out_locations],
             ))
         }
+        "archive_set_contains" => {
+            // ArchiveSetContains (0x1424fcc80): (reader, archive_number) ->
+            // bool. One blob holds the reader object at 0 (the set pointer at
+            // +0x238), the 0x28-byte set object at 0x1000, the bucket heads at
+            // 0x1100, the keys at 0x1800 and the next indices at 0x2000; every
+            // pointer is an absolute arena address baked in by the fixture.
+            // The probe returns the client's AL as a u64 and the blob
+            // unchanged (the function writes nothing).
+            const ARENA: u64 = 0x2_0000_0000;
+            if args.len() != 2 {
+                return Err(format!("expected 2 args, got {}", args.len()));
+            }
+            let mut it = args.into_iter();
+            let blob = match it.next() {
+                Some(Arg::Ptr(b, _r, g)) if g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let archive = match it.next() {
+                Some(Arg::U64(v)) => v as u32,
+                _ => return Err("arg1 must be u64".into()),
+            };
+            let found = archive_set_contains(&blob, ARENA, archive);
+            Ok((format!("{:x}", u64::from(found)), vec![blob]))
+        }
         "page_slot_find" => {
             // PageSlotFind (0x1424fa440): (cache, archive, page, len,
             // out_usable, exclude) -> slot. One blob holds the cache object at
@@ -967,6 +992,105 @@ fn handle_call(entry: &str, args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), St
             }
             let ret = client_memcmp(&a, &b, n);
             Ok((format!("{:x}", ret), vec![a, b]))
+        }
+        "client_strlen" => {
+            // strlen (0x1426cce30): (s) -> the string's length. The buffer is
+            // a NUL-terminated string; the client reads bytes until the NUL
+            // and writes nothing, so the probe hands the buffer back unchanged
+            // (the harness compares it to prove no write happened).
+            if args.len() != 1 {
+                return Err(format!("expected 1 arg, got {}", args.len()));
+            }
+            let b = match args.into_iter().next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let ret = client_strlen(&b);
+            Ok((format!("{:x}", ret), vec![b]))
+        }
+        "block_read_stored" => {
+            // BlteBlockReadStored (0x1424d7850): (state, dst, dst_len, src,
+            // src_len, out_decoded, out_consumed) -> the client's AL status.
+            // The state object is the client's 0x18-byte block-reader object
+            // (+0x0c the running decoded total, +0x10 the mode-consumed flag);
+            // the two out buffers are the caller's u32 counters, seeded with a
+            // sentinel so the client's opening zero-store is observable. The
+            // client writes the state, the dst prefix and both counters, so
+            // the probe returns all four.
+            if args.len() != 7 {
+                return Err(format!("expected 7 args, got {}", args.len()));
+            }
+            let mut it = args.into_iter();
+            let mut state = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg0 must be a plain arena buffer".into()),
+            };
+            let mut dst = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg1 must be a plain arena buffer".into()),
+            };
+            let dst_len = match it.next() {
+                Some(Arg::U64(v)) => v as u32,
+                _ => return Err("arg2 must be u64".into()),
+            };
+            let src = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg3 must be a plain arena buffer".into()),
+            };
+            let src_len = match it.next() {
+                Some(Arg::U64(v)) => v as u32,
+                _ => return Err("arg4 must be u64".into()),
+            };
+            let out_decoded = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg5 must be a plain arena buffer".into()),
+            };
+            let out_consumed = match it.next() {
+                Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+                _ => return Err("arg6 must be a plain arena buffer".into()),
+            };
+            if state.len() != 0x18 {
+                return Err(format!("state-must-be-24-bytes (got {})", state.len()));
+            }
+            if out_decoded.len() != 4 {
+                return Err(format!(
+                    "out-decoded-must-be-4-bytes (got {})",
+                    out_decoded.len()
+                ));
+            }
+            if out_consumed.len() != 4 {
+                return Err(format!(
+                    "out-consumed-must-be-4-bytes (got {})",
+                    out_consumed.len()
+                ));
+            }
+            if dst_len as usize > dst.len() {
+                return Err("dst-len-past-dst".into());
+            }
+            if src_len as usize > src.len() {
+                return Err("src-len-past-src".into());
+            }
+            let mut decoded = u32::from_le_bytes(out_decoded.as_slice().try_into().unwrap());
+            let mut consumed = u32::from_le_bytes(out_consumed.as_slice().try_into().unwrap());
+            let ret = block_read_stored(
+                &mut state,
+                &mut dst,
+                dst_len,
+                &src,
+                src_len,
+                &mut decoded,
+                &mut consumed,
+            );
+            Ok((
+                format!("{:x}", u64::from(ret)),
+                vec![
+                    state,
+                    dst,
+                    src,
+                    decoded.to_le_bytes().to_vec(),
+                    consumed.to_le_bytes().to_vec(),
+                ],
+            ))
         }
         "build_info_select_row" => {
             // BuildInfoSelectRow (0x1424aec30): (table, flavor) - the 2-arg

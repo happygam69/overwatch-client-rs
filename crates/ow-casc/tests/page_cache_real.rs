@@ -15,8 +15,12 @@
 //! 2. a record larger than a page is read as exactly the client's plan (head
 //!    page, one direct whole-page run, tail page) and returns the archive's
 //!    bytes;
-//! 3. after 17 distinct pages the 16-slot cache has evicted the first, so
-//!    re-reading it is a miss and reads the page again.
+//! 3. after 17 distinct pages the cache has evicted the first, so re-reading
+//!    it is a miss and reads the page again. Only eight of the sixteen slots
+//!    are resident: `PageSlotFind` bumps the clock and the chosen stamp on
+//!    every call, and `PageCacheRead` calls it for the head lookup before
+//!    `PageLoad` calls it again, so the load's pass skips the slot the lookup
+//!    touched and the cache fills every other slot.
 //!
 //! Skipped when no install is present. Read-only.
 
@@ -210,19 +214,22 @@ fn real_stored_reads_follow_the_client_page_plan() {
     }
     let large_ops = trace.len();
 
-    // The cache holds 16 pages. Seventeen distinct pages evict the first; its
-    // re-read is a miss and loads the page again. The earlier reads are
-    // dropped first so the 17 pages are the only candidates.
+    // The cache holds 16 slots but fills every other one: the head lookup's
+    // `PageSlotFind` pass makes the slot it touched the freshest, so the
+    // `PageLoad` pass picks a different slot. Seventeen distinct pages leave
+    // eight resident; the first page is long gone, so its re-read is a miss.
+    // The earlier reads are dropped first so the 17 pages are the only
+    // candidates.
     store.clear_page_cache();
     for (key, _) in &distinct {
         store.read_payload(key).expect("read distinct-page payload");
     }
     let first_page = (payload_start(distinct[0].1) & ARCHIVE_MASK) & !u64::from(PAGE_SIZE - 1);
     let resident = store.page_cache_resident();
-    assert_eq!(resident.len(), 16, "the cache keeps 16 page slots");
+    assert_eq!(resident.len(), 8, "the cache fills every other slot");
     assert!(
         !resident.iter().any(|(_, page, _, _)| *page == first_page),
-        "the 17th distinct page evicts the first"
+        "the first distinct page is evicted"
     );
     store.clear_page_cache_trace();
     store

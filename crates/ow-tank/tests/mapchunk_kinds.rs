@@ -460,14 +460,16 @@ fn unknown_kind_walks_placeables_without_a_body_reader() {
 }
 
 #[test]
-fn kind_ids_match_the_reference_enum() {
+fn kind_ids_are_the_clients_table() {
+    // The client's kind table is `0x1439aa320`: 0x24 entries of 0x20 bytes,
+    // entry `+0x08` is the id a chunk GUID carries in bits 32..39, and
+    // `ChunkSlotForGuid` (`0x141b32e70`) resolves that id to the slot at
+    // `entry+0`. These are the ids the client actually has.
     for (kind, id) in [
         (Kind::Unknown, 0x00u8),
         (Kind::ModelGroup, 0x01),
-        (Kind::SingleModel, 0x02),
         (Kind::ReflectionPoint, 0x04),
         (Kind::Text, 0x07),
-        (Kind::Model, 0x08),
         (Kind::Light, 0x09),
         (Kind::Area, 0x0A),
         (Kind::Entity, 0x0B),
@@ -475,13 +477,33 @@ fn kind_ids_match_the_reference_enum() {
         (Kind::Effect, 0x0D),
         (Kind::Sequence, 0x18),
     ] {
-        assert_eq!(kind.type_id(), id, "{}", kind.label());
+        assert_eq!(kind.type_id(), Some(id), "{}", kind.label());
         assert_eq!(Kind::from_type_id(id), Some(kind), "{}", kind.label());
     }
-    // The reference names these but has no body for them.
+    // `Model` and `SingleModel` are the **reference** library's
+    // `teMAP_PLACEABLE_TYPE` values. The client's table has no `0x08` and no
+    // `0x02`, and no plain-model placeable distinct from
+    // `MAP_PLACEABLE_MODEL_GROUP` (`0x01`): a real chunk carrying either id
+    // resolves to slot 0 (`MAP_PLACEABLE_UNKNOWN`) in the client.
+    assert_eq!(Kind::Model.type_id(), None);
+    assert_eq!(Kind::SingleModel.type_id(), None);
+    assert_eq!(Kind::from_type_id(0x02), None);
+    assert_eq!(Kind::from_type_id(0x08), None);
+    // Ids the client has but this reader has no body for.
     assert_eq!(Kind::from_type_id(0x03), None); // occluder
+    assert_eq!(Kind::from_type_id(0x06), None); // label
     assert_eq!(Kind::from_type_id(0x0E), None); // fog
     assert_eq!(Kind::from_type_id(0xFF), None);
+
+    // The read table itself, as the repo records it: no 0x02, no 0x08, and the
+    // one model placeable is MODEL_GROUP at slot 0x01.
+    assert!(!ow_tank::chunkkind::TABLE.iter().any(|e| e.id == 0x02));
+    assert!(!ow_tank::chunkkind::TABLE.iter().any(|e| e.id == 0x08));
+    assert_eq!(ow_tank::chunkkind::slot_for_kind(0x01), Some(0x01));
+    assert_eq!(
+        ow_tank::chunkkind::entry_for_kind(0x01).map(|e| e.name),
+        Some("MAP_PLACEABLE_MODEL_GROUP")
+    );
 }
 
 #[test]
@@ -694,11 +716,20 @@ fn real_map_chunks_match_their_declared_kinds() {
     }
     eprintln!("kind byte in the asset GUID (bits 32..39):");
     for (id, gs) in &declared {
-        let name = match Kind::from_type_id(*id) {
-            Some(kind) => kind.label(),
-            None => "reference has no body",
+        // Named by the **client's** table (`0x1439aa320`), not by the
+        // reference enum: the reference's 0x02/0x08 are not ids the client
+        // has, so a real chunk carrying one is UNKNOWN to the client.
+        let name = match ow_tank::chunkkind::entry_for_kind(*id) {
+            Some(e) => {
+                let body = match Kind::from_type_id(*id) {
+                    Some(kind) => kind.label(),
+                    None => "no body in this reader",
+                };
+                format!("{} [{}]", e.name, body)
+            }
+            None => "NOT IN THE CLIENT'S TABLE".to_string(),
         };
-        eprintln!("  0x{id:02X} {name:<22} {} asset(s)", gs.len());
+        eprintln!("  0x{id:02X} {name:<52} {} asset(s)", gs.len());
     }
 
     // Spread each declared-kind sample across its bucket rather than taking a
@@ -773,8 +804,11 @@ fn real_map_chunks_match_their_declared_kinds() {
     eprintln!("\nassets parsed with the kind their GUID declares:");
     for (id, gs) in &declared {
         let Some(kind) = Kind::from_type_id(*id) else {
+            let name = ow_tank::chunkkind::entry_for_kind(*id)
+                .map(|e| e.name)
+                .unwrap_or("NOT IN THE CLIENT'S TABLE");
             eprintln!(
-                "  0x{id:02X} (no body in the reference) {} asset(s), not swept by kind",
+                "  0x{id:02X} ({name}) {} asset(s), no body in this reader",
                 gs.len()
             );
             continue;
@@ -801,25 +835,28 @@ fn real_map_chunks_match_their_declared_kinds() {
         }
     }
 
-    let model = by_kind.get(&Kind::Model).cloned().unwrap_or_default();
-    if model.assets == 0 {
+    // The client's model placeable is `MAP_PLACEABLE_MODEL_GROUP` (id 0x01,
+    // slot 0x01). `Kind::Model`/`Kind::SingleModel` are reference-enum layouts
+    // with no client id, so they must not be what this sweep is measured by.
+    let model_group = by_kind.get(&Kind::ModelGroup).cloned().unwrap_or_default();
+    if model_group.assets == 0 {
         eprintln!("no sampled map chunk bytes could be read; nothing to assert");
         return;
     }
     assert!(
-        model.placeables > 0,
-        "model chunks parsed but hold no placeables"
+        model_group.placeables > 0,
+        "model-group chunks parsed but hold no placeables"
     );
     // docs/formats/materials.md measured every model placement's model and
     // look resolving; re-measured here on this sample.
     assert!(
-        model.refs_resolved > 0,
+        model_group.refs_resolved > 0,
         "no model reference resolved on any sampled chunk"
     );
 
     let non_model: Vec<&'static str> = KINDS
         .iter()
-        .filter(|k| **k != Kind::Model)
+        .filter(|k| **k != Kind::ModelGroup)
         .filter(|k| by_kind.get(k).map(|t| t.placeables > 0).unwrap_or(false))
         .map(|k| k.label())
         .collect();

@@ -748,6 +748,14 @@ pub fn resolve_scene(data: &GameData, map: u64, kinds: &[u64]) -> Result<Scene> 
                 continue;
             }
         };
+        // Bits 32..39 of the chunk GUID are the client's kind **id** (the
+        // table at `0x1439aa320`, entry `+0x08`). The client resolves it to a
+        // **slot** (`ChunkSlotForGuid`, `0x141b32e70`: scan `entry+8`, stride
+        // `0x20`, count `0x24`, return `dword [entry+0]`) and dispatches on the
+        // slot; because the table is a bijection, mapping the id to a `Kind`
+        // here is the same dispatch, and an id the client does not carry
+        // (the reference's `0x02`/`0x08`) lands on `Kind::Unknown` — slot 0,
+        // `MAP_PLACEABLE_UNKNOWN`, exactly as the client resolves it.
         let kind = ((guid >> 32) & 0xFF) as u8;
         let declared = Kind::from_type_id(kind).unwrap_or(Kind::Unknown);
         let (chunk, parse_error) = match MapChunk::parse(&bytes, declared) {

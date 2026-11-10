@@ -427,6 +427,26 @@ pub struct WeaponFigs {
     pub damage_candidates: Vec<(u64, usize, u32, f32)>,
 }
 
+/// The ranked pick of [`weapon_figs_of`]: a later graph replaces the best
+/// only when its qualification key is strictly higher, so ties keep graph
+/// order. Extracted as a pure function so the ranking is testable without an
+/// install.
+fn pick_best_volley(
+    candidates: impl IntoIterator<Item = (u64, VolleySpec)>,
+) -> Option<(u64, VolleySpec)> {
+    let mut best_key = (false, false);
+    let mut best: Option<(u64, VolleySpec)> = None;
+    for (graph, spec) in candidates {
+        let rate = spec.shots_per_second.is_some();
+        let pellets = spec.projectiles_per_shot.is_some();
+        if best.is_none() || (rate, pellets) > best_key {
+            best_key = (rate, pellets);
+            best = Some((graph, spec));
+        }
+    }
+    best
+}
+
 /// A hero entity's weapon figures, merged across its weapon graphs.
 ///
 /// Rank: a graph whose primary volley carries a literal non-999 rate first,
@@ -436,23 +456,14 @@ pub struct WeaponFigs {
 pub fn weapon_figs_of(data: &crate::GameData, entity: u64) -> WeaponFigs {
     let mut out = WeaponFigs::default();
     let weapons = crate::weapons::weapons_of(data, entity).unwrap_or_default();
-    let mut best_key = (false, false);
-    let mut best_graph: Option<u64> = None;
-    let mut best_spec: Option<VolleySpec> = None;
-    // (graph, stu bytes parsed lazily per graph below for candidates)
+    let mut candidates: Vec<(u64, VolleySpec)> = Vec::new();
     for w in &weapons {
         let Some(graph) = w.graph else { continue };
         let Ok(stu) = data.stu_of(graph) else {
             continue;
         };
         if let Some(spec) = weapon_model_of(&stu) {
-            let rate = spec.shots_per_second.is_some();
-            let pellets = spec.projectiles_per_shot.is_some();
-            if !out.has_volley || (rate, pellets) > best_key {
-                best_key = (rate, pellets);
-                best_graph = Some(graph);
-                best_spec = Some(spec);
-            }
+            candidates.push((graph, spec));
         }
         for (node, literals) in modify_health_of(&stu) {
             for (field, value) in literals {
@@ -465,9 +476,9 @@ pub fn weapon_figs_of(data: &crate::GameData, entity: u64) -> WeaponFigs {
             }
         }
     }
-    if let Some(spec) = best_spec {
+    if let Some((graph, spec)) = pick_best_volley(candidates) {
         out.volley = spec;
-        out.graph = best_graph;
+        out.graph = Some(graph);
         out.has_volley = true;
     }
     out.damage_candidates
@@ -673,5 +684,33 @@ mod tests {
             Some("computed")
         );
         assert_eq!(child_note(0xDEAD_BEEF), None);
+    }
+
+    #[test]
+    fn the_volley_pick_is_the_ranked_graph_not_the_last() {
+        let spec = |rate: bool, pellets: bool| VolleySpec {
+            shots_per_second: rate.then_some((1.0, Source::Literal)),
+            projectiles_per_shot: pellets.then_some((1, Source::Literal)),
+            ..VolleySpec::default()
+        };
+
+        // Equal keys keep graph order: the first graph wins, not the last.
+        let pick = pick_best_volley([(0x1, spec(false, false)), (0x2, spec(false, false))]);
+        assert_eq!(pick.unwrap().0, 0x1);
+
+        // A later graph with a rate beats an earlier one without.
+        let pick = pick_best_volley([(0x1, spec(false, true)), (0x2, spec(true, false))]);
+        assert_eq!(pick.unwrap().0, 0x2);
+
+        // A later graph with a weaker key does not replace the best.
+        let pick = pick_best_volley([(0x1, spec(true, false)), (0x2, spec(false, true))]);
+        assert_eq!(pick.unwrap().0, 0x1);
+
+        // Pellets break a rate tie.
+        let pick = pick_best_volley([(0x1, spec(true, false)), (0x2, spec(true, true))]);
+        assert_eq!(pick.unwrap().0, 0x2);
+
+        // No candidate at all.
+        assert!(pick_best_volley(Vec::<(u64, VolleySpec)>::new()).is_none());
     }
 }

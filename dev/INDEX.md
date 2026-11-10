@@ -96,13 +96,15 @@ reproducible on a clean checkout.
 | `tex_oracle.py` | Cross-check our texture decoders against an independent implementation. | 300 |
 | `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 81 |
 | `verify_harness/apply_character_move_fixture.py` | Inputs for the `fn/ApplyCharacterControllerMove` unit (no-shape path). | 43 |
+| `verify_harness/archive_set_contains_fixture.py` | Deterministic (reader, archive) cases for `fn/ArchiveSetContains`. | 257 |
+| `verify_harness/blte_block_read_stored_fixture.py` | Deterministic cases for `fn/BlteBlockReadStored`. | 121 |
 | `verify_harness/box_triangle_fixture.py` | Inputs for the `box_triangle_overlap` unit (`0x142cd58a0`). | 221 |
 | `verify_harness/build_info_select_row_fixture.py` | Deterministic (rows, flavor) cases for `fn/BuildInfoSelectRow`. | 174 |
 | `verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` | 575 |
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/bvh_fixture.py` | Inputs for the BVH builder unit (`0x142ccb1b0`). | 144 |
 | `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 255 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 955 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 961 |
 | `verify_harness/cdn_index_file_parse_fixture.py` | Deterministic (key, file, len, out) cases for `fn/CdnIndexFileParse`. | 237 |
 | `verify_harness/cdn_index_footer_fixture.py` | Deterministic inputs for the `fn/CdnIndexFooterParse` unit. | 178 |
 | `verify_harness/cdn_page_checksums_fixture.py` | Deterministic (file, len, descriptor) cases for `fn/CdnIndexPageChecksums`. | 205 |
@@ -113,6 +115,7 @@ reproducible on a clean checkout.
 | `verify_harness/chunk_guid_fixture.py` | Deterministic table-slot inputs for the `fn/ChunkGuid` unit. | 99 |
 | `verify_harness/cli.py` | Run verification units. Exit code is the gate. | 292 |
 | `verify_harness/client_memcmp_fixture.py` | Deterministic (a, b, count) cases for `fn/Memcmp`. | 184 |
+| `verify_harness/client_strlen_fixture.py` | Deterministic NUL-terminated string cases for `fn/ClientStrlen`. | 92 |
 | `verify_harness/cmf_iv_154504_fixture.py` | Deterministic inputs for the `fn/CmfIv154504` unit. | 202 |
 | `verify_harness/cmf_key_154504_fixture.py` | Deterministic inputs for the `fn/CmfKey154504` unit. | 60 |
 | `verify_harness/collision_capsule_fixture.py` | Inputs for the `collision_capsule` unit (`0x142ccd7b0`, type 1). | 237 |

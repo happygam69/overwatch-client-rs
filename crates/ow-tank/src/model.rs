@@ -888,8 +888,18 @@ fn read_render_mesh(d: &[u8], load: &dyn Fn(u64) -> Option<Vec<u8>>) -> Result<V
         if ibo_index >= index_buffers.len() {
             continue;
         }
-        let (_, _, index_at) = index_buffers[ibo_index];
-        let mut original: Vec<u16> = Vec::with_capacity(submesh.indices_to_draw as usize);
+        let (index_count, _index_format, index_at) = index_buffers[ibo_index];
+        // `indices_to_draw` is a file word. The index buffer's own count is
+        // the bound: allocating the file value first is what lets a corrupt
+        // count abort on a multi-gigabyte reservation before anything checks
+        // it. The format word stays unused: the client's runtime record does
+        // not carry it, so its values are a file reading, not client code
+        // (`mrnm::index_buffer::FORMAT`).
+        let draw = submesh.indices_to_draw as usize;
+        if draw > index_count as usize {
+            return Err(Error::Malformed("indices to draw exceed the index buffer"));
+        }
+        let mut original: Vec<u16> = Vec::with_capacity(draw);
         let index_base =
             usize::try_from(index_at).map_err(|_| Error::Malformed("negative MRNM offset"))?;
         let start = index_base
@@ -899,7 +909,7 @@ fn read_render_mesh(d: &[u8], load: &dyn Fn(u64) -> Option<Vec<u8>>) -> Result<V
                     .ok_or(Error::Malformed("index run runs past the end"))?,
             )
             .ok_or(Error::Malformed("index run runs past the end"))?;
-        for j in 0..submesh.indices_to_draw as usize {
+        for j in 0..draw {
             let at = start
                 .checked_add(
                     j.checked_mul(2)
@@ -1470,6 +1480,21 @@ mod tests {
         // The old single-set behaviour survives through `uv_sets.first()`.
         assert!(m.uv_sets.is_empty());
         assert_eq!(m.normals[0], [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn a_draw_count_past_the_index_buffer_is_rejected_before_allocation() {
+        let mut d = synth_mrnm(false);
+        // The index buffer holds 3 indices; a submesh that claims to draw
+        // u32::MAX of them is malformed. The old code reserved that many u16s
+        // (8 GiB) before any bound check, aborting the process.
+        let at = 208 + crate::mrnm::submesh::INDICES_TO_DRAW;
+        d[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let meshes = read_render_mesh(&d, &|_| None);
+        assert!(
+            meshes.is_err(),
+            "a draw count past the index buffer must be a refusal"
+        );
     }
 
     /// A container laid out as the file does: one record followed by its

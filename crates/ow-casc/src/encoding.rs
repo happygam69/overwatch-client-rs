@@ -711,11 +711,10 @@ pub fn espec_string_index(
         if byte != 0 {
             continue;
         }
-        // The helper at `0x1426cce30` returns the address of the string's NUL
-        // terminator (its byte loop and its 0x7efefefe/0x81010101 word test
-        // both produce `start + length`), so a zero answer means the string is
-        // empty. Here no NUL lies between the string start and this one, so
-        // the terminator is `base + offset` and the test is
+        // The helper at `0x1426cce30` returns the string's length (`end - s`,
+        // because `neg rcx` turns the start into `-s`), so a zero answer means
+        // the string is empty. Here no NUL lies between the string start and
+        // this one, so the length is `offset - string_start` and the test is
         // `offset == string_start`; the client returns 8 before the append.
         if offset == string_start {
             return ESPEC_NOT_TERMINATED as u8;

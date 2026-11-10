@@ -75,9 +75,22 @@ pub const AREA_BOX_SIZE: usize = 56;
 
 /// What a map chunk's placeables describe.
 ///
-/// The ids are the reference's `teMAP_PLACEABLE_TYPE` values (`Enums.cs`); the
-/// client builds a map's chunk key with this id in bits 32..39 of the asset
-/// GUID.
+/// Two id spaces meet here, and they are not the same one:
+///
+/// * The **client's** kind table at `0x1439aa320` (0x24 entries of 0x20 bytes)
+///   carries, per entry, a *slot* at `+0x00` and a *kind id* at `+0x08`; the id
+///   is the byte a chunk GUID carries in bits 32..39. `ChunkSlotForGuid`
+///   (`0x141b32e70`) resolves an id to a slot by scanning `entry+8` (stride
+///   `0x20`, count `0x24`) and returning `dword [entry+0]`, and the client's
+///   dispatch compares that **slot** (its callers at `0x141ff5408` and
+///   `0x141ff5507` test it against 8, `MAP_PLACEABLE_ENTITY`). [`Kind::type_id`]
+///   is that table's id.
+/// * The **reference** library's `teMAP_PLACEABLE_TYPE` (`Enums.cs`) is a
+///   different enum. Its values for a plain model (`0x08`) and a single model
+///   (`0x02`) do **not** exist in the client's table, and the client has no
+///   plain-model placeable distinct from `MAP_PLACEABLE_MODEL_GROUP`
+///   (id `0x01`). Those two variants are kept for the reference-ported body
+///   readers and carry no client id ([`Kind::type_id`] returns `None`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     /// Static geometry: a model and its placement.
@@ -129,14 +142,18 @@ impl Kind {
         }
     }
 
-    /// The kind's id in the reference's `teMAP_PLACEABLE_TYPE` enum.
-    pub fn type_id(self) -> u8 {
-        match self {
+    /// The kind's id in the client's table at `0x1439aa320` (entry `+0x08`),
+    /// which is the byte a chunk GUID carries in bits 32..39.
+    ///
+    /// `None` for [`Kind::Model`] and [`Kind::SingleModel`]: those are the
+    /// reference library's `teMAP_PLACEABLE_TYPE` values, and the client's
+    /// table has no `0x08` and no `0x02` — the client's only model placeable is
+    /// [`Kind::ModelGroup`] (`0x01`).
+    pub fn type_id(self) -> Option<u8> {
+        Some(match self {
             Kind::ModelGroup => 0x01,
-            Kind::SingleModel => 0x02,
             Kind::ReflectionPoint => 0x04,
             Kind::Text => 0x07,
-            Kind::Model => 0x08,
             Kind::Light => 0x09,
             Kind::Area => 0x0A,
             Kind::Entity => 0x0B,
@@ -144,20 +161,24 @@ impl Kind {
             Kind::Effect => 0x0D,
             Kind::Sequence => 0x18,
             Kind::Unknown => 0x00,
-        }
+            Kind::Model | Kind::SingleModel => return None,
+        })
     }
 
-    /// The inverse of [`Kind::type_id`]. `None` for ids the reference's enum
-    /// names but this reader has no body for (occluder, clutter, label, fog,
-    /// indoor box, post-processing, planar reflection surface).
+    /// The inverse of [`Kind::type_id`]: the kind the client's table
+    /// (`0x1439aa320`) names for a chunk GUID's bits 32..39.
+    ///
+    /// `None` for every id the client's table does not carry — including the
+    /// reference's `0x02`/`0x08`, which the client cannot produce. Ids the
+    /// client has but this reader has no body for (occluder `0x03`, label
+    /// `0x06`, fog `0x0E`, indoor box `0x0F`, the volumes, and the seven chunk
+    /// kinds `0x10`..`0x13`/`0x1B`/`0x23`/`0x27`) are `None` too.
     pub fn from_type_id(id: u8) -> Option<Kind> {
         Some(match id {
             0x00 => Kind::Unknown,
             0x01 => Kind::ModelGroup,
-            0x02 => Kind::SingleModel,
             0x04 => Kind::ReflectionPoint,
             0x07 => Kind::Text,
-            0x08 => Kind::Model,
             0x09 => Kind::Light,
             0x0A => Kind::Area,
             0x0B => Kind::Entity,
@@ -688,13 +709,18 @@ fn read_placeable(
         // `teMapPlaceableSingleModel` reuses the model structure in the
         // reference, so it is read the same way here.
         Kind::Model | Kind::SingleModel => {
-            placeable.model = rd_guid(data, body);
-            placeable.look = rd_guid(data, body + 0x20);
-            placeable.translation = rd_vec3(data, body + 0x30).unwrap_or([0.0; 3]);
-            placeable.scale = rd_vec3(data, body + 0x3C).unwrap_or([1.0; 3]);
-            placeable.rotation = rd_quat(data, body + 0x48).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            // The model body runs to `body + 0x68`, but a placeable's declared
+            // `size` is the authority: a short placeable must read defaults, not
+            // the next placeable's UUID as its look/transform. The walk already
+            // proved `body_end <= data.len()`, so the prefix is always valid.
+            let body_data = &data[..body_end];
+            placeable.model = rd_guid(body_data, body);
+            placeable.look = rd_guid(body_data, body + 0x20);
+            placeable.translation = rd_vec3(body_data, body + 0x30).unwrap_or([0.0; 3]);
+            placeable.scale = rd_vec3(body_data, body + 0x3C).unwrap_or([1.0; 3]);
+            placeable.rotation = rd_quat(body_data, body + 0x48).unwrap_or([0.0, 0.0, 0.0, 1.0]);
             let model = ModelBody {
-                unknown_rotation: rd_quat(data, body + 0x58).unwrap_or([0.0; 4]),
+                unknown_rotation: rd_quat(body_data, body + 0x58).unwrap_or([0.0; 4]),
             };
             placeable.body = if kind == Kind::Model {
                 Body::Model(model)

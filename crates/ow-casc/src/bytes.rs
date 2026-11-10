@@ -49,3 +49,59 @@ pub fn client_memcmp(a: &[u8], b: &[u8], count: usize) -> u64 {
     }
     0
 }
+
+/// `strlen` (exe `0x1426cce30`): the length of the NUL-terminated string at
+/// `s`, in the client's own SWAR form. It is the length helper the encoding
+/// espec build calls (`0x142498a70`), and 1,628 other call sites reach it.
+///
+/// The read, instruction for instruction:
+///
+/// - `neg rcx` turns the start pointer into `-s`, so the return is a length
+///   (`end - s`), not the terminator's address.
+/// - the aligned walk reads one qword at a time and applies the client's
+///   zero-byte test: `r9 = 0x7efefefefefefeff + x`, `t = (~x) ^ r9`,
+///   `t &= 0x8101010101010100`; a zero `t` means no NUL in the qword.
+/// - on a hit the qword is reloaded and the first zero byte is found from the
+///   low byte up; the return is `qword_address + 8 - s - (8 - j)`, i.e. the
+///   byte offset of the NUL. A qword the test flags but that holds no zero
+///   byte falls through to the next qword (`test dh, dh` / `jne`).
+///
+/// The client's byte walk aligns the qword reads to the absolute address
+/// (`test al, 7` / `jne`). That walk is a performance path only: the test is a
+/// fast zero-byte detector (it has false positives, which the byte scan's
+/// fall-through handles) and the byte scan finds the first NUL, so the
+/// returned length is the same for every alignment. The Rust reads from index
+/// 0 and records that equivalence here, the same way `client_memcmp` records
+/// its byte scan. The fixture varies the oracle's alignment through
+/// `arena_offset` to exercise the client's walk; the differential compares the
+/// length only.
+///
+/// # Panics
+///
+/// Never panics: a slice with no NUL returns the offset it reached, which is
+/// the caller-bug case the client would run off its buffer on.
+pub fn client_strlen(s: &[u8]) -> u64 {
+    let mut i = 0usize;
+    loop {
+        let x = match s.get(i..i + 8) {
+            Some(c) => u64::from_le_bytes(c.try_into().unwrap()),
+            None => return i as u64,
+        };
+        let r9 = 0x7efefefefefefeffu64.wrapping_add(x);
+        let t = (!x) ^ r9;
+        let t = t & 0x8101010101010100u64;
+        i += 8;
+        if t == 0 {
+            continue;
+        }
+        // The client's byte scan, from the low byte up. No zero byte means
+        // the test was a false positive: the client loops to the next qword.
+        let mut shift = 0usize;
+        while shift < 64 {
+            if (x >> shift) & 0xff == 0 {
+                return (i - 8 + shift / 8) as u64;
+            }
+            shift += 8;
+        }
+    }
+}

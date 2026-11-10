@@ -1015,8 +1015,13 @@ impl Texture {
         hdr[8..12].copy_from_slice(&(self.height as u32).to_le_bytes());
         hdr[12..16].copy_from_slice(&(self.width as u32).to_le_bytes());
         hdr[16..20].copy_from_slice(&pitch.to_le_bytes());
-        hdr[28..32].copy_from_slice(&1u32.to_le_bytes());
-        let pf_off = 76usize;
+        // `hdr` starts after the 4-byte `DDS ` magic, so every file offset in
+        // the DDS_HEADER is 4 less here: the mip count is header `+0x18`, the
+        // pixel format begins at header `+0x48` (file 76) and `dwCaps` is at
+        // header `+0x68` (file 108). Writing the file offsets into `hdr` would
+        // shift the whole pixel format one word late and leave its `dwSize` 0.
+        hdr[24..28].copy_from_slice(&1u32.to_le_bytes());
+        let pf_off = 72usize;
         hdr[pf_off..pf_off + 4].copy_from_slice(&32u32.to_le_bytes());
         if is_bc {
             hdr[pf_off + 4..pf_off + 8].copy_from_slice(&0x4u32.to_le_bytes());
@@ -1030,7 +1035,7 @@ impl Texture {
             hdr[pf_off + 24..pf_off + 28].copy_from_slice(&0x000000FFu32.to_le_bytes());
             hdr[pf_off + 28..pf_off + 32].copy_from_slice(&0xFF000000u32.to_le_bytes());
         }
-        hdr[108..112].copy_from_slice(&0x1000u32.to_le_bytes());
+        hdr[104..108].copy_from_slice(&0x1000u32.to_le_bytes());
         out.extend_from_slice(&hdr);
         if let Some(fmt) = dxgi {
             let mut dx = [0u8; 20];
@@ -4571,6 +4576,20 @@ mod tests {
         let dds = t.to_dds().expect("dds");
         assert_eq!(&dds[0..4], b"DDS ");
         assert!(dds.len() > 128);
+
+        // The DDS header is the 124 bytes after the magic, so a field's file
+        // offset is its header offset plus 4. Every one of these is a real
+        // reader's first stop: a shift here makes the whole asset unreadable.
+        let word = |at: usize| u32::from_le_bytes(dds[at..at + 4].try_into().unwrap());
+        assert_eq!(word(4), 124, "dwSize");
+        assert_eq!(word(8), 0x81007, "dwFlags: caps|height|width|linearsize");
+        assert_eq!(word(12), 4, "dwHeight");
+        assert_eq!(word(16), 4, "dwWidth");
+        assert_eq!(word(28), 1, "dwMipMapCount");
+        assert_eq!(word(76), 32, "DDS_PIXELFORMAT.dwSize");
+        assert_eq!(word(80), 0x4, "DDS_PIXELFORMAT.dwFlags = FOURCC");
+        assert_eq!(&dds[84..88], b"DXT1", "DDS_PIXELFORMAT.dwFourCC");
+        assert_eq!(word(108), 0x1000, "dwCaps = DDSCAPS_TEXTURE");
     }
 
     #[test]

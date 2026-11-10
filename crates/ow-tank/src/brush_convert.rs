@@ -983,9 +983,12 @@ fn triangulate_group(ctx: &mut Ctx, g: usize) -> Result<(), Error> {
     loop {
         let en = ctx.hull[e as usize].next;
         let pn = ctx.hull[e as usize].prev;
+        if en < 0 || pn < 0 {
+            return Err(Error::MalformedRing { start: 0 });
+        }
         let nn = ctx.hull[en as usize].next;
         let pp = ctx.hull[pn as usize].prev;
-        if en < 0 || pn < 0 || nn < 0 || pp < 0 {
+        if nn < 0 || pp < 0 {
             return Err(Error::MalformedRing { start: 0 });
         }
         // unlink e from the ear list
@@ -1414,5 +1417,52 @@ mod tests {
         let b = brush(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
         assert!(tree_to_mesh_variant(&b, 0).is_err());
         assert!(tree_to_mesh_variant(&b, 1).is_ok());
+    }
+
+    /// A four-hull ring whose only ear is node 2, and whose node 2 has an
+    /// unset `prev`. Pass 1 collects node 2 as the ear; pass 2 then reads the
+    /// unset neighbour. The old code indexed `hull[-1 as usize]` before the
+    /// negative guard and panicked; the guard now runs first.
+    #[test]
+    fn an_ear_with_an_unset_neighbour_is_refused_not_a_panic() {
+        let mut ctx = Ctx {
+            ws: vec![
+                Ws {
+                    pos: [0.0, 0.0, 0.0, 0.0],
+                    ..Default::default()
+                },
+                Ws {
+                    pos: [4.0, 0.0, 0.0, 0.0],
+                    ..Default::default()
+                },
+                Ws {
+                    pos: [2.0, -1.0, 0.0, 0.0],
+                    ..Default::default()
+                },
+                Ws {
+                    pos: [0.0, -4.0, 0.0, 0.0],
+                    ..Default::default()
+                },
+            ],
+            hull: vec![Hull::default(); 4],
+            pairs: Vec::new(),
+            faces: vec![-1; 2],
+            groups: vec![0],
+            root: -1,
+            next_hull: 4,
+            next_face: 0,
+        };
+        for (i, h) in ctx.hull.iter_mut().enumerate() {
+            h.vertex = i as i32;
+            h.next = ((i + 1) % 4) as i32;
+            h.prev = ((i + 3) % 4) as i32;
+        }
+        // The malformed bit: node 2's previous is unset.
+        ctx.hull[2].prev = -1;
+        let result = triangulate_group(&mut ctx, 0);
+        assert!(
+            result.is_err(),
+            "an unset neighbour must be a refusal, not a panic"
+        );
     }
 }
