@@ -79,18 +79,18 @@
  "knownEquivalentMutants": [
   {
    "kind": "boundary +1",
-   "line": 776,
-   "rationale": "Line 776 is `Vec::with_capacity(data.len() + 64)`. Raising the constant to 65 changes only the allocation hint; the function pushes exactly one byte per input byte and never reads capacity, so the returned ciphertext is identical for every input. What would observe a difference: an allocator-failure or capacity-overflow test, neither of which is part of this unit's contract. Line updated again after the MD5 staging refactor (2026-11-17) moved the statement; the mutant is unchanged."
+   "line": 854,
+   "rationale": "Line 854 is `Vec::with_capacity(data.len() + 64)`. Raising the constant to 65 changes only the allocation hint; the function pushes exactly one byte per input byte and never reads capacity, so the returned ciphertext is identical for every input. What would observe a difference: an allocator-failure or capacity-overflow test, neither of which is part of this unit's contract. Line updated again after the MD5 staging refactor (2026-11-17) moved the statement, and again after the salsa20_state_init refactor (2026-11-19) moved it further; the mutant is unchanged."
   },
   {
    "kind": "boundary -1",
-   "line": 776,
-   "rationale": "Lowering the capacity constant to 63 leaves the capacity at data.len() + 63, still at or above the final length, so `Vec` may grow once but the content and order are unchanged. The differential compares bytes, not allocation counts. What would observe a difference: a test that instruments allocations, which this harness does not do. Line updated again after the MD5 staging refactor (2026-11-17) moved the statement; the mutant is unchanged."
+   "line": 854,
+   "rationale": "Lowering the capacity constant to 63 leaves the capacity at data.len() + 63, still at or above the final length, so `Vec` may grow once but the content and order are unchanged. The differential compares bytes, not allocation counts. What would observe a difference: a test that instruments allocations, which this harness does not do. Line updated again after the MD5 staging refactor (2026-11-17) moved the statement, and again after the salsa20_state_init refactor (2026-11-19) moved it further; the mutant is unchanged."
   },
   {
    "kind": "mask widen",
-   "line": 797,
-   "rationale": "Line 797 is `out.push(byte ^ (keystream & 0xFF) as u8)`. Widening the mask to 0x1FF cannot change the pushed byte: the `as u8` cast keeps only the low eight bits, which both masks pass through identically. What would observe a difference: a consumer of the pre-cast u32 keystream, which this function does not have - it XORs bytes and pushes bytes. Line updated again after the MD5 staging refactor (2026-11-17) moved the statement; the mutant is unchanged."
+   "line": 875,
+   "rationale": "Line 875 is `out.push(byte ^ (keystream & 0xFF) as u8)`. Widening the mask to 0x1FF cannot change the pushed byte: the `as u8` cast keeps only the low eight bits, which both masks pass through identically. What would observe a difference: a consumer of the pre-cast u32 keystream, which this function does not have - it XORs bytes and pushes bytes. Line updated again after the MD5 staging refactor (2026-11-17) moved the statement, and again after the salsa20_state_init refactor (2026-11-19) moved it further; the mutant is unchanged."
   }
  ]
 }

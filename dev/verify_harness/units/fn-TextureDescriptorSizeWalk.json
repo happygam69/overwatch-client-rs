@@ -35,7 +35,7 @@
   "knownEquivalentMutants": [
     {
       "kind": "mask widen",
-      "line": 305,
+      "line": 311,
       "rationale": "The mutation widens the shift mask from 0x1f to 0x3f. The oracle (0x142e2dbb0) masks the bias to five bits before shifting, and both it and the candidate run on x86-64 release, where a 32-bit shift masks the count to five bits: a mutant shift of 32..63 is executed as count & 31, exactly the original 0x1f mask. The shift is applied to a u32 whose value is at most 0x4000, so every bias produces the same width, height and depth. What would observe a difference: a target that traps or saturates a shift count of 32..63 instead of masking it, which is outside this unit's x86-64 ABI contract."
     }
   ],

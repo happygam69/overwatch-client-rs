@@ -34,18 +34,20 @@
   "knownEquivalentMutants": [
     {
       "kind": "boundary -1",
-      "line": 179,
-      "rationale": "`(b.wrapping_add(0x14) >> 1) == 0` already forces b + 0x14 to be 0 or 1; when it is 1, b is odd and `(b & 1) == 0` is false. The `& 1` term cannot change the branch result, so a boundary shift on it is observationally equivalent for every u8 b."
+      "line": 207,
+      "mutated": "let second = if ((b.wrapping_add(0x14) >> 0) == 0 && (b & 1) == 0) || !s.flag_652 {",
+      "rationale": "Line 207 is `let second = if ((b.wrapping_add(0x14) >> 1) == 0 && (b & 1) == 0) || !s.flag_652 {`. This is the shift-amount boundary mutant (`>> 1` becomes `>> 0`), the one the mutator's decimal rule reaches first on the line. The branch is taken exactly when b == 0xEC: `(b + 0x14) mod 256 >> 1 == 0` leaves b in {0xEC, 0xED}, and the `& 1` test drops the odd one. With `>> 0` the first test is `b + 0x14 == 0`, which is b == 0xEC alone, and 0xEC is even, so the second test still passes. Both spellings select the same b for every one of the 256 state bytes, and no other input reaches the term. What would observe a difference: nothing in this unit - the branch's only other input is `s.flag_652`, which the mutation does not touch."
     },
     {
       "kind": "boundary +1",
-      "line": 179,
-      "rationale": "Same redundant `& 1` term: the high-shift test subsumes it for all 256 state-byte values. No input can observe the boundary change."
+      "line": 207,
+      "mutated": "let second = if ((b.wrapping_add(0x15) >> 1) == 0 && (b & 1) == 0) || !s.flag_652 {",
+      "rationale": "Line 207, the hex-constant boundary mutant (0x14 becomes 0x15). The branch is taken exactly when b == 0xEC (see the `>> 0` sibling above). With 0x15 the first test leaves b in {0xEB, 0xEC}, and the `& 1` test drops the odd one, so the branch still selects b == 0xEC. What would observe a difference: nothing in this unit. The sibling boundary mutants on the same line are NOT equivalent and are deliberately left undeclared: `>> 2` widens the first test to b in {0xEC..0xEF} (so 0xEE also takes the branch) and 0x13 moves it to {0xED, 0xEE} (so 0xEE takes it). Those two are probed and killed."
     },
     {
       "kind": "mask widen",
-      "line": 179,
-      "rationale": "A widened mask on the redundant low-bit test still yields the same boolean because the test is only reached when b + 0x14 == 0 (b even)."
+      "line": 207,
+      "rationale": "Line 207, `& 1` widened to `& 3`. The second test is only reached with b in {0xEC, 0xED}, where `b & 3` is 0 for 0xEC and 1 for 0xED - the same two answers `b & 1` gives, because 0xEC and 0xED differ only in bit 0. So the widened mask yields the same boolean for every u8 b. What would observe a difference: a b whose bit 1 is set while bit 0 is clear, which the first test cannot reach."
     }
   ],
   "acknowledgedGaps": [

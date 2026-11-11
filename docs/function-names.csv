@@ -932,3 +932,8 @@ Overwatch.exe,0x141c6c830,0x141c6c830,ScaleFloatRunToQ12,"Scales a run of f32 to
 
 Overwatch.exe,0x142efecf0,0x142efecf0,Memcmp,"Compares two byte ranges: 0 when equal, -1 when the first differing byte of a is below b, 1 when above; verified as fn/Memcmp",casc,,
 
+Overwatch.exe,0x142cd4d90,0x142cd4d90,CharacterPairBuild,Registers the character's shape entries against the world's fixture list before the resolve,domino,,
+Overwatch.exe,0x142cd5270,0x142cd5270,CharacterPositionResolve,Moves the body to the requested position and returns where the runtime left it,domino,,
+Overwatch.exe,0x142cd4610,0x142cd4610,CharacterBodyUpdate,Rebuilds the body's shape entries and their transforms at the requested position,domino,,
+Overwatch.exe,0x142cf3f80,0x142cf3f80,CollisionSolver,The Domino collision solver: the pair walk the contact collection and the fixed-point resolve (eps 0.005),domino,,
+Overwatch.exe,0x142cbcee0,0x142cbcee0,RunCharacterControllerSweep,Runs the character controller collision sweep for the desired position and publishes the resolved position,mover,,

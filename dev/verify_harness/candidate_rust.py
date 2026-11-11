@@ -176,7 +176,10 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "archive_set_contains": ["crates/ow-casc/src/pagecache.rs"],
     "chunk_guid": ["crates/ow-tank/src/mapguid.rs"],
     "cell_bytes_fixup": ["crates/ow-tank/src/collision.rs"],
+    "map_chunk_header_fixup": ["crates/ow-tank/src/chunkkind.rs"],
     "mrnm_fixup": ["crates/ow-tank/src/mrnm.rs"],
+    "mesh_shape_fill": ["crates/ow-tank/src/mesh_shape.rs"],
+    "shape_pool_alloc": ["crates/ow-tank/src/domino_world.rs"],
     "mrnm_runtime_size": ["crates/ow-tank/src/mrnm.rs"],
     "mrnm_load": ["crates/ow-tank/src/mrnm.rs"],
     "cmf_key_154504": ["crates/ow-tank/src/manifest.rs"],
@@ -280,7 +283,10 @@ ENTRY_MUTATION: Dict[str, str] = {
     "archive_set_contains": "archive_set_contains",
     "chunk_guid": "chunk_guid",
     "cell_bytes_fixup": "fixup_cell_bytes",
+    "map_chunk_header_fixup": "fixup_header_in_place",
     "mrnm_fixup": "fixup",
+    "mesh_shape_fill": "shape_record",
+    "shape_pool_alloc": "shape_pool_alloc",
     "mrnm_runtime_size": "runtime_size",
     "mrnm_load": "load",
     "cmf_key_154504": "key_154504",
@@ -480,6 +486,9 @@ class RustCandidate:
         startup_timeout: float = DEFAULT_STARTUP_TIMEOUT,
         crate_dir: Optional[str] = None,
         cargo_probe: Optional[str] = None,
+        prebuilt_exe: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+        start_process: bool = True,
     ):
         self.entry = entry
         self.arg_kinds = list(arg_kinds)
@@ -498,9 +507,15 @@ class RustCandidate:
             os.path.abspath(cargo_probe) if cargo_probe else CARGO_PROBE_SRC
         )
         self.probe_bin = os.path.splitext(os.path.basename(self.cargo_probe))[0]
+        self.env = dict(env) if env else None
         work_dir = work_dir or tempfile.mkdtemp(prefix="verify_rust_")
         os.makedirs(work_dir, exist_ok=True)
-        if loader == "cargo":
+        if prebuilt_exe:
+            # A batch build: the binary is already compiled and carries every
+            # mutant of the unit as a dispatch arm. The process picks its arm
+            # from the environment (see `batch.py`).
+            self.exe = prebuilt_exe
+        elif loader == "cargo":
             self.exe = self._build_cargo(work_dir, source_override, source_path)
         else:
             if source_override is not None:
@@ -513,6 +528,14 @@ class RustCandidate:
                 self.exe = self._build_rustc(src_path, work_dir)
             else:
                 self.exe = self._build_rustc(probe_src or PROBE_SRC, work_dir)
+        if not start_process:
+            # Build only: the caller wants the binary (a batch build) and
+            # starts the processes itself.
+            return
+        child_env = None
+        if self.env:
+            child_env = dict(os.environ)
+            child_env.update(self.env)
         self.proc = subprocess.Popen(
             [self.exe],
             stdin=subprocess.PIPE,
@@ -520,6 +543,7 @@ class RustCandidate:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            env=child_env,
         )
         # Blocking readline() on a wedged child never returns; read on a
         # thread into a queue and put a timeout on every roundtrip.

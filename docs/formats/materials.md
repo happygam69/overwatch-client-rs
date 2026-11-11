@@ -97,6 +97,13 @@ registers the job. Its load callback is `FUN_141b1a7b0` and its finalize
 callback `FUN_141b1a790`. The material asset (`0x008`, job 2, loader
 `FUN_141b1a8e0`) names the material data at `+0x18`.
 
+**The job table is now read**, so those three addresses are the image's own
+values rather than an inference: the descriptor `0x141b19160` fills for job 28
+holds the job id at `+8`, the load callback `FUN_141b1a7b0` at `+0x48` and the
+release callback `FUN_141b1a790` at `+0x78`; job 2's descriptor holds
+`FUN_141b1a8e0` the same way. `docs/formats/asset-types.md` section 1b has
+the whole table.
+
 The load callback rewrites seven base-relative `i64` fields at `+0x00` through
 `+0x30` to `payload + value`; a stored `0` stays null. The file therefore
 holds offsets and the resident image holds pointers:

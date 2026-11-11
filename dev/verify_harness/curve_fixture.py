@@ -52,6 +52,14 @@ _T_BASES = [
      [float(j) * 0.5 for j in range(63)]),  # count == 63: just below 0x3f gate
     ([float(j) * 0.5 for j in range(80)],
      [float(j) * 0.5 for j in range(80)]),  # track2 key-0 sample (i%7 picks it)
+    # 128 keys: the search's window is [0, count-1] and it halves it once per
+    # pass, so the loop repeats only while (hi - lo) >= 0x40. After the first
+    # pass lo is the middle key (63) and hi is 127, so (hi - lo) == 64 - the
+    # loop repeats exactly once. 80 keys halve to 40 and never repeat, which
+    # is why the search's back edge (0x140b90a80 / 0x140b90b70) needs this
+    # shape. The sample has to sit above the middle key for lo to advance.
+    ([float(j) * 0.5 for j in range(128)],
+     [float(j) * 0.5 for j in range(128)]),
 ]
 
 

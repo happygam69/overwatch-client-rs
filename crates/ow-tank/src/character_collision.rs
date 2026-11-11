@@ -377,6 +377,9 @@ pub fn shape_descriptor(record: &CharacterCollision) -> ShapeDescriptor {
 /// The smallest the client's radius clamp allows (`COMISS`-guarded `0.02`).
 pub const MIN_RADIUS: f32 = 0.02;
 
+/// The largest the client's radius cap allows (`0.5`, `0x140cb7700`).
+pub const MAX_RADIUS: f32 = 0.5;
+
 /// The fraction of the radius the capsule's segment keeps when the mover's
 /// extent is too small: `fVar11 * 0.1`.
 pub const SEGMENT_FRACTION: f32 = 0.1;
@@ -488,15 +491,22 @@ impl Capsule {
 /// `extent` is the class's `+0x78` (`0x1972C687`), `radius` its `+0x7c`
 /// (`0x7A70E3E3`), `offset` its `+0x80` (`0x4A576BC2`).
 ///
+/// **The radius the client uses is capped at `0.5`.** The body's copy of the
+/// component's radius (`body+0x5a4`) is written by `0x140cb7700` as
+/// `min(0.5, radius)`, so a hero that declares a wider capsule than `0.5` -
+/// the large ones declare `0.7` - collides with a `0.5` m one. The cap is
+/// applied to the **body's copy**, so it is this function's `radius` that
+/// carries it, not the extent's term.
+///
 /// `ConstructMoverBody` (`0x140ca9730`) maxes `extent` against
 /// `2.1 * radius + offset` **first**, using the raw radius; `0x140ca5db0` then
 /// clamps the radius to `0.02` and derives the segment - with the **raw** radius
 /// again, in the client's own addition order:
 ///
 /// ```text
-/// raised = max(extent, 2.1 * radius + offset)
-/// r      = max(0.02, radius)
-/// d      = max(r * 0.1, raised - (offset + radius + radius))
+/// raised = max(extent, 2.1 * radius + offset)   ; the RAW radius
+/// r      = max(0.02, min(0.5, radius))          ; the body's copy
+/// d      = max(r * 0.1, raised - (offset + min(0.5, radius) + min(0.5, radius)))
 /// ```
 ///
 /// The comparisons are the client's `COMISS`/`<=` forms, so a `NaN` takes the
@@ -508,12 +518,20 @@ pub fn capsule_from_mover(extent: f32, radius: f32, offset: f32) -> Capsule {
     } else {
         extent
     };
-    let r = if MIN_RADIUS <= radius {
+    // The body's copy of the radius is capped at `0.5` (`0x140cb7700`), so
+    // the capsule's own radius and segment see the capped value while the
+    // extent's term keeps the raw one.
+    let capped = if MAX_RADIUS <= radius {
+        MAX_RADIUS
+    } else {
         radius
+    };
+    let r = if MIN_RADIUS <= capped {
+        capped
     } else {
         MIN_RADIUS
     };
-    let raw = raised - (offset + radius + radius);
+    let raw = raised - (offset + capped + capped);
     let floor = r * SEGMENT_FRACTION;
     let segment = if floor <= raw { raw } else { floor };
     Capsule {
@@ -684,13 +702,16 @@ mod tests {
     }
 
     #[test]
-    fn the_large_hero_capsule_is_seventy_centimetres_wide_and_two_metres_tall() {
-        // Hero 7: `0x1972C687 = 2.3`, `0x7A70E3E3 = 0.7`, `0x4A576BC2 = 0.5`.
+    fn the_large_hero_capsule_is_capped_to_the_common_radius() {
+        // Hero 7 declares `0x1972C687 = 2.3`, `0x7A70E3E3 = 0.7`,
+        // `0x4A576BC2 = 0.5`. The body's copy of the radius is
+        // `min(0.5, 0.7) = 0.5` (`0x140cb7700`), so the capsule collides as
+        // the common one does.
         let c = capsule_from_mover(2.3, 0.7, 0.5);
-        assert_eq!(c.radius, 0.7);
-        assert_eq!(c.point_a, [0.0, 0.7, 0.0]);
-        // 0.4 = 2.3 - (0.5 + 0.7 + 0.7); the 0.1 * r floor is 0.07, below it.
-        assert!((c.segment() - 0.4).abs() < 1e-6, "segment {}", c.segment());
+        assert_eq!(c.radius, 0.5);
+        assert_eq!(c.point_a, [0.0, 0.5, 0.0]);
+        // 0.8 = 2.3 - (0.5 + 0.5 + 0.5); the 0.1 * r floor is 0.05, below it.
+        assert!((c.segment() - 0.8).abs() < 1e-6, "segment {}", c.segment());
         // The capsule is 2r + d tall, not the extent field's 2.3.
         assert!((c.height() - 1.8).abs() < 1e-6, "height {}", c.height());
     }

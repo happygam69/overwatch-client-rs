@@ -96,13 +96,13 @@ shipped search used half-open bounds `[0, count)` while the client walks
 unsorted one, so the search now follows the client's walk exactly.
 
 ## E. Verified consumers (no A–C row to close)
-
 A verified unit can prove a stage that is already implemented without closing
 the open row next to it. These are recorded separately so section D stays the
 list of rows that actually moved.
 
 | area | unit | client address | result |
 |---|---|---|---|
+| Pathing chunk's header fixup | `dev/verify_harness/units/fn-MapChunkHeaderFixup.json` (`fn/MapChunkHeaderFixup`) | `MapChunkHeaderFixup` at `0x142e49360` | verified: 160 differential cases, every channel; 100% coverage (0 of 0 branch sites - the client decides with a branchless `cmove`); 4/4 mutants killed (the three `== 0` comparisons are the function's whole behaviour). It proves the three-pointer rebase of the pathing chunk's header record; the cell container it feeds is `fn/MapChunkCellBytesFixup`'s subject. |
 | Bundle directory lookup | `dev/verify_harness/units/fn-BundleDirectoryLookup.json` (`fn/BundleDirectoryLookup`) | `BundleDirectoryLookup` at `0x141fd5160` (loaded-bundle guard `FUN_141fcbf40`, handle status `FUN_141fd3970`) | verified: 364 differential cases, every channel; 93.3% coverage (14/15 reachable branches of 18 sites; three sites declare one structurally dead edge each) with one named gap — the loaded-bundle guard's false edge needs the live content-database set; 35/35 mutants killed (one further type-count gate flip declared equivalent; one signature-line mutant does not compile and is counted killed). It verifies the **consumer** of the directory blob; the producer row in section A stays open. |
 
 The unit's probe follows the blob's absolute guest pointers through the same
@@ -116,6 +116,74 @@ first/middle/last rows, absent before/between/after, duplicate GUIDs, sorted
 and unsorted arrays, counts 0/1/2/3/4/8, every handle status, GUID `0` and
 `u64::MAX`, and two sentinels just past the declared type and group counts so
 an implementation that runs past them is caught.
+
+## F. The client's function surface behind `ow-tank`
+
+The rows above say what the crate *is*; this says what the client *has*, so
+the gap is measured rather than remembered.
+
+**The rule is derived, not a hand list.** Take every client function the
+crate cites, walk the client's own call graph outward from it, and report the
+**named** client functions that come back but that the crate does not anchor
+to an address. An unanchored function is either behaviour the crate does not
+implement, or behaviour it implements without citing the client's function -
+which is the same thing for the 1-to-1 rule: neither is proven.
+
+```text
+python dev/fn.py surface ow-tank
+```
+
+`ow-tank` cites **254** client addresses (the `0x14…` form and the `FUN_…`
+form) in 119 functions. **86** named client functions are reachable from those
+and are not anchored:
+
+| the crate's tag | cited functions | named client functions not anchored |
+|---|---|---|
+| `map` | 13 | 13 |
+| `mover` | 8 | 21 |
+| `domino` | 6 | 9 |
+| `texture` | 7 | 8 |
+| `model` | 4 | 3 |
+| `casc` | 7 | 2 |
+| `stu` | 1 | 1 |
+| `hero` | 4 | 1 |
+| `(unnamed)` | 65 | 28 |
+
+The ones that matter for the crate's own formats:
+
+| client function | reached from | what the crate does today |
+|---|---|---|
+| `MoclRead` `0x141b88e50` | `ModelChunkLoad` `0x141b5df70` | **nothing**: the crate names the `MOCL` tag in a comment (`hardpoint.rs`) and never parses the chunk |
+| `MapChunkHeaderFixup` `0x142e49360` | `FinishMapChunkAsset` `0x141ff54e0` | **implemented and verified**: `chunkkind::fixup_header_in_place` (`fn/MapChunkHeaderFixup`) |
+| `TypeHashLookup` `0x1421c14f0` | `LoadStuBlob` `0x1421d88c0` | the crate's `classreg.rs` resolves class hashes, but never names the client's lookup |
+| `TextureSubresourceCount` `0x142e36e40`, `TextureResourceKind` `0x142e2dc70`, `TextureDepthAtLevel` `0x142e2db10`, `TextureRendererDesc` `0x141e7ba50`, `TextureRunRange` `0x141e29820`, `TextureTypeIsCube` `0x141e298e0`, `TextureSubresourceCopy` `0x141f11b60` | the texture loader | `texture.rs` is the crate's largest file (214 KB) and cites seven client functions; these eight are the ones it does not |
+| `ShapePoolAlloc` `0x142cb00c0`, `ShapePoolAllocType1..4`, `ShapeFillType2` `0x142cd31f0`, `ShapeFillType4` `0x142ccf330`, `ColliderMeshEmit` `0x142ccc120`, `ColliderFaceAppend` `0x142cca460` | the brush/collision path | `brush_convert.rs` implements a brush -> mesh conversion; the client's own shape-pool and collider-emit functions are the counterpart and are not cited |
+| `MapAssetDependencies` `0x142e48da0` | the manifest build `0x142e48700` | the crate's `manifest.rs` cites the build's other two functions, not this one |
+
+**The coverage tool under-reported this.** `dev/crate_coverage.py` counted
+only the `0x14…` form of an address; the crate also writes addresses the way
+a human does when the Ghidra name is in the prose - `FUN_1421d88c0`. That
+hid **16** of `ow-tank`'s citations (the effect builder `FUN_142e4a780`, the
+STU loader `FUN_1421d88c0`, the material job registration `FUN_141b19160`,
+the texture-set consumer `FUN_141f1ca80`) and 13 of `ow-casc`'s. The tool
+now reads both forms: `ow-tank` 238 -> 254 addresses, `ow-casc` 199 -> 212.
+
+**The same cross-check, from the job registry.** The client's own asset-type
+registry (`docs/formats/asset-types.md` section 1b) names the loader behind
+each of its 32 resolved jobs, and `python dev/fn.py jobs --crate ow-tank`
+compares that with the crate. `ow-tank` cites the loaders of **four** jobs:
+
+| job | types | loader | cited by the crate |
+|---|---|---|---|
+| 1 | `0x04`, `0x0F1` | `0x141dacf00` | yes |
+| 15 | `0x02` | `0x141ff5c80` (`LoadMapAssetChunks`) | yes |
+| 28 | `0x0B3` (material data) | `0x141b1a7b0` | yes |
+| 31 | `0x0BC` (map chunk) | `0x141ff54e0` (`FinishMapChunkAsset`) | yes |
+
+The other **28** job loaders are not anchored by the crate at all - among them
+the material asset (`0x141b1a8e0`), the three shader jobs (`0x141e73f30`,
+`0x141e74360`, `0x141e73a80`) and the generic job 10 (`0x1421bccc0`), which
+serves 194 of the 403 asset types.
 
 ## Closing a row
 

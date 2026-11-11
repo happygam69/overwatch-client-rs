@@ -26,7 +26,7 @@ use std::io::{BufRead, IsTerminal, Write};
 
 use ow_tank::character_collision::StepLimits;
 use ow_tank::classreg::ClassRegistry;
-use ow_tank::entity::{mover_row_of, mover_step_limits_of, MoverRow};
+use ow_tank::entity::{mover_capsule_of, mover_row_of, mover_step_limits_of, MoverRow};
 use ow_tank::hero_select::{
     mode_team_pools, resolve_hero, selectable_heroes, HeroChoice, HeroPool,
 };
@@ -54,6 +54,10 @@ pub struct HeroEntry {
     pub step: Option<StepLimits>,
     /// The take-off lane (`0xEC289987`), the jump's launch speed, m/s.
     pub takeoff_lane: Option<f32>,
+    /// The character's collision capsule, read from the mover component's three
+    /// class fields (`0x1972C687`, `0x7A70E3E3`, `0x4A576BC2`) through
+    /// `ow_tank::entity::mover_capsule_of`. This is the shape the walk sweeps.
+    pub capsule: Option<ow_tank::character_collision::Capsule>,
 }
 
 impl HeroEntry {
@@ -94,6 +98,14 @@ impl HeroEntry {
     /// hero, `2.8` on the large ones).
     pub fn step_reach(&self) -> Option<f32> {
         self.step.map(|limits| limits.reach())
+    }
+
+    /// The character's collision capsule, as the walk's collider.
+    ///
+    /// The walk sweeps the capsule the client gives the character, so a picked
+    /// hero's own capsule is what the walk must use.
+    pub fn walk_capsule(&self) -> Option<ow_sim::walk::Capsule> {
+        self.capsule.map(crate::walk::capsule_of_shape)
     }
 }
 
@@ -196,11 +208,13 @@ fn roster_of(
                 .ok()
                 .flatten()
         });
+        let capsule = entity.and_then(|entity| mover_capsule_of(data, entity).ok().flatten());
         heroes.push(HeroEntry {
             hero,
             row,
             step,
             takeoff_lane,
+            capsule,
         });
     }
     Ok(ModeRoster {
@@ -348,6 +362,11 @@ mod tests {
                 max: 1.0,
             }),
             takeoff_lane: Some(6.0),
+            capsule: Some(ow_tank::character_collision::capsule_from_mover(
+                crate::walk::CAPSULE_EXTENT,
+                crate::walk::CAPSULE_RADIUS,
+                crate::walk::CAPSULE_OFFSET,
+            )),
         };
         ModeRoster {
             mode: 0x0230_0000_0000_0018,

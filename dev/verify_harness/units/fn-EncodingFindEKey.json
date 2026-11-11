@@ -53,7 +53,7 @@
  "knownEquivalentMutants": [
   {
    "kind": "cmp-flip <to<=",
-   "line": 1123,
+   "line": 1164,
    "rationale": "The ekey scan's loop bound `p < body.len()` is the client's `p < end` test. At `p == body.len()` the extra iteration reads the 4-byte espec tail with `body.get`, finds nothing, and breaks; it cannot read a byte, match a key, or change the out slot. The reader's bounds check is the only reason the mutant is not observable, and that check is the short-body safety edge the unit explicitly excludes. On every in-bounds body the two forms are the same walk. Line updated from 991 to 1122, then to 1124, then to 1123 (a correction to the strlen comment above the loop removed one line): the declaration is line-keyed and the file grew below the loop while other CASC units were ported, so the old line no longer named the mutated statement. The mutant is unchanged."
   }
  ],

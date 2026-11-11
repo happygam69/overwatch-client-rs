@@ -227,3 +227,225 @@ wall becomes the longest single binary (~19 min, `index_find_real`) plus
 the build, instead of the sum of all binaries. The 1154 s floor itself is
 untouched - a `key_state`-free resolve path stays classified as a perf
 change, not a port (`STATUS-handoff.md`, "Measured, not fixed").
+
+## 2026-11: coverage-guided corpus growth, `autoCorpus` (harness v8)
+
+The per-unit fixture cost was the bottleneck for the long tail: 105 fixture
+modules, 15,078 lines, ~143 lines per unit, and ~800 named functions still
+without a unit. About a third of them (flat buffers + scalars: hashes, memcmp,
+hex parsers, header readers) never needed a *hand-written* corpus - they
+needed a corpus that clears the same gates. `options.autoCorpus` makes that
+the harness's job:
+
+1. The base corpus is unchanged: the focused edge pool plus `iterations`
+   seeded draws.
+2. After the differential loop agrees on every channel, the runner measures
+   the branch coverage of those very runs (the same `BranchTracker`, still
+   installed before stage 2) and, while it is under the gate, compares more
+   draws from the same deterministic `(seed, i)` sequence - 50 per round,
+   1200 cases total by default (`{"cap": N, "step": M}` overrides). Growth
+   only ever ADDS compared cases through the same `_run_case` body: the same
+   channels, the same undeclared-access accounting, the same counterexample
+   format, and the same three-divergence stop.
+3. The mutation corpus gains the grown tail. The head's 48 cases stay pinned,
+   but a mutant can be distinguishable only on the branch a grown case
+   uncovered (the constant-edit mutants of a magic-value compare are exactly
+   this shape), so `cases[:48] + cases[base:]` is what the mutants are probed
+   on. Measured in the test below: the `boundary ±1` mutants of the magic
+   compare are killed at the grown case, not by the head.
+4. The ledger entry records the realized corpus (`corpus_sha256` over every
+   case's stable identity, `corpus_cases`), so an audit can see exactly what
+   was compared. It is a fingerprint, not a freshness input: the corpus is a
+   deterministic function of what the ledger already binds (args surface,
+   options incl. seed/iterations/cap/step, the oracle window, harness
+   version), which is what keeps the fresh-verdict replay sound.
+
+What did NOT change: the five stages, every gate, the fixture path (a unit
+with an `argFactory` never grows - the factory's corpus is the fixture's
+claim, and `autoCorpus` + `argFactory` warns and ignores the option), and
+every existing unit's corpus (no unit JSON was edited; `autoCorpus` defaults
+to off). `scaffold_unit.py` templates now set it, so a new scaffold for a
+flat signature needs args and returns, not a fixture.
+
+Not measured here (no oracle image on this machine): the growth cost on real
+units. It is bounded by construction - at most `cap - iterations` extra
+oracle+candidate calls at stage 3's per-case cost, which PERFORMANCE.md's own
+measurements put at ~0.6 s per 364 cases for stages 1-4 - plus the larger
+mutation corpus for grown units only (`cap` cases x mutants, sub-millisecond
+calls each).
+
+Quality proof (`test_auto_corpus.py`, synthetic image): a one-branch function
+whose taken edge needs draw 352 of seed 4241 (unique in [0, 1200), absent
+from the 300-draw base - re-derived from gen.py, not hand-picked) grows
+300 -> 400 cases across two rounds and verifies with the `±1` constant
+mutants killed by the grown case; the same unit with `{"cap": 320}` stops
+below the magic draw and is inconclusive at the coverage gate with the 320-case
+corpus recorded; a forced re-run reproduces the identical corpus digest; the
+fresh-verdict replay serves the cached entry; toggling `autoCorpus` changes
+the options digest so the stale entry re-runs. The pre-existing suites
+(`test_harness_smoke.py`, `test_run_unit_e2e.py`, `test_cache_and_parallel.py`)
+pass unchanged; `test_cargo_mutant_builds.py` needs cargo and was not run
+here (no Rust code and no cargo path changed).
+
+HARNESS_VERSION was bumped 7 -> 8: the first `all`/`casc` after this change
+re-runs every unit once (~the old cost); from then on only units whose
+digests changed.
+
+## 2026-11: a stale "equivalent mutant" declaration fails the unit (harness v8)
+
+The mutation stage's kill rate is the unit's proof that the differential can
+tell a wrong candidate from the right one. A `knownEquivalentMutants` entry is
+the unit's claim that one mutation is *not* wrong - so it is skipped. The
+claim is written as a line number in the candidate's source, and a refactor
+moves lines: a declaration that names nothing skips nothing, the equivalent
+mutant is probed again, survives (it is equivalent), and the kill rate falls.
+`fn/Salsa20Xor` fell from 100% to 70% and dropped below its 75% gate; eight
+other units sat at 75-83% without noticing. The failure is silent in the
+other direction too: a stale declaration that still names a line - but the
+wrong statement on it - suppresses a mutant that should have been killed.
+
+Three changes:
+
+1. **The guard.** Stage 5 scans every mutation site the entry function has
+   (`MUTATION_SITE_SCAN`, 4096) and compares it with the unit's declarations.
+   A declaration that names no live site fails the unit with `inconclusive`
+   and a note that names the stale entries. The unit is not verified against
+   a weaker mutant set; it says why it stopped. One scan per unit, on the
+   candidate's own source - no extra build, no extra oracle call.
+2. **A finer key.** The mutator now records the *mutated* text of each
+   mutant, and a declaration may carry it. One line can hold two mutants of
+   the same kind - a decimal and a hex constant each get a boundary shift -
+   and kind+line could not tell them apart, so a declaration covering one
+   silently covered the other. `fn/BuildMoverPhysicsCommand` is the case that
+   needed it: three equivalent mutants and two non-equivalent ones on a
+   single line, with the old key unable to skip the right three.
+3. **The ledger binds the declarations.** A verdict is replayed only when the
+   declarations that produced it are unchanged (kind, line and mutated text -
+   not the rationale, which is prose). Changing what the mutation stage skips
+   invalidates the verdict; re-wording why does not.
+
+One consequence worth knowing: a tier-1 C unit's candidate is a *generated*
+decompile (`dev/decompiles/<Name>_<addr>.c`, written by `dev/gh_decompile.py`),
+so regenerating it moves its lines and the unit stops with the guard's note
+until its declaration is re-pointed. That is the point - the declaration is a
+claim about code, and a regenerated decompile is new code. The unit's own
+body is otherwise unchanged.
+
+The cost is one extra source scan per unit (milliseconds) and no change to
+the five stages, the gates or the corpora. Proof: `test_harness_smoke.py`
+grows a case that shows two same-line boundary mutants are separable by
+their mutated text and that a declaration without the text still covers
+both; `test_run_unit_e2e.py` runs the whole ladder on a unit whose
+declaration names a line the candidate does not have and expects the
+inconclusive verdict and the note.
+
+## 2026-11: one build for a unit's mutants, and the install reads cached
+
+Two costs dominated the verification, and both are gone.
+
+### The mutation stage: one crate build per unit, not per mutant
+
+Measured before: a cargo unit's mutants were each a full crate rebuild -
+4.4 s with a warm target dir - and a unit has a dozen of them. That was ~80%
+of the harness's wall time; a full re-prove of the 107 units cost ~35
+minutes, almost all of it in `cargo build`.
+
+Now every mutant of a unit is an **arm** of one dispatch inside the function
+under test (`batch.py`):
+
+```rust
+match __ow_mutant_index() {
+    0 => { <mutant 0's body> }
+    1 => { <mutant 1's body> }
+    _ => { <the original body> }
+}
+```
+
+The arms are the original interior with the mutation applied, so a mutant is
+byte-for-byte what it was when it was built alone. The harness picks the arm
+with `OW_MUTANT_INDEX` in the child's environment, so one build serves every
+mutant (one process per mutant; the process is cheap).
+
+Three things keep this honest:
+
+1. **The default arm is the original body**, and the harness compares the
+   batch binary (with no index set) against the baseline candidate before it
+   trusts the batch. A mismatch falls back to one build per mutant: the
+   batch is an optimisation, never a change of what is measured.
+2. **A compiler error is attributed to its arm.** The error names the line,
+   the line names the arm, the arm is dropped and the batch rebuilt. The
+   compiler catching a mutant is a kill, exactly as in the old path. An
+   unattributable error falls back to the old path.
+3. **The verdicts are unchanged.** Same corpus, same comparisons, same gates.
+   All 111 ledger entries agree on the status, the killed count and the
+   total, before and after. Ten of the slowest units, the same corpus both
+   ways: **324 s without the batch, 85 s with it** (3.8x); a full forced
+   re-prove of all 107 units: ~35 minutes -> **542 s**. Per unit:
+   `fn/OrthonormalizeCameraBasis-cargo` 23.2 s -> 6.6 s,
+   `fn/BuildMoverPhysicsCommand` 17.2 s -> 5.8 s, `fn/Md5Final` 17.0 s ->
+   7.5 s.
+
+Two shapes the first version got wrong, both found by the stage timings
+rather than by the verdicts:
+
+- The dispatch helper is a free function, so it belongs at the file's
+  module scope. A function under test that is *nested* inside another one
+  cannot hold it where it was, and the batch silently fell back to one
+  build per mutant for those units.
+- The dispatch replaces the function's *body*, so a mutation on the
+  *signature* (the line carrying the opening brace is part of it) cannot be
+  an arm. Dropping it silently cost four units a kill and their gates. A
+  mutation outside the body is now simply not in the batch, and the caller
+  builds it on its own, as it did before.
+
+`VERIFY_NO_BATCH=1` turns the batch off: the escape hatch for a crate whose
+build refuses the generated dispatch, and the way to A/B the two paths.
+
+The stage now prints its own wall time, and so does every other stage: the
+cost was not uniform, and "make it quick" is a guess without the numbers.
+
+Proof: `test_batch.py` builds a tiny crate whose function has two swappable
+operators and checks that the built binary answers 43 with no index set, 11
+with the `*` arm and 41 with the `+` arm; the error-attribution cases are
+pure.
+
+### The install-reading suites: two caches in the shipped reader
+
+The Rust gate's cost was seven install-reading suites (2218 s of the 2246 s
+of test time). Both hot spots were in `ow-casc`, and both were the same
+mistake: a value that is a pure function of the install was rebuilt on every
+call.
+
+| what | before | after |
+|---|---:|---:|
+| the segment's byte form, rebuilt per `key_state` call | 1154 s (`index_find_real`) | 1.5 s |
+| the encoding manifest's espec index, rebuilt per asset open | 213 s (`effect_real`) | 4.0 s |
+
+`SegmentEntries::key_state` rebuilt the whole 18-byte-per-entry buffer on
+every call, so the install test - which resolves every one of 1.1M keys -
+copied tens of gigabytes. The bytes are a pure function of the entries and
+the page table (the client keeps its parsed entries in memory for the same
+reason), so they are built once.
+
+`Store::open_ckey` re-parsed the decoded encoding manifest on every asset
+open, and the parse's expensive half is the espec string index: one u64 per
+byte of a 100 MB manifest. The index is a pure function of the block, so it
+is built with the manifest (`EncodingFile::parse_with_index` +
+`encoding::espec_index_of`) and the parse reuses it.
+
+Measured, same machine, same assertions, every suite still passing:
+
+| suite | before | after |
+|---|---:|---:|
+| `ow-casc` `index_find_real` | 1154 s | 1.5 s |
+| `ow-scene` `skin_pose_gate` | 428 s | 4.4 s |
+| `ow-tank` `effect_real` | 213 s | 4.0 s |
+| `ow-scene` `practice_launch` | 186 s | 5.2 s |
+| `ow-scene` `hero_draws` | 159 s | 2.8 s |
+| `ow-tank` `hero_pick_real` | 152 s | 2.8 s |
+| `ow-tank` `brush_real` | 134 s | 2.7 s |
+
+Both changes are behaviour-preserving, and the differential harness covers
+the changed code (`fn/DynamicIndexFindEntry`, `fn/DynamicIndexResolveRange`,
+`fn/EncodingFindCKey`, `fn/EncodingEspecStringIndex`): a behaviour change
+fails there, not here.

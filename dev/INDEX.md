@@ -28,7 +28,7 @@ reproducible on a clean checkout.
 | `clip_structure.py` | Dump the entire file structure to find pose data. | 57 |
 | `codec_scan.py` | Enumerate the client's out-of-line 64-bit obfuscation primitives. | 123 |
 | `corpus.py` | Build and query a standing corpus for the current image. | 1678 |
-| `crate_coverage.py` | Which client functions does a crate implement, and in what state. | 267 |
+| `crate_coverage.py` | Which client functions does a crate implement, and in what state. | 275 |
 | `deviation_check.py` | Check that the legacy deviations and the code agree. | 92 |
 | `disp_scan.py` | Every instruction in `.text` whose memory operand has a given displacement. | 117 |
 | `eng_build.py` | Build the engine-slot table by walking the disassembly block by block. | 96 |
@@ -51,6 +51,7 @@ reproducible on a clean checkout.
 | `find_anim_decoder.py` | Find code that reads the animation clip header, by the loads it must make. | 107 |
 | `find_field_writes.py` | Find the code that reads or writes one struct-field offset. | 124 |
 | `find_tables.py` | Find large arrays of code pointers (jump/dispatch tables) in the module image. | 79 |
+| `fn.py` | Find and read the client's functions in the current image. | 1632 |
 | `fn_extent.py` | Recover a function's TRUE extent when the image stores it as `.pdata` fragments. | 152 |
 | `fp_table.py` | Decode the client's config-var name table and read each var's default value. | 172 |
 | `frame_check.py` | Check cited addresses and function-name entries against the one address frame. | 434 |
@@ -97,6 +98,7 @@ reproducible on a clean checkout.
 | `verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. | 81 |
 | `verify_harness/apply_character_move_fixture.py` | Inputs for the `fn/ApplyCharacterControllerMove` unit (no-shape path). | 43 |
 | `verify_harness/archive_set_contains_fixture.py` | Deterministic (reader, archive) cases for `fn/ArchiveSetContains`. | 257 |
+| `verify_harness/batch.py` | One build for a unit's whole mutant set. | 235 |
 | `verify_harness/blte_block_read_stored_fixture.py` | Deterministic cases for `fn/BlteBlockReadStored`. | 121 |
 | `verify_harness/box_triangle_fixture.py` | Inputs for the `box_triangle_overlap` unit (`0x142cd58a0`). | 221 |
 | `verify_harness/build_info_select_row_fixture.py` | Deterministic (rows, flavor) cases for `fn/BuildInfoSelectRow`. | 174 |
@@ -104,7 +106,7 @@ reproducible on a clean checkout.
 | `verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. | 238 |
 | `verify_harness/bvh_fixture.py` | Inputs for the BVH builder unit (`0x142ccb1b0`). | 144 |
 | `verify_harness/candidate_c.py` | Tier-1 candidate: compile a Ghidra decompile, call it through ctypes. | 255 |
-| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 961 |
+| `verify_harness/candidate_rust.py` | Tier-2 candidate: run a Rust implementation through a subprocess. | 985 |
 | `verify_harness/cdn_index_file_parse_fixture.py` | Deterministic (key, file, len, out) cases for `fn/CdnIndexFileParse`. | 237 |
 | `verify_harness/cdn_index_footer_fixture.py` | Deterministic inputs for the `fn/CdnIndexFooterParse` unit. | 178 |
 | `verify_harness/cdn_page_checksums_fixture.py` | Deterministic (file, len, descriptor) cases for `fn/CdnIndexPageChecksums`. | 205 |
@@ -127,7 +129,7 @@ reproducible on a clean checkout.
 | `verify_harness/config_key_entry_parse_fixture.py` | Deterministic (key span, value span, vector) cases for | 258 |
 | `verify_harness/coverage.py` | Basic-block / branch coverage of the oracle, measured on the very runs | 265 |
 | `verify_harness/crc32_fixture.py` | Deterministic byte/initial inputs for `fn/Crc32NameHash`. | 75 |
-| `verify_harness/curve_fixture.py` | Structured input factory for fn/CurveKeySampleDual. | 150 |
+| `verify_harness/curve_fixture.py` | Structured input factory for fn/CurveKeySampleDual. | 158 |
 | `verify_harness/dynamic_index_append_interval_fixture.py` | Deterministic (object, events, entry, resident) cases for | 214 |
 | `verify_harness/dynamic_index_decode_entries_fixture.py` | Deterministic (entries, indirect, contiguous, initial state) cases for | 291 |
 | `verify_harness/dynamic_index_entry_sink_fixture.py` | Deterministic (kind, found, chosen, entry, existing events) cases for | 211 |
@@ -145,13 +147,15 @@ reproducible on a clean checkout.
 | `verify_harness/gen.py` | Deterministic input generation for one unit. | 258 |
 | `verify_harness/gjk_closest_fixture.py` | Inputs for the `closest_point` unit (`0x142cc9460`). | 339 |
 | `verify_harness/hex_pair_decode_fixture.py` | Deterministic (out, count, text, len) cases for `fn/HexPairDecode`. | 215 |
-| `verify_harness/ledger.py` | Digest-bound verification records. | 166 |
+| `verify_harness/ledger.py` | Digest-bound verification records. | 183 |
+| `verify_harness/map_chunk_header_fixup_fixture.py` | `MapChunkHeaderFixup` (`0x142e49360`) inputs: a pathing chunk's header | 78 |
 | `verify_harness/md5_final_fixture.py` | Deterministic context inputs for the `fn/Md5Final` unit. | 104 |
 | `verify_harness/md5_init_fixture.py` | Deterministic context inputs for the `fn/Md5Init` unit. | 66 |
 | `verify_harness/md5_transform_fixture.py` | Deterministic block/state inputs for the `fn/Md5Transform` unit. | 95 |
 | `verify_harness/md5_update_fixture.py` | Deterministic context/input pairs for the `fn/Md5Update` unit. | 121 |
 | `verify_harness/mesh_fixture.py` | Inputs for the `mesh_sweep` unit (`0x142caed30`, type 3). | 294 |
 | `verify_harness/mesh_gather_fixture.py` | Inputs for the `mesh_gather` unit (`0x142caea70`). | 378 |
+| `verify_harness/mesh_shape_fill_fixture.py` | `MeshShapeFill` (`0x142cae540`) inputs: the 0x30-byte source buffer the | 78 |
 | `verify_harness/move_character_fixture.py` | Inputs for the `fn/MoveCharacterController` unit (no-shape path). | 60 |
 | `verify_harness/move_character_shape_fixture.py` | Inputs for the `fn/MoveCharacterControllerShape` unit. | 50 |
 | `verify_harness/mover_apply_modifiers_fixture.py` | Inputs for the `fn/ApplyStateModifiers` unit. | 449 |
@@ -179,7 +183,7 @@ reproducible on a clean checkout.
 | `verify_harness/mrnm_fixup_fixture.py` | `MrnmFixup` (`0x141b893e0`) inputs: a structurally valid MRNM payload with | 12 |
 | `verify_harness/mrnm_load_fixture.py` | `MrnmHandler` (`0x141b88f10`) inputs: payload (with its relocation slots | 13 |
 | `verify_harness/mrnm_size_fixture.py` | `MrnmRuntimeSize` (`0x141b89390`) inputs: the same synthetic payloads the | 11 |
-| `verify_harness/mutate.py` | Behaviour-changing mutations of a C candidate, for measuring whether the | 278 |
+| `verify_harness/mutate.py` | Behaviour-changing mutations of a C candidate, for measuring whether the | 307 |
 | `verify_harness/orthonormalize_basis_fixture.py` | Structured input factory for fn/OrthonormalizeCameraBasis. | 100 |
 | `verify_harness/orthonormalize_state_fixture.py` | State-mode fixture for fn/OrthonormalizeCameraBasis-state. | 26 |
 | `verify_harness/page_slot_find_fixture.py` | Deterministic (slots, clock, query) cases for `fn/PageSlotFind`. | 251 |
@@ -190,21 +194,24 @@ reproducible on a clean checkout.
 | `verify_harness/q12_fixture.py` | Inputs for the Q12 scaler unit (`0x141c6c830`). | 91 |
 | `verify_harness/query_driver_fixture.py` | Inputs for the `query_driver` unit (`0x142cbd510`). | 437 |
 | `verify_harness/rigid_position_fixture.py` | Inputs for the `fn/RigidPosition` unit. | 29 |
-| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1296 |
+| `verify_harness/runner.py` | The five-stage verification ladder, native edition. | 1818 |
 | `verify_harness/salsa20_fixture.py` | Deterministic Salsa20 inputs for the `fn/Salsa20Xor` unit. | 156 |
 | `verify_harness/salsa20_state_fixture.py` | Deterministic key/nonce/counter inputs for the `fn/Salsa20StateInit` unit. | 92 |
-| `verify_harness/scaffold_unit.py` | Scaffold a verification unit from an address. | 297 |
+| `verify_harness/scaffold_unit.py` | Scaffold a verification unit from an address. | 303 |
 | `verify_harness/selftest.py` | The harness's own gate: inject known defects, require detection. | 221 |
 | `verify_harness/set_velocity_fixture.py` | Inputs for the `fn/SetCharacterControllerVelocity` unit (character path). | 42 |
 | `verify_harness/shape_box_fixture.py` | Inputs for the `shape_box` shape-bounds unit. | 43 |
 | `verify_harness/shape_capsule_fixture.py` | Inputs for the `shape_capsule` shape-bounds unit. | 44 |
 | `verify_harness/shape_dispatch_fixture.py` | Inputs for the `fn/ShapeDispatch` unit. | 49 |
 | `verify_harness/shape_points_fixture.py` | Inputs for the `shape_points` shape-bounds unit. | 51 |
+| `verify_harness/shape_pool_alloc_fixture.py` | `ShapePoolAlloc` (`0x142cb00c0`) inputs: a shape pool's record and its | 107 |
 | `verify_harness/shape_sphere_fixture.py` | Inputs for the `shape_sphere` shape-bounds unit. | 42 |
+| `verify_harness/test_auto_corpus.py` | Auto-corpus growth tests: the autoCorpus option, on synthetic bytes. | 227 |
+| `verify_harness/test_batch.py` | The batch build: one crate build for a unit's whole mutant set. | 326 |
 | `verify_harness/test_cache_and_parallel.py` | Fresh-verdict cache, unit-level parallelism, and the ledger lock. | 340 |
 | `verify_harness/test_cargo_mutant_builds.py` | The cargo candidate path: real crate builds, mutant slots, no staleness. | 170 |
-| `verify_harness/test_harness_smoke.py` | Smoke tests for the verify_harness fixes. | 482 |
-| `verify_harness/test_run_unit_e2e.py` | End-to-end test: run the full five-stage ladder on synthetic bytes. | 144 |
+| `verify_harness/test_harness_smoke.py` | Smoke tests for the verify_harness fixes. | 517 |
+| `verify_harness/test_run_unit_e2e.py` | End-to-end test: run the full five-stage ladder on synthetic bytes. | 176 |
 | `verify_harness/texture_count_bits_fixture.py` | Structured inputs for fn/TextureCountBitsShifted. | 53 |
 | `verify_harness/texture_descriptor_fixture.py` | Structured inputs for fn/TextureDescriptor. | 117 |
 | `verify_harness/texture_descriptor_size_fixture.py` | Structured inputs for fn/TextureDescriptorSizeWalk. | 113 |

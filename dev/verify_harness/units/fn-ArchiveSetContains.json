@@ -35,12 +35,12 @@
  "knownEquivalentMutants": [
   {
    "kind": "boundary +1",
-   "line": 819,
+   "line": 894,
    "rationale": "`h ^= h >> 33` over the zero-extended archive number: the input is `mov r9, rdx` (a u32 zero-extended into u64), so h < 2^32 and `h >> 34` is 0 exactly as `h >> 33` is. The XOR is a no-op in the original and in the widened mutant; the finalizer's second shift (after the first multiply, where h is a full 64-bit value) is the one that affects the bucket index. No input can observe the first shift's amount."
   },
   {
    "kind": "boundary -1",
-   "line": 819,
+   "line": 894,
    "rationale": "same proof as boundary +1: `h >> 32` is also 0 for every h < 2^32, so the narrowed mutant is observationally equivalent."
   }
  ],

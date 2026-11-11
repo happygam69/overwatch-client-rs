@@ -745,15 +745,77 @@ pub struct EncodingFile<'a> {
     /// String-start offsets in `espec`, built by `espec_string_index`
     /// (`FUN_142498a70`): the client stores the absolute pointers, this
     /// slice reader stores them as offsets from the block base.
-    espec_index: Vec<u64>,
+    espec_index: std::sync::Arc<[u64]>,
     ck_index: &'a [u8],
     ck_bodies: &'a [u8],
     es_index: &'a [u8],
     es_bodies: &'a [u8],
 }
 
+/// The espec string index (`FUN_142498a70`) of a manifest.
+///
+/// The index holds the espec block's string-start offsets, relative to the
+/// block's base, and it is the expensive half of the parse: the index buffer
+/// holds the whole block, one u64 per byte. It is a pure function of the
+/// block, so a caller that parses the same manifest many times builds it
+/// once (the install sweep opens thousands of assets, and every open reads
+/// the 100 MB manifest).
+pub fn espec_index_of(data: &[u8]) -> Result<Vec<u64>> {
+    if data.len() < HEADER_SIZE {
+        return Err(Error::HeaderShort);
+    }
+    let header = EncodingHeader::from_bytes(data).ok_or(Error::HeaderRejected)?;
+    let layout = SectionLayout::of(header.fields());
+    let sections = read_sections(data, &layout)?;
+
+    let espec_base = sections.espec.as_ptr() as u64;
+    let mut espec_index = vec![0u64; sections.espec.len()];
+    let mut espec_size = 0u32;
+    let espec_capacity = u32::try_from(sections.espec.len()).unwrap_or(u32::MAX);
+    if espec_string_index(
+        sections.espec,
+        espec_base,
+        0,
+        &mut espec_index,
+        &mut espec_size,
+        espec_capacity,
+    ) != 0
+    {
+        return Err(Error::EspecNotTerminated);
+    }
+    for pointer in espec_index.iter_mut() {
+        *pointer = pointer.wrapping_sub(espec_base);
+    }
+    espec_index.truncate(espec_size as usize);
+    Ok(espec_index)
+}
+
 impl<'a> EncodingFile<'a> {
+    /// Parse a manifest, building its espec index.
+    ///
+    /// The index is the expensive half of the parse and the parse happens on
+    /// every asset open, so a caller that reads the same manifest many times
+    /// wants [`EncodingFile::parse_with_index`] and
+    /// [`espec_index_of`] instead.
     pub fn parse(data: &'a [u8]) -> Result<EncodingFile<'a>> {
+        let index = espec_index_of(data)?;
+        EncodingFile::parse_with_index(data, index.into())
+    }
+
+    /// The parse with a prebuilt espec index.
+    ///
+    /// The index is `FUN_142498a70`, the client's post-read step over the
+    /// espec block, and it is a pure function of that block. The block is a
+    /// run of NUL-terminated strings and the index holds the string starts,
+    /// so the index buffer is one u64 per byte of the block - the parse's
+    /// whole cost on a 100 MB manifest.
+    ///
+    /// The index must be the one [`espec_index_of`] builds for this same
+    /// buffer; a caller that mixes them reads the wrong strings.
+    pub fn parse_with_index(
+        data: &'a [u8],
+        espec_index: std::sync::Arc<[u64]>,
+    ) -> Result<EncodingFile<'a>> {
         if data.len() < HEADER_SIZE {
             return Err(Error::HeaderShort);
         }
@@ -771,31 +833,10 @@ impl<'a> EncodingFile<'a> {
         let ekey_size = header.ekey_width() as usize;
 
         // `FUN_142498a70`, the client's post-read step: the espec block is a
-        // run of NUL-terminated strings whose last byte must be zero, and
-        // the string-start index is built from its NUL bytes. The header
-        // parser rejects a zero espec size, so the block is never empty
-        // here and `before` is never read. The index buffer holds the whole
-        // block, so the reserve and every append are no-grow. This slice
-        // reader stores the client pointers as offsets from the block base.
-        let espec_base = sections.espec.as_ptr() as u64;
-        let mut espec_index = vec![0u64; sections.espec.len()];
-        let mut espec_size = 0u32;
-        let espec_capacity = u32::try_from(sections.espec.len()).unwrap_or(u32::MAX);
-        if espec_string_index(
-            sections.espec,
-            espec_base,
-            0,
-            &mut espec_index,
-            &mut espec_size,
-            espec_capacity,
-        ) != 0
-        {
-            return Err(Error::EspecNotTerminated);
-        }
-        for pointer in espec_index.iter_mut() {
-            *pointer = pointer.wrapping_sub(espec_base);
-        }
-        espec_index.truncate(espec_size as usize);
+        // The espec string index is the caller's: it is the client's
+        // post-read step over the espec block (`FUN_142498a70`) and the
+        // expensive half of the parse, so a caller that parses the same
+        // manifest many times builds it once and passes it in.
 
         // The client's header parser accepts every key width 1..=16 and the
         // section reader uses `width + 16` for an index entry. The record walk

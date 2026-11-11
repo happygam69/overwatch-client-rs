@@ -48,7 +48,15 @@ LEDGER_PATH = os.path.join(os.path.dirname(__file__), "ledger.json")
 #    the corpus and every gate are unchanged; a replayed verdict is the one
 #    the same digests produced under the same harness version. Existing
 #    entries are re-run once (they carry version 6) and cached from then on.
-HARNESS_VERSION = "7"
+# 8: coverage-guided corpus growth (`options.autoCorpus`): a unit without an
+#    argFactory grows its seeded corpus until the branch-coverage gate is met
+#    or the corpus cap is reached, and entries record the realized corpus
+#    (digest + case count) for audit. The five stages, the gates and every
+#    factory corpus are unchanged; the realized corpus is a deterministic
+#    function of the digests the ledger already binds (args surface, options
+#    incl. seed/iterations/cap/step, oracle window, harness version), so a
+#    fresh replay is still the verdict the same digests produced.
+HARNESS_VERSION = "8"
 
 
 def sha256_bytes(b: bytes) -> str:
@@ -82,6 +90,13 @@ class LedgerEntry:
     # function's source file(s) and the git revision the probe was built from.
     candidate_sources: List[str] = field(default_factory=list)
     crate_rev: str = ""
+    # The corpus that was actually compared, once stage 3 completed (base
+    # cases plus any autoCorpus growth): a sha256 over every case's stable
+    # identity and the case count. Empty on the exits before a final corpus
+    # existed. An audit fingerprint, not a freshness input - see the
+    # HARNESS_VERSION 8 note above.
+    corpus_sha256: str = ""
+    corpus_cases: int = 0
 
     def to_json(self) -> Dict[str, Any]:
         return {
@@ -103,6 +118,8 @@ class LedgerEntry:
             "timestamp": self.timestamp,
             "candidate_sources": self.candidate_sources,
             "crate_rev": self.crate_rev,
+            "corpus_sha256": self.corpus_sha256,
+            "corpus_cases": self.corpus_cases,
         }
 
     @staticmethod

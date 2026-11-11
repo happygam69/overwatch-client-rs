@@ -19,15 +19,21 @@ project, never write to the game.
   Several units run at once (`--unit-jobs N`, default `min(4, cpus)`; a unit
   is never split across threads), each through the full ladder.
   `all` and `casc` replay a ledger entry whose every bound digest still
-  matches (oracle window, candidate, options, surfaces, harness version)
-  instead of re-running it - reported as `(cached)`; `--force` re-proves
+  matches (oracle window, candidate, options, surfaces, harness version, and
+  the unit's declared equivalent mutants) instead of re-running it - reported
+  as `(cached)`; `--force` re-proves
   everything, and a named unit always re-runs. Naming several units runs them
   as one parallel batch.
   `--jobs N` sets how many mutant probes run at once (default 4),
   `--slots N` / `VERIFY_MUTANT_SLOTS` how many cargo build slots each crate
   gets (default 4), and `--mutation-timeout S` bounds one mutant probe call
-  (default 10 s; the baseline candidate keeps 300 s). None of these flags
-  skips a stage or weakens a gate. A mutant the harness cannot build, start
+  (default 10 s; the baseline candidate keeps 300 s). A unit without an
+  `argFactory` can set `options.autoCorpus`: the runner grows the seeded
+  corpus until the branch-coverage gate is met or the cap (default 1200
+  cases) is reached, and the ledger entry records the realized corpus - a
+  flat/scalar unit needs no hand-written fixture, linked structures still
+  do. None of these flags or options skips a stage or weakens a gate. A
+  mutant the harness cannot build, start
   or drive is retried once; a second infrastructure failure makes the unit
   `inconclusive` rather than counting an unobserved mutant as killed. A
   mutant that does not return within the doubled call budget on the retry is
@@ -96,6 +102,55 @@ project, never write to the game.
   function).
 - **`dev/frame_check.py`** — the address-frame gate (`cargo xtask frame-check`):
   docs citations, the name table, and function-entry sanity.
+- **`dev/fn.py`** — find and read the client's functions in one command.
+  `read <addr>` prints everything known about one function: its name and role
+  (`docs/function-names.csv`), the differential unit that tests it and that
+  unit's ledger verdict, every place `docs/` already writes it down, the true
+  extent (the chain-root union, with the `opaque` flag when the linear listing
+  desyncs), the whole-image callers and callees, and the disassembly decoded
+  from the image. It also reads a body the unwind table does not cover (the
+  client has code no `.pdata` entry describes - `MrnmFixup` `0x141b893e0` is
+  one) by running the window to the next known function.
+  `find <query>` searches by name, by 4CC tag (`MRNM`), by string, by immediate
+  or by asset type; a tag is compared by the client as a **big-endian** u32,
+  so the tool searches for the immediate and confirms each candidate by
+  decoding the function that holds it. `callers`, `callees`, `scope` (the
+  transitive closure - the cluster a format's functions form) and `slots`
+  (who dispatches through a vtable slot) are queries over the whole-image
+  index that `corpus.py index` builds. `jobs` prints the client's asset-type
+  registry (type -> loader job), read from the image; see
+  [`formats/asset-types.md`](formats/asset-types.md).
+  Everything it needs is the image and the corpus index, so it works with no
+  Ghidra session; the corpus index is optional and only the whole-image
+  caller/callee queries need it.
+  `tags` and `tag <tag>` navigate the name table (`docs/function-names.csv`
+  holds 500 named functions in 20 tags), and `surface <crate>` reports the
+  named client functions that are reachable from what a crate cites but that
+  the crate does **not** anchor to an address - the measured gap between the
+  client's surface and the crate's, grouped by the **crate's own files**,
+  because a crate file is the format's vocabulary. `jobs` prints the client's
+  asset-type registry (type -> loader job) **and** the loader behind each
+  job, read from the registration that fills it; `jobs --crate <crate>` marks
+  the loaders that crate cites. `names` decodes the client's **own names**
+  for its assets - every registration function deobfuscates the name it
+  registers with the same XOR loop `formats/chunk-kinds.md` documents - and
+  ties each name to its type id, its job and its loader.
+  `read <addr> --decompile` also runs the client's decompiler and prints the
+  C: it drives the project's own headless script (`McpDecompile.java`)
+  against the merged working copy and caches the result under
+  `dev/data/decompiles` (ignored). The paths are this machine's defaults and
+  the environment overrides them - `GHIDRA_HEADLESS`, `GHIDRA_SCRIPTS`,
+  `GHIDRA_PROJECT`. When the decompiler cannot run, the tool says **why**
+  (no Ghidra, no script, no project, or no function at that address) instead
+  of silently omitting it. The merged copy in `GHIDRA_PROJECT` is a separate
+  project file, so the GUI's own open project does not lock it.
+  `callers` and `callees` work on bodies the unwind table does not cover:
+  the index records the raw target of every transfer, so a call into such a
+  body is found by its exact target.
+  `dev/crate_coverage.py` counts an address in
+  either the `0x14…` form or the `FUN_…` form a human writes it in; the
+  second form was hidden before and hid 16 of `ow-tank`'s citations and 13 of
+  `ow-casc`'s.
 - **`dev/gh_apply_types.py`** — applies `docs/struct-layouts.csv` to the
   Ghidra program (struct import, then the `prototype` column).
 - **`dev/imm_scan.py`, `dev/xref_rva.py`** — immediate and
@@ -152,7 +207,7 @@ The table below is the practical set by task.
 `cargo xtask verify` does not run the differential harness; `python
 dev/verify_harness/cli.py casc` is the CASC gate, and `fn/<Name>` is the
 per-function gate.
-| `python dev/verify_harness/scaffold_unit.py <address> --name <Name>` | a scaffold for a new client function |
+| `python dev/verify_harness/scaffold_unit.py <address> --name <Name>` | a scaffold for a new client function (autoCorpus on; a fixture is only needed for linked structures) |
 | `cargo run --release -p ow-client` | the practice-range eye-check; a terminal launch asks for a hero |
 | `cargo run --release -p ow-client -- --list-maps` | map headers and variation modes |
 | `cargo run --release -p ow-client -- --list-heroes` | the practice mode's roster: names and forward speeds |

@@ -1,0 +1,46 @@
+{
+  "id": "fn/MapChunkHeaderFixup",
+  "title": "tier-2 shipped code: the pathing chunk's header fixup against MapChunkHeaderFixup (0x142e49360)",
+  "address": {
+    "v2b": "0x7ff7c7b69360"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "map_chunk_header_fixup",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "header",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "header_base",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "map_chunk_header_fixup_fixture",
+  "options": {
+    "iterations": 96,
+    "coverageThreshold": 90.0,
+    "mutationCount": 4,
+    "mutationKillRate": 1.0,
+    "seed": 41337,
+    "coverageWindow": 61
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/chunkkind.rs (fixup_header_in_place), built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the map_chunk_header_fixup entry. The ledger binds the verdict to chunkkind.rs + the probe source + the git revision.",
+    "Oracle is MapChunkHeaderFixup at exe 0x142e49360 (v2b 0x7ff7c7b69360), 0x3D bytes. The client converts three self-relative RVAs of the record - at +0x00, +0x08 and +0x18 - to pointers by adding the record's own address, and a stored zero stays zero: each conversion is a `lea` of the value plus the base, a `test` of the value and a `cmove` back to zero when the value was zero. The record's +0x10 is not touched.",
+    "The client takes the base from the record's own pointer (RCX) and has no second argument, so the fixture passes the record's arena base in the client's dead second slot: the oracle and the probe write the same absolute values and the whole 0x20-byte record is compared without masking.",
+    "The fixture varies the three slots between zero, ordinary offsets and a value that wraps when the base is added, and puts a marker in +0x10 so a spurious write there is caught. The all-zero case is the null boundary the file actually carries.",
+    "The function has no allocator and no external call. Its one decision is branchless - each of the three conversions is a `cmove` - so the coverage stage finds no conditional branch site in the body and reports 0 of 0. The mutation stage carries the proof instead: the three `== 0` comparisons are the only behaviour the function has, and all three are mutated and killed."
+  ],
+  "acknowledgedGaps": [
+    "Offset arithmetic only: the unit proves the rebase formula and the exact slot set. It says nothing about what the pointers point at; the STUD loader and the cell fixup are fn/MapChunkCellBytesFixup's subject.",
+    "The client has no bounds check. The 0x20-byte record is always long enough for the three slots it reads; a shorter record would fault on the client.",
+    "The client's branchless `cmove` gives the coverage stage nothing to measure, so the unit's coverage figure is 0 of 0 sites and the mutation stage is the only evidence that the zero rule is observed.",
+    "The sibling relocators of the same dispatch - 0x142e49270 (two pointers), 0x142e493a0 (+0x2E8/+0x2F0) and 0x142e493e0 (+0x08) - are not implemented and not verified here."
+  ]
+}

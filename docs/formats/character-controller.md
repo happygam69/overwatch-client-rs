@@ -15,9 +15,19 @@ integrates the per-frame step.
   builder (`BuildMoverPhysicsCommand`) are differential-verified against the
   client's bytes.
 - **Open:** the input→wish spring (`FUN_140cc0dc0`), the
-  `SubmitMoverPhysicsCommand` velocity assembly, the Domino character
-  controller and collision. The invoker's caller is still not located and may
-  be a dead path.
+  `SubmitMoverPhysicsCommand` velocity assembly, and the Domino character
+  controller's collision **response**. The invoker's caller is still not
+  located and may be a dead path.
+- **The collision shape and the resolve loop, 2026-11-11.** The character's
+  shape is the **vertical capsule** (`radius 0.5`, height `1.5` on the common
+  hero; the install-wide values), and `ow-client`'s walk now sweeps it instead
+  of a `0.35` m sphere proxy. The solver's resolve loop (`0x142cf3f80`) is
+  read: it puts the body where it was asked to go, lets the Domino runtime push
+  it out of what it overlaps, and repeats until the correction is within
+  `eps = 0.005` or the iteration cap is reached. It has **no slide**. The
+  runtime's own depenetration is not ported, so the walk's slide and floor
+  stage stay declared stand-ins - see "The resolve loop, read" and "The walk
+  sweeps this capsule" below.
 - **The jump, 2026-11-16.** The take-off is read end to end and shipped as
   `ow_sim::jump` (the button bits, the handler chain, the state file word and
   its five transitions, the gate and the impulse). Its magnitude is the mover
@@ -137,6 +147,13 @@ d = max(0.1 * r, extent - (offset + radius + radius))
 A = (0, r, 0)        B = (0, r + d, 0)
 ```
 
+The `radius` there is the **body's copy**, `+0x5a4`, and the body caps it:
+`0x140cb7700` writes `min(0.5, class radius)` into the slot (the same
+`min(0.5, ...)` `ApplyStateModifiers` (`0x140cbcbe0`) carries on its guarded
+path), so a hero that declares `0.7` collides with a `0.5` m capsule.
+`ow_tank::character_collision::capsule_from_mover` applies the cap for that
+reason; the table above lists the **declared** class values.
+
 with the **raw** radius in the segment term (the clamp only reaches `r` and
 `A`/`B`), the client's left-to-right addition order, and `<=` comparisons that
 send a `NaN` to the left branch. The capsule's origin is at its **feet**: its
@@ -157,6 +174,37 @@ with the point cloud's hull (`0x142cd5540`), so the capsule's contact differs
 from a sphere of the same radius - which is the point. Whether the character
 controller reaches the leaf that way is still open: its pass `0x142cf3f80`
 walks the entry's **already-paired** shapes instead of re-querying.
+
+### The walk sweeps this capsule (2026-11-11)
+
+`ow-client`'s walk used to sweep a `0.35` m **sphere** - a shape the client
+does not have. It now sweeps the client's capsule, and the walker's position is
+the capsule's **origin**, which is at its feet:
+
+| what | before (the sphere proxy) | now (the client's capsule) |
+|---|---|---|
+| the shape | a sphere, `r = 0.35` | a vertical capsule, `r = 0.5`, height `1.5` |
+| the position | the sphere's **centre**, `0.35` m above the floor | the capsule's **origin**, at the feet |
+| the floor | the sphere rests a radius above it | the feet rest on it |
+| a sill | a sphere `0.7` m tall passes under it | the upper sphere meets it |
+
+The implementation is `ow_sim::walk::Capsule` (the shape),
+`ow_sim::walk::advance_capsule` and `ow_sim::walk::snap_to_floor_capsule`
+(the two queries the walk makes), and `ow-client`'s `walk::capsule_of` and
+`walk::common_capsule` (the client's own construction, and the install-wide
+common values `2.0` / `0.5` / `0.5` for the extent, the radius and the
+offset). A picked hero's own capsule comes from
+`ow_tank::entity::mover_capsule_of`, the same read the other mover scalars use.
+
+**The rotation is not carried, and that is exact.** The capsule is vertical and
+the character yaws; a yaw about the up axis leaves a vertical capsule's two
+centres where they are, so the query block's quaternion (`+0x40`) is the
+identity for this shape.
+
+**The camera's height is not read**, so the eye stays where it was: the sphere
+proxy put the eye `0.35 + 1.25 = 1.60` m above the floor and the capsule's
+origin is at the feet, so `walk::EYE_ABOVE_ORIGIN` is `1.60` m.
+
 
 ## The vertical step limits (2026-11-07)
 
@@ -197,15 +245,77 @@ first cause was the **world**, and it is measured.
 ### The static world is the map's `MAP_CHUNK_COLLISION`, not the models' meshes
 
 `ow-client --walk-test --no-hero` on the practice range, spawn room
-`(71.169, -3.656, 53.110)`, two worlds:
+`(71.169, -3.656, 53.110)`, three worlds (the source is selectable with
+`--collision level|models|both`; the numbers below are the measured ones).
 
-| world | forward leg, 1 s at 5.5 m/s | drift off the straight line | six-second tour | contacts |
-|---|---|---|---|---|
-| the level collider only (1 shape, 343,474 triangles) | **5.500 m** | **0.000 m** | y `-3.656` -> `-3.657`, lowest `-3.659` | 47 |
-| level collider + 3,017 per-model holder shapes | 5.189 m | 0.461 m | y `-3.656` -> `-2.885` (**climbs 0.78 m**), lowest `-3.674` | 73 |
+**With the client's capsule** (the shape the walk sweeps now, `r = 0.5`,
+height `1.5`, origin at the feet; the spawn resolves to `y = -4.006`):
 
-The second row is what the walk did before this change. The per-model holder
-meshes are not the static map's collision:
+| world | shapes | forward leg, 1 s at 5.5 m/s | drift off the straight line | strafe leg, 1 s | grounded | contacts |
+|---|---|---|---|---|---|---|
+| the level collider only (`MAP_CHUNK_COLLISION`, 343,474 triangles) | 1 | **5.500 m** | **0.000 m** | 4.519 m (a wall face stops it) | yes | 180 |
+| the per-model holder meshes only | 3,017 | 4.978 m | 0.764 m | **5.500 m** | **no** | 40 |
+| both - what the client has | 3,018 | 4.999 m | 0.628 m | 1.902 m | yes | 239 |
+
+**With the sphere proxy** (the shape the walk used before this change; the row
+is kept so the change is measured, not argued):
+
+| world | shapes | forward leg | drift | strafe leg | grounded | contacts |
+|---|---|---|---|---|---|---|
+| the level collider only | 1 | 5.500 m | 0.000 m | 4.540 m | yes | 180 |
+| the per-model holder meshes only | 3,017 | 5.493 m | 0.005 m | 5.500 m | no | 26 |
+| both | 3,018 | 5.190 m | 0.460 m | 2.030 m | yes | 254 |
+
+**What the three rows say.** The two copies are *not* interchangeable, and
+neither alone is the client's world:
+
+- The **level collider** carries the spawn room's floor: the walker is
+  grounded, the forward leg is the exact speed and the idle leg is exactly
+  still. Its strafe stops at 4.519 m on a vertical face - and that is the
+  walk's **slide stand-in**, not the world: `ow_sim::walk`'s slide is the
+  minimal projection of the residual onto the contact normal, while the
+  client's own solver resolves the position to a 0.005 fixed point over the
+  character's Domino pair list (`0x142cf3f80`; the resolve loop is read, see
+  "The resolve loop, read" above).
+- The **per-model meshes** carry the strafe free but **no floor** under the
+  spawn room: the walker's floor probe finds one 13.9 m away and the body
+  floats (its start moves from `(71.169, -4.006, 53.110)` to
+  `(70.541, -3.752, 66.982)`).
+- **Both together** is what the client has, and the walk does not survive
+  them: the forward leg drifts 0.628 m and the strafe collapses to 1.902 m,
+  because the per-model copies are coarse (some holders are 8 points / 12
+  triangles, a box) and the stand-in slide and floor stage cannot resolve
+  the two copies against each other.
+
+**The capsule makes the two copies harder, and that is the honest result.** It
+is `0.15` m wider than the proxy, so it meets coarse holders the proxy passed
+(the per-model forward leg falls from 5.493 m to 4.978 m) and it stops a
+little earlier at the room's wall (4.540 m -> 4.519 m). The shape is the
+client's; the *response* is what is still missing, and the numbers say so:
+the client's resolve has no slide, it puts the body where it was asked to go
+and lets the runtime push it out, and the walk's stand-in does the opposite.
+
+So the walk keeps the level collider alone, and the reason is not "the
+per-model meshes are not the map's collision" - they are, and the client has
+both. The reason is that the walk's slide and floor stage are stand-ins, and
+the client's solver is what makes the pair harmless.
+
+The per-model builder is read and named: `0x14201ae60` walks the model's
+`STU_537E56E4` list and emits one Domino shape per holder through
+`ShapeAddToBody`/`OwnerCreateBody` into the **node's** world - the same world
+the character sweeps (`docs/formats/shape-ingest.md` §6, and the chain
+`0x14213c440` -> `0x142cf2010` -> `0x142ccc120` -> `0x142cca460` ->
+`0x142ccb1b0`).
+
+**The numbers above are pinned by an install-reading test**:
+`crates/ow-client/tests/walk_real.rs` runs the built binary against the
+install and asserts the capsule's origin resting on the floor (`y = -4.006`),
+the level collider's exact forward leg, its zero drift, its zero idle, its
+grounding and its wall face at 4.519 m, the per-model world's free strafe and
+its missing floor, and the "both" world's two broken legs. The test skips when
+the install is not readable.
+
+**What is known about the per-model meshes:**
 
 - Their read consumer in this image is **query-only**:
   `FUN_14210bac0` walks the model's `STU_537E56E4` list, fills a `0x4c` shape
@@ -239,11 +349,13 @@ meshes are not the static map's collision:
   `(-0.58, 0.00, -0.82)`, where the level mesh has the ramp. The walker was
   climbing the coarse copy and being stopped by its faces.
 
-`ow-client::walk_world` now builds the world from
-`RangeWorld::level()` - the `MAP_CHUNK_COLLISION` and additive bodies, which are
-already in world coordinates - and returns an error when the range carries no
-collision body. The per-model shapes stay in `RangeWorld::placed` for the
-tests and for the entity route once its attach is read.
+`ow-client::walk_world` builds the world from `RangeWorld::level()` - the
+`MAP_CHUNK_COLLISION` and additive bodies, which are already in world
+coordinates - and returns an error when the range carries no collision body.
+The per-model shapes stay in `RangeWorld::placed` for the tests and for the
+entity route once its attach is read. **The source is now selectable**
+(`--collision level|models|both`) so the three rows above are one command
+each and the choice is measured rather than argued.
 
 ### The vertical stage is a stand-in, and its guard was measured from the probe
 
@@ -322,6 +434,161 @@ vertical one ("The jump law", below). The step stage that consumes `+0x688`/
 the walk's vertical is declared open in `docs/open-questions.md` item 1b, and
 `ow-client --walk-log` prints each step's contact normal and shape so the
 operator can see what the body touched.
+
+### The solver's pair walk, first pass (2026-11-11)
+
+The solver is `0x142cf3f80` (`0x142cf3f80..0x142cf4d77`, 3,575 bytes over ten
+`.pdata` pieces, **67 direct calls** and no indirect call). What this pass
+establishes:
+
+- **The mode dispatch is the world's variant tag**, as
+  `formats/static-collision.md` records: `cmp dword ptr [rcx], 1` at
+  `0x142cf3fa6` with the rigid path falling through and the character path
+  branching at `0x142cf3fc1`. The rigid path builds a pair list with
+  `0x142cb5260` and queries with `0x142cc4cd0`; the character path
+  (the one the walk needs) takes the handle at `[world+0x08]` and calls
+  `0x142cd4d90` and the position resolvers.
+- **The pair array is allocated, then filled.** At `0x142cf43c9` the solver
+  allocates `count * 0x20` bytes (`count` at `[rbp+0x238]`, alignment `0x10`)
+  through the runtime allocator `0x142cadee0`, stores the array at
+  `[rbp+0x230]`, and `0x142cd4d90` fills it with the world's pairs.
+- **The pair loop** is at `0x142cf43f0`: for each pair it takes the world's
+  fixture list at `[world+0x28]`, indexes it by the pair index, calls the
+  pair getter `0x142cbb260` (a byte), decodes the fixture's handle with
+  `0x142cb9d60`, rejects an empty world slot (`shr rcx, 0x30` against
+  `0xffff`) and an invalid body, and looks the body up with `0x142cc5730`.
+  The handle's decode and the body's records are the Domino runtime's own
+  structures - the world's fixture list, the body pool, the pair array.
+
+**What that means for the port.** The solver is not one function that can be
+transcribed: it is the *Domino runtime's* collision - the world's pools, the
+allocator, the free list, the handle encoding, the body records and the
+narrowphase. `ow_sim::walk` stands in for it with a shape list and an 8 m grid
+(`docs/history/modlog-2026-11.md`), and the walk's slide is the minimal
+projection of the residual. A faithful port therefore needs the runtime's
+data structures, not a new function: the shape pool's free-list pop is now
+implemented and proved (`fn/ShapePoolAlloc`, `ow_tank::domino_world`), and the
+next piece is the pair build `0x142cd4d90` and the position resolve
+`0x142cd5270`, which decide *where* the body ends up.
+
+### The resolve loop, read (2026-11-11)
+
+The loop that decides where the body ends up is now read. `0x142cf3f80`'s
+character path is a `do`/`while` at `0x142cf43f0`'s pair walk's end, and its
+body is:
+
+```text
+eps   = 0.005                                  ; the solver's own constant
+cap   = the sweep block's +0x1c                ; the advance fills it from step_state+0x94
+again:
+    pair_build(world_handle)                  ; 0x142cd4d90: the world's pairs
+    for each pair:                             ; the contact collection
+        fixture = pair_getter(pair)           ; 0x142cbb260
+        body    = handle_decode(fixture)      ; 0x142cb9d60
+        for each of the body's shape records:  ; 0x142cc5890
+            for each of the record's triangles: ; the record's own triangles
+                contact_plane(n, separation)   ; 0x142cc5600 and the triangle fold
+    resolved = resolve(world_handle, &pos)    ; 0x142cd5270
+    corr     = resolved - pos                 ; the three-lane correction
+    if corr·corr >= eps·eps and ++iter < cap: goto again
+body+0x620 = resolved.x ; body+0x628 = resolved.y ; body+0x62c = resolved.z
+body+0x664 = iter                              ; the iteration count
+```
+
+Four facts, each read from the image:
+
+1. **The convergence test is a squared length.** The correction's three lanes
+   are squared and summed (`fVar55 * fVar55 + fVar59 * fVar59 +
+   (z - z0) * (z - z0)`) and compared against `eps * eps`, with `eps = 0.005`
+   read as the solver's own constant (`fVar60 = fVar6 * fVar6`). The comparison
+   is splatted over four lanes and taken out with `movmskps`, so the loop ends
+   when **all four** lanes are below `eps²`.
+2. **The correction is measured against the *requested* position**, not against
+   the previous iteration: `fVar55` is the requested `x` and `fVar59` the
+   requested `y` on entry to the iteration, and the subtraction is against the
+   position the resolve returned. So the loop asks "can the body be put where
+   it was asked to go?", and the answer it converges to is "within 5 mm".
+3. **The resolve is the Domino runtime's own move.** `0x142cd5270` decodes the
+   body from the handle, rejects an empty world slot and a stale generation,
+   and calls `0x142cd4610`, which rebuilds the body's broadphase entry at the
+   requested position and lets the runtime's contacts push it out. The
+   resolved position is the body's new position - the runtime's depenetration,
+   not a projection the solver computes.
+4. **The iteration count is written out** (`body+0x664`) next to the resolved
+   position (`body+0x620`/`+0x628`/`+0x62c`), so the client itself records how
+   many rounds the resolve took. The bound is a dword the solver reads from
+   its own copy of the sweep block (`param_3[0xb]` in the solver's frame,
+   `cmp edx, dword ptr [rsi + 0x2c]` at `0x142cf49f0`); the advance fills that
+   block's `+0x1c` with `step_state[0x94]`, clamped by `body[0x1a88]` when the
+   global is set (the read expression is already in this file, "The advance's
+   read expression").
+
+**What this means for the walk.** The client's resolve has **no slide**: it
+puts the body where it was asked to go and lets the runtime push it out of
+what it overlaps, and the loop's answer is the body's resting place. The walk's
+stand-in does the opposite: it projects the *residual* along the contact
+normal and keeps going, which is what makes a body in a corner drift sideways
+instead of stopping. Porting the client's answer needs the runtime's body
+records and its contact collection (`0x142cc5600`), so the stage stays **open**
+- but the shape, the convergence test and the cap are now read, and the
+walker's own `ow_sim::walk` stand-in can be measured against them.
+
+### The resolve's shape, and the factor it is still missing (2026-11-11)
+
+`0x142cd4610`'s tail is now read, and it is the **shape** of the client's
+answer rather than its value:
+
+```text
+factor  = (1, 1, 1, 1)                        ; _DAT_14306ad20
+for each contact:
+    factor = minps(factor, contact_factor)     ; the narrowphase's descriptor +0x20
+new_pos = old_pos + motion * factor            ; per lane
+```
+
+Three facts, each from the image:
+
+1. **The accumulator is a lane-wise minimum**, `minps xmm6, [rbp - 0x50]`
+   (`0x142cd4a79`), over the contacts' factors, and it starts at
+   `(1, 1, 1, 1)` (`_DAT_14306ad20`, read from the image).
+2. **The motion is scaled by it**, per lane: `new.x = motion.x * factor.x +
+   old.x` (`0x142cd4610`'s tail, four `MULSS`/`ADDSS` pairs). There is **no
+   projection of the leftover motion** anywhere in that tail - the client's
+   resolve does not slide.
+3. **The contact's factor is the narrowphase's third quad.** The capsule
+   narrowphase `0x142cfc090` writes the descriptor `+0x00` the point, `+0x10`
+   the normal, `+0x20` the **GJK's residual** and `+0x30` the iteration
+   count (`movups [rdi], [rdi+0x10], [rdi+0x20], [rdi+0x30]`), and accepts a
+   contact only when the residual is strictly below the running minimum in all
+   four lanes (`cmpltps` + `movmskps` + `cmp eax, 0xf`).
+
+**What is still missing is the factor's value.** The GJK's residual is the
+sweep's time of impact *when the GJK sweeps* and the overlap depth when it
+does not, and the narrowphase's descriptor decides which: its direction
+(`descriptor+0x80`) and motion budget (`+0x90`) read as zero in the narrowphase
+as read so far, which would make the GJK a static test - and then the residual
+is not a fraction and cannot scale the motion. **That link is open**, and it
+is the one that decides the rule:
+
+- if the narrowphase sweeps, the factor is the time of impact, the resolve is
+  a swept stop, and the loop's iteration is what pushes the body out;
+- if the narrowphase is static, the factor is an overlap depth, and the
+  resolve is a push-out whose units are metres, not a fraction.
+
+A first implementation of the swept reading was measured and **rejected**: it
+lets the body through a wall on the second round, because the leaf reports
+nothing for a sweep that starts on a surface (`docs/formats/static-collision.md`'s
+leaf rule) - so the body, parked exactly on the contact, sails on to where it
+was asked to go. The client's own answer to that case is the runtime's GJK
+penetration path, which is not read. The reading therefore stays a reading:
+the walk's slide remains a declared stand-in, now with the reason written
+down - it is not the client's rule, and the client's rule is not yet known
+well enough to write down.
+
+**The next link is named:** the narrowphase's GJK descriptor - its direction
+and motion budget (`0x142cfc090`'s `uStack_1b8`/`uStack_1c8`, the descriptor's
+`+0x80`/`+0x90`) - and, behind it, `FUN_142cc5ba0`, which builds the triangle
+descriptor the GJK takes.
+
 
 ## The jump struct
 

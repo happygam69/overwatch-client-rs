@@ -1516,25 +1516,42 @@ fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
-/// The sweep world the walker uses: the map's own level collider, each shape
-/// with its `MeshShapeFill` record and its world transform.
+/// Which collision source the walk's world is built from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollisionSource {
+    /// The map's own level collider: the `MAP_CHUNK_COLLISION` and additive
+    /// bodies, already in world coordinates.
+    Level,
+    /// The models' own collision meshes: the per-model holder blocks the
+    /// client's per-model builder (`0x14201ae60`) turns into Domino shapes.
+    Models,
+    /// Both.
+    Both,
+}
+
+/// The sweep world the walker uses: each shape with its `MeshShapeFill` record
+/// and its world transform.
 ///
-/// Only the `MAP_CHUNK_COLLISION` / additive bodies are here. The per-model
-/// holder meshes are the models' own meshes: their read consumer in this image
-/// is a query that writes nothing, and the per-model Domino body route hangs off
-/// the collision component, whose attach no read path decides yet. Adding them
-/// to the walk was measured (`--walk-test`, the practice range's spawn room):
-/// the forward leg fell from `5.500` m to `5.189` m, the body drifted `0.461` m
-/// off a straight line, the six-second tour climbed `0.78` m in a flat room, and
-/// contacts doubled. See `docs/formats/character-controller.md`.
-fn walk_world(range: &ow_tank::range_world::RangeWorld) -> Result<ow_sim::walk::World, String> {
+/// The two sources are the map's level collider (`RangeWorld::level`) and the
+/// models' own holder meshes (`RangeWorld::placed`'s head). Which one the
+/// client collides against is measured, not assumed: `--walk-test --collision
+/// level|models|both` builds each and prints the walk.
+fn walk_world(
+    range: &ow_tank::range_world::RangeWorld,
+    source: CollisionSource,
+) -> Result<ow_sim::walk::World, String> {
     if range.level_shapes == 0 {
         return Err("the range carries no MAP_CHUNK_COLLISION body".into());
     }
     let mesh = &range.mesh;
-    let level = range.level();
-    let mut shapes = Vec::with_capacity(level.len());
-    for placed in level {
+    let split = range.placed.len() - range.level_shapes;
+    let (models, level): (&[ow_tank::range_world::PlacedShape], _) = match source {
+        CollisionSource::Level => (&[], range.level()),
+        CollisionSource::Models => (&range.placed[..split], &[]),
+        CollisionSource::Both => (&range.placed[..split], range.level()),
+    };
+    let mut shapes = Vec::with_capacity(models.len() + level.len());
+    for placed in models.iter().chain(level.iter()) {
         // The chunk stores the model's local-to-world quaternion; the sweep's
         // transform is the world-to-local one its leaf applies to the query.
         let rotation = placed.rotation;
@@ -1592,6 +1609,7 @@ fn run_walk_column(walker: &walk::Walker, at: [f32; 2]) {
     );
     let step = 0.25f32;
     let mut y = high[1] + 1.0;
+    let capsule = &walker.capsule;
     println!(
         "column at ({:.2}, {:.2}) from y {:.2} down",
         at[0], at[1], y
@@ -1600,18 +1618,20 @@ fn run_walk_column(walker: &walk::Walker, at: [f32; 2]) {
     while y > low[1] - 1.0 {
         let from = [at[0], y, at[1]];
         let to = [at[0], y - step, at[1]];
-        if let Some(hit) = walker.world.sweep(from, to, walk::RADIUS) {
+        if let Some(hit) = walker.world.sweep_capsule(
+            from,
+            to,
+            ow_sim::walk::UPRIGHT,
+            capsule.point_a,
+            capsule.point_b,
+            capsule.radius,
+        ) {
             let contact = y - step * hit.fraction.clamp(0.0, 1.0);
             found += 1;
             if found <= 40 {
                 println!(
                     "  surface {:2}: y {:.3} normal ({:+.2}, {:+.2}, {:+.2}) shape {}",
-                    found,
-                    contact - walk::RADIUS,
-                    hit.normal[0],
-                    hit.normal[1],
-                    hit.normal[2],
-                    hit.shape
+                    found, contact, hit.normal[0], hit.normal[1], hit.normal[2], hit.shape
                 );
             }
             y = contact - 0.05;
@@ -1863,7 +1883,7 @@ fn run_walk_test(mut walker: walk::Walker, speed: f32) {
             chest[1],
             chest[2] + dir[2] * reach,
         ];
-        let Some(hit) = walker.world.sweep(chest, to, walk::RADIUS) else {
+        let Some(hit) = walker.world.sweep(chest, to, walker.capsule.radius) else {
             continue;
         };
         if hit.normal[1].abs() > 0.4 {
@@ -1880,7 +1900,7 @@ fn run_walk_test(mut walker: walk::Walker, speed: f32) {
         for s in [-0.5f32, 0.5] {
             let from = [chest[0] + side[0] * s, chest[1], chest[2] + side[2] * s];
             let to = [from[0] + dir[0] * reach, from[1], from[2] + dir[2] * reach];
-            match walker.world.sweep(from, to, walk::RADIUS) {
+            match walker.world.sweep(from, to, walker.capsule.radius) {
                 Some(near) => {
                     let d = (near.normal[0] - hit.normal[0]).abs()
                         + (near.normal[1] - hit.normal[1]).abs()
@@ -2001,9 +2021,9 @@ fn run_walk_test(mut walker: walk::Walker, speed: f32) {
 /// as walking through walls.
 fn run_wall_audit(mut walker: walk::Walker, speed: f32) {
     const STEP: f32 = 12.0;
-    const RADIUS: f32 = walk::RADIUS;
     const DT: f32 = 1.0 / 60.0;
     let (low, high) = walker.world.extent();
+    let capsule = walker.capsule;
     let mut points: Vec<[f32; 3]> = Vec::new();
     let mut x = low[0] + STEP * 0.5;
     while x < high[0] {
@@ -2013,17 +2033,29 @@ fn run_wall_audit(mut walker: walk::Walker, speed: f32) {
             while y > low[1] {
                 let from = [x, y, z];
                 let to = [x, y - 0.5, z];
-                match walker.world.sweep(from, to, RADIUS) {
+                match walker.world.sweep_capsule(
+                    from,
+                    to,
+                    ow_sim::walk::UPRIGHT,
+                    capsule.point_a,
+                    capsule.point_b,
+                    capsule.radius,
+                ) {
                     Some(hit) => {
                         let at = y - 0.5 * hit.fraction.clamp(0.0, 1.0);
                         y = at - 0.05;
                         if hit.normal[1] <= 0.9 {
                             continue;
                         }
-                        // Headroom: a 1.9 m person must fit.
-                        let head = walker
-                            .world
-                            .sweep([x, at + 0.1, z], [x, at + 1.9, z], RADIUS);
+                        // Headroom: the capsule must fit under whatever is above.
+                        let head = walker.world.sweep_capsule(
+                            [x, at + 0.1, z],
+                            [x, at + capsule.height() + 0.5, z],
+                            ow_sim::walk::UPRIGHT,
+                            capsule.point_a,
+                            capsule.point_b,
+                            capsule.radius,
+                        );
                         if head.is_some() {
                             continue;
                         }
@@ -2059,7 +2091,14 @@ fn run_wall_audit(mut walker: walk::Walker, speed: f32) {
             // A leg that starts inside a prop is not a walk: require the
             // body to have room in front of it before the first frame.
             let ahead = [point[0] + dir[0] * 0.6, point[1], point[2] + dir[2] * 0.6];
-            if let Some(hit) = walker.world.sweep(*point, ahead, RADIUS) {
+            if let Some(hit) = walker.world.sweep_capsule(
+                *point,
+                ahead,
+                ow_sim::walk::UPRIGHT,
+                capsule.point_a,
+                capsule.point_b,
+                capsule.radius,
+            ) {
                 if hit.fraction < 0.6 {
                     continue;
                 }
@@ -2072,12 +2111,18 @@ fn run_wall_audit(mut walker: walk::Walker, speed: f32) {
                 let before = walker.pos;
                 let step = walker.step(walk::wish_local(1.0, 0.0, speed), yaw, DT);
                 contacts += step.contacts;
+                // The tunnel check follows the character's **middle**, not its
+                // origin: the origin is at the feet, and a path along the feet
+                // runs on the floor.
+                let mid = capsule.centre_height();
+                let from = [before[0], before[1] + mid, before[2]];
+                let to = [step.pos[0], step.pos[1] + mid, step.pos[2]];
                 let crossed = walker
                     .world
-                    .sweep(before, step.pos, 0.0)
+                    .sweep(from, to, 0.0)
                     .is_some_and(|h| h.normal[1].abs() < 0.6 && h.fraction < 0.999);
                 if crossed {
-                    let h = walker.world.sweep(before, step.pos, 0.0).unwrap();
+                    let h = walker.world.sweep(from, to, 0.0).unwrap();
                     tunnels += 1;
                     if h.normal[1].abs() < 0.3 {
                         wall_tunnels += 1;
@@ -2106,7 +2151,12 @@ fn run_wall_audit(mut walker: walk::Walker, speed: f32) {
 /// the scene's own viewpoint. The map's own spawn selectors are unread, so the
 /// volume is the viewer's declared default; it is map data, not a guess at the
 /// client's rule.
-fn build_walker(scene: &scene::Scene, spawn: Option<[f32; 3]>) -> Result<walk::Walker, String> {
+fn build_walker(
+    scene: &scene::Scene,
+    spawn: Option<[f32; 3]>,
+    collision_source: CollisionSource,
+    capsule: Option<ow_sim::walk::Capsule>,
+) -> Result<walk::Walker, String> {
     use ow_tank::classreg::ClassRegistry;
     use ow_tank::keytable::Sources;
     use ow_tank::range_world::RangeWorld;
@@ -2137,8 +2187,12 @@ fn build_walker(scene: &scene::Scene, spawn: Option<[f32; 3]>) -> Result<walk::W
         }
         (None, None) => scene.eye.to_array(),
     };
-    let world = walk_world(&range)?;
-    Ok(walk::Walker::new(world, spawn))
+    let world = walk_world(&range, collision_source)?;
+    Ok(walk::Walker::new(
+        world,
+        spawn,
+        capsule.unwrap_or_else(walk::common_capsule),
+    ))
 }
 
 fn main() {
@@ -2366,10 +2420,32 @@ fn main() {
         };
         [at(1), at(2), at(3)]
     });
+    let collision_source = match args
+        .iter()
+        .position(|a| a == "--collision")
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
+    {
+        Some("level") => CollisionSource::Level,
+        Some("models") => CollisionSource::Models,
+        Some("both") => CollisionSource::Both,
+        other => {
+            if other.is_some() {
+                eprintln!("error: --collision takes level|models|both");
+                std::process::exit(1);
+            }
+            CollisionSource::Level
+        }
+    };
     let walker = if free_cam {
         None
     } else {
-        match build_walker(&scene, spawn_override) {
+        match build_walker(
+            &scene,
+            spawn_override,
+            collision_source,
+            pick.as_ref().and_then(|hero| hero.walk_capsule()),
+        ) {
             Ok(mut walker) => {
                 if let Some(terminal) = pick.as_ref().and_then(|hero| hero.terminal_fall()) {
                     walker.terminal_fall = terminal;

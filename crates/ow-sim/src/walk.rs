@@ -95,6 +95,10 @@ pub const WALKABLE_SLOPE: f32 = 0.7;
 /// The broadphase cell edge, metres.
 pub const CELL: f32 = 8.0;
 
+/// The upright identity quaternion: the query block's `+0x40` when the shape
+/// has no rotation of its own.
+pub const UPRIGHT: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
 fn put_quad(out: &mut [u8], offset: usize, quad: [f32; 4]) {
     for (lane, value) in quad.iter().enumerate() {
         out[offset + lane * 4..offset + lane * 4 + 4].copy_from_slice(&value.to_le_bytes());
@@ -368,7 +372,41 @@ impl World {
         b: [f32; 3],
         radius: f32,
     ) -> Option<Sweep> {
-        let block = query_block_capsule(start, end, rotation, radius, MESH_MASK);
+        self.sweep_capsule_block(start, end, rotation, a, b, radius, false)
+    }
+
+    /// The penetration contact for the **capsule** at `at`: the same leaf,
+    /// asked with the query block's **`+0x72`** byte set (the client's "hit
+    /// while already inside" flag) and a zero-length sweep.
+    ///
+    /// This is the capsule's answer to the question a moving sweep cannot
+    /// answer: *is the body overlapping anything?* The sphere's own form is
+    /// [`World::overlap`]; the flag and the rule are the same.
+    pub fn overlap_capsule(
+        &self,
+        at: [f32; 3],
+        rotation: [f32; 4],
+        a: [f32; 3],
+        b: [f32; 3],
+        radius: f32,
+    ) -> Option<Sweep> {
+        self.sweep_capsule_block(at, at, rotation, a, b, radius, true)
+    }
+
+    fn sweep_capsule_block(
+        &self,
+        start: [f32; 3],
+        end: [f32; 3],
+        rotation: [f32; 4],
+        a: [f32; 3],
+        b: [f32; 3],
+        radius: f32,
+        inside: bool,
+    ) -> Option<Sweep> {
+        let mut block = query_block_capsule(start, end, rotation, radius, MESH_MASK);
+        if inside {
+            block[0x72] = 1;
+        }
         let points = capsule_points(a, b);
         let view = self.view();
         let mut best: Option<Sweep> = None;
@@ -401,6 +439,95 @@ impl World {
         let down = [at[0], at[1] - reach, at[2]];
         let hit = self.sweep(at, down, radius)?;
         (hit.normal[1] > 0.5).then_some(hit)
+    }
+}
+
+/// The walk's original proxy: a sphere of `radius`.
+///
+/// The client sweeps the character's **capsule** ([`Capsule`]); the sphere is
+/// kept so the walk's own numbers stay pinned and so the two shapes can be
+/// compared on the same world.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sphere {
+    /// The sphere's radius, metres.
+    pub radius: f32,
+}
+
+/// The client's character capsule: a vertical capsule whose origin is at its
+/// **feet**.
+///
+/// `point_a` and `point_b` are the two sphere centres in the character's local
+/// frame and `radius` the sphere radius. `ow_tank::character_collision`'s
+/// `capsule_from_mover` is the client's construction of this shape and
+/// `ow_tank::entity::mover_capsule_of` reads a hero's own.
+///
+/// **The rotation is not carried.** The capsule is vertical and the character
+/// yaws, and a yaw about the up axis leaves a vertical capsule's two centres
+/// where they are, so the query block's quaternion (`+0x40`) is the identity
+/// ([`UPRIGHT`]). The leaf reads the block's quaternion to fold the support
+/// points into a hull (`sweep_bounds`), and for a vertical capsule that hull is
+/// the same under any yaw.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Capsule {
+    /// The lower sphere's centre: `r` above the capsule's origin.
+    pub point_a: [f32; 3],
+    /// The upper sphere's centre: `r + d` above the origin.
+    pub point_b: [f32; 3],
+    /// The sphere radius `r`.
+    pub radius: f32,
+}
+
+impl Capsule {
+    /// The capsule's total height, `2r + d`.
+    pub fn height(&self) -> f32 {
+        2.0 * self.radius + (self.point_b[1] - self.point_a[1])
+    }
+
+    /// The hull's centre height above the capsule's origin, `r + d/2`.
+    ///
+    /// The leaf folds the two centres into a hull whose centre is this far
+    /// above the origin, so this is the height a probe of the character's
+    /// middle has to sit at to test the capsule's cross-section.
+    pub fn centre_height(&self) -> f32 {
+        self.radius + 0.5 * (self.point_b[1] - self.point_a[1])
+    }
+}
+
+/// The shape the walk queries with.
+///
+/// The client sweeps the character's own collision shape; [`Sphere`] is the
+/// walk's proxy and [`Capsule`] is the client's.
+pub trait Collider {
+    /// The contact a sweep from `start` to `end` hits, if any.
+    fn sweep(&self, world: &World, start: [f32; 3], end: [f32; 3]) -> Option<Sweep>;
+
+    /// The contact the shape is **already inside** at `at`, if any.
+    ///
+    /// `skin` is the margin the query must exceed: the leaf calls a body
+    /// resting on a surface "already inside" (its convergence radius is the
+    /// expansion plus a margin, so a tangent centre converges and the `+0x72`
+    /// flag turns that into a contact), so a penetration test has to ask about
+    /// a depth **below** the resting distance.
+    fn overlap(&self, world: &World, at: [f32; 3], skin: f32) -> Option<Sweep>;
+}
+
+impl Collider for Sphere {
+    fn sweep(&self, world: &World, start: [f32; 3], end: [f32; 3]) -> Option<Sweep> {
+        world.sweep(start, end, self.radius)
+    }
+
+    fn overlap(&self, world: &World, at: [f32; 3], skin: f32) -> Option<Sweep> {
+        world.overlap(at, self.radius - skin)
+    }
+}
+
+impl Collider for Capsule {
+    fn sweep(&self, world: &World, start: [f32; 3], end: [f32; 3]) -> Option<Sweep> {
+        world.sweep_capsule(start, end, UPRIGHT, self.point_a, self.point_b, self.radius)
+    }
+
+    fn overlap(&self, world: &World, at: [f32; 3], skin: f32) -> Option<Sweep> {
+        world.overlap_capsule(at, UPRIGHT, self.point_a, self.point_b, self.radius - skin)
     }
 }
 
@@ -454,7 +581,7 @@ pub const DEPENETRATION_STEPS: usize = 4;
 /// margin, so a tangent centre converges and the `+0x72` flag turns that into a
 /// contact). A penetration test must therefore ask about a depth **below** the
 /// resting distance, or every floor contact would read as a penetration.
-fn depenetrate(world: &World, at: [f32; 3], radius: f32) -> ([f32; 3], Option<Sweep>) {
+fn depenetrate(world: &World, at: [f32; 3], collider: &impl Collider) -> ([f32; 3], Option<Sweep>) {
     let mut at = at;
     let mut last = None;
     // The depth is not reported, so the push doubles from the contact skin:
@@ -462,7 +589,7 @@ fn depenetrate(world: &World, at: [f32; 3], radius: f32) -> ([f32; 3], Option<Sw
     // penetration (the common case) still costs one.
     let mut step = CONTACT_SKIN;
     for _ in 0..DEPENETRATION_STEPS {
-        let Some(hit) = world.overlap(at, radius - CONTACT_SKIN) else {
+        let Some(hit) = collider.overlap(world, at, CONTACT_SKIN) else {
             break;
         };
         // A wall's push is horizontal, for the same reason the slide's re-seat
@@ -513,8 +640,35 @@ fn depenetrate(world: &World, at: [f32; 3], radius: f32) -> ([f32; 3], Option<Sw
 /// Domino pair list, it does not sweep. The stage stays open in
 /// `docs/open-questions.md`.
 pub fn advance(world: &World, pos: [f32; 3], delta: [f32; 3], radius: f32) -> Advanced {
+    advance_with(world, pos, delta, &Sphere { radius })
+}
+
+/// Advance `pos` by `delta` with the client's **capsule**, resolving contacts.
+///
+/// This is [`advance`] with the shape the client actually sweeps
+/// ([`Capsule`]): every rule - the fold, the depenetration, the re-seat and
+/// the slide - is the same, and only the query's shape differs.
+///
+/// `pos` is the capsule's **origin**, which is at its feet, so the resolved
+/// position is the character's origin too.
+pub fn advance_capsule(
+    world: &World,
+    pos: [f32; 3],
+    delta: [f32; 3],
+    capsule: &Capsule,
+) -> Advanced {
+    advance_with(world, pos, delta, capsule)
+}
+
+/// The shared body of [`advance`] and [`advance_capsule`].
+fn advance_with(
+    world: &World,
+    pos: [f32; 3],
+    delta: [f32; 3],
+    collider: &impl Collider,
+) -> Advanced {
     let requested = length(delta);
-    let mut at = depenetrate(world, pos, radius).0;
+    let mut at = depenetrate(world, pos, collider).0;
     let mut remaining = delta;
     let mut contact = None;
     let mut contact_shape = None;
@@ -525,13 +679,13 @@ pub fn advance(world: &World, pos: [f32; 3], delta: [f32; 3], radius: f32) -> Ad
             break;
         }
         let target = add(at, remaining);
-        let Some(hit) = world.sweep(at, target, radius) else {
+        let Some(hit) = collider.sweep(world, at, target) else {
             // The start is on or inside a surface, so the moving sweep could
             // not see what is ahead - the state a corner leaves the body in.
             // Move, then resolve the overlaps: the body lands on the wall
             // instead of passing through it, and a rising slope still carries
             // it (the push is along the slope's own normal).
-            let (resolved, overlap) = depenetrate(world, target, radius);
+            let (resolved, overlap) = depenetrate(world, target, collider);
             if let Some(overlap) = overlap {
                 contacts += 1;
                 contact = Some(overlap.normal);
@@ -577,7 +731,7 @@ pub fn advance(world: &World, pos: [f32; 3], delta: [f32; 3], radius: f32) -> Ad
         // along the first one into it, so resolve any overlap before the next
         // sweep (and before the residual is composed, which assumes the start
         // is clear).
-        at = depenetrate(world, at, radius).0;
+        at = depenetrate(world, at, collider).0;
         let rest = mul(remaining, 1.0 - f);
         let into = dot(rest, hit.normal);
         remaining = sub(rest, mul(hit.normal, into));
@@ -618,6 +772,43 @@ pub fn snap_to_floor(world: &World, pos: [f32; 3], radius: f32, reach: f32) -> O
     // floor follower's. Lifting here is what let a walk climb a wall: the
     // practice range's bevels report up normals and each frame raised the body
     // another few centimetres until it went over the top.
+    if y > pos[1] {
+        return None;
+    }
+    Some([pos[0], y, pos[2]])
+}
+
+/// Snap a step's vertical **down** to the floor with the client's capsule.
+///
+/// This is [`snap_to_floor`] with the shape the client sweeps: the capsule's
+/// **feet** are its origin, so the floor's height is where the origin stops,
+/// not where a sphere's centre would rest a radius above it.
+///
+/// `pos` is the capsule's origin (at the feet) and the answer is the origin's
+/// new height.
+pub fn snap_to_floor_capsule(
+    world: &World,
+    pos: [f32; 3],
+    capsule: &Capsule,
+    reach: f32,
+) -> Option<[f32; 3]> {
+    let down = [pos[0], pos[1] - reach, pos[2]];
+    let hit = world.sweep_capsule(
+        pos,
+        down,
+        UPRIGHT,
+        capsule.point_a,
+        capsule.point_b,
+        capsule.radius,
+    )?;
+    if hit.normal[1] <= 0.5 {
+        return None;
+    }
+    let y = pos[1] - reach * hit.fraction.clamp(0.0, 1.0);
+    if (y - pos[1]).abs() > reach {
+        return None;
+    }
+    // Only down, for the reason `snap_to_floor` gives.
     if y > pos[1] {
         return None;
     }
@@ -680,7 +871,7 @@ mod tests {
 
     /// A blob with one leaf node and two triangles, in the client's record
     /// layout: nodes `0x20` stride, points `0x10`, triangles `0x20`.
-    fn place_quad(vertices: &[[f32; 4]], triangles: &[[i32; 3]], at: [f32; 3]) -> World {
+    pub(crate) fn place_quad(vertices: &[[f32; 4]], triangles: &[[i32; 3]], at: [f32; 3]) -> World {
         place_quad_rotated(vertices, triangles, at, [0.0, 0.0, 0.0, 1.0])
     }
 
@@ -1251,5 +1442,84 @@ mod capsule_tests {
             .sweep_capsule(start, end, UPRIGHT, [0.0, 0.5, 0.0], [0.0, 1.0, 0.0], 0.5)
             .expect("the capsule meets the sill");
         assert!(capsule.fraction < 0.9, "{}", capsule.fraction);
+    }
+
+    /// The install's common capsule: `r = 0.5`, height `1.5`, so the segment
+    /// is `0.5` and the hull's centre is `0.75` above the feet.
+    ///
+    /// This is the shape `ow_tank::character_collision::capsule_from_mover`
+    /// builds for the common hero (`extent 2.0`, `radius 0.5`, `offset 0.5`).
+    fn common_capsule() -> Capsule {
+        Capsule {
+            point_a: [0.0, 0.5, 0.0],
+            point_b: [0.0, 1.0, 0.0],
+            radius: 0.5,
+        }
+    }
+
+    /// The capsule's **origin** is at its feet, so a body standing on a floor
+    /// is at the floor's height - not a radius above it, the way a sphere's
+    /// centre rests.
+    #[test]
+    fn the_capsule_origin_rests_on_the_floor() {
+        let world = plane(0.0, true);
+        let capsule = common_capsule();
+        // Start above the floor and drop past it: the feet stop on the floor
+        // while the drop still has room, so the contact is a real one.
+        let out = advance_capsule(&world, [0.0, 1.0, 0.0], [0.0, -1.5, 0.0], &capsule);
+        assert!(out.grounded, "{out:?}");
+        assert!(
+            (out.pos[1] - 0.0).abs() < 1e-2,
+            "the feet rest on the floor, not a radius above it: {out:?}"
+        );
+    }
+
+    /// The sphere's answer on the same floor: its **centre** rests a radius
+    /// above the floor. The two shapes put the body at different heights, and
+    /// that difference is the reason the capsule cannot be swapped for the
+    /// sphere proxy.
+    #[test]
+    fn the_sphere_origin_rests_a_radius_above_the_floor() {
+        let world = plane(0.0, true);
+        let out = advance(&world, [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], 0.5);
+        assert!(out.grounded, "{out:?}");
+        assert!(
+            (out.pos[1] - 0.5).abs() < 1e-2,
+            "the sphere's centre rests a radius above the floor: {out:?}"
+        );
+    }
+
+    /// The capsule's floor probe answers with the **origin's** height, because
+    /// the origin is at the feet.
+    #[test]
+    fn the_capsule_floor_probe_answers_with_the_feet() {
+        let world = plane(0.0, true);
+        let capsule = common_capsule();
+        let snapped = snap_to_floor_capsule(&world, [0.0, 0.5, 0.0], &capsule, 1.0)
+            .expect("a floor within reach");
+        assert!(
+            (snapped[1] - 0.0).abs() < 1e-2,
+            "the feet land on the floor: {snapped:?}"
+        );
+        assert_eq!(
+            snap_to_floor_capsule(&world, [0.0, 0.5, 0.0], &capsule, 0.1),
+            None,
+            "a floor out of reach is not a floor"
+        );
+    }
+
+    /// The capsule's own width is the client's: a wall stops the capsule a
+    /// radius further out than the same wall stops the sphere proxy, because
+    /// the capsule's radius is `0.5` and not `0.35`.
+    #[test]
+    fn the_capsule_stops_a_radius_further_out() {
+        let world = wall_from(-1.0);
+        let capsule = common_capsule();
+        let out = advance_capsule(&world, [0.0, 0.0, 0.0], [3.0, 0.0, 0.0], &capsule);
+        assert!(out.contacts > 0, "{out:?}");
+        assert!(
+            out.pos[0] < 2.0 - 0.5,
+            "the capsule stops a radius short of the wall: {out:?}"
+        );
     }
 }

@@ -61,9 +61,27 @@ The layout in `shader.rs` (108-byte header, then optional tables) is a port of
 the reference reader and is **not tested against real data**. This build does
 not merely lack assets: it registers no loader for the type. The asset-type job
 table at `0x143a7c3a0` maps type `0x085` (group) to job 23 and `0x087` (code) to
-25, and type `0x086` to **0** — no job — while the registry holds zero type-`0x086`
+25, and type `0x086` to **0** - no job - while the registry holds zero type-`0x086`
 assets. The module's synthetic tests pin the read order and gating, nothing
 more.
+
+The job table is now read too (`docs/formats/asset-types.md` section 1b), so
+the loaders behind those jobs are known:
+
+| job | types | load | release |
+|---|---|---|---|
+| 23 | `0x085` (group), `0x088` (source) | `0x141e73f30` | `0x141e73eb0` |
+| 24 | `0x040` (`SHADER REFLECTION DATA`) | `0x141e74360` | `0x141e74300` |
+| 25 | `0x087` (`SHADER CODE`) | `0x141e73a80` | `0x141e73a10` |
+
+The client's own names for them are read as well (section 1c of that
+document): `SHADER CODE` is type `0x087`, `SHADER REFLECTION DATA` is type
+`0x040`, and `SHADER GROUP` is the third name in the same registration
+function - its type id is not resolved, though job 23 serves `0x085` and
+`0x088`.
+
+Neither loader is read: the group's load path and the code blob's are the
+open part of this document.
 
 ## Open
 

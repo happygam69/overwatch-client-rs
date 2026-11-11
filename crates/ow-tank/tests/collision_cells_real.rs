@@ -116,6 +116,54 @@ fn the_practice_range_collision_chunk_parses_as_220_cells() {
     );
 }
 
+/// The client's header fixup (`MapChunkHeaderFixup`, `0x142e49360`) converts
+/// the pathing chunk's header record before the STUD loader runs, so the
+/// record's first slot must become the blob's pointer - which is the same
+/// `0x20` the reader above uses as the blob's offset.
+#[test]
+fn the_header_fixup_turns_the_chunk_s_first_slot_into_the_blob_pointer() {
+    let Some(data) = open() else {
+        return;
+    };
+    let bytes = data
+        .open_asset(PRACTICE_COLLISION)
+        .expect("the practice range's collision chunk opens");
+
+    const BASE: u64 = 0x1_0000;
+    let mut header = bytes[..0x20].to_vec();
+    ow_tank::chunkkind::fixup_header_in_place(&mut header, BASE).unwrap();
+    let slot = |at: usize| u64::from_le_bytes(header[at..at + 8].try_into().unwrap());
+
+    // The three slots the client converts, and the one it leaves alone.
+    assert_eq!(slot(0x00), BASE + 0x20, "the blob's pointer");
+    assert_eq!(slot(0x08), BASE + 0x862720, "the second blob's pointer");
+    assert_eq!(slot(0x18), BASE + 0x862878, "the third slot's pointer");
+    assert_eq!(
+        slot(0x10),
+        u64::from_le_bytes(bytes[0x10..0x18].try_into().unwrap()),
+        "the client does not touch +0x10"
+    );
+    // The second and third slots name the two blobs at the very end of the
+    // chunk (0x862720 and 0x862878, inside the 0x8628C0-byte payload, just
+    // past the cells), and the fixup converts them like the first.
+    eprintln!(
+        "header slots: blob {:#x}, second {:#x}, third {:#x}, chunk {:#x}",
+        slot(0x00),
+        slot(0x08),
+        slot(0x18),
+        bytes.len()
+    );
+    assert!(
+        0x862720 < bytes.len(),
+        "the second blob is inside the chunk"
+    );
+    assert!(0x862878 < bytes.len(), "the third blob is inside the chunk");
+    assert!(
+        slot(0x08) - BASE > 0x862700,
+        "the second blob is past the cells, which stop at 0x862700"
+    );
+}
+
 /// The component's three array fields tile the blob exactly, so each element
 /// stride follows from the tiling. Values are the practice payload's; the cell
 /// table is the field `MapChunkCellBytesFixup` rewrites.

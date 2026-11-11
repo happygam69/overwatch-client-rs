@@ -13,6 +13,14 @@ the next; the order is deliberate.
 
 A unit is `verified` only when all five pass. `inconclusive` is not a pass.
 
+A unit without an `argFactory` can set `options.autoCorpus`: when the branch
+coverage measured on the compared runs is still under the gate after the base
+corpus, the runner compares more draws from the same deterministic (seed, i)
+sequence until the gate is met or the corpus cap is reached (stage 3's growth
+loop). Growth only adds compared cases - it cannot mask a divergence, weaken
+a gate, or replace a fixture - and the realized corpus is recorded in the
+ledger entry (digest + case count) for audit.
+
 `run_and_record(..., use_cache=True)` replays a ledger entry instead of
 re-running the stages when every digest the ledger binds is unchanged (see
 `_fresh_cached_entry`); the stages themselves are never skipped inside a run.
@@ -28,6 +36,7 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -89,9 +98,54 @@ SHIM_PATH = os.path.join(os.path.dirname(__file__), "ghidra_shim.h")
 DEFAULT_MUTATION_CALL_TIMEOUT = 10.0
 # The pinned mutation corpus: the first 48 cases (declared specials first,
 # then the focused edges). Do not lengthen - a mutant only has to be caught
-# once.
+# once. The one exception is a grown corpus (autoCorpus): the growth tail is
+# appended to the mutation corpus, because a mutant can be distinguishable
+# only on a branch a grown case uncovered, which the corpus head never sees.
 MUTATION_CORPUS_CASES = 48
 DEFAULT_MUTANT_JOBS = 4
+
+# How many mutation sites the stale-declaration check scans. A unit probes
+# `options.mutationCount` of them, but a declaration may name a site past
+# that window (it is then inert, not wrong), so the check looks at every
+# site the mutator can produce in the entry function.
+MUTATION_SITE_SCAN = 4096
+
+
+def _declares(eq: Dict[str, Any], m: Any) -> bool:
+    """Does a `knownEquivalentMutants` entry name this mutant?
+
+    The kind and the line are the key. A line can carry two mutants of the
+    same kind (a decimal and a hex constant each get a boundary shift), so a
+    declaration may add the mutated text to pick one of them; without it the
+    declaration covers every mutant of that kind on that line.
+    """
+    if eq.get("kind") != m.kind or eq.get("line") != m.line:
+        return False
+    want = eq.get("mutated")
+    return not want or want == getattr(m, "mutated", "")
+
+
+def _decl_key(decls: Sequence[Dict[str, Any]]) -> List[Tuple[Any, Any, Any]]:
+    """The part of a declaration that decides which mutants are skipped.
+
+    The rationale is prose and is not part of the key: re-wording a
+    rationale does not change what the mutation stage skips, so it does not
+    invalidate a verdict. Which mutants are skipped does.
+    """
+    return sorted(
+        (d.get("kind"), d.get("line"), d.get("mutated") or "")
+        for d in decls
+    )
+
+# Coverage-guided corpus growth (`options.autoCorpus`, fixture-less units).
+# The base corpus is the focused edge pool plus `iterations` seeded draws;
+# when the branch coverage measured on those very runs is still under the
+# gate, more draws from the same deterministic sequence are compared until
+# the gate is met or `cap` cases exist in total. Growth only runs after the
+# base corpus agreed on every channel, so it cannot mask a divergence, and
+# the coverage it measures is the runs themselves, so it cannot inflate it.
+DEFAULT_CORPUS_CAP = 1200
+DEFAULT_CORPUS_STEP = 50
 
 # Unit descriptor keys this harness understands. A typo'd key ("argfactory",
 # "candidateLoader ":"rust ") would otherwise be silently ignored and the
@@ -106,6 +160,7 @@ _KNOWN_ARG_KEYS = {"name", "kind", "ptr_len"}
 _KNOWN_OPTION_KEYS = {
     "iterations", "coverageThreshold", "mutationCount", "mutationKillRate",
     "seed", "allowedImageReads", "unreachableBranches", "mutationCallTimeout",
+    "autoCorpus",
     # Rebuild the emulator for every corpus case. A callee that leaves state
     # behind (an allocator the arena reset does not restore, say) then cannot
     # make one case's answer depend on the previous one. Slower, and only for
@@ -316,6 +371,13 @@ def _fresh_cached_entry(unit: Unit) -> Optional[LedgerEntry]:
     cref = _candidate_ref(unit)
     prev = load_ledger().get(unit.id)
     if prev is None or prev.status != "verified":
+        return None
+    # The declarations decide which mutants the mutation stage skips, so a
+    # verdict produced under different declarations is not this unit's
+    # verdict. (They also rot silently: a declaration that no longer names
+    # a live site stops skipping anything, the equivalent mutant survives
+    # and the kill rate drops - fn/Salsa20Xor, 2026-11-19.)
+    if _decl_key(prev.equivalent_mutants) != _decl_key(unit.known_equivalent_mutants):
         return None
     if (
         check_entry(prev, oracle_sha, cref.sha, _options_sha(unit), _args_sha(unit))
@@ -638,6 +700,171 @@ def _read_allowed(unit: Unit, addr: int, size: int = 1) -> bool:
     return any(lo <= addr and addr + size - 1 <= hi for lo, hi in unit.allowed_read_ranges)
 
 
+# How many times the batch build may be rebuilt after the compiler rejected
+# an arm. Each round drops the arms the compiler named; a unit whose mutants
+# all compile needs one round.
+BATCH_BUILD_ROUNDS = 6
+
+
+def _batch_enabled() -> bool:
+    """Is the batch build on?
+
+    It is on by default: one crate build for a unit's whole mutant set
+    instead of one per mutant. `VERIFY_NO_BATCH=1` turns it off, which is
+    the escape hatch for a crate whose build refuses the generated dispatch
+    and the way to A/B the two paths against each other.
+    """
+    return os.environ.get("VERIFY_NO_BATCH", "") == ""
+
+
+def _build_batch(
+    unit: Unit,
+    cref: Any,
+    cand_path: str,
+    base_src: str,
+    active: List[Any],
+):
+    """Compile a unit's whole mutant set in ONE crate build.
+
+    Every mutant becomes a dispatch arm inside the function under test
+    (`batch.py`); the harness picks the arm at run time with an environment
+    variable. A mutant whose code does not compile takes the whole batch down
+    with it - the compiler names the line, the line names the arm, and that
+    arm is dropped and the batch rebuilt. When the error cannot be
+    attributed to an arm, or the batch still does not build, the caller
+    falls back to one build per mutant.
+
+    Returns `(exe, work_dir, {position: arm index}, {position: build error})`.
+    `exe` is None when the batch is not usable.
+    """
+    from batch import error_lines, plan_batch
+    from candidate_rust import RustCandidate, mutation_entry
+
+    base_dir = os.path.dirname(cand_path) or "."
+    # The mutation entry is the function the mutator edits, which is not
+    # always the probe's entry name (the probe's entry is a wrapper).
+    entry = mutation_entry(unit.entry) if unit.candidate_loader == "cargo" else unit.entry
+    remaining = list(active)
+    arm_of: Dict[int, int] = {}
+    broken: Dict[int, str] = {}
+    pos_of = {id(m): pos for pos, m in enumerate(active)}
+    work = ""
+    for _round in range(BATCH_BUILD_ROUNDS):
+        plan = plan_batch(base_src, entry, remaining, base_dir)
+        if plan is None:
+            return None, "", {}, {}
+        work = tempfile.mkdtemp(prefix="batch_")
+        try:
+            builder = RustCandidate(
+                entry=unit.entry,
+                arg_kinds=[
+                    a.kind if a.kind != "ptr" else "ptr" for a in unit.args
+                ],
+                ret_kind=unit.ret_kind,
+                work_dir=work,
+                source_override=plan.source,
+                source_path=cand_path,
+                loader="cargo",
+                state_base=unit.state.base if unit.state is not None else None,
+                state_bytes=unit.state.data if unit.state is not None else None,
+                crate_dir=cref.crate_dir,
+                cargo_probe=cref.probe,
+                start_process=False,
+            )
+            exe = builder.exe
+        except RuntimeError as e:
+            msg = str(e)
+            lines = error_lines(msg)
+            dropped = set()
+            for arm in plan.arms:
+                if any(arm.line_start <= ln <= arm.line_end for ln in lines):
+                    dropped.add(id(arm.mutant))
+            if not dropped:
+                shutil.rmtree(work, ignore_errors=True)
+                return None, "", {}, {}
+            for pos, m in enumerate(active):
+                if id(m) in dropped:
+                    broken[pos] = msg
+            remaining = [m for m in remaining if id(m) not in dropped]
+            shutil.rmtree(work, ignore_errors=True)
+            work = ""
+            continue
+        for arm in plan.arms:
+            pos = pos_of.get(id(arm.mutant))
+            if pos is not None:
+                arm_of[pos] = arm.index
+        return exe, work, arm_of, broken
+    shutil.rmtree(work, ignore_errors=True)
+    return None, "", {}, {}
+
+
+def _batch_matches_baseline(
+    unit: Unit,
+    cref: Any,
+    batch_exe: str,
+    mutation_oracle: List[Tuple[Any, Any]],
+) -> bool:
+    """Does the batch binary, with no arm selected, behave like the baseline?
+
+    The batch's default arm is the original body, so a batch binary with no
+    `OW_MUTANT_INDEX` set must answer exactly what the unmutated candidate
+    answers. If it does not, the batch generation is not faithful and the
+    unit falls back to one build per mutant - the batch is an optimisation,
+    never a change of what is measured.
+    """
+    if not mutation_oracle:
+        return True
+    from candidate_rust import RustCandidate
+
+    work = tempfile.mkdtemp(prefix="batch_check_")
+    probe = None
+    try:
+        probe = RustCandidate(
+            entry=unit.entry,
+            arg_kinds=[
+                a.kind if a.kind != "ptr" else "ptr" for a in unit.args
+            ],
+            ret_kind=unit.ret_kind,
+            work_dir=work,
+            prebuilt_exe=batch_exe,
+            loader="cargo",
+            state_base=unit.state.base if unit.state is not None else None,
+            state_bytes=unit.state.data if unit.state is not None else None,
+            crate_dir=cref.crate_dir,
+            cargo_probe=cref.probe,
+        )
+        args, o = mutation_oracle[0]
+        c = probe.call(args)
+        if not c.ok:
+            return False
+        if unit.ret_kind != "void" and not _bits_equal(
+            o.ret_bits, c.ret_bits, unit.ret_kind
+        ):
+            return False
+        if _mem_channel(o.pointee_after, c.pointee_after, args) is not None:
+            return False
+        if (
+            _state_channel(
+                getattr(o, "state_after", None),
+                getattr(c, "state_after", None),
+                unit,
+                args,
+            )
+            is not None
+        ):
+            return False
+        return True
+    except Exception:
+        return False
+    finally:
+        if probe is not None:
+            try:
+                probe.close()
+            except Exception:
+                pass
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def run_unit(
     unit: Unit,
     work_dir: Optional[str] = None,
@@ -675,8 +902,50 @@ def run_unit(
             f"unit {unit.id}: mutationCallTimeout must be positive, "
             f"got {mutation_call_timeout!r}"
         )
+    # Coverage-guided corpus growth. `autoCorpus` is true/false or a dict
+    # {"cap": int, "step": int}; either form lands in the options digest,
+    # so editing it stales the verdict like any other option. It only applies
+    # to units without an argFactory - a factory's corpus is the fixture's
+    # claim, and growing past it would silently rewrite that claim.
+    auto_raw = opts.get("autoCorpus", False)
+    if isinstance(auto_raw, bool):
+        auto_corpus = auto_raw
+        corpus_cap = DEFAULT_CORPUS_CAP
+        corpus_step = DEFAULT_CORPUS_STEP
+    elif isinstance(auto_raw, dict):
+        bad = sorted(set(auto_raw) - {"cap", "step"})
+        if bad:
+            raise ValueError(
+                f"unit {unit.id}: unknown autoCorpus keys {bad} "
+                "(expected cap/step)"
+            )
+        auto_corpus = True
+        corpus_cap = int(auto_raw.get("cap", DEFAULT_CORPUS_CAP))
+        corpus_step = int(auto_raw.get("step", DEFAULT_CORPUS_STEP))
+    else:
+        raise ValueError(
+            f"unit {unit.id}: autoCorpus must be true/false or {{cap, step}}, "
+            f"got {auto_raw!r}"
+        )
+    if auto_corpus and (corpus_cap < 1 or corpus_step < 1):
+        raise ValueError(
+            f"unit {unit.id}: autoCorpus cap and step must be positive "
+            f"(got cap {corpus_cap}, step {corpus_step})"
+        )
+    if auto_corpus and unit.arg_factory is not None:
+        _warn(f"unit {unit.id}: autoCorpus ignored - the argFactory defines the corpus")
+        auto_corpus = False
 
     oracle_sha = "unloaded"
+    # The realized corpus, recorded in the ledger once stage 3 has finished
+    # comparing (base + any growth). Empty until then: an early exit never
+    # reached a final corpus. This is an audit fingerprint, not a freshness
+    # input - the corpus is a deterministic function of what the ledger
+    # already binds (the args surface, the options incl. seed/iterations/
+    # cap/step, the oracle window, the harness version), which is why a
+    # fresh replay is still the verdict the same digests produced.
+    corpus_sha = ""
+    corpus_n = 0
     # The candidate artifact the ledger binds to: the decompile for tier 1,
     # the probe source for tier 2 rustc, the crate function source + crate
     # revision for the shipped cargo probe. One place computes this (also
@@ -703,8 +972,23 @@ def run_unit(
             notes=list(unit.notes) + list(kw_notes),
             candidate_sources=list(cref.sources),
             crate_rev=cref.crate_rev,
+            corpus_sha256=corpus_sha,
+            corpus_cases=corpus_n,
             **kw,
         )
+
+    # Each stage reports its own wall time. The harness's cost is not
+    # uniform: a cargo unit's mutation stage is dominated by crate builds,
+    # a tier-1 unit's by the C compiler, and both by nothing at all when
+    # the ledger replays the verdict. Without the numbers, "make it quick"
+    # is a guess.
+    _stage_t0 = time.perf_counter()
+
+    def _stage_done(name: str) -> None:
+        nonlocal _stage_t0
+        now = time.perf_counter()
+        log(f"  [{name}] {now - _stage_t0:.1f}s")
+        _stage_t0 = now
 
     # ---- Stage 1: load ----------------------------------------------------
     log(f"[1/5] load {unit.id}")
@@ -809,6 +1093,7 @@ def run_unit(
 
     try:
         # ---- Stage 2: determinism ----------------------------------------
+        _stage_done("load")
         log("[2/5] determinism")
         if factory is not None:
             det_args = factory(0)
@@ -840,11 +1125,19 @@ def run_unit(
         log("  ok")
 
         # ---- Stage 3: differential ---------------------------------------
-        log(f"[3/5] differential ({iterations} iterations + edge pool)")
+        if auto_corpus:
+            _stage_done("determinism")
+            log(
+                f"[3/5] differential ({iterations} draws + edge pool, "
+                f"autoCorpus cap {corpus_cap})"
+            )
+        else:
+            log(f"[3/5] differential ({iterations} iterations + edge pool)")
         divergences: List[Divergence] = []
         undeclared_reads: List[Tuple[int, int]] = []
         undeclared_writes: List[Tuple[int, int]] = []
         corpus_args: List[List[ArgSpec]] = []
+        hard_fail: Optional[str] = None
 
         if factory is not None:
             # A structured unit's inputs come only from its factory; the generic
@@ -864,67 +1157,79 @@ def run_unit(
         # Compiler literal-pool constants the unit has declared (and the
         # decompile already inlined). A read of one of these is not
         # undeclared global state: the candidate hardcodes the same value.
-        try:
-            for idx, args in enumerate(cases):
-                tracker.begin_call()
-                if fresh_oracle:
-                    call_oracle = EmuOracle(unit.image, base=unit.base)
-                    if unit.state is not None:
-                        call_oracle.set_state(unit.state.base, unit.state.data)
-                    tracker.attach(call_oracle)
-                    o = call_oracle.call(
-                        unit.address_v2b,
-                        args,
-                        ret_kind=unit.ret_kind,
-                        start_regs=unit.start_regs or {},
-                    )
-                else:
-                    o = _oracle_call_cached(
-                        oracle, unit.address_v2b, args, unit.ret_kind, cache, unit.start_regs
-                    )
-                if not o.ok:
-                    log(f"  FAIL: oracle fault at iteration {idx}: {o.fault}")
-                    return entry("inconclusive", notes=[f"oracle fault at {idx}: {o.fault}"])
-                if o.reads_outside:
-                    undeclared_reads.extend(
-                        r for r in o.reads_outside if not _read_allowed(unit, r[0], r[1])
-                    )
-                if o.out_of_arena_writes:
-                    undeclared_writes.extend(o.out_of_arena_writes)
 
-                c = candidate.call(args)
-                if not c.ok:
+        def _run_case(idx: int, args: List[ArgSpec]) -> bool:
+            """Compare one case on every channel. Returns False when the
+            caller must stop (the divergence cap is hit, or the oracle faulted
+            via `hard_fail`). The base corpus and every growth batch run
+            through this same body, so a grown case is compared exactly like
+            a base case: the same channels, the same undeclared-access
+            accounting, the same counterexample format."""
+            nonlocal hard_fail
+            tracker.begin_call()
+            if fresh_oracle:
+                call_oracle = EmuOracle(unit.image, base=unit.base)
+                if unit.state is not None:
+                    call_oracle.set_state(unit.state.base, unit.state.data)
+                tracker.attach(call_oracle)
+                o = call_oracle.call(
+                    unit.address_v2b,
+                    args,
+                    ret_kind=unit.ret_kind,
+                    start_regs=unit.start_regs or {},
+                )
+            else:
+                o = _oracle_call_cached(
+                    oracle, unit.address_v2b, args, unit.ret_kind, cache, unit.start_regs
+                )
+            if not o.ok:
+                hard_fail = f"oracle fault at {idx}: {o.fault}"
+                return False
+            if o.reads_outside:
+                undeclared_reads.extend(
+                    r for r in o.reads_outside if not _read_allowed(unit, r[0], r[1])
+                )
+            if o.out_of_arena_writes:
+                undeclared_writes.extend(o.out_of_arena_writes)
+
+            c = candidate.call(args)
+            if not c.ok:
+                divergences.append(
+                    Divergence(idx, "fault", "ok", f"candidate fault: {c.fault}")
+                )
+            else:
+                if unit.ret_kind != "void" and not _bits_equal(
+                    o.ret_bits, c.ret_bits, unit.ret_kind
+                ):
                     divergences.append(
-                        Divergence(idx, "fault", "ok", f"candidate fault: {c.fault}")
-                    )
-                else:
-                    if unit.ret_kind != "void" and not _bits_equal(
-                        o.ret_bits, c.ret_bits, unit.ret_kind
-                    ):
-                        divergences.append(
-                            Divergence(
-                                idx,
-                                "ret",
-                                f"{o.ret_bits:#x} ({_fmt_ret(o.ret_bits, unit.ret_kind)})",
-                                f"{c.ret_bits:#x} ({_fmt_ret(c.ret_bits, unit.ret_kind)})",
-                            )
+                        Divergence(
+                            idx,
+                            "ret",
+                            f"{o.ret_bits:#x} ({_fmt_ret(o.ret_bits, unit.ret_kind)})",
+                            f"{c.ret_bits:#x} ({_fmt_ret(c.ret_bits, unit.ret_kind)})",
                         )
-                    mem = _mem_channel(o.pointee_after, c.pointee_after, args)
-                    if mem is not None:
-                        divergences.append(Divergence(idx, "mem", mem[0], mem[1], mem[2]))
-                    st = _state_channel(
-                        getattr(o, "state_after", None),
-                        getattr(c, "state_after", None),
-                        unit,
-                        args,
                     )
-                    if st is not None:
-                        divergences.append(Divergence(idx, "state", st[0], st[1], st[2]))
-                corpus_args.append(args)
-                if len(divergences) >= 3:
-                    # Enough counterexamples to act on; stop.
-                    break
+                mem = _mem_channel(o.pointee_after, c.pointee_after, args)
+                if mem is not None:
+                    divergences.append(Divergence(idx, "mem", mem[0], mem[1], mem[2]))
+                st = _state_channel(
+                    getattr(o, "state_after", None),
+                    getattr(c, "state_after", None),
+                    unit,
+                    args,
+                )
+                if st is not None:
+                    divergences.append(Divergence(idx, "state", st[0], st[1], st[2]))
+            corpus_args.append(args)
+            return len(divergences) < 3
 
+        def _post_cases_check() -> Optional[LedgerEntry]:
+            """The checks after a compared batch: an oracle fault, undeclared
+            accesses, divergences. Returns the entry to return, or None when
+            the ladder continues."""
+            if hard_fail:
+                log(f"  FAIL: {hard_fail}")
+                return entry("inconclusive", notes=[hard_fail])
             if undeclared_reads:
                 uniq = sorted(set(undeclared_reads))[:8]
                 msg = (
@@ -942,7 +1247,6 @@ def run_unit(
                 )
                 log(f"  INCONCLUSIVE: {msg}")
                 return entry("inconclusive", notes=[msg])
-
             if divergences:
                 log(f"  DIVERGENT: {len(divergences)} channel disagreements")
                 for d in divergences[:5]:
@@ -953,9 +1257,79 @@ def run_unit(
                     "divergent",
                     divergences=[d.__dict__ for d in divergences],
                 )
+            return None
+
+        try:
+            for idx, args in enumerate(cases):
+                if not _run_case(idx, args):
+                    break
+            early = _post_cases_check()
+            if early is not None:
+                return early
+
+            # ---- Stage 3b: coverage-guided growth (autoCorpus) -----------
+            # Growth only adds compared cases, and only after the base corpus
+            # agreed on every channel - it cannot mask a divergence. The
+            # draws continue the same deterministic (seed, i) sequence the
+            # base corpus used, so the realized corpus stays a function of
+            # the digests the ledger already binds. A batch that diverges or
+            # faults ends growth; the checks above then report it exactly as
+            # they would have for the base corpus.
+            grown = 0
+            base_case_count = len(cases)
+            if auto_corpus and factory is None:
+                next_i = iterations
+                while True:
+                    probe = tracker.result(unreachable=unit.unreachable_branches)
+                    if probe.invalid_declarations:
+                        break  # stage 4 reports the invalid declaration
+                    if probe.coverage >= cov_gate:
+                        break
+                    if len(cases) >= corpus_cap:
+                        log(
+                            f"  growth: cap {corpus_cap} reached at branch "
+                            f"coverage {probe.coverage:.1f}%; stage 4 decides"
+                        )
+                        break
+                    log(
+                        f"  growth: branch coverage {probe.coverage:.1f}% < gate "
+                        f"{cov_gate:.1f}% at {len(cases)} cases; drawing "
+                        f"{corpus_step} more"
+                    )
+                    batch: List[List[ArgSpec]] = []
+                    target = min(corpus_cap, len(cases) + corpus_step)
+                    while len(cases) + len(batch) < target:
+                        batch.append(generate_args(unit.args, seed, next_i))
+                        next_i += 1
+                    stop = False
+                    for args in batch:
+                        cases.append(args)
+                        if not _run_case(len(cases) - 1, args):
+                            stop = True
+                            break
+                    grown += len(batch)
+                    if stop:
+                        break
+                early = _post_cases_check()
+                if early is not None:
+                    return early
+                if grown:
+                    final = tracker.result(unreachable=unit.unreachable_branches)
+                    log(
+                        f"  growth: +{grown} case(s) -> branch coverage "
+                        f"{final.coverage:.1f}% ({len(cases)} cases)"
+                    )
+
+            # The corpus compared is now final; bind it into every entry
+            # this run can still record.
+            corpus_sha = sha256_bytes(
+                "\n".join(_args_key(a) for a in corpus_args).encode("utf-8")
+            )
+            corpus_n = len(corpus_args)
             log(f"  ok ({len(cases)} cases, every channel)")
 
             # ---- Stage 4: coverage -------------------------------------------
+            _stage_done("differential")
             log("[4/5] coverage (oracle, both branch edges of the compared runs)")
             cov = tracker.result(unreachable=unit.unreachable_branches)
         finally:
@@ -999,6 +1373,7 @@ def run_unit(
                 notes=["mutation skipped; a unit is not verified without it"],
             )
 
+        _stage_done("coverage")
         log(f"[5/5] mutation ({mutation_count} mutants, kill gate {kill_gate:.0%})")
         with open(cand_path, "r", encoding="utf-8") as f:
             base_src = f.read()
@@ -1011,13 +1386,47 @@ def run_unit(
             count=mutation_count,
             base_dir=os.path.dirname(cand_path) or ".",
         )
+        # A declaration that names no live mutation site is stale: the
+        # candidate's code moved under it. The equivalent mutant is then
+        # probed again, survives (it is equivalent) and drags the kill rate
+        # down - enough to drop the unit below its gate, which is how
+        # fn/Salsa20Xor failed on 2026-11-19 after a refactor moved two
+        # lines. A stale declaration is a claim about code that is no longer
+        # there, so the unit fails instead of quietly verifying against a
+        # weaker mutant set. (fn/ArchiveSetContains and eight other units
+        # carried the same rot on the same day.)
+        if unit.known_equivalent_mutants:
+            all_sites = mutate_mod.generate_mutants(
+                base_src,
+                mutation_entry(unit.entry)
+                if unit.candidate_loader == "cargo"
+                else unit.entry,
+                count=MUTATION_SITE_SCAN,
+                base_dir=os.path.dirname(cand_path) or ".",
+            )
+            stale = [
+                f"{eq.get('kind')}@{eq.get('line')}"
+                for eq in unit.known_equivalent_mutants
+                if eq.get("kind") is not None
+                and eq.get("line") is not None
+                and not any(_declares(eq, m) for m in all_sites)
+            ]
+            if stale:
+                return entry(
+                    "inconclusive",
+                    coverage=cov.coverage,
+                    notes=[
+                        "declared equivalent mutants name sites that no longer "
+                        "exist in the candidate: "
+                        + ", ".join(stale)
+                        + "; the code moved, update the unit's "
+                        "knownEquivalentMutants lines"
+                    ],
+                )
         active = [
             m
             for m in mutants
-            if not any(
-                m.kind == eq.get("kind") and m.line == eq.get("line")
-                for eq in unit.known_equivalent_mutants
-            )
+            if not any(_declares(eq, m) for eq in unit.known_equivalent_mutants)
         ]
         for m in mutants:
             if m not in active:
@@ -1025,12 +1434,22 @@ def run_unit(
 
         # Mutation corpus: a subset is enough to decide kill/survive. The
         # first 48 are the pinned specials (factories put discriminating cases
-        # at the front) plus the focused edges; oracle results come from the
-        # stage-3 cache - identical inputs were already executed and stage 2
-        # proved the oracle agrees with itself. The results are gathered here,
-        # in the main thread, because the emulator is not shared with the
-        # mutant workers and a cache miss must not change that.
-        mut_cases = cases[: min(len(cases), MUTATION_CORPUS_CASES)]
+        # at the front) plus the focused edges. When the corpus grew, the
+        # grown tail is appended: a mutant can be distinguishable only on a
+        # branch a grown case uncovered, which the head of the corpus never
+        # sees. Oracle results come from the stage-3 cache - identical inputs
+        # were already executed and stage 2 proved the oracle agrees with
+        # itself. The results are gathered here, in the main thread, because
+        # the emulator is not shared with the mutant workers and a cache miss
+        # must not change that.
+        if grown:
+            mut_cases = (
+                cases[: min(base_case_count, MUTATION_CORPUS_CASES)]
+                + cases[base_case_count:]
+            )
+        else:
+            mut_cases = cases[: min(len(cases), MUTATION_CORPUS_CASES)]
+        _t_oracle = time.perf_counter()
         mutation_oracle: List[Tuple[Any, Any]] = []
         for args in mut_cases:
             key = _args_key(args)
@@ -1039,12 +1458,54 @@ def run_unit(
                 o = oracle.call(unit.address_v2b, args, ret_kind=unit.ret_kind)
                 cache[key] = o
             mutation_oracle.append((args, o))
+        log(f"  [mutation corpus] {time.perf_counter() - _t_oracle:.1f}s ({len(mut_cases)} cases)")
+
+        # ---- Stage 5a: the batch build -----------------------------------
+        # A cargo unit's mutants are each a full crate rebuild (measured:
+        # 4.4 s with a warm target dir), and a unit has a dozen of them -
+        # ~80% of the harness's wall time. The batch compiles the crate ONCE
+        # with every mutant as a dispatch arm inside the function under test
+        # (`batch.py`); the harness picks the arm with an environment
+        # variable. The kill verdict is unchanged: the same corpus, the same
+        # comparisons, the same gates.
+        batch_exe: Optional[str] = None
+        batch_work = ""
+        arm_of: Dict[int, int] = {}      # position in `active` -> arm index
+        broken: Dict[int, str] = {}       # position in `active` -> build error
+        if unit.candidate_loader == "cargo" and len(active) > 1 and _batch_enabled():
+            _t_batch = time.perf_counter()
+            batch_exe, batch_work, arm_of, broken = _build_batch(
+                unit, cref, cand_path, base_src, active
+            )
+            log(f"  [batch build] {time.perf_counter() - _t_batch:.1f}s")
+            if batch_exe is not None:
+                log(
+                    f"  batch build: {len(arm_of)} mutant(s) in one crate build"
+                    + (
+                        f", {len(broken)} dropped by the compiler"
+                        if broken
+                        else ""
+                    )
+                )
+                if not _batch_matches_baseline(
+                    unit, cref, batch_exe, mutation_oracle
+                ):
+                    log(
+                        "  batch build does not reproduce the baseline; falling "
+                        "back to one build per mutant"
+                    )
+                    batch_exe = None
+                    arm_of = {}
+                    broken = {}
+                    shutil.rmtree(batch_work, ignore_errors=True)
+                    batch_work = ""
 
         # Each mutant is an independent probe subprocess and the oracle
         # results above are read-only, so build AND run each mutant in a
         # worker. `pool.map` keeps the report in mutant order; the verdicts
         # are per-mutant and do not depend on scheduling.
-        def _probe(m) -> MutantOutcome:
+        def _probe(item) -> MutantOutcome:
+            pos, m = item
             # A mutant the harness could not build, start or drive is
             # retried once with a fresh work dir and a doubled call timeout.
             # A second infrastructure failure is NOT a kill: the mutant was
@@ -1058,29 +1519,57 @@ def run_unit(
                         if unit.candidate_loader in ("rust", "cargo"):
                             from candidate_rust import RustCandidate
 
-                            mc = RustCandidate(
-                                entry=unit.entry,
-                                arg_kinds=[
-                                    a.kind if a.kind != "ptr" else "ptr"
-                                    for a in unit.args
-                                ],
-                                ret_kind=unit.ret_kind,
-                                work_dir=mdir,
-                                source_override=m.source,
-                                source_path=cand_path
-                                if unit.candidate_loader == "cargo"
-                                else None,
-                                loader=unit.candidate_loader,
-                                state_base=unit.state.base
-                                if unit.state is not None
-                                else None,
-                                state_bytes=unit.state.data
-                                if unit.state is not None
-                                else None,
-                                call_timeout=mutation_call_timeout * (attempt + 1),
-                                crate_dir=cref.crate_dir,
-                                cargo_probe=cref.probe,
-                            )
+                            if batch_exe is not None and pos in arm_of:
+                                # The batch arm: the binary is already built.
+                                from batch import ENV_NAME
+
+                                mc = RustCandidate(
+                                    entry=unit.entry,
+                                    arg_kinds=[
+                                        a.kind if a.kind != "ptr" else "ptr"
+                                        for a in unit.args
+                                    ],
+                                    ret_kind=unit.ret_kind,
+                                    work_dir=mdir,
+                                    prebuilt_exe=batch_exe,
+                                    env={ENV_NAME: str(arm_of[pos])},
+                                    loader=unit.candidate_loader,
+                                    state_base=unit.state.base
+                                    if unit.state is not None
+                                    else None,
+                                    state_bytes=unit.state.data
+                                    if unit.state is not None
+                                    else None,
+                                    call_timeout=mutation_call_timeout
+                                    * (attempt + 1),
+                                    crate_dir=cref.crate_dir,
+                                    cargo_probe=cref.probe,
+                                )
+                            else:
+                                mc = RustCandidate(
+                                    entry=unit.entry,
+                                    arg_kinds=[
+                                        a.kind if a.kind != "ptr" else "ptr"
+                                        for a in unit.args
+                                    ],
+                                    ret_kind=unit.ret_kind,
+                                    work_dir=mdir,
+                                    source_override=m.source,
+                                    source_path=cand_path
+                                    if unit.candidate_loader == "cargo"
+                                    else None,
+                                    loader=unit.candidate_loader,
+                                    state_base=unit.state.base
+                                    if unit.state is not None
+                                    else None,
+                                    state_bytes=unit.state.data
+                                    if unit.state is not None
+                                    else None,
+                                    call_timeout=mutation_call_timeout
+                                    * (attempt + 1),
+                                    crate_dir=cref.crate_dir,
+                                    cargo_probe=cref.probe,
+                                )
                         else:
                             from candidate_c import CCandidate
 
@@ -1174,11 +1663,43 @@ def run_unit(
             f"  probing {len(active)} mutant(s) on {workers} worker(s), "
             f"mutation call timeout {mutation_call_timeout:g}s"
         )
+        # A mutant the compiler rejected in the batch build is already a kill
+        # (the compiler is the detector), exactly as in the one-build-per-
+        # mutant path. It is counted in both numerator and denominator.
+        pre_killed = {
+            pos: MutantOutcome(
+                active[pos], killed=True, build_error=msg, detail="does not compile"
+            )
+            for pos, msg in broken.items()
+        }
+        todo = [
+            (pos, m)
+            for pos, m in enumerate(active)
+            if pos not in pre_killed
+        ]
+        def _probe_timed(item):
+            # A mutant that hangs is the only slow one (it waits out the call
+            # timeout), so the slow ones are the ones worth naming.
+            _t0 = time.perf_counter()
+            out = _probe(item)
+            _dt = time.perf_counter() - _t0
+            if _dt >= 1.0:
+                log(
+                    f"  (mutant {item[1].kind}@{item[1].line} took {_dt:.1f}s)"
+                )
+            return out
+
         if workers > 1:
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                outcomes = list(pool.map(_probe, active))
+                probed = list(pool.map(_probe_timed, todo))
         else:
-            outcomes = [_probe(m) for m in active]
+            probed = [_probe_timed(item) for item in todo]
+        outcomes = []
+        for pos, m in enumerate(active):
+            outcomes.append(pre_killed.get(pos) or probed.pop(0))
+        if batch_work:
+            shutil.rmtree(batch_work, ignore_errors=True)
+            batch_work = ""
 
         killed = 0
         scored = 0
@@ -1222,6 +1743,7 @@ def run_unit(
                 survivors.append(m)
                 log(f"  SURVIVOR: {m.kind}@{m.line}: {m.excerpt[:60]}")
 
+        _stage_done("mutation")
         kill_rate = (killed / scored) if scored else 0.0
         log(f"  kill rate {kill_rate:.0%} ({killed}/{scored})")
         if survivors:

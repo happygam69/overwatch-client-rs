@@ -37,11 +37,6 @@
   "knownEquivalentMutants": [
     {
       "kind": "mask widen",
-      "line": 335,
-      "rationale": "The mutation widens the shift mask from 0x1f to 0x3f. Both the oracle (0x142e374d0) and the candidate run on x86-64 release, where a 32-bit shift masks the count to 5 bits: (bias + 2) & 0x3f produces counts 32..63 that the hardware shifts by count & 31, which is exactly (bias + 2) & 0x1f. The two builds therefore return the same value for every u32 value and every bias. What would observe a difference: a target that traps or saturates a shift count of 32..63 instead of masking it, which is outside this unit's x86-64 ABI contract."
-    },
-    {
-      "kind": "mask widen",
       "line": 390,
       "rationale": "`(bias.wrapping_add(2) & 0x1f)` masks the shift amount. Widening the mask to 0x3f (or removing it) cannot be observed: the shifted value is u32, and Rust's `>>` masks the shift amount to 5 bits exactly as the client's `shrl` does, so shifts of 32..63 are the same as 0..31 modulo 32. Every input, not just this fixture, takes the same path."
     }

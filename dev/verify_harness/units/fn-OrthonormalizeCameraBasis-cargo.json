@@ -52,17 +52,17 @@
   "knownEquivalentMutants": [
     {
       "kind": "boundary -1",
-      "line": 56,
+      "line": 54,
       "rationale": "The assert checks desc.len() >= 0x30 before any load or store. Lowering it to 0x2f only accepts 47-byte buffers, which the fixture never produces (every case is exactly 0x30) and which the oracle's own pointee write would still need 48 bytes for on the rebuild path. What would observe a difference: a harness that declared ptr_len 47 and still expected the rebuild stores - the protocol requires ptr_len >= the widest write, so that state is outside this unit's contract."
     },
     {
       "kind": "cmp-flip >=to>",
-      "line": 76,
+      "line": 74,
       "rationale": "The test is (len0 - 1.0).abs() >= 0.008 vs > 0.008. IEEE float equality at exactly 0.008 is a single bit pattern (0x3c03126f). The fixture's nearest cases are ~0.001999 (inside) and ~0.0201 (outside); neither lands on the boundary. What would observe a difference: a row whose |len2-1| is exactly the f32 value 0.008 - the early-out and rebuild paths would disagree only on that measure-zero input. Random f32 draws do not hit it, and the decompile's own comiss+jae uses the same IEEE relation, so the mutant is observationally equivalent for this unit's contract."
     },
     {
       "kind": "cmp-flip >to>=",
-      "line": 76,
+      "line": 74,
       "rationale": "The |dot| > 0.004 gate is also a single f32 boundary. The fixture pins dot values just inside (0.003) and just outside (0.005); neither is exactly 0.004. Only an input whose |dot| is the exact f32 0.004 could observe the difference, and the oracle uses the same IEEE jae/jbe relation."
     }
   ]

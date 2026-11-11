@@ -880,6 +880,29 @@ read: `0x142e49270` (two pointers), `0x142e492a0` (two counted arrays,
 (`+0x2E8`/`+0x2F0`) and `0x142e493e0` (`+0x08`). Each treats a stored `0` as
 null and adds the payload base to every non-zero RVA.
 
+**`0x142e49360` is implemented and verified.** The client's body is 61 bytes
+and reads:
+
+```text
++0x00  u64  RVA -> pointer (zero stays zero)   the first STUD blob
++0x08  u64  RVA -> pointer (zero stays zero)   the second blob
++0x10  u64  not touched
++0x18  u64  RVA -> pointer (zero stays zero)   the third blob
+```
+
+Each conversion is the same three instructions: a `lea` of the value plus the
+record's own address, a `test` of the value, and a `cmove` back to zero when
+the value was zero. The crate's `chunkkind::fixup_header_in_place` is that
+expression, operation for operation, and `fn/MapChunkHeaderFixup` proves it
+against the client's bytes (160 differential cases, 4/4 mutants killed). On
+the practice range's pathing chunk the three stored values are `0x20`,
+`0x862720` and `0x862878` - the two blobs at the very end of the chunk - and
+the fixup turns them into pointers at the record's address plus each value.
+
+The other three relocators are **not** implemented: `0x142e49270`,
+`0x142e493a0` and `0x142e493e0` are read here but the crate has no code for
+them.
+
 ### The cell container, decoded (2026-11-01)
 
 All offsets are relative to the first STUD blob (its magic dword). The client

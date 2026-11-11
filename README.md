@@ -41,7 +41,7 @@ full flag list is under [Running it](#running-it).
 | system | state |
 |---|---|
 | practice-range launch: header → variation → scene map → chunk loader | works, 34/34 chunks (a viewer default: the image has no mode→variation selector) |
-| walking on the map's own level collider | works: `ow-sim::walk`, swept by the verified type-3 mesh leaf |
+| walking on the map's own level collider | works: `ow-sim::walk`, swept by the verified type-3 mesh leaf with the **client's own capsule** (`radius 0.5`, height `1.5`) |
 | movement arithmetic: ramp, command, state transform, per-frame velocity law | verified, differential units against the client's bytes |
 | jump and the airborne arc | verified: `ow-sim::jump`, `ow-sim::air` |
 | CASC, STU, entities, weapon graphs, models, textures, maps | verified against the install |
@@ -87,7 +87,7 @@ export OW_SUPPORT_KEYRING='path/to/Overwatch.keyring'   # optional
 
 cargo xtask verify                                      # fmt, clippy, tests, index, deviations, addresses
 cargo xtask verify --fast                               # without the install-reading tests
-cargo xtask verify -p ow-casc --skip index_find_real    # one crate, one suite left out (iteration only)
+cargo xtask verify -p ow-casc                           # one crate (iteration only)
 
 cargo run --release -p ow-client                        # the practice range; WASD walks
 cargo run --release -p ow-client -- --walk-test         # the movement trace and its assertions

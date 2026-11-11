@@ -1,0 +1,65 @@
+{
+  "id": "fn/ShapePoolAlloc",
+  "title": "tier-2 shipped code: the shape-entry pool's free-list pop against ShapePoolAlloc (0x142cb00c0)",
+  "address": {
+    "v2b": "0x7ff7c79d00c0"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "shape_pool_alloc",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "pool",
+      "kind": "ptr",
+      "ptr_len": 24
+    },
+    {
+      "name": "entries",
+      "kind": "ptr",
+      "ptr_len": 1152
+    },
+    {
+      "name": "arena_base",
+      "kind": "u64"
+    }
+  ],
+  "returns": "u64",
+  "argFactory": "shape_pool_alloc_fixture",
+  "knownEquivalentMutants": [
+    {
+      "kind": "cmp-flip >to>=",
+      "line": 163,
+      "rationale": "`let keep = (high as i32) > (want as i32);` is a maximum: the high-water mark becomes the larger of itself and index+1. The mutation makes the comparison non-strict, and when the two are equal the branch writes the same value either way, so the mutant cannot change a single byte of the pool record. The client's own `cmovg` has the same property."
+    }
+  ],
+  "options": {
+    "iterations": 96,
+    "coverageThreshold": 0.0,
+    "mutationCount": 8,
+    "mutationKillRate": 1.0,
+    "seed": 52770,
+    "coverageWindow": 322,
+    "unreachableBranches": [
+      {
+        "site": "0x7ff7c79d00cf",
+        "edge": "0x7ff7c79d00d5",
+        "why": "the grow path's entry. The client takes this branch whenever the free head is not -1, which is every case the fixture generates; the fall-through is the grow path, which allocates through the client's runtime allocator (0x142cadee0) and cannot run offline because the heap vtable at 0x144188200 is null in the image."
+      }
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/domino_world.rs (shape_pool_alloc), built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the shape_pool_alloc entry. The ledger binds the verdict to domino_world.rs + the probe source + the git revision.",
+    "Oracle is ShapePoolAlloc at exe 0x142cb00c0 (v2b 0x7ff7c79d00c0), 0x142 bytes. On the pop path it takes the free head from pool+0x14, writes the popped entry's own link dword (entry+0xA0) into the head slot, writes the index back into that entry's link, increments the used count at pool+0x08, and raises the high-water mark at pool+0x10 to the larger of itself and index+1 (a signed compare). It returns the index.",
+    "The client takes one pointer - the pool record - and reaches the entries through the record's base pointer at +0x00. The fixture keeps that base relative and declares it as a relocation, so the oracle rebases it to the arena; the probe is handed the entries array directly and rebases the same slot with the arena base it is given. Both sides therefore read and write the same array, and the pool record and the entries are compared exactly.",
+    "The fixture varies the free head over every index of a one-to-six entry array, the used count (including the wrapping maximum), the high-water mark (below and above the index), and the free chain's shape (a single index, a two-link chain, the last index). Data outside the link field is filled so a spurious write is caught.",
+    "The grow path - the free head is -1 - is NOT exercised: the client allocates there through its runtime allocator (0x142cadee0), whose heap vtable is null in the offline image, so the branch cannot run. The candidate refuses that case rather than guessing it, and the unit says so.",
+    "Coverage is 0 of 2: the free-head test's grow edge is declared unreachable, and the two branches inside the grow path (0x7ff7c79d015f and 0x7ff7c79d018f, the free-list rebuild loop) are never reached at all, so the coverage stage cannot measure the body and the gate is 0 with this gap acknowledged - the same shape as fn/CmfKey154504's. The differential and the mutation stage carry the proof."
+  ],
+  "acknowledgedGaps": [
+    "The pop path only. The client's grow path (a new capacity of capacity/2 + capacity with a minimum of 2, a zeroed new array, the old array copied, the free list rebuilt and the old block freed) is read but not implemented and not verified: the crate does not model the runtime allocator.",
+    "The client reads the free head as a sign-extended 32-bit value and compares the high-water mark with a signed compare; the unit's cases stay inside the positive range, so the negative-index behaviour is not exercised.",
+    "The pool record's base pointer is the client's absolute address in the image; the unit compares the rebased value on both sides, so the base itself is a fixture artefact rather than a client behaviour."
+  ]
+}

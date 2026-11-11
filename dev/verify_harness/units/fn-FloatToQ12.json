@@ -42,8 +42,9 @@
   ],
   "knownEquivalentMutants": [
     {
-      "mutation": "cmp-flip >=to>",
-      "detail": "exponent >= 138 vs > 138: at exponent 138 both arms shift by 0"
+      "kind": "cmp-flip >=to>",
+      "line": 40,
+      "rationale": "Line 40 is `let magnitude = if exponent >= 138 {`. Flipping it to `>` moves the exponent-138 case into the other arm. Both arms then shift by 0 - the first computes `(mantissa + 0x0080_0000) << 0`, the second `(mantissa + 0x0080_0000) >> 0` - so the magnitude, the sign and the returned value are the same for every input. What would observe a difference: an arm that used a different expression, not a different shift count. The sibling `cmp-flip >=to>` at line 42 (`if shift >= 8 {`) is NOT equivalent - at shift == 8 the first arm returns 0x7FFF_FFFF while the second computes `(mantissa + 0x0080_0000) << 8` - and it is left to be probed and killed."
     }
   ]
 }

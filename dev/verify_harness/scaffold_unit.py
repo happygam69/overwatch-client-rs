@@ -229,14 +229,18 @@ def build_unit(
         "returns": "void",
         "options": {
             "iterations": 200,
+            "autoCorpus": True,
             "coverageThreshold": 85,
             "mutationCount": 12,
             "mutationKillRate": 0.8,
             "seed": 4241,
         },
         "notes": [
-            "SCAFFOLD - not a verification claim. Fill in the real args, returns, argFactory and",
-            "entry, then remove the scaffold flag and run the harness.",
+            "SCAFFOLD - not a verification claim. Fill in the real args and returns,",
+            "then remove the scaffold flag and run the harness. A flat/scalar signature",
+            "needs no fixture: autoCorpus grows the seeded corpus to the coverage gate.",
+            "Linked structures (internal pointers, vtable seams, captured state) still",
+            "need an argFactory - growth cannot invent a valid linked shape.",
             f".pdata extent: RVA 0x{ext.begin_rva:x}..0x{ext.end_rva:x} ({ext.size} bytes), "
             f"run_info 0x{ext.run_info:x}; decompiler body {body_size} bytes",
             f"decompile: {os.path.relpath(c_path, REPO_ROOT).replace(chr(92), '/')} (signature: {signature})",
@@ -287,8 +291,10 @@ def main(argv=None) -> int:
         json.dump(unit, f, indent=2)
         f.write("\n")
     print(f"  wrote {os.path.relpath(path, REPO_ROOT)}")
-    print(f"  oracle {unit['address']['v2b']} ({unit['notes'][2]})")
-    print("  next: read the decompile, set args/returns/argFactory, move to units/, run cli.py")
+    pdata_note = next(n for n in unit["notes"] if n.startswith(".pdata"))
+    print(f"  oracle {unit['address']['v2b']} ({pdata_note})")
+    print("  next: read the decompile, set args/returns (fixture only for")
+    print("        linked structures), move to units/, run cli.py")
     return 0
 
 

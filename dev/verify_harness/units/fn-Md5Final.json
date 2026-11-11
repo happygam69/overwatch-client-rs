@@ -50,13 +50,13 @@
  "knownEquivalentMutants": [
   {
    "kind": "cmp-flip <to<=",
-   "line": 737,
-   "rationale": "Line 737 is `if filled < 0x38 {` inside the `filled <= 0x38` branch. Flipping it to `<=` widens the guard to the whole enclosing branch, so the mutant also takes the arm when filled == 0x38. That arm fills `ctx[0x18 + filled..0x18 + 0x38]`, which is the empty range at filled == 0x38, and `fill(0)` on an empty range writes nothing. For every other value inside the branch the two guards agree. So the mutant changes no byte of the context or the digest for any input; the client's own expression reaches the same state through `jae` skipping an empty memset."
+   "line": 815,
+   "rationale": "Line 815 is `if filled < 0x38 {` inside the `filled <= 0x38` branch. Flipping it to `<=` widens the guard to the whole enclosing branch, so the mutant also takes the arm when filled == 0x38. That arm fills `ctx[0x18 + filled..0x18 + 0x38]`, which is the empty range at filled == 0x38, and `fill(0)` on an empty range writes nothing. For every other value inside the branch the two guards agree. So the mutant changes no byte of the context or the digest for any input; the client's own expression reaches the same state through `jae` skipping an empty memset."
   },
   {
    "kind": "cmp-flip <to<=",
-   "line": 741,
-   "rationale": "Line 741 is `if filled < 0x40 {` inside the `filled > 0x38` branch, where filled can only be 0x39..0x40. Flipping it to `<=` adds only filled == 0x40, and the arm then fills `ctx[0x18 + 0x40..0x18 + 0x40]` (empty). For 0x39..0x3F the guards are identical, so no input can distinguish the two versions through the context, the digest or a fault."
+   "line": 819,
+   "rationale": "Line 819 is `if filled < 0x40 {` inside the `filled > 0x38` branch, where filled can only be 0x39..0x40. Flipping it to `<=` adds only filled == 0x40, and the arm then fills `ctx[0x18 + 0x40..0x18 + 0x40]` (empty). For 0x39..0x3F the guards are identical, so no input can distinguish the two versions through the context, the digest or a fault."
   }
  ]
 }

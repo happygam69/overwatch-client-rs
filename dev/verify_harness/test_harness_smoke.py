@@ -39,6 +39,7 @@ from gen import F64_EDGE_POOL, U64_EDGE_VALUES, UnitArg, focused_f32_edge_cases,
 from mutate import generate_mutants  # noqa: E402
 from ledger import HARNESS_VERSION, LedgerEntry, check_entry  # noqa: E402
 from runner import _bits_equal, _mem_channel, _args_key, load_unit  # noqa: E402
+import runner as runner_mod  # noqa: E402
 
 BASE = 0x7FF7C4D20000
 FAILURES = []
@@ -339,6 +340,39 @@ def test_mutate_bool_negate():
           f"kinds={sorted({m.kind for m in mutants})} n={len(mutants)}")
 
 
+def test_mutate_same_line_two_boundary_mutants():
+    """One line, two boundary mutants of the same kind.
+
+    A decimal and a hex constant on the same line each get a boundary
+    shift, so a declaration that names one of them cannot be told apart
+    from the other by kind and line alone. The mutated text is what
+    separates them.
+    """
+    src = (
+        "fn FUN_x(b: u8) -> u32 {\n"
+        "    if ((b.wrapping_add(0x14) >> 1) == 0 && (b & 1) == 0) { 1 } else { 0 }\n"
+        "}\n"
+    )
+    mutants = generate_mutants(src, "FUN_x", count=64)
+    plus = [m for m in mutants if m.kind == "boundary +1" and m.line == 2]
+    minus = [m for m in mutants if m.kind == "boundary -1" and m.line == 2]
+    check("mutate/two-plus-one-line", len(plus) == 2 and len(minus) == 2,
+          f"plus={len(plus)} minus={len(minus)}")
+    check("mutate/mutated-text-differs",
+          len({m.mutated for m in plus}) == 2 and len({m.mutated for m in minus}) == 2,
+          f"{sorted({m.mutated for m in plus})}")
+    # A declaration that names the mutated text picks exactly one of them.
+    eq = {"kind": "boundary +1", "line": 2, "mutated": plus[0].mutated}
+    picked = [m for m in plus if runner_mod._declares(eq, m)]
+    check("declare/picks-one-mutant", len(picked) == 1 and picked[0].mutated == plus[0].mutated,
+          f"picked={len(picked)}")
+    # Without the mutated text the declaration covers both of them.
+    eq_wide = {"kind": "boundary +1", "line": 2}
+    check("declare/without-text-covers-both",
+          len([m for m in plus if runner_mod._declares(eq_wide, m)]) == 2,
+          "wide declaration should cover both")
+
+
 def test_ledger_version_binding():
     e = LedgerEntry(
         unit_id="fn/t", status="verified", oracle_sha256="a", candidate_sha256="b",
@@ -463,6 +497,7 @@ def main() -> int:
     test_gen_pools()
     test_mutate_hex_boundary()
     test_mutate_bool_negate()
+    test_mutate_same_line_two_boundary_mutants()
     test_ledger_version_binding()
     test_runner_helpers()
     test_candidate_c_f64_u64()

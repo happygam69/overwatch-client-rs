@@ -4,8 +4,7 @@
 //! `docs/formats/static-collision.md` check 10 reads the owner side of the
 //! builder: which id `0x14201ae60` hands to `OwnerCreateBody`, and what that
 //! function does with it. Two encodings come out of that read, both with exact
-//! constants.
-//!
+//! constants.//!
 //! **The world slot.** `OwnerCreateBody` (`0x142cc3d90`) takes a `u16` first
 //! argument, rejects it when it is `>= 0x3fff` and rejects the slot whose table
 //! entry is the empty-slot sentinel, then resolves the world pointer:
@@ -60,6 +59,113 @@ pub const WORLD_BODY_STRIDE: usize = 0x1c0;
 pub const BODY_GENERATION: usize = 0x198;
 /// The invalid body handle `OwnerCreateBody` returns and the builder skips.
 pub const INVALID_BODY_HANDLE: u64 = 0xffff_0000_ffff_ffff;
+
+/// The shape-entry pool record's fields (`ShapePoolAlloc`, `0x142cb00c0`).
+/// The pool table is `world+0x288 + 0x18*i`; the shape pool is index 2, so
+/// its record sits at `world+0x2b8`.
+pub mod pool {
+    /// `+0x00`: the entries array's base.
+    pub const BASE: usize = 0x00;
+    /// `+0x08`: how many entries are in use.
+    pub const USED: usize = 0x08;
+    /// `+0x0C`: how many entries the array holds.
+    pub const CAPACITY: usize = 0x0C;
+    /// `+0x10`: the high-water mark - the largest index handed out, plus one.
+    pub const HIGH: usize = 0x10;
+    /// `+0x14`: the free list's head, an index; `-1` when the list is empty.
+    pub const FREE: usize = 0x14;
+    /// The pool record's length.
+    pub const RECORD_LEN: usize = 0x18;
+    /// A shape entry's stride.
+    pub const ENTRY_LEN: usize = 0xC0;
+    /// The entry's own free-list link, at `+0xA0`.
+    pub const ENTRY_LINK: usize = 0xA0;
+    /// The free head's empty value: the client tests it against `-1`.
+    pub const FREE_EMPTY: u32 = u32::MAX;
+}
+
+/// Why a pool allocation could not be made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolError {
+    /// The pool record is shorter than the fields the client reads.
+    Truncated,
+    /// The free list is empty: the client grows the array here, through its
+    /// runtime allocator, which this crate does not model.
+    Empty,
+}
+
+impl fmt::Display for PoolError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PoolError::Truncated => write!(f, "the pool record is truncated"),
+            PoolError::Empty => write!(f, "the pool's free list is empty"),
+        }
+    }
+}
+
+impl std::error::Error for PoolError {}
+
+fn pool_u32(pool: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([pool[at], pool[at + 1], pool[at + 2], pool[at + 3]])
+}
+
+fn set_pool_u32(pool: &mut [u8], at: usize, value: u32) {
+    pool[at..at + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+/// `ShapePoolAlloc` (`0x142cb00c0`), the shape-entry pool's free-list pop.
+///
+/// The client pops one index from the pool record's free list and hands it
+/// back: the head is at `+0x14`, the next free index is the popped entry's own
+/// link dword at `+0xA0`, the used count at `+0x08` goes up by one and the
+/// high-water mark at `+0x10` becomes the larger of itself and `index + 1`.
+/// The popped entry's link is set to its own index, so the entry is a
+/// one-element list.
+///
+/// **The grow path is not implemented here.** When the free head is `-1` the
+/// client allocates a new array through its runtime allocator (`0x142cadee0`),
+/// copies the old one, rebuilds the free list and frees the old block; this
+/// crate does not model that allocator, so the case is refused instead of
+/// guessed. `fn/ShapePoolAlloc` proves the pop path against the client's
+/// bytes and declares the grow branch unreachable offline (the allocator's
+/// heap vtable is null in the image).
+///
+/// `entries` is the array the record's base points at; the client reaches it
+/// through that pointer, so the two must be the same array.
+pub fn shape_pool_alloc(pool: &mut [u8], entries: &mut [u8]) -> Result<u32, PoolError> {
+    if pool.len() < pool::RECORD_LEN {
+        return Err(PoolError::Truncated);
+    }
+    let free = pool_u32(pool, pool::FREE);
+    if free == pool::FREE_EMPTY {
+        return Err(PoolError::Empty);
+    }
+    let at = (free as usize)
+        .wrapping_mul(pool::ENTRY_LEN)
+        .wrapping_add(pool::ENTRY_LINK);
+    // The client has no bounds check here either: it reads the entry through
+    // the record's base pointer. A free head outside the array is the
+    // client's own business, so the read here is the same unchecked one.
+    let next = u32::from_le_bytes([
+        entries[at],
+        entries[at + 1],
+        entries[at + 2],
+        entries[at + 3],
+    ]);
+    set_pool_u32(pool, pool::FREE, next);
+    entries[at..at + 4].copy_from_slice(&free.to_le_bytes());
+    let used = pool_u32(pool, pool::USED).wrapping_add(1);
+    set_pool_u32(pool, pool::USED, used);
+    // The client's compare is signed (`cmovg`), and the index is a sign
+    // extended 32-bit value.
+    let want = free.wrapping_add(1);
+    let high = pool_u32(pool, pool::HIGH);
+    let keep = (high as i32) > (want as i32);
+    set_pool_u32(pool, pool::HIGH, if keep { high } else { want });
+    Ok(free)
+}
+
+use std::fmt;
 
 /// The table entry the allocator writes for a world.
 pub fn encode_world_pointer(world: u64) -> u64 {

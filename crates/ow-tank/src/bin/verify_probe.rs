@@ -682,6 +682,126 @@ fn mrnm_fixup_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     Ok(("-".to_string(), vec![payload]))
 }
 
+/// `MapChunkHeaderFixup` (`0x142e49360`): `void (header, base)`.
+///
+/// The client rebases three self-relative slots of the pathing chunk's header
+/// record in place. The fixture keeps the slots relative and passes the
+/// record's arena base in the client's dead second argument slot, so both
+/// sides write the same absolute values and the comparison needs no masked
+/// pointer slots. The client sees one argument: it takes the base from the
+/// record's own pointer.
+fn map_chunk_header_fixup_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut header = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg0 must be the plain header record".into()),
+    };
+    let base = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg1 must be the header base".into()),
+    };
+    ow_tank::chunkkind::fixup_header_in_place(&mut header, base)
+        .map_err(|e| format!("fixup-{e}"))?;
+    Ok(("-".to_string(), vec![header]))
+}
+
+/// `MeshShapeFill` (`0x142cae540`): `void (record, source, scale)`.
+///
+/// The client fills a 0x4c-byte shape record from the 0x30-byte source the
+/// block unpacker wrote: four lanes of the scale, four lanes of its
+/// reciprocal (a `divss` by the constant 1.0 at `0x142f7aae4`), the three
+/// data pointers, the four copied words and the one float multiplied by the
+/// scale. The candidate is `ow_tank::mesh_shape::shape_record`.
+fn mesh_shape_fill_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut record = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg0 must be the record buffer".into()),
+    };
+    let source = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg1 must be the source buffer".into()),
+    };
+    let scale = match it.next() {
+        Some(Arg::F32(bits)) => f32::from_bits(bits),
+        _ => return Err("arg2 must be the scale".into()),
+    };
+    if source.len() < 0x2C {
+        return Err("source-too-short".into());
+    }
+    if record.len() < 0x4C {
+        return Err("record-too-short".into());
+    }
+    let q = |at: usize| u64::from_le_bytes(source[at..at + 8].try_into().unwrap());
+    let d = |at: usize| u32::from_le_bytes(source[at..at + 4].try_into().unwrap());
+    let src = ow_tank::mesh_shape::MeshSource {
+        nodes: q(0x00),
+        points: q(0x08),
+        triangles: q(0x10),
+        node_count: d(0x18),
+        point_count: d(0x1C),
+        field_3c: d(0x20),
+        height: d(0x24),
+        field_44: f32::from_bits(d(0x28)),
+    };
+    let out = ow_tank::mesh_shape::shape_record(&src, scale);
+    for (i, word) in out.iter().enumerate() {
+        record[i * 4..i * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    // One buffer per pointer argument, in the unit's order: the record the
+    // client filled, and the source it did not touch.
+    Ok(("-".to_string(), vec![record, source]))
+}
+
+/// `ShapePoolAlloc` (`0x142cb00c0`): `u32 (pool, entries)`.
+///
+/// The client pops one index from the shape pool's free list. It takes one
+/// pointer - the pool record - and reaches the entries through the record's
+/// base pointer, so the fixture keeps that base relative and declares it as a
+/// relocation; the probe rebases it to the same arena address the oracle
+/// rebases it to. The entries array is the candidate's second argument: the
+/// client reaches it through the base, the probe is handed it.
+fn shape_pool_alloc_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let (mut pool, relocs) = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if g.is_none() => (b, r),
+        _ => return Err("arg0 must be the pool record".into()),
+    };
+    let mut entries = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg1 must be the entries array".into()),
+    };
+    let record_addr = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg2 must be the pool record's address".into()),
+    };
+    // The record's base slot holds an offset relative to the record; the
+    // harness rebases a relocation the same way (`pointee_address +
+    // relative`), so the probe does the same and both sides read the same
+    // entries.
+    for off in relocs {
+        let bytes: [u8; 8] = pool
+            .get(off..off + 8)
+            .ok_or("reloc-out-of-range")?
+            .try_into()
+            .unwrap();
+        let absolute = u64::from_le_bytes(bytes).wrapping_add(record_addr);
+        pool[off..off + 8].copy_from_slice(&absolute.to_le_bytes());
+    }
+    let index = ow_tank::domino_world::shape_pool_alloc(&mut pool, &mut entries)
+        .map_err(|e| format!("alloc-{e}"))?;
+    Ok((format!("{index:x}"), vec![pool, entries]))
+}
+
 /// `MrnmRuntimeSize` (`0x141b89390`): `int (payload)`.
 fn mrnm_runtime_size_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     if args.len() != 1 {
@@ -773,6 +893,12 @@ fn handle_call(
         "crc32_seeded" => crc32_seeded_entry(args),
         // crates/ow-tank/src/collision.rs
         "cell_bytes_fixup" => cell_bytes_fixup_entry(args),
+        // crates/ow-tank/src/chunkkind.rs
+        "map_chunk_header_fixup" => map_chunk_header_fixup_entry(args),
+        // crates/ow-tank/src/domino_world.rs
+        "shape_pool_alloc" => shape_pool_alloc_entry(args),
+        // crates/ow-tank/src/mesh_shape.rs
+        "mesh_shape_fill" => mesh_shape_fill_entry(args),
         // crates/ow-tank/src/mrnm.rs
         "mrnm_fixup" => mrnm_fixup_entry(args),
         "mrnm_runtime_size" => mrnm_runtime_size_entry(args),

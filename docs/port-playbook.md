@@ -98,14 +98,44 @@ python dev/corpus.py build <start> <end> --asm-only --tag <name>
 `<end>` is the start plus the byte size `crate_coverage.py --queue` prints; a
 function with a `.pdata` entry gets its exact extent in the corpus header.
 
+### 1.6 Find the function first
+
+The queue answers "what have we already cited". It does not answer "which
+functions does the client have for this". `dev/fn.py` does, in one command,
+from the image alone:
+
+```sh
+python dev/fn.py find MRNM            # the chunk tag -> the dispatcher functions
+python dev/fn.py find type:0x0b3      # the asset type -> the client's loader job
+python dev/fn.py find name:mover      # the names a human has given
+python dev/fn.py scope 0x141b5df70    # every function a format's dispatcher reaches
+```
+
+`scope` is the answer to "all the functions of this format": it walks the
+whole-image call graph from the dispatcher and lists the cluster, each with
+its extent and the unit that proves it. `find <TAG>` works because the client
+compares a chunk tag as a **big-endian** u32 (`MRNM` is the immediate
+`0x4d524e4d`); see [`formats/asset-types.md`](formats/asset-types.md).
+
 ---
 
 ## 2. Read it
 
 Reading is the expensive part and the only part that cannot be skipped.
 
-**a. Get the body.** The corpus holds a disassembly and, where built, a
-decompile for every function:
+**a. Get the body.** One command gathers everything known about the function -
+its name and role, the unit that tests it and that unit's verdict, where
+`docs/` already records it, its true extent, the whole-image callers and
+callees, and the disassembly decoded from the image:
+
+```sh
+python dev/fn.py read 0x140cb74a0
+```
+
+It needs no Ghidra session and no built corpus range, and it reads a body the
+unwind table does not cover by running the window to the next known function.
+The corpus holds a disassembly and, where built, a decompile for every
+function:
 
 ```sh
 python dev/corpus.py show 0x140cb74a0 --asm     # the disassembly comes first
@@ -310,7 +340,17 @@ Rules that matter:
 - `unreachableBranches` declares a branch site whose one edge the code cannot
   take, with the reason; the harness requires the site to run.
 - `knownEquivalentMutants` is for a mutant no input can kill. The rationale must
-  say *why for every input*, not "the fixture misses it".
+  say *why for every input*, not "the fixture misses it". It is **line-keyed**:
+  any edit above the mutated statement moves it, and the harness now *says so*
+  - a declaration that names no live mutation site fails the unit with
+  `inconclusive` and a note naming the stale entries, instead of quietly
+  verifying against a weaker mutant set (2026-11-10). Re-state the line and
+  say why it moved; do not delete the declaration.
+- One line can carry **two mutants of the same kind** (a decimal and a hex
+  constant each get a boundary shift), and the kind+line key cannot tell them
+  apart. A declaration may add `"mutated": "<the mutated line>"` to name one
+  of them exactly; without it the declaration covers every mutant of that kind
+  on that line - which can suppress a mutant that *should* be killed.
 - `acknowledgedGaps` names what is still open. It is shown in every verdict; it
   is not a pass.
 - `scaffold: true` marks a unit that is declared but not yet wired; `cli.py all`
@@ -326,7 +366,9 @@ Rules that matter:
   statement silently re-arms the mutant and the unit goes red for a non-port
   reason (`fn/EncodingFindEKey`, 991 -> 1122 -> 1124; the last move was two
   lines added to a doc comment). Re-state the line and say why it moved; do not
-  delete the declaration.
+  delete the declaration. Since 2026-11-10 the harness fails such a unit with
+  a note that names the stale entry, instead of letting the kill rate drift
+  down to the gate.
 
 ---
 
@@ -378,7 +420,7 @@ binds, not of the commit.
 | `INCONCLUSIVE: coverage x% < gate` | add declared cases for the missed branch addresses printed |
 | `SURVIVOR: …` | either a fixture gap (add the discriminating case) or an equivalent mutant (declare with a proof) |
 | `candidate compile failed` with no text | the harness now prints the command and exit code: run it by hand |
-| harness self-test red at `candidate compile failed`, no compiler output | the local `gcc` is broken (`cc1.exe` exits 1 silently), not your change; the tier-1 C units go `inconclusive` for the same reason |
+| harness self-test red at `candidate compile failed`, no compiler output | the local `gcc` was broken (`cc1.exe` exited 1 silently) until 2026-11-10; it compiles again, so a tier-1 C unit that still stops at the compile is *your* change, not the toolchain |
 | `mutant … not evaluated` / unit `inconclusive` after a mutant | the mutant panicked or hung: fix the fixture so a broken candidate answers differently instead of faulting (§5) |
 | `make_index.py (python): FAILED`, then `python3: Python was not found` | the second line is the gate's interpreter fallback, not the cause: `dev/INDEX.md` is stale. `python dev/make_index.py` |
 | `gh_apply_names.py` takes minutes, or times out | it is one HTTP call per table row (~500). Use `--addr 0x…` for the row just added (§12); `--check` now only reads |

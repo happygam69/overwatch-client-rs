@@ -49,6 +49,12 @@ BASE = 0x140000000
 V2B_DELTA = 0x7FF7C4D20000 - BASE
 
 ADDR_RE = re.compile(r"\b(0x14[0-9a-fA-F]{7})\b")
+# The same address written the way a human writes it when the Ghidra name is
+# in the prose: `FUN_1421d88c0`. 16 of `ow-tank`'s citations are in this form
+# only (the effect builder `FUN_142e4a780`, the STU loader `FUN_1421d88c0`,
+# the material job registration `FUN_141b19160`), and a coverage report that
+# misses them understates what the crate is about.
+FUN_RE = re.compile(r"\bFUN_(1[0-9a-f]{8})\b")
 
 
 def image_bytes() -> bytes:
@@ -147,8 +153,10 @@ def cited(crate: str) -> dict[int, set[str]]:
     out: dict[int, set[str]] = {}
     for path in sorted(root.rglob("*.rs")):
         text = path.read_text(encoding="utf-8", errors="replace")
-        for hit in ADDR_RE.findall(text):
-            out.setdefault(int(hit, 16), set()).add(
+        hits = {int(h, 16) for h in ADDR_RE.findall(text)}
+        hits |= {int(h, 16) for h in FUN_RE.findall(text)}
+        for hit in hits:
+            out.setdefault(hit, set()).add(
                 str(path.relative_to(ROOT)).replace("\\", "/")
             )
     return out

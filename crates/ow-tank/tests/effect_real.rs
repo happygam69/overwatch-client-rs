@@ -63,9 +63,11 @@ struct Census {
 
 #[test]
 fn effect_assets_parse_and_every_component_keeps_the_clients_widths() {
+    let _t0 = std::time::Instant::now();
     let Some(data) = open() else {
         return;
     };
+    eprintln!("effect install open: {:?}", _t0.elapsed());
 
     let mut census = Census::default();
     for type_id in EFFECT_TYPES {
@@ -73,6 +75,7 @@ fn effect_assets_parse_and_every_component_keeps_the_clients_widths() {
         if guids.is_empty() {
             continue;
         }
+        let _t2 = std::time::Instant::now();
         for g in guids.iter().take(SAMPLE_CAP) {
             let Ok(bytes) = data.open_asset(*g) else {
                 census.unreadable += 1;
@@ -103,6 +106,7 @@ fn effect_assets_parse_and_every_component_keeps_the_clients_widths() {
                 check_component(&mut census, &name, chunk, *g);
             }
         }
+        eprintln!("effect sweep {type_id:03X}: {:?}", _t2.elapsed());
     }
 
     assert!(census.assets > 0, "no effect asset parsed");

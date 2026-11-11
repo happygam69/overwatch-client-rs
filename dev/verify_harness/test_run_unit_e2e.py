@@ -115,11 +115,43 @@ def main() -> int:
             if expect == "divergent" and not e.divergences:
                 failures.append(f"{label}: divergent without counterexamples")
 
+        # A declaration that names a line the candidate does not have is
+        # stale: the code moved under it. The unit must not verify against a
+        # weaker mutant set - it says so and stops.
+        stale_label = "stale-declaration"
+        c_file = os.path.join(work, f"{stale_label}.c")
+        with open(c_file, "w") as f:
+            f.write(CORRECT_C)
+        unit_json = os.path.join(work, f"unit_{stale_label}.json")
+        unit_data = dict(UNIT)
+        unit_data["id"] = f"fn/SyntheticAdd-{stale_label}"
+        unit_data["knownEquivalentMutants"] = [
+            {
+                "kind": "boundary +1",
+                "line": 999,
+                "rationale": "a line the candidate does not have",
+            }
+        ]
+        with open(unit_json, "w") as f:
+            json.dump(unit_data, f)
+        unit = load_unit(unit_json)
+        unit.c_file = c_file
+        unit.image = img_path
+        print(f"\n--- run_and_record: {stale_label} (expect inconclusive) ---")
+        e = runner_mod.run_and_record(unit, verbose=True)
+        print(f"=> verdict: {e.status}")
+        for n in e.notes:
+            print(f"   note: {n}")
+        if e.status != "inconclusive":
+            failures.append(f"{stale_label}: got {e.status}, expected inconclusive")
+        if not any("no longer exist" in n for n in e.notes):
+            failures.append(f"{stale_label}: no stale-declaration note: {e.notes}")
+
         # The ledger must contain both runs, and the wrong-decompile entry
         # must not be usable as a verdict.
         entries = ledger.load_ledger(tmp_ledger)
-        if len(entries) != 2:
-            failures.append(f"ledger has {len(entries)} entries, expected 2")
+        if len(entries) != 3:
+            failures.append(f"ledger has {len(entries)} entries, expected 3")
         elif entries["fn/SyntheticAdd-wrong-decompile"].status != "divergent":
             failures.append(
                 "ledger kept status "

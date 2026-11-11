@@ -67,27 +67,33 @@ one.
 
 ---
 
-## The gate's wall time: seven install suites are 98% of it (2026-11-19)
+## The gate's wall time: seven install suites were 98% of it (2026-11-19)
+
+**Closed 2026-11-11: the seven suites are now seconds.** The measurement
+below is the "before"; the fix and the "after" are in
+[`open-questions.md`'s item 1](#the-gate's-wall-time-seven-install-suites-are-98-of-it-2026-11-19)
+and in MODLOG 2026-11-11. The whole gate now runs in **99.6 s**, green, with
+the slowest test binary at 13.2 s (it was `index_find_real` at 935 s).
 
 Measured on the operator's machine (12 cores) with `cargo xtask verify`, the
 sequential `cargo test --release --workspace` run: of the 56 binaries whose
 timings parse out of the log, **2246 s of test time** and these seven suites
 account for 2218 s of it:
 
-| suite | wall |
-|---|---:|
-| `ow-casc` `index_find_real` | 935.2 s |
-| `ow-scene` `skin_pose_gate` | 428.3 s |
-| `ow-tank` `effect_real` | 222.8 s |
-| `ow-scene` `practice_launch` | 185.5 s |
-| `ow-scene` `hero_draws` | 158.6 s |
-| `ow-tank` `hero_pick_real` | 151.9 s |
-| `ow-tank` `brush_real` | 134.5 s |
+| suite | wall (before) | wall (now) |
+|---|---:|---:|
+| `ow-casc` `index_find_real` | 935.2 s | 1.5 s |
+| `ow-scene` `skin_pose_gate` | 428.3 s | 4.4 s |
+| `ow-tank` `effect_real` | 222.8 s | 4.0 s |
+| `ow-scene` `practice_launch` | 185.5 s | 5.2 s |
+| `ow-scene` `hero_draws` | 158.6 s | 2.8 s |
+| `ow-tank` `hero_pick_real` | 151.9 s | 2.8 s |
+| `ow-tank` `brush_real` | 134.5 s | 2.7 s |
 
 Everything else is under 16 s per binary. The full sequential run passed 84
 minutes of wall clock (compile + fmt + clippy + the suites) before it was
-stopped, so the operator's "verification takes longer than the work" is
-arithmetic: a unit is ~12 minutes, the gate is over an hour.
+stopped, so the operator's "verification takes longer than the work" was
+arithmetic: a unit is ~12 minutes, the gate was over an hour.
 
 The pool is now in: `crates/xtask/src/json.rs` + `test_runner.rs` +
 `main.rs` (applied from `xtask-verify-speedup.patch`) build every binary once
@@ -103,12 +109,27 @@ below remain the real fix.
 
 Three ways forward, in order of what actually removes work:
 
-1. **Make the seven suites cheap.** `index_find_real` re-derives a binary
-   search for every one of ~10M entries; the same property can be proven from
-   the sortedness walk plus a deterministic sample of keys (boundaries,
-   duplicates, first/last per bucket). The other six re-scan install trees per
-   run; a shared, gitignored, install-keyed cache of the derived facts would
-   collapse them to seconds.
+1. ~~Make the seven suites cheap.~~ **Done (2026-11-11), by fixing the
+   reader rather than by sampling or caching to disk.** Two values that are a
+   pure function of the install were rebuilt on every call, and both hot
+   spots were that:
+   - `SegmentEntries::key_state` rebuilt the segment's whole 18-byte-per-entry
+     buffer on every call, so the per-key sweep copied tens of gigabytes. The
+     bytes are now built once per segment: `index_find_real` **1154 s ->
+     1.5 s**, with every key still resolved.
+   - `Store::open_ckey` re-parsed the decoded encoding manifest on every
+     asset open; the parse's expensive half is the espec string index (one
+     u64 per byte of a 100 MB manifest). The index is now built with the
+     manifest: `effect_real` **213 s -> 4.0 s**.
+
+   The other five suites paid the same two costs through the same reader:
+   `skin_pose_gate` 428 s -> 4.4 s, `practice_launch` 186 s -> 5.2 s,
+   `hero_draws` 159 s -> 2.8 s, `hero_pick_real` 152 s -> 2.8 s,
+   `brush_real` 134 s -> 2.7 s. Every assertion is unchanged - the effect
+   census is the same 7,342 assets and 419,488 chunks.
+
+   The weaker proposals are not needed: nothing was sampled away and no
+   on-disk cache can go stale, because the cache is the reader's own state.
 2. **Split the gate by cost.** Done as scoping, not as a second gate:
    `cargo xtask verify -p <crate>` runs clippy, the tests and the doc tests for
    the named crates only, and `cargo xtask verify --skip <name>` (repeatable)
@@ -120,7 +141,8 @@ Three ways forward, in order of what actually removes work:
    are exactly where an unexpected break hides. The four python doc checks stay
    workspace-wide either way - they answer in seconds.
 3. ~~Parallel binaries~~ **done** (the pool above). Wall-time win only; no
-   CPU saved. Once (1) lands the pool makes the gate a few minutes.
+   CPU saved. With (1) done the pool has nothing left to hide: the gate's
+   floor is the compile time plus the suites' own seconds.
 
 ## 0. The engine object and its subsystem schedule
 
@@ -1463,6 +1485,31 @@ appender that no decoded store shows. `BuildBvh`'s three callers are split
 wrappers over the collider-face array and all unreachable; "a sector reader must
 end in a BVH" is false.
 
+**Correction (2026-11-11): "BuildBvh's three callers are unreachable" was a
+fragment artifact, and the chain is now named end to end.** The three
+addresses (`0x142cca7d9`, `0x142ccb2db`, `0x142ccbc1c`) are not three
+functions: the first is a fragment of `ColliderFaceAppend` (`0x142cca460`) and
+the other two are interior points of `BuildBvh` (its own recursion).
+`BuildBvh` has exactly one external caller, and that one is reachable:
+
+```text
+0x142137480 -> 0x14213bbc0 (the geometry driver)
+                 -> 0x14213a510 AppendCollisionEntryFromBrushSource
+                 -> 0x14213acf0 (the 0x60-entry builder)
+0x14213c440 GeometryBuild -> 0x142cf2010 MeshToColliderFaces
+                            -> 0x142ccc120 ColliderMeshEmit
+                            -> 0x142cca460 ColliderFaceAppend
+                            -> 0x142ccb1b0 BuildBvh (fn/BuildBvh, verified)
+```
+
+**The conclusion of round 5 stands** - the source is the brush, not the
+collision chunk - but it now rests on named functions instead of on an
+unreachability that was an artifact of counting fragments as functions. The
+shape record itself is now proven too: `MeshShapeFill` (`0x142cae540`) is
+verified as `fn/MeshShapeFill` (96 differential cases, 8/8 mutants killed),
+and the crate's `ow_tank::mesh_shape::shape_record` is that expression dword
+for dword.
+
 With the chunk excluded, the live producer is the **brush**, and its
 tree→mesh walk is now read and implemented: the hull stage, the status tree
 (insert fixup, erase + rebalance, both rotations), the six ops, the ear
@@ -2037,14 +2084,33 @@ floor probe now uses it instead of an invented `1.5` m. The second capsule
 triple (`0x84`/`0x88`/`0x8c`) is crouch-sized (`1.3 / 0.5 / 0.25`) but which
 state selects it is still unread.
 
+**The capsule is now swept (2026-11-11).** `ow-client`'s walk no longer calls
+the sphere form. `ow_sim::walk::Capsule` carries the shape, `advance_capsule`
+and `snap_to_floor_capsule` are the capsule's two queries (the same fold, the
+same depenetration, the same slide - only the shape in the query differs), and
+the walker's position is the capsule's **origin**, at its feet. A picked hero's
+own capsule comes from `ow_tank::entity::mover_capsule_of`; a launch with no
+pick uses the install-wide common values (`extent 2.0`, `radius 0.5`,
+`offset 0.5` -> `r = 0.5`, `d = 0.5`, height `1.5`). Five units in `ow-sim`
+pin the difference, and `crates/ow-client/tests/walk_real.rs` pins the walk's
+numbers on the install.
+
 **What is still open.** The client's character-vs-world pass `0x142cf3f80`
-iterates the entry's paired shapes (`0x142cd4d90` iterator, `0x142cbb260` pair
-getter) and divides the delta by `param_3[8]` into the fraction quad at
-`+0x640` - a Domino pair walk, not a per-shape re-query. The walk's `8 m` grid
-and its slide are therefore declared deviations, and reading that pass is the
-next narrowphase-side anchor. `ow-client` still calls the sphere form; adopting
-the capsule is a one-line switch per probe once the pass is read, because the
-capsule's origin-at-feet height changes the resting position.
+(the Domino solver) is read on the **shape** side and on the **resolve
+loop**: it iterates the entry's paired shapes (`0x142cd4d90`, the pair
+getter `0x142cbb260`), collects the contacts, and resolves the position with
+`0x142cd5270` until the **squared** correction is below `eps = 0.005` (the
+bound is the sweep block's `+0x1c`, which the advance fills from
+`step_state[0x94]`), with the resolved position at `body+0x620` and the
+iteration count at `body+0x664`. **The client's resolve has no slide**: it puts
+the body where it was asked to go and lets the Domino runtime push it out.
+
+What is not ported is the runtime's own depenetration (`0x142cd4610` and the
+contact collection behind it) and the pair build's world structures (the
+fixture list, the handle encoding, the body records). So the walk's `8 m`
+grid, its slide and its floor stage remain declared deviations - and the
+slide is now known to be the *wrong* rule, not just a different one. That is
+the next narrowphase-side anchor.
 
 ---
 
@@ -2949,6 +3015,45 @@ roster, names, marker and movement row are read and `ow-client` applies them as
 a declared viewer default; its remaining half closes by reading what the spawn
 does with the hero id, not by inventing a selector. Item 1 is the cheapest next
 read.
+
+## 19. The asset-type registry: job id -> the loader that fills it
+
+**Answered 2026-11-11** (the open part is the last paragraph).
+
+The mapping is read. `JobForType` (`0x141fd8300`) indexes the u32 type table
+at `0x143a7c3a0` (403 types, `0x00..0x192`) and returns the qword in the job
+table at `0x1441b3cb0`. The job table is zero-fill, so the job object behind
+a slot exists only at runtime - but `0x141fd89f0` is the call that *fills* a
+slot, so its callers are the registration functions, and the descriptor each
+one passes holds the job id at `+8`, the **load** callback at `+0x48` and the
+**release** callback at `+0x78`.
+
+32 of the 33 jobs are resolved; the whole table is in
+`docs/formats/asset-types.md` section 1b and `python dev/fn.py jobs` prints
+it. The write was invisible to a displacement scan because the slot address
+is computed with a `lea` and the store then uses no displacement.
+
+**What is known.** 33 job ids are used (`0..39`, with gaps); job 10 serves 194
+of the 403 types; 163 types map to job 0 (no loader). The type table is a
+compile-time constant, so the ids are fixed by the build. The read confirms
+two claims the project had made by inference: the material asset (type
+`0x008`) is job 2 with the loader `0x141b1a8e0`, and the material data (type
+`0x0B3`) is job 28 with the load callback `0x141b1a7b0` and the finalize
+callback `0x141b1a790`.
+
+**Still open.** Job 4 (type `0x27`): its registration stores the job id in a
+way this read does not resolve. And the descriptor's other fields are not
+read - only `+8`, `+0x48` and `+0x78` are. The registration functions also
+deobfuscate the asset's **name** with the same XOR-with-a-key loop
+`formats/chunk-kinds.md` documents (the first one, at `0x1439a70a4`, is
+`MODEL`), so every registered name is decodable - but the names are not
+listed yet.
+
+**Next anchor.** `0x1441b3cb0` (the job table), `0x141fd89f0` (the register
+call), `0x141b19160` (one registration), `docs/formats/asset-types.md`,
+`dev/fn.py jobs`.
+
+---
 
 ## How an entry is closed
 

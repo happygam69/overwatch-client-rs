@@ -1,0 +1,54 @@
+{
+  "id": "fn/MeshShapeFill",
+  "title": "tier-2 shipped code: the shape-record builder against MeshShapeFill (0x142cae540)",
+  "address": {
+    "v2b": "0x7ff7c79ce540"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "mesh_shape_fill",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-tank",
+  "candidateProbe": "crates/ow-tank/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "record",
+      "kind": "ptr",
+      "ptr_len": 76
+    },
+    {
+      "name": "source",
+      "kind": "ptr",
+      "ptr_len": 48
+    },
+    {
+      "name": "scale",
+      "kind": "f32"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "mesh_shape_fill_fixture",
+  "options": {
+    "iterations": 96,
+    "coverageThreshold": 90.0,
+    "mutationCount": 8,
+    "mutationKillRate": 0.8,
+    "seed": 52768,
+    "coverageWindow": 89,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-tank/src/mesh_shape.rs (shape_record), built by cargo and called by crates/ow-tank/src/bin/verify_probe.rs through the mesh_shape_fill entry. The ledger binds the verdict to mesh_shape.rs + the probe source + the git revision.",
+    "Oracle is MeshShapeFill at exe 0x142cae540 (v2b 0x7ff7c79ce540), 0x59 bytes. It fills a 0x4c-byte record from the 0x30-byte source the block unpacker 0x141b53af0 writes: four lanes of the scale at +0x00, four lanes of the reciprocal at +0x10 (a divss by the constant 1.0 at 0x142f7aae4, so a zero scale gives inf), the three data pointers at +0x20/+0x28/+0x30, the four copied words at +0x38/+0x3c/+0x40/+0x44, and the scaled float at +0x48.",
+    "The source's three pointers are copied as stored - the client never converts them - so the whole 0x4c-byte record is compared exactly, with no masked slot.",
+    "The fixture varies the scale over ordinary values, a negative, a zero (the reciprocal's inf edge), and a denormal and a huge scale; the source's pointers, the four words and the scaled float are random or the declared special cases, including the all-zero source and the all-maximum one.",
+    "The function has no branch and no external call: its coverage is 0 of 0 sites by construction, and the mutation stage is the whole evidence.",
+    "allowedImageReads: 0x7ff7c7c9aae4 is the 1.0f constant at exe 0x142f7aae4, the dividend of the `divss` that makes the reciprocal lanes. It is a .rdata compiler constant, not game state."
+  ],
+  "acknowledgedGaps": [
+    "The record's fields only: the unit proves the 19 dwords the client writes and where each comes from. It says nothing about what the three arrays hold - that is the block unpacker 0x141b53af0 and the mesh record layout.",
+    "The client's division and multiplication are IEEE operations on the same operands in the same order as the candidate's, so the reciprocal and the scaled float are bit-identical; the unit compares the record's bits rather than the floating-point values.",
+    "The scale is passed in xmm2 on both sides: the client reads it from the third float argument slot and the probe takes the same slot."
+  ]
+}

@@ -127,9 +127,26 @@ at 0x142cbee77` show the surrounding stores.
 The per-element allocator is `ShapePoolAlloc` (`0x142cb00c0`): pop
 `pool[+0x14]`, take the next index from that element's link dword, bump
 `pool[+0x08]`, raise `pool[+0x10]`; when the free head is `-1`, grow to
-`capacity/2 + capacity` (minimum 2), allocate, zero, copy `used * stride` bytes
-and re-point. `formats/domino.md` records that expression; this is the census
-of who may call it.
+`capacity/2 + capacity` (minimum 2), allocate, zero, copy the old array's
+`capacity * stride` bytes and re-point. `formats/domino.md` records that
+expression; this is the census of who may call it.
+
+**The allocator is implemented and proved.** `ow_tank::domino_world::shape_pool_alloc`
+is the client's pop path, operation for operation: the head at `pool+0x14`, the
+popped entry's own link dword at `entry+0xA0`, the used count at `pool+0x08`,
+the high-water mark at `pool+0x10` raised with the client's signed compare,
+and the popped entry's link set to its own index. `fn/ShapePoolAlloc` proves
+it against the client's bytes: 96 differential cases on every channel, the
+pool record and the entries array compared exactly, 5/5 mutants killed (one
+declared equivalent - a maximum written with a non-strict compare writes the
+same value when the two are equal).
+
+**Correction (2026-11-11): the grow path copies the old array's `capacity *
+stride` bytes, not `used * stride`.** The client's copy at `0x142cb0145` reads
+the *capacity* at `pool+0x0C` for its length, not the used count at `+0x08`.
+The crate's implementation covers the pop path only - the grow path allocates
+through the client's runtime allocator (`0x142cadee0`), which the crate does
+not model - so the case is refused rather than guessed, and the unit says so.
 
 | target | E8 sites | functions |
 |---|---:|---|
@@ -276,6 +293,77 @@ pool: the only BVH on this path is the face BVH, and its faces come from
 `ColliderFaceAppend`/`ColliderMeshEmit`/`MeshToColliderFaces`, which is the
 brush route again (`formats/brush-collision.md`).
 
+### Correction (2026-11-11): the three "functions" are one function and two
+### interior points, and the chain is reachable
+
+The table above names three *addresses* (`0x142cca7d9`, `0x142ccb2db`,
+`0x142ccbc1c`), not three functions. Resolving each address to the function
+that owns it (`python dev/fn.py read <addr>`, which walks the
+`UNW_FLAG_CHAININFO` chain to its root) gives:
+
+| address | what it really is |
+|---|---|
+| `0x142cca7d9` | a **fragment** of `ColliderFaceAppend` (`0x142cca460`, extent `0x142cca460..0x142ccad73`) |
+| `0x142ccb2db` | an **interior point** of `BuildBvh` (`0x142ccb1b0`) - one of its own recursive calls |
+| `0x142ccbc1c` | an interior point of `BuildBvh` too |
+
+So `BuildBvh` has exactly **one** external caller - `ColliderFaceAppend` -
+and the three "unreachable" wrappers were never separate entries to begin
+with. "No `E8` site to any of the three" was true of the fragments and of
+`BuildBvh`'s own recursion, and said nothing about the function that owns
+the first one.
+
+**The chain is reachable, and every link is named:**
+
+```text
+0x142137480  the geometry builder's owner (five callers)
+  └─ 0x14213bbc0  the geometry driver: pool A and pool B, the 0x60 and 0x100 entries
+       ├─ 0x14213a510  AppendCollisionEntryFromBrushSource (the 0x100 entry)
+       └─ 0x14213acf0  the 0x60 entry builder
+0x14213c440  GeometryBuild (the node-type-2 build)
+  └─ 0x142cf2010  MeshToColliderFaces
+       └─ 0x142ccc120  ColliderMeshEmit
+            └─ 0x142cca460  ColliderFaceAppend
+                 └─ 0x142ccb1b0  BuildBvh   (verified: fn/BuildBvh)
+```
+
+`ColliderMeshEmit` (`0x142ccc120`) has exactly two callers: the character
+controller (`0x140c264b0`) and `MeshToColliderFaces` (`0x142cf2010`); and
+`MeshToColliderFaces`'s two callers are `AppendCollisionEntryFromBrushSource`
+(`0x14213a510`) and `GeometryBuild` (`0x14213c440`). The level's geometry
+therefore reaches the collider BVH through the brush, exactly as §7 concludes
+- but the route is now named end to end instead of "unreachable".
+
+## 6b. The shape record: `MeshShapeFill` is now a verified unit
+
+`MeshShapeFill` (`0x142cae540`, 89 bytes) fills the 0x4c-byte shape record
+the collision query consumes, and it is the only writer of that record:
+
+```text
++0x00  4 x f32   the scale, broadcast
++0x10  4 x f32   1.0 / the scale, broadcast   (a divss by the constant 1.0 at 0x142f7aae4)
++0x20  u64       the source's +0x00 (the node array)
++0x28  u64       the source's +0x08 (the point array)
++0x30  u64       the source's +0x10 (the triangle array)
++0x38  u32       the source's +0x18
++0x3C  u32       the source's +0x1C
++0x40  u32       the source's +0x20
++0x44  u32       the source's +0x24
++0x48  f32       the scale * the source's +0x28
+```
+
+The crate's `ow_tank::mesh_shape::shape_record` is that expression dword for
+dword, and it is now **proved against the client's bytes**
+(`dev/verify_harness/units/fn-MeshShapeFill.json`): 96 differential cases on
+every channel, 8/8 mutants killed, the record compared bit for bit with no
+masked slot. The scale's edges are in the fixture - a zero scale (the
+reciprocal is `inf`), a denormal and a huge scale.
+
+The five `MeshShapeFill` callers are now all named: the character controller
+(`0x140c264b0`), the geometry module (`0x142077580`), the chunk assembler
+(`0x14209fc90`), the model route (`0x14210bac0`) and `ShapeEntryFromDescriptor`
+(`0x142cb7f10`).
+
 ## 7. The decision, and what it changes
 
 **The source data is the brush, not the collision chunk.** Four independent
@@ -319,6 +407,7 @@ records them so the parent can fold them in):
 | `docs/function-names.csv` (row `0x14213a510`) | `AppendCollisionEntryFromBrushSource` "appends one `0x60` entry" | it appends one **`0x100`**-byte entry to the array at `geometry+0x118` (`0x1421360a0`, argument at `0x14213aad5`) and fills it through `+0xf0` (stores at `+0xa0`, `+0xb0`, `+0xd0`, `+0xf0`); the `0x60`-byte entries are `GeometryBuild`'s, into `geometry+0x108` |
 | `formats/brush-collision.md` | its driver is "`0x14213bbe6`" | the driver's group starts at **`0x14213bbc0`**; `0x14213bbe6` is inside it |
 | `formats/maps.md` | "the geometry object's `+0x114` has only three writers" | `+0x114` is array A's count; its only append path is `0x142136010` ← `GeometryBuild`, and `GeometryFinalize` resets it after draining (§4). The "three writers" figure was not reproduced by this scan and should be re-derived before it is relied on |
+| this file, §6 | "Its five `E8` sites are in three functions ... None is reachable" | the three named addresses are **not three functions**: `0x142cca7d9` is a fragment of `ColliderFaceAppend` (`0x142cca460`) and `0x142ccb2db`/`0x142ccbc1c` are interior points of `BuildBvh` (its own recursion). `BuildBvh` has exactly one external caller - `ColliderFaceAppend` - and that one is reachable, through `ColliderMeshEmit` (`0x142ccc120`) and `MeshToColliderFaces` (`0x142cf2010`) from the brush route. §6's correction has the chain |
 
 ## 8. What is open
 

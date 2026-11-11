@@ -20,7 +20,7 @@ use std::path::Path;
 
 use crate::blte;
 use crate::bytes;
-use crate::encoding::EncodingFile;
+use crate::encoding::{self, EncodingFile};
 use crate::index::{self, Location};
 use crate::install::{Error as InstallError, Install};
 use crate::pagecache::{self, PageCache};
@@ -231,6 +231,14 @@ pub struct Store {
     /// in this installation", which is our own message for "the encoding table
     /// has no entry for this key" — not a missing decryption key at all.
     encoding: RefCell<Option<Vec<Vec<u8>>>>,
+    /// The espec index of each decoded encoding manifest, in the same order.
+    ///
+    /// The index is the expensive half of the manifest parse (one u64 per
+    /// byte of the espec block) and the parse runs on every asset open, so
+    /// the install sweep - thousands of opens - spent all its time building
+    /// the same index again. It is a pure function of the manifest, so it is
+    /// built once, with the manifests.
+    encoding_index: RefCell<Option<Vec<std::sync::Arc<[u64]>>>>,
     /// What happened to each encoding manifest the build config named.
     encoding_report: RefCell<Vec<String>>,
 }
@@ -244,6 +252,7 @@ impl Store {
             archives: RefCell::new(HashMap::new()),
             page_cache: RefCell::new(PageCache::new()),
             encoding: RefCell::new(None),
+            encoding_index: RefCell::new(None),
             encoding_report: RefCell::new(Vec::new()),
         })
     }
@@ -692,6 +701,7 @@ impl Store {
             .map(|v| v.to_vec())
             .ok_or_else(|| Error::Parse("build config has no encoding key".into()))?;
         let mut blobs: Vec<Vec<u8>> = Vec::new();
+        let mut indexes: Vec<std::sync::Arc<[u64]>> = Vec::new();
         let mut report = Vec::new();
         let mut opened: Option<&String> = None;
 
@@ -713,7 +723,11 @@ impl Store {
                         "{value}: opened as an encoding key, {} B",
                         blob.len()
                     ));
+                    // The index is built here, once: it is the parse's
+                    // expensive half and the parse runs on every asset open.
+                    let index: std::sync::Arc<[u64]> = encoding::espec_index_of(&blob)?.into();
                     blobs.push(blob);
+                    indexes.push(index);
                     opened = Some(value);
                     break;
                 }
@@ -733,6 +747,7 @@ impl Store {
         }
         self.encoding_report.borrow_mut().clone_from(&report);
         *self.encoding.borrow_mut() = Some(blobs);
+        *self.encoding_index.borrow_mut() = Some(indexes);
         Ok(())
     }
 
@@ -826,7 +841,9 @@ impl Store {
         // here, and a bundle index opens tens of thousands of assets.
         let blobs = self.encoding.borrow();
         let blobs = blobs.as_ref().expect("just loaded");
-        self.open_ckey_using(ckey, blobs)
+        let indexes = self.encoding_index.borrow();
+        let indexes = indexes.as_ref().expect("just loaded");
+        self.open_ckey_using(ckey, blobs, indexes)
     }
 
     /// Resolve a content key against an explicit set of decoded encoding
@@ -834,11 +851,20 @@ impl Store {
     /// encoding manifests themselves can resolve one half through the other
     /// without re-entering `ensure_encoding` (which recursed until the stack
     /// overflowed, when this was one function).
-    fn open_ckey_using(&self, ckey: &[u8; 16], blobs: &[Vec<u8>]) -> Result<Vec<u8>> {
+    fn open_ckey_using(
+        &self,
+        ckey: &[u8; 16],
+        blobs: &[Vec<u8>],
+        indexes: &[std::sync::Arc<[u64]>],
+    ) -> Result<Vec<u8>> {
         let mut had_ekey = false;
         let mut last = None;
-        for blob in blobs {
-            let encoding = EncodingFile::parse(blob)?;
+        for (i, blob) in blobs.iter().enumerate() {
+            let index = indexes
+                .get(i)
+                .cloned()
+                .ok_or_else(|| Error::Parse("the encoding index is missing".into()))?;
+            let encoding = EncodingFile::parse_with_index(blob, index)?;
             let ekeys = encoding.ekeys_for_ckey(ckey);
             if ekeys.is_empty() {
                 continue;

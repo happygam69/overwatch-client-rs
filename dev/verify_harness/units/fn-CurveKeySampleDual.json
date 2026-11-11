@@ -18,12 +18,26 @@
     "coverageThreshold": 95,
     "mutationCount": 12,
     "mutationKillRate": 0.75,
-    "seed": 4241
+    "seed": 4241,
+    "unreachableBranches": [
+     {
+      "site": "0x7ff7c58b0a92",
+      "edge": "0x7ff7c58b0aaf",
+      "why": "The linear scan's entry test in the first half (exe 0x140b90a92, `comiss xmm4,xmm3 / jae 0x140b90aaf`) can never be taken: the scan is entered with xmm4 = times[lo] and lo is 0 or a key whose time is strictly below t. The caller has already compared t with times[0] (`comiss xmm3,xmm4 / ja` at 0x140b90a1d) and t <= times[0] leaves through the before-all path, and the binary search only advances lo (0x140b90a6e, `mov rdx,rax`) on the `jbe` NOT taken edge, which is t > times[mid]. So times[lo] < t holds on every path into the scan, and the jae is dead. The second half is the same code (0x140b90b82)."
+     },
+     {
+      "site": "0x7ff7c58b0b82",
+      "edge": "0x7ff7c58b0b9f",
+      "why": "The same dead edge in the second half (exe 0x140b90b82, `comiss xmm2,xmm3 / jae 0x140b90b9f`): the second half's search advances r8 (lo) only on the `jbe` not-taken edge at 0x140b90b5c, so times2[lo] < t always holds when the scan is entered. The first half's twin is 0x140b90a92."
+     }
+    ]
   },
   "notes": [
     "Zero named callees; reads a linked struct (values ptr, times ptr, two counts).",
     "argFactory=curve_fixture builds the linked layout with relative pointers; both loaders rebase them.",
     "The 80-key shape reaches the +0x3f binary-search branch in BOTH halves (track2 count also >= 64).",
+   "The 128-key shape is what repeats the search loop: the window is [0, count-1] and halves once per pass, so the loop continues only while (hi - lo) >= 0x40; 80 keys halve to 40 and never repeat, 128 keys leave 64 and repeat exactly once. That is the back edge at exe 0x140b90a80 / 0x140b90b70.",
+   "Two branch edges are dead and are declared in options.unreachableBranches: the linear scan's entry test (exe 0x140b90a92 / 0x140b90b82). The scan is entered with times[lo] and lo is 0 or a key whose time is strictly below t (the caller compares t with times[0] at 0x140b90a1d and the search advances lo only on the t > times[mid] edge at 0x140b90a6e), so the jae is never taken.",
     "Second track's key index is relative; the callee adds count1.",
     "Every key-index load is a raw dword load in the machine, not a float conversion; the decompile's (uint)float casts were fixed to bitcast_u32 (caught by this harness)."
   ],
@@ -31,27 +45,27 @@
   "knownEquivalentMutants": [
     {
       "kind": "boundary -1",
-      "line": 45,
+      "line": 38,
       "rationale": "Flipping the count==1 fast-path test to count==0 is observationally equivalent: when the track has one key every branch of the general path loads that same key (before-all, exact-match and after-all all index the single entry), and when the track has more keys neither ==1 nor ==0 is true, so both builds take the general path. What would observe a difference: a track whose stored count is 1 but whose times array is malformed (multiple keys with count claimed as 1) - the fast path reads one key, the general path would read past it. The fixture never builds that malformed state because the count always matches the array length, which is the contract the callee's caller provides."
     },
     {
       "kind": "cmp-flip <to<=",
-      "line": 57,
+      "line": 50,
       "rationale": "The test is `t < last || t == last`, which is exactly IEEE `t <= last`: for non-NaN both spellings agree value-for-value, and for NaN every comparison is false so both are false. Changing the first `<` to `<=` yields `t <= last || t == last`, the same relation. What would observe a difference: nothing under IEEE-754 ordering; only a non-IEEE comparison semantic (e.g. total-order predicates) would distinguish them, and the callee uses comiss/minss/maxss which are IEEE."
     },
     {
       "kind": "boundary +1",
-      "line": 61,
+      "line": 54,
       "rationale": "The binary-search mid is `(lo+hi)>>1` in the bytes (lea+shr) but written as `lo + (hi>>1)` in the decompile due to C precedence; flipping `>>1` to `>>2` changes the mid stride. The search is only a window-narrowing optimization: it never advances the low bound past a key with time < t, and the linear scan that follows walks forward from the window's low bound to the first key >= t. Any mid that keeps the invariant 'low bound's key time < t' yields the same final key after the scan. What would observe a difference: a code path that uses the search's high bound or mid directly as the result without the linear scan - this callee does not have one."
     },
     {
       "kind": "boundary +1",
-      "line": 42,
+      "line": 35,
       "rationale": "uVar12 is the binary-search low bound, initialized to 0. Raising it to 1 makes the first mid `(1+hi)>>1` instead of `(0+hi)>>1` and starts the window one key later. The search invariant is 'low bound's key time < t' (it only advances the low bound to keys strictly before t), and the linear scan after walks forward from the window's low bound. Starting at index 1 instead of 0 skips only key 0, whose time is the smallest in the track; the before-all fast path already handles t below every key, so when the search runs, t is past key 0 and the scan would skip it anyway. What would observe a difference: a call with t exactly equal to key 0's time AND count > 0x3f AND the first comiss taking the search arm - the comiss for t <= first key routes to the fast path instead, so this state is unreachable through this entry."
     },
     {
       "kind": "cmp-flip <to<=",
-      "line": 59,
+      "line": 52,
       "rationale": "The gate `count > 0x3f` decides binary search vs pure linear walk. Flipping to `count >= 0x3f` makes count==63 take the search path. The search narrows a window and the SAME linear scan then runs to completion either way; the search never skips a key whose time is < t (it only advances the low bound to such keys), so the scan lands on the same final key. The 63-key fixture shape exists to reach this exact boundary and demonstrates both paths agree. What would observe a difference: timing only (the search is asymptotically faster), or a hypothetical callee that returns the window's bounds directly without the trailing scan."
     }
   ]

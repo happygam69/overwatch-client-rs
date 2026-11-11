@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -28,6 +28,11 @@ class Mutant:
     line: int  # 1-based
     excerpt: str
     source: str
+    # The mutated line itself, stripped. Two mutants of the same kind can
+    # live on the same line (a line with a decimal and a hex constant gets a
+    # boundary mutant for each), so a declaration that names one of them
+    # needs the mutated text to tell them apart.
+    mutated: str = ""
 
 
 def _expand_includes(source: str, base_dir: str) -> str:
@@ -51,6 +56,11 @@ def _expand_includes(source: str, base_dir: str) -> str:
     return "".join(out_lines)
 
 
+# The public name for the include expansion. The batch generator needs the
+# same expansion the mutator does, or the two would slice different text.
+expand_includes = _expand_includes
+
+
 _CMP_FLIPS = [
     ("<=", "<"),
     ("<=", "=="),  # a second, nastier flip: boundary to equality
@@ -70,26 +80,26 @@ _OP_SWAPS = [
 ]
 
 
-def generate_mutants(
-    source: str, entry: str, count: int = 12, base_dir: str = "."
-) -> List[Mutant]:
-    """Produce up to `count` distinct behaviour-changing mutants of `source`.
+def function_extent(source: str, entry: str) -> Optional[Tuple[int, int, int]]:
+    """The entry function's body extent in `source`.
 
-    Walks the lines inside the entry function only (from the first line
-    containing the entry name to the first line that is just `}` at column 0
-    after that, a simple and honest bound for these files). Mutations that
-    would be no-ops on a given line are skipped. Rust `include!` directives
-    are expanded first so the mutator sees the real function body.
+    Returns `(open_line, close_line, sig_line)`, all 0-based indices into the
+    source's lines: the line carrying the function body's opening brace, the
+    line carrying its closing brace, and the line the definition starts on.
+    The body's interior is `lines[open_line + 1 : close_line]`.
+
+    Ghidra C style: the signature line has the name and parens but no brace;
+    the brace is on its own line after it. Rust style: `fn name(...)` on one
+    line. Comment lines are skipped so a doc comment mentioning the name is
+    not mistaken for the definition, and an actual Rust definition is
+    preferred over a call site (a call to `salsa20(...)` earlier in the file
+    is not the function the mutation stage must edit).
+
+    The mutator and the batch generator share this one implementation: the
+    batch slices the same interior out of each mutant's source, so the two
+    can never disagree about where the function is.
     """
-    source = _expand_includes(source, base_dir)
     lines = source.splitlines(keepends=True)
-    # Find the entry function body. Ghidra C style: the signature line has
-    # the name and parens but no brace; the brace is on its own line after
-    # it. Rust style: `fn name(...)` on one line. Skip comment lines so a
-    # doc comment mentioning the name is not mistaken for the definition.
-    # Prefer an actual Rust definition: a call site earlier in the file (for
-    # example `be_u32`'s caller invoking `salsa20(...)`) is not the function
-    # the mutation stage must edit.
     sig = -1
     def_re = re.compile(r"\bfn\s+" + re.escape(entry) + r"\s*\(")
     for i, ln in enumerate(lines):
@@ -108,13 +118,12 @@ def generate_mutants(
                 sig = i
                 break
     if sig < 0:
-        return []
+        return None
     start = sig
     for i in range(sig, len(lines)):
         if "{" in lines[i]:
             start = i
             break
-    end = len(lines)
     depth = 0
     opened = False
     for i in range(start, len(lines)):
@@ -122,8 +131,27 @@ def generate_mutants(
         if "{" in lines[i]:
             opened = True
         if opened and depth <= 0:
-            end = i + 1
-            break
+            return (start, i, sig)
+    return (start, len(lines), sig)
+
+
+def generate_mutants(
+    source: str, entry: str, count: int = 12, base_dir: str = "."
+) -> List[Mutant]:
+    """Produce up to `count` distinct behaviour-changing mutants of `source`.
+
+    Walks the lines inside the entry function only (from the first line
+    containing the entry name to the first line that is just `}` at column 0
+    after that, a simple and honest bound for these files). Mutations that
+    would be no-ops on a given line are skipped. Rust `include!` directives
+    are expanded first so the mutator sees the real function body.
+    """
+    source = _expand_includes(source, base_dir)
+    lines = source.splitlines(keepends=True)
+    extent = function_extent(source, entry)
+    if extent is None:
+        return []
+    start, end, _sig = extent
 
     mutants: List[Mutant] = []
     seen: set = set()
@@ -141,6 +169,7 @@ def generate_mutants(
                 line=lineno,
                 excerpt=lines[lineno - 1].rstrip()[:80],
                 source="".join(out),
+                mutated=out[lineno - 1].strip(),
             )
         )
 

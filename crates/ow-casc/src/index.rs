@@ -31,6 +31,7 @@
 //! bucket. [`parse_segment_file_name`] is that parser and [`segment_name`] is
 //! the formatter.
 
+use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fs;
@@ -311,6 +312,41 @@ pub struct BucketFile {
 pub struct SegmentEntries {
     entries: Vec<([u8; 9], Location)>,
     pages: PageTable,
+    /// The segment's byte form, built once and reused.
+    ///
+    /// The bytes are a pure function of `entries` and `pages` - the same
+    /// 18-byte records and the same page table the client keeps in memory
+    /// after it opens the segment. `key_state` used to rebuild them on every
+    /// call, which made a per-key sweep quadratic in the segment size: the
+    /// install test resolves 1.1M keys and copied tens of gigabytes.
+    bytes: OnceCell<SegmentBytes>,
+}
+
+/// The segment's byte forms: the sorted 18-byte entries, the page table
+/// bytes and the page count.
+#[derive(Debug, Clone, Default)]
+struct SegmentBytes {
+    entries: Vec<u8>,
+    page_table: Vec<u8>,
+    page_count: u32,
+}
+
+/// The segment's byte forms, built once per segment.
+///
+/// The layout is the client's: `EKey[9] | location[5, big-endian] |
+/// size u32 LE` per entry, then the page table's own bytes.
+fn build_segment_bytes(entries: &[([u8; 9], Location)], pages: &PageTable) -> SegmentBytes {
+    let mut bytes = Vec::with_capacity(entries.len() * ENTRY_SIZE);
+    for (ekey, location) in entries {
+        bytes.extend_from_slice(ekey);
+        bytes.extend_from_slice(&location.packed().to_be_bytes()[3..8]);
+        bytes.extend_from_slice(&location.size.to_le_bytes());
+    }
+    SegmentBytes {
+        entries: bytes,
+        page_table: pages.page_bytes(),
+        page_count: pages.page_count() as u32,
+    }
 }
 
 impl SegmentEntries {
@@ -318,11 +354,16 @@ impl SegmentEntries {
         SegmentEntries {
             entries,
             pages: PageTable::default(),
+            bytes: OnceCell::new(),
         }
     }
 
     pub fn with_pages(entries: Vec<([u8; 9], Location)>, pages: PageTable) -> SegmentEntries {
-        SegmentEntries { entries, pages }
+        SegmentEntries {
+            entries,
+            pages,
+            bytes: OnceCell::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -397,16 +438,17 @@ impl SegmentEntries {
     /// `DynamicIndexFindContextInit` (`0x142520520`). The out page/record
     /// words are not part of the shipped state, so they are discarded here.
     pub fn key_state(&self, key: &[u8; 9]) -> KeyState {
+        let bytes = self
+            .bytes
+            .get_or_init(|| build_segment_bytes(&self.entries, &self.pages));
         let mut state = KeyState::default();
-        let mut entries = Vec::with_capacity(self.entries.len() * ENTRY_SIZE);
-        for (ekey, location) in &self.entries {
-            entries.extend_from_slice(ekey);
-            entries.extend_from_slice(&location.packed().to_be_bytes()[3..8]);
-            entries.extend_from_slice(&location.size.to_le_bytes());
-        }
-        let page_table = self.pages.page_bytes();
-        let page_count = self.pages.page_count() as u32;
-        let _ = find_entry(&entries, &page_table, page_count, key, &mut state);
+        let _ = find_entry(
+            &bytes.entries,
+            &bytes.page_table,
+            bytes.page_count,
+            key,
+            &mut state,
+        );
         state
     }
 

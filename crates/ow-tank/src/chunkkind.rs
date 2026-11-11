@@ -75,6 +75,20 @@
 //!
 //! The consumer that turns a sector into collision shapes is not in this
 //! module and is not read (`docs/formats/chunk-kinds.md`).
+//!
+//! # The pathing chunk's header
+//!
+//! The pathing kinds take a different relocator: the client's dispatch
+//! (`FinishMapChunkAsset`, `0x141ff54e0`) sends slot `0x1E` to
+//! `MapChunkHeaderFixup` (`0x142e49360`), which converts three
+//! self-relative RVAs of the header record - at `+0x00`, `+0x08` and `+0x18` -
+//! to pointers and leaves a stored zero as zero. The record's `+0x00` is then
+//! handed to the STUD loader, and the cell fixup runs on the blob it returns.
+//! [`fixup_header_in_place`] is that expression, operation for operation.
+//!
+//! The sibling relocators the same dispatch uses - `0x142e49270` (two
+//! pointers, the additive pathing kind), `0x142e493a0` (`+0x2E8`/`+0x2F0`) and
+//! `0x142e493e0` (`+0x08`, the sound area) - are **not** implemented here.
 
 use std::fmt;
 
@@ -832,4 +846,132 @@ pub fn fixup_in_place(data: &mut [u8], base: u64) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The pathing chunk's header record, as `MapChunkHeaderFixup`
+/// (`0x142e49360`) reads it.
+///
+/// ```text
+/// +0x00  u64  RVA -> pointer (zero stays zero)   the first STUD blob
+/// +0x08  u64  RVA -> pointer (zero stays zero)
+/// +0x10  u64  not touched by the fixup
+/// +0x18  u64  RVA -> pointer (zero stays zero)
+/// ```
+///
+/// The client's dispatch sends the pathing kinds (slot `0x1E`, kind `0x12`)
+/// here before it hands `+0x00` to the STUD loader, and the additive pathing
+/// kind (slot `0x22`) to a sibling that converts two pointers instead.
+pub const PATHING_HEADER_SIZE: usize = 0x20;
+/// The three slots `MapChunkHeaderFixup` converts.
+pub const PATHING_HEADER_POINTERS: usize = 3;
+
+/// `MapChunkHeaderFixup` (`0x142e49360`), the pathing chunk's header fixup,
+/// in place.
+///
+/// The client converts three self-relative RVAs - at `+0x00`, `+0x08` and
+/// `+0x18` - to pointers by adding the record's own address to each, and a
+/// stored zero stays zero. Each conversion is the same three instructions: a
+/// `lea` of the value plus the base, a `test` of the value, and a `cmove`
+/// back to zero when the value was zero. The client's `+0x10` is not touched.
+///
+/// The three conversions are written out rather than looped, because the
+/// machine does them one at a time and each one carries its own zero test.
+///
+/// `base` is the record's address in memory, which is what the client adds;
+/// the client takes it from the record's own pointer, so a caller reading the
+/// file's bytes has to supply it.
+pub fn fixup_header_in_place(data: &mut [u8], base: u64) -> Result<()> {
+    if data.len() < PATHING_HEADER_SIZE {
+        return Err(Error::Truncated("the chunk's header record"));
+    }
+    let blob = u64_at(data, 0x00);
+    set_u64(
+        data,
+        0x00,
+        if blob == 0 {
+            0
+        } else {
+            blob.wrapping_add(base)
+        },
+    );
+    let second = u64_at(data, 0x08);
+    set_u64(
+        data,
+        0x08,
+        if second == 0 {
+            0
+        } else {
+            second.wrapping_add(base)
+        },
+    );
+    let third = u64_at(data, 0x18);
+    set_u64(
+        data,
+        0x18,
+        if third == 0 {
+            0
+        } else {
+            third.wrapping_add(base)
+        },
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn put(data: &mut [u8], at: usize, value: u64) {
+        set_u64(data, at, value);
+    }
+
+    #[test]
+    fn the_header_fixup_rebases_three_slots_and_keeps_a_zero_zero() {
+        let mut d = vec![0u8; PATHING_HEADER_SIZE];
+        put(&mut d, 0x00, 0x20);
+        put(&mut d, 0x08, 0x1000);
+        put(&mut d, 0x10, 0xDEAD_BEEF); // not touched
+        put(&mut d, 0x18, 0x40);
+        fixup_header_in_place(&mut d, 0x1_0000).unwrap();
+        assert_eq!(u64_at(&d, 0x00), 0x1_0020);
+        assert_eq!(u64_at(&d, 0x08), 0x1_1000);
+        assert_eq!(u64_at(&d, 0x18), 0x1_0040);
+        assert_eq!(
+            u64_at(&d, 0x10),
+            0xDEAD_BEEF,
+            "the client does not touch +0x10"
+        );
+    }
+
+    #[test]
+    fn a_stored_zero_stays_zero() {
+        let mut d = vec![0u8; PATHING_HEADER_SIZE];
+        fixup_header_in_place(&mut d, 0x1_0000).unwrap();
+        assert_eq!(u64_at(&d, 0x00), 0);
+        assert_eq!(u64_at(&d, 0x08), 0);
+        assert_eq!(u64_at(&d, 0x18), 0);
+    }
+
+    #[test]
+    fn the_fixup_is_the_clients_order() {
+        // The client reads each slot before it writes that slot, so a slot's
+        // own value is never the base of the next conversion.
+        let mut d = vec![0u8; PATHING_HEADER_SIZE];
+        put(&mut d, 0x00, 0x30);
+        put(&mut d, 0x08, 0x08);
+        put(&mut d, 0x18, 0x10);
+        fixup_header_in_place(&mut d, 0x100).unwrap();
+        assert_eq!(u64_at(&d, 0x00), 0x130);
+        assert_eq!(u64_at(&d, 0x08), 0x108);
+        assert_eq!(u64_at(&d, 0x18), 0x110);
+    }
+
+    #[test]
+    fn a_short_record_is_refused() {
+        let mut d = vec![0u8; PATHING_HEADER_SIZE - 1];
+        assert!(matches!(
+            fixup_header_in_place(&mut d, 0),
+            Err(Error::Truncated(_))
+        ));
+    }
 }

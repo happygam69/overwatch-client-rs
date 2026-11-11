@@ -47,10 +47,53 @@ const SCALE_SET: usize = 0x5b4;
 /// The flags block's `+0x2c`: the per-frame offset added after `t * scale`.
 const RAMP_OFFSET: usize = 0x2c;
 
-/// The character's collision radius, metres. The client's own floor for the
-/// wish writer's radius is `max(body+0x65c, 0.35)`; a walk collider of the same
-/// order keeps the same clearance through a doorway.
-pub const RADIUS: f32 = 0.35;
+/// The mover component's capsule **extent**, field hash `0x1972C687` (class
+/// `+0x78`). The install-wide common value is `2.0` (`2.3` for the large
+/// heroes); a picked hero's own row replaces it.
+pub const CAPSULE_EXTENT: f32 = 2.0;
+
+/// The mover component's capsule **radius**, field hash `0x7A70E3E3` (class
+/// `+0x7c`). The install-wide common value is `0.5` (`0.7` for the large
+/// heroes); a picked hero's own row replaces it.
+pub const CAPSULE_RADIUS: f32 = 0.5;
+
+/// The mover component's capsule **offset**, field hash `0x4A576BC2` (class
+/// `+0x80`), the height the segment is derived against. The install-wide
+/// common value is `0.5`; a picked hero's own row replaces it.
+pub const CAPSULE_OFFSET: f32 = 0.5;
+
+/// The walker's collider: the character's collision capsule, in the
+/// character's local frame.
+///
+/// The client sweeps **this** shape
+/// (`ow_tank::character_collision::capsule_from_mover` is the client's
+/// construction of it). The walk used to sweep a `0.35` m sphere instead, which
+/// is not a shape the client has: it is narrower than the capsule's `0.5` m
+/// radius and only `0.7` m tall, so it passes under a sill the capsule's upper
+/// sphere meets, and it rests a radius above the floor where the capsule's
+/// feet do not.
+pub fn capsule_of(extent: f32, radius: f32, offset: f32) -> ow_sim::walk::Capsule {
+    let capsule = ow_tank::character_collision::capsule_from_mover(extent, radius, offset);
+    ow_sim::walk::Capsule {
+        point_a: capsule.point_a,
+        point_b: capsule.point_b,
+        radius: capsule.radius,
+    }
+}
+
+/// The install-wide common capsule, for a launch with no hero picked.
+pub fn common_capsule() -> ow_sim::walk::Capsule {
+    capsule_of(CAPSULE_EXTENT, CAPSULE_RADIUS, CAPSULE_OFFSET)
+}
+
+/// The walk's collider for a capsule the client already built.
+pub fn capsule_of_shape(capsule: ow_tank::character_collision::Capsule) -> ow_sim::walk::Capsule {
+    ow_sim::walk::Capsule {
+        point_a: capsule.point_a,
+        point_b: capsule.point_b,
+        radius: capsule.radius,
+    }
+}
 
 /// The mover component's base speed, field hash `0x19452F15` (`5.5` for most
 /// heroes in this install). The input source scales this; a selected hero's own
@@ -84,8 +127,15 @@ pub const TERMINAL_FALL: f32 = 30.0;
 /// drag on the way up too.
 pub const RISE_TERMINAL: f32 = 0.0;
 
-/// The eye's height above the sphere's centre, metres.
-pub const EYE_ABOVE_CENTRE: f32 = 1.25;
+/// The eye's height above the character's **origin** (its feet), metres.
+///
+/// The camera's height is **not read** from the client (the view stage is
+/// open, `docs/open-questions.md`), so this carries the sphere proxy's world
+/// height over unchanged: the sphere's centre rested `0.35` m above the floor
+/// and the eye `1.25` m above the centre, so the eye was `1.60` m above the
+/// floor. The capsule's origin is at the feet, so the same world height is
+/// `1.60` m above the origin.
+pub const EYE_ABOVE_ORIGIN: f32 = 1.60;
 
 /// How far down the floor probe reaches, metres: the mover's step-down limit
 /// `+0x688` (`2.5` for the common hero, `2.8` for the large ones), read from
@@ -102,7 +152,11 @@ pub struct Walker {
     body: Vec<u8>,
     /// The ramp's flags block, `body + 0x10d0`, as its own buffer.
     flags: Vec<u8>,
-    /// The sphere's centre, world space.
+    /// The character's collision capsule, in the character's local frame. The
+    /// walk sweeps this shape - the client's own - and not a sphere proxy.
+    pub capsule: ow_sim::walk::Capsule,
+    /// The character's origin, world space: the capsule's origin, which is at
+    /// its **feet**.
     pub pos: [f32; 3],
     /// The arc's state: the up lane of the local movement vector
     /// (`body+0x1150`), m/s. Positive is up.
@@ -159,8 +213,15 @@ fn put_f32(bytes: &mut [u8], offset: usize, value: f32) {
 }
 
 impl Walker {
-    /// A walker standing on the floor under `spawn`.
-    pub fn new(world: World, spawn: [f32; 3]) -> Walker {
+    /// A walker with the character's own collision capsule, standing on the
+    /// floor under `spawn`.
+    ///
+    /// The capsule decides the shape of every query the walk makes, so it is
+    /// the one thing that must be right before the walk means anything: a
+    /// picked hero's own capsule comes from
+    /// `ow_tank::entity::mover_capsule_of`, and a launch with no hero pick
+    /// uses the install-wide common one ([`common_capsule`]).
+    pub fn new(world: World, spawn: [f32; 3], capsule: ow_sim::walk::Capsule) -> Walker {
         let mut body = vec![0u8; BODY_LEN];
         let mut flags = vec![0u8; 0x30];
         // The ramp's direction is up: a character's ramp term is vertical.
@@ -176,11 +237,12 @@ impl Walker {
         put_f32(&mut flags, RAMP_OFFSET, 0.0);
         // The flags byte selects the scale slot; bit 1 clear picks +0x5a8.
         flags[0] = 0;
-        let pos = find_spawn(&world, spawn);
+        let pos = find_spawn(&world, spawn, &capsule);
         Walker {
             world,
             body,
             flags,
+            capsule,
             pos,
             fall: 0.0,
             terminal_fall: TERMINAL_FALL,
@@ -226,7 +288,7 @@ impl Walker {
 
     /// The camera's world eye, given the current position.
     pub fn eye(&self) -> [f32; 3] {
-        [self.pos[0], self.pos[1] + EYE_ABOVE_CENTRE, self.pos[2]]
+        [self.pos[0], self.pos[1] + EYE_ABOVE_ORIGIN, self.pos[2]]
     }
 
     /// One frame.
@@ -359,6 +421,10 @@ impl Walker {
         // The contact stage is the walk's verified sweep and floor probe; a
         // floor in reach ends the arc and zeroes the lane, which is what the
         // client's contact response does to the movement vector.
+        //
+        // The probe starts a fifth of a metre above the body so the capsule is
+        // clear of the surface it is standing on: the leaf reports nothing for
+        // a sweep whose start is on or inside a surface.
         let probe_from = [self.pos[0], self.pos[1] + 0.2, self.pos[2]];
         // A body that left the ground is swept, not snapped: the floor probe is
         // the walk's step-down rule and would otherwise pull a body off its own
@@ -369,7 +435,12 @@ impl Walker {
             self.grounded = false;
             delta[1] = self.fall * dt;
         } else {
-            match walk::snap_to_floor(&self.world, probe_from, RADIUS, self.floor_reach) {
+            match walk::snap_to_floor_capsule(
+                &self.world,
+                probe_from,
+                &self.capsule,
+                self.floor_reach,
+            ) {
                 Some(snapped) => {
                     self.pos[1] = snapped[1];
                     self.fall = 0.0;
@@ -387,7 +458,7 @@ impl Walker {
             }
         }
 
-        let out = walk::advance(&self.world, self.pos, delta, RADIUS);
+        let out = walk::advance_capsule(&self.world, self.pos, delta, &self.capsule);
         self.pos = out.pos;
         if out.grounded {
             self.grounded = true;
@@ -426,12 +497,12 @@ impl Walker {
 ///
 /// Spawn selection is the client's: the map's own spawn points live in an unread
 /// entity component (550 entity placeables in this range, none naming a model).
-pub fn find_spawn(world: &World, centre: [f32; 3]) -> [f32; 3] {
+pub fn find_spawn(world: &World, centre: [f32; 3], capsule: &ow_sim::walk::Capsule) -> [f32; 3] {
     let bounds = world.extent();
     let below_eye = |at: &&[f32; 3]| at[1] <= centre[1] + 0.5;
     // The room the viewpoint is in: its own column's highest floor under the
     // eye. This is exact without a grid, and cannot land across a wall.
-    let own = column_levels(world, [centre[0], centre[2]], bounds, false);
+    let own = column_levels(world, [centre[0], centre[2]], bounds, false, capsule);
     if let Some(at) = own
         .iter()
         .filter(below_eye)
@@ -450,7 +521,7 @@ pub fn find_spawn(world: &World, centre: [f32; 3]) -> [f32; 3] {
     while x <= high[0] {
         let mut z = low[2];
         while z <= high[2] {
-            levels.extend(column_levels(world, [x, z], bounds, true));
+            levels.extend(column_levels(world, [x, z], bounds, true, capsule));
             z += step;
         }
         x += step;
@@ -522,13 +593,21 @@ fn column_levels(
     xz: [f32; 2],
     bounds: ([f32; 3], [f32; 3]),
     level_patch: bool,
+    capsule: &ow_sim::walk::Capsule,
 ) -> Vec<[f32; 3]> {
     let (low, high) = bounds;
     let step = 2.0f32;
     let mut out = Vec::new();
     let mut y = high[1] + 1.0;
     while y > low[1] {
-        let Some(hit) = world.sweep([xz[0], y, xz[1]], [xz[0], y - step, xz[1]], RADIUS) else {
+        let Some(hit) = world.sweep_capsule(
+            [xz[0], y, xz[1]],
+            [xz[0], y - step, xz[1]],
+            ow_sim::walk::UPRIGHT,
+            capsule.point_a,
+            capsule.point_b,
+            capsule.radius,
+        ) else {
             y -= step;
             continue;
         };
@@ -537,9 +616,16 @@ fn column_levels(
         if hit.normal[1] <= 0.9 {
             continue;
         }
-        // Headroom: the sphere must fit under whatever is above.
+        // Headroom: the capsule must fit under whatever is above.
         if world
-            .sweep([xz[0], at + 0.1, xz[1]], [xz[0], at + 2.0, xz[1]], RADIUS)
+            .sweep_capsule(
+                [xz[0], at + 0.1, xz[1]],
+                [xz[0], at + 2.0, xz[1]],
+                ow_sim::walk::UPRIGHT,
+                capsule.point_a,
+                capsule.point_b,
+                capsule.radius,
+            )
             .is_some()
         {
             continue;
@@ -553,9 +639,9 @@ fn column_levels(
             let probe = [xz[0] + dx, at + 0.5, xz[1] + dz];
             // The spawn-levels march is not the walk's floor follower: it
             // probes in fixed increments, so it keeps the constant reach.
-            match world.floor(probe, RADIUS, FLOOR_REACH) {
+            match walk::snap_to_floor_capsule(world, probe, capsule, FLOOR_REACH) {
                 Some(side) => {
-                    let side_y = probe[1] - FLOOR_REACH * side.fraction;
+                    let side_y = side[1];
                     if (side_y - at).abs() > 0.35 {
                         level = false;
                     }
