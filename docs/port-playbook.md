@@ -14,15 +14,9 @@ below exists to make that checkable rather than believable.
 
 ## 0. The shape of the work
 
-| unit | count | meaning |
-|---|---:|---|
-| gameplay functions | 3,864 | the whole gameplay surface (3.2% of the image) |
-| units | 1,541 | functions bucketed so each is a testable step |
-| triage `unit` | 1,303 | self-contained enough to port on its own |
-| triage `entry` | 238 | reachable from outside the system: port as a cluster head |
-| triage `inline` | 2,312 | only meaningful inside a caller: port with it |
-| triage `thunk` / `trivial` | 6 / 5 | wrappers and one-liners: port with the head |
-| verified | whatever this machine's ledger says | `python dev/verify_harness/cli.py list` (the ledger is local, §7) |
+The measured scope, its counts and the five function states are in
+[`port-plan.md`](port-plan.md) (printed by `python dev/corpus.py triage`, never
+typed here). This playbook is the procedure that consumes them.
 
 One unit = one client function address, one Rust function, one descriptor, one
 verdict. The verdict is bound by SHA-256 to the oracle bytes, the candidate
@@ -336,7 +330,15 @@ Rules that matter:
   function's own byte extent.
 - `allowedImageReads` lists every image address the code reads (compiler
   constants included). A read outside the list and outside the state block is
-  `inconclusive` — undeclared globals are not silently tolerated.
+  `inconclusive` - undeclared globals are not silently tolerated.
+- `allowedImageWrites` lists the image globals the callee may **write**. The
+  client keeps some runtime statistics in the image's zero-fill region - the
+  character controller's step stage (`0x142cf5020`) updates the global that
+  holds the largest round count it has seen - and the oracle's read-only
+  image turned such a write into a fault, so a leaf that updates one could
+  not be proved at all. The write stays outside the compared channels: the
+  statistic does not feed the callee's answer. `fn/CharacterStepStage` is the
+  example.
 - `unreachableBranches` declares a branch site whose one edge the code cannot
   take, with the reason; the harness requires the site to run.
 - `knownEquivalentMutants` is for a mutant no input can kill. The rationale must
@@ -422,7 +424,7 @@ binds, not of the commit.
 | `candidate compile failed` with no text | the harness now prints the command and exit code: run it by hand |
 | harness self-test red at `candidate compile failed`, no compiler output | the local `gcc` was broken (`cc1.exe` exited 1 silently) until 2026-11-10; it compiles again, so a tier-1 C unit that still stops at the compile is *your* change, not the toolchain |
 | `mutant … not evaluated` / unit `inconclusive` after a mutant | the mutant panicked or hung: fix the fixture so a broken candidate answers differently instead of faulting (§5) |
-| `make_index.py (python): FAILED`, then `python3: Python was not found` | the second line is the gate's interpreter fallback, not the cause: `dev/INDEX.md` is stale. `python dev/make_index.py` |
+| `make_index.py (python): FAILED`, then `python3: Python was not found` | the second line is the gate's interpreter fallback, not the cause: the generated tables in `docs/tools.md` are stale. `python dev/make_index.py` |
 | `gh_apply_names.py` takes minutes, or times out | it is one HTTP call per table row (~500). Use `--addr 0x…` for the row just added (§12); `--check` now only reads |
 | `stale` | expected after editing the candidate source or the harness; re-run |
 
@@ -451,14 +453,17 @@ leaves first, each its own unit, then the head with the ported callees in place.
 
 ## 10. A system is done when
 
-1. every function on its path has a unit and a fresh `verified` verdict, or is
-   listed as open with the address that blocks it;
-2. the declarations exist in Rust (`docs/struct-layouts.csv`, `docs/formats/…`);
-3. the shipped crate path uses them (not a parallel copy);
-4. the gate passes: `cargo xtask verify`;
-5. `docs/systems-coverage.md` states what is read, what is verified, what is
+The scope-level definition is [`port-plan.md`](port-plan.md) §"Definition of
+done, per system": every function in the system's scope is a verified unit, is
+covered by one, or is declared unverifiable with the reason. On top of that, a
+session checks:
+
+1. the shipped crate path uses the declarations (not a parallel copy);
+2. the gate passes: `cargo xtask verify` - while the operator's suspension holds,
+   `--fast` or a scoped run, and say which (`AGENTS.md`);
+3. `docs/systems-coverage.md` states what is read, what is verified, what is
    open and the next anchor; `docs/open-questions.md` no longer lists the closed
-   questions; `MODLOG.md` has the entry.
+   question; `MODLOG.md` has the entry.
 
 Progress is reported as **verified units × functions covered × mutant kill rate**
 per system. It is never "percent of the 119,802 image functions": 96.8% of the
@@ -538,7 +543,8 @@ read stale ones. State has an owner:
 |---|---|
 | what is verified right now, and every verdict's digests | `dev/verify_harness/ledger.json` (local, gitignored) - read by `python dev/verify_harness/cli.py list` |
 | what each crate and system covers, function by function | `docs/systems-coverage.md` |
-| what is open, what is next, which units are red | `STATUS-handoff.md`, `docs/open-questions.md` |
+| what is open, what is next | `docs/open-questions.md` (the queue) |
+| the loop a session runs, and the rules that bind it | `STATUS-handoff.md` |
 | the read behind a unit | `docs/formats/<system>.md` and the unit's `notes` |
 | why a unit is red for a non-port reason | §6 (line-keyed mutants) and §8 (the environment rows) |
 

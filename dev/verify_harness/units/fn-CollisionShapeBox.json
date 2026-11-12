@@ -1,0 +1,74 @@
+{
+  "id": "fn/CollisionShapeBox",
+  "title": "tier-2 shipped code: the shape's own box carried into the query's frame against 0x142cd5c80",
+  "address": {
+    "v2b": "0x7ff7c79f5c80"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_shape_box",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "transform",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "shape_box",
+      "kind": "ptr",
+      "ptr_len": 32
+    }
+  ],
+  "returns": "void",
+  "argFactory": "collision_shape_box_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 100,
+    "mutationCount": 12,
+    "mutationKillRate": 0.8,
+    "seed": 23680,
+    "coverageWindow": 666,
+    "allowedImageReads": [
+      "0x7ff7c7dc4bf0-0x7ff7c7dc4bff",
+      "0x7ff7c7dc4b40-0x7ff7c7dc4b4f",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff",
+      "0x7ff7c830cfc0-0x7ff7c830cfcf"
+    ]
+  },
+  "knownEquivalentMutants": [
+    {
+      "kind": "op-swap +->-",
+      "line": 522,
+      "rationale": "This lane is the quaternion's `w` doubled, and the output's fourth lane does not depend on it for any input. The client's own arithmetic cancels the fourth lane of the rotation twice: the centre's rotation is `centre[3]*w - w*centre[3]` (the two products are the same term in the two orders the client computes), which is zero for every input, and the second difference is `centre[3]*w*w - centre[3]*w*w`, which is zero for every input too. What reaches the output's fourth lane is the box's own centre `((max[3]+min[3])*0.5)`, the transform's row and the extents' fourth lane, and that last one is `|m1|*half[1] + |m0|*half[0] + 0` - the diagonal's lanes 0..2, which the quaternion's `w` does not enter, and the zero the three-lane mask at 0x1430a4b40 writes into the diagonal's fourth lane. So the fourth lane of the output is a function of the box, the row and the quaternion's vector part alone, and this mutant cannot change it."
+    },
+    {
+      "kind": "op-swap *->/",
+      "line": 535,
+      "rationale": "This lane is the square term `2w*w` in the quaternion's `w`, and the output's fourth lane does not depend on it for any input: the square term reaches the output only through the diagonal, whose fourth lane the three-lane mask at 0x1430a4b40 writes to zero, and through the spin product, whose fourth lane is cancelled by the two pairwise differences the client computes (`centre[3]*w - w*centre[3]` and `centre[3]*w*w - centre[3]*w*w`). The output's fourth lane is therefore a function of the box, the row and the quaternion's vector part alone."
+    },
+    {
+      "kind": "op-swap *->/",
+      "line": 543,
+      "rationale": "This lane is the spin product's fourth lane `2w*w`, and the output's fourth lane does not depend on it for any input: the spin product reaches the output only through the fourth lane, and the client's two pairwise differences cancel the fourth lane exactly (`centre[3]*w - w*centre[3]` and `centre[3]*w*w - centre[3]*w*w`), so the fourth lane of the output is a function of the box, the row and the quaternion's vector part alone."
+    }
+  ],
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (transform_shape_box), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_shape_box entry.",
+    "The oracle runs the real 0x142cd5c80 and the harness compares the whole 32-byte output pointee byte for byte: the transformed box's minimum at +0x00 and its maximum at +0x10. The client returns the out pointer, so the return value is not a compared channel.",
+    "The transform block's +0x10 is the quaternion already conjugated by the caller (0x143110d50 flips the sign of its vector part), so the box is carried by the inverse rotation; the fixture hands over the conjugated form the narrowphase builds.",
+    "The function is straight-line SSE: 95 instructions, no conditional branch, so the coverage stage finds no branch site and the gate is 100 by the same convention fn/CmfIv154504 uses. The declared coverageWindow is the function's whole 0x29a-byte extent, because the image's .pdata entry is shorter than the body.",
+    "The arithmetic's order is observable in the last bit and the port keeps it: the diagonal is 1 - |2q1*q1| - |2q2*q2| and not 1 - (|2q1*q1| + |2q2*q2|), the two absolute-value masks differ (0x1430a4b40 is 0x7fffffff on lanes 0..2 and zero on lane 3; 0x142f7aaf0 is 0x7fffffff on all four), and every shuffle is the client's own SHUFPS immediate.",
+    "The declared cases pin every quaternion edge (the identity, the three quarter turns, a non-unit quaternion, the zero quaternion, a signed zero, a denormal and a huge one), every row edge, and the six box edges (an ordinary box, a degenerate one, an inverted one whose half extent is negative, and boxes that carry a fourth lane).",
+    "Every corpus value is finite on purpose: an infinity in the quaternion reaches `0 * inf`, and the emulator's softfloat answers that invalid operation with 0x7fc00000 where the x86 hardware QNaN indefinite is 0xffc00000 - the same limitation fn/ShapeWorldTransform and fn/ClosestPointGjk declare. The port keeps the hardware answer, so the corpus cannot carry that case."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the box transform only. The capsule narrowphase 0x142cfc090 that calls it, the candidate gather 0x142cfcba0 that calls it the other way round, the shape head 0x142cb8950 and the triangle records remain open."
+  ]
+}

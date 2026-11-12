@@ -159,7 +159,7 @@ _KNOWN_UNIT_KEYS = {
 _KNOWN_ARG_KEYS = {"name", "kind", "ptr_len"}
 _KNOWN_OPTION_KEYS = {
     "iterations", "coverageThreshold", "mutationCount", "mutationKillRate",
-    "seed", "allowedImageReads", "unreachableBranches", "mutationCallTimeout",
+    "seed", "allowedImageReads", "allowedImageWrites", "unreachableBranches", "mutationCallTimeout",
     "autoCorpus",
     # Rebuild the emulator for every corpus case. A callee that leaves state
     # behind (an allocator the arena reset does not restore, say) then cannot
@@ -225,6 +225,10 @@ class Unit:
     # Inclusive ranges of allowed image reads, for state/global blocks. The
     # unit's own state region is added automatically.
     allowed_read_ranges: List[Tuple[int, int]] = field(default_factory=list)
+    # Inclusive ranges of image addresses the callee may write. The client
+    # keeps some runtime statistics in the image's zero-fill region, and a
+    # unit that proves a leaf which updates one declares the global here.
+    allowed_write_ranges: List[Tuple[int, int]] = field(default_factory=list)
     # Declared dead branch edges: (branch site, never-taken next address,
     # rationale), all in the unit's v2b frame. The coverage stage validates
     # each one (the site ran, exactly one edge was observed, and it is not the
@@ -461,6 +465,23 @@ def load_unit(path: str) -> Unit:
                 allowed_image_reads.append(int(a, 16) if isinstance(a, str) else int(a))
     except (TypeError, ValueError) as e:
         raise ValueError(f"unit {path}: bad allowedImageReads: {e}") from e
+    allowed_write_ranges: List[Tuple[int, int]] = []
+    for a in opts.get("allowedImageWrites", []) or []:
+        try:
+            if isinstance(a, str) and "-" in a:
+                lo, hi = a.split("-", 1)
+                allowed_write_ranges.append((int(lo, 16), int(hi, 16)))
+            elif isinstance(a, (list, tuple)) and len(a) == 2:
+                allowed_write_ranges.append(
+                    (
+                        int(a[0], 16) if isinstance(a[0], str) else int(a[0]),
+                        int(a[1], 16) if isinstance(a[1], str) else int(a[1]),
+                    )
+                )
+            else:
+                raise ValueError(f"not a range: {a!r}")
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"unit {path}: bad allowedImageWrites: {e}") from e
     unreachable: List[Tuple[int, int, str]] = []
     for u in opts.get("unreachableBranches", []) or []:
         try:
@@ -511,6 +532,7 @@ def load_unit(path: str) -> Unit:
         start_regs=d.get("startRegs", {}),
         allowed_image_reads=allowed_image_reads,
         allowed_read_ranges=allowed_read_ranges,
+        allowed_write_ranges=allowed_write_ranges,
         unreachable_branches=unreachable,
         state=state,
     )
@@ -1014,6 +1036,7 @@ def run_unit(
         return entry("inconclusive", notes=["c_file missing: " + unit.c_file])
 
     oracle = EmuOracle(unit.image, base=unit.base)
+    oracle.allowed_writes = list(unit.allowed_write_ranges)
     if unit.state is not None:
         try:
             oracle.set_state(unit.state.base, unit.state.data)

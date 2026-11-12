@@ -222,6 +222,1108 @@ pub fn sweep_bounds(block: &[u8], points: &[u8]) -> (Quad, Quad, Quad) {
     (start, end, expansion)
 }
 
+/// `0x142cb8950`: the shape's head - its points, their count and its radius.
+///
+/// The narrowphase (`0x142cfc090`) and the query's own dispatch
+/// (`0x142cc1610`) both ask for this before they can talk to the GJK. The
+/// head is a `0x20`-byte record:
+///
+/// | offset | value |
+/// |---|---|
+/// | `+0x00` | the points pointer (an absolute address) |
+/// | `+0x08` | the point count |
+/// | `+0x0c` | **untouched** - the client writes `+0x00`..`+0x0c` and `+0x10`..`+0x20`, and nothing in between |
+/// | `+0x10` | the radius, four lanes |
+///
+/// The shape entry's **type byte** at `+0x20` picks the shape, and its
+/// **index** at `+0x24` picks the element inside the world's pool:
+///
+/// | type | the pool | the stride | the builder | the head |
+/// |---|---|---|---|---|
+/// | `0` | `world+0x2d0` | `0x20` | `0x142cc5b80` | one point at the element, the radius splatted from the element's `+0x10` |
+/// | `1` | `world+0x2e8` | `0x30` | `0x142cc5b40` | two points at the element, the radius splatted from the element's `+0x20` |
+/// | anything else | `world+0x300` | `0x50` | `0x142cc5b60` | the points behind the element's `+0x10`, the count at its `+0x30`, the constant radius `0.01` |
+///
+/// `pools` carries the three pool arrays in the order the table names them,
+/// so the element's own bytes can be read. The head's pointer is the
+/// element's **absolute** address, and the world's pool pointer already
+/// carries that base.
+pub fn shape_head(entry: &[u8], world: &[u8], pools: [&[u8]; 3], out: &mut [u8]) {
+    let (element, _slot, address, kind) = shape_head_element(entry, world, pools);
+    // The client zeroes `+0x00` (a quad), `+0x08` (a dword) and `+0x10` (the
+    // zero quad at `0x142f84a00`), and the word at `+0x0c` is left alone.
+    out[0x00..0x08].copy_from_slice(&0u64.to_le_bytes());
+    out[0x08..0x0c].copy_from_slice(&0u32.to_le_bytes());
+    out[0x10..0x20].copy_from_slice(&[0u8; 0x10]);
+    match kind {
+        0 => {
+            // `0x142cc5b80`: the element is the point, the radius is its
+            // `+0x10`.
+            out[0x00..0x08].copy_from_slice(&address.to_le_bytes());
+            out[0x08..0x0c].copy_from_slice(&1u32.to_le_bytes());
+            out[0x10..0x20].copy_from_slice(&quad_bytes(splat(f32_at(element, 0x10))));
+        }
+        1 => {
+            // `0x142cc5b40`: the element holds the two points, the radius is
+            // its `+0x20`.
+            out[0x00..0x08].copy_from_slice(&address.to_le_bytes());
+            out[0x08..0x0c].copy_from_slice(&2u32.to_le_bytes());
+            out[0x10..0x20].copy_from_slice(&quad_bytes(splat(f32_at(element, 0x20))));
+        }
+        _ => {
+            // `0x142cc5b60`: the points are behind the element's `+0x10`, the
+            // count is its `+0x30` and the radius is the constant `0.01` at
+            // `0x14311e0c0`.
+            out[0x00..0x08].copy_from_slice(&element[0x10..0x18]);
+            out[0x08..0x0c].copy_from_slice(&element[0x30..0x34]);
+            out[0x10..0x20].copy_from_slice(&quad_bytes(splat(0.01)));
+        }
+    }
+}
+
+/// The shape's head, resolved: the element it names, the pool it came from,
+/// the address the client writes into the head and the shape's type.
+fn shape_head_element<'a>(
+    entry: &[u8],
+    world: &[u8],
+    pools: [&'a [u8]; 3],
+) -> (&'a [u8], usize, u64, u8) {
+    let kind = entry[0x20];
+    let index = i32::from_le_bytes(entry[0x24..0x28].try_into().unwrap()) as i64;
+    let (slot, pool_at, stride) = match kind {
+        0 => (0usize, 0x2d0usize, 0x20usize),
+        1 => (1usize, 0x2e8usize, 0x30usize),
+        _ => (2usize, 0x300usize, 0x50usize),
+    };
+    let pool = u64::from_le_bytes(world[pool_at..pool_at + 8].try_into().unwrap());
+    let offset = index * stride as i64;
+    let address = pool.wrapping_add(offset as u64);
+    let element = &pools[slot][offset as usize..offset as usize + stride];
+    (element, slot, address, kind)
+}
+
+/// The shape's head's points, their count and its radius - the half of the
+/// head the closest-point solver wants.
+///
+/// `counted` carries the point array of the counted shape, the one the
+/// element's `+0x10` names.
+fn shape_head_points(
+    entry: &[u8],
+    world: &[u8],
+    pools: [&[u8]; 3],
+    counted: &[u8],
+) -> (Vec<Quad>, i32, Quad) {
+    let (element, _slot, _address, kind) = shape_head_element(entry, world, pools);
+    match kind {
+        0 => (
+            vec![quad_at(element, 0x00)],
+            1,
+            splat(f32_at(element, 0x10)),
+        ),
+        1 => (
+            vec![quad_at(element, 0x00), quad_at(element, 0x10)],
+            2,
+            splat(f32_at(element, 0x20)),
+        ),
+        _ => {
+            let count = i32::from_le_bytes(element[0x30..0x34].try_into().unwrap());
+            let points = (0..count.max(0))
+                .map(|slot| quad_at(counted, slot as usize * 0x10))
+                .collect();
+            (points, count, splat(0.01))
+        }
+    }
+}
+
+/// The narrowphase's candidate list: what the gather fills and the narrowphase
+/// walks.
+///
+/// The client keeps it in the context block: the count at `+0x30`, the
+/// capacity at `+0x34`, the pool pointer at `+0x38` and the swept box at
+/// `+0x10..+0x30`. Each candidate is a `0x20`-byte record whose first dword is
+/// the triangle index.
+#[derive(Clone, Debug, Default)]
+pub struct NarrowphaseContext {
+    /// `+0x30`: how many candidates the pool holds.
+    pub count: i32,
+    /// `+0x34`: how many the pool can hold.
+    pub capacity: i32,
+    /// `+0x38`: the pool, `0x20` bytes per candidate.
+    pub pool: Vec<u8>,
+    /// `+0x10..+0x30`: the swept box the gather keeps between frames.
+    pub box8: [u8; 0x20],
+}
+
+/// The callback the runtime's own triangle record may carry at its `+0x40`.
+///
+/// The client calls it as `u16 cb(record, index, byte)` and keeps its answer
+/// as the contact's layer; the narrowphase never reads that layer, but the
+/// call itself is part of the client's behaviour.
+pub type LayerCallback<'a> = &'a dyn Fn(u32, u8) -> u16;
+
+/// `0x142cae760`: the type-3 mesh's own triangle record.
+///
+/// The mesh record carries the scale quad at `+0x00`, the vertices at `+0x28`
+/// and the triangle array at `+0x30`; a triangle record is `0x20` bytes, its
+/// three vertex indices are at `+0x00`, `+0x04` and `+0x08`, and its three
+/// layer words at `+0x18`, `+0x1a` and `+0x1c`.
+///
+/// The function writes the three scaled vertices at the output's `+0x00`,
+/// `+0x10` and `+0x20` and the three layer words at `+0x80`, `+0x82` and
+/// `+0x84`.
+pub fn mesh_triangle_record(
+    record: &[u8],
+    vertices: &[u8],
+    triangles: &[u8],
+    index: i32,
+    out: &mut [u8],
+) {
+    let scale = quad_at(record, 0x00);
+    let triangle = &triangles[(index as usize) * 0x20..];
+    for slot in 0..3usize {
+        let vertex = i32_at(triangle, slot * 4) as usize;
+        let point = quad_at(vertices, vertex * 0x10);
+        let scaled = mul_lane(point, scale);
+        out[slot * 0x10..slot * 0x10 + 0x10].copy_from_slice(&quad_bytes(scaled));
+    }
+    out[0x80..0x82].copy_from_slice(&u16_at(triangle, 0x18).to_le_bytes());
+    out[0x82..0x84].copy_from_slice(&u16_at(triangle, 0x1a).to_le_bytes());
+    out[0x84..0x86].copy_from_slice(&u16_at(triangle, 0x1c).to_le_bytes());
+}
+
+/// `FUN_142ccf540`: the runtime's own height-field triangle record.
+///
+/// The record is a grid: `+0x04` the cells per row, `+0x08` the vertex
+/// stride, `+0x30` a layer word, `+0x38` the vertex array and `+0x40` an
+/// optional callback. A vertex is eight bytes - a height and a kind byte - and
+/// the triangle index picks a quad of the grid:
+///
+/// ```text
+/// q    = (index >> 1) / (count - 1)
+/// r    = (index >> 1) - q * (count - 1)
+/// base = q * count + r
+/// ```
+///
+/// The four corners are `base`, `base + 1`, `base + count` and
+/// `base + count + 1`, and the vertex's own byte at `+0x07` picks the
+/// diagonal: `0` takes it by the parity of `q` and `r`, `1` always takes it
+/// and `4` means there is no triangle here at all.
+///
+/// The three vertices go to the output's `+0x00`, `+0x10` and `+0x20`, the
+/// vertex's own layer word to `+0x80` and the record's (or the callback's)
+/// layer to `+0x82`.
+pub fn runtime_triangle(
+    record: &[u8],
+    vertices: &[u8],
+    index: i32,
+    callback: Option<LayerCallback<'_>>,
+    out: &mut [u8],
+) {
+    let count = i32_at(record, 0x04);
+    let stride = f32_at(record, 0x08);
+    let half = index >> 1;
+    let quotient = half / (count - 1);
+    let remainder = half - quotient * (count - 1);
+    let base = quotient * count + remainder;
+    let corners = [base, base + 1, base + count, base + count + 1];
+    let heights = [
+        f32_at(vertices, (corners[0] as usize) * 8),
+        f32_at(vertices, (corners[1] as usize) * 8),
+        f32_at(vertices, (corners[2] as usize) * 8),
+        f32_at(vertices, (corners[3] as usize) * 8),
+    ];
+    // The vertex's own eight bytes: the height, the layer word at `+0x04` and
+    // the kind byte at `+0x07`.
+    let word = u64::from_le_bytes(
+        vertices[(corners[0] as usize) * 8..(corners[0] as usize) * 8 + 8]
+            .try_into()
+            .expect("eight bytes"),
+    );
+    let kind = (word >> 0x38) as u8;
+    if kind == 4 {
+        // No triangle here: the client returns without touching the output.
+        return;
+    }
+    // The x and y of each corner: the grid's own coordinates. The corners are
+    // `(q, r)`, `(q, r+1)`, `(q+1, r)` and `(q+1, r+1)`.
+    let xs = [
+        quotient as f32 * stride,
+        quotient as f32 * stride,
+        (quotient + 1) as f32 * stride,
+        (quotient + 1) as f32 * stride,
+    ];
+    let ys = [
+        remainder as f32 * stride,
+        (remainder + 1) as f32 * stride,
+        remainder as f32 * stride,
+        (remainder + 1) as f32 * stride,
+    ];
+    let diagonal = if kind == 0 {
+        (quotient & 1) == (remainder & 1)
+    } else {
+        kind == 1
+    };
+    let odd = index & 1 != 0;
+    // The three corners of the triangle, in the client's order. The rule is
+    // the grid's own diagonal - the one that joins the two corners the
+    // diagonal byte points at - and the winding flips with the triangle's
+    // own parity.
+    let corners_of: [usize; 3] = if diagonal {
+        if odd {
+            // The (q, r), (q+1, r+1), (q, r+1) triangle.
+            [0, 3, 1]
+        } else {
+            // The (q, r), (q+1, r), (q+1, r+1) triangle.
+            [0, 2, 3]
+        }
+    } else if odd {
+        // The (q+1, r), (q+1, r+1), (q, r+1) triangle.
+        [2, 3, 1]
+    } else {
+        // The (q, r), (q+1, r), (q, r+1) triangle.
+        [0, 2, 1]
+    };
+    for slot in 0..3usize {
+        let corner = corners_of[slot];
+        let point = [xs[corner], ys[corner], heights[corner], 0.0];
+        out[slot * 0x10..slot * 0x10 + 0x10].copy_from_slice(&quad_bytes(point));
+    }
+    out[0x80..0x82].copy_from_slice(&((word >> 0x20) as u16).to_le_bytes());
+    let layer = match callback {
+        Some(callback) => callback(index as u32, (word >> 0x18) as u8),
+        None => u16_at(record, 0x30),
+    };
+    out[0x82..0x84].copy_from_slice(&layer.to_le_bytes());
+}
+
+/// The transform block the client builds from a position and a quaternion.
+///
+/// The first four floats are the position carried into the shape's own frame
+/// and the last four are the **conjugated** quaternion, in the client's
+/// `(x, y, z, w)` order. The narrowphase flips the sign of the quaternion's
+/// vector part with the mask at `0x143110d50` before it builds the block.
+///
+/// The block is the **inverse** transform: the translation is
+/// `-conj(q) * p` and the rotation is `conj(q)`, so a point carried through
+/// it lands in the shape's own frame.
+pub fn transform_block(position: Quad, quaternion: Quad) -> [f32; 8] {
+    transform_block_with(position, quaternion, position)
+}
+
+/// The transform block the **narrowphase** builds.
+///
+/// The narrowphase (`0x142cfc090`) builds the same block, but its first
+/// cross product takes the `y` and `z` of the rotated vector from the other
+/// shape's position and its `x` from the frame's own position. The client's
+/// own `SHUFPS` reads the two sources from different registers, so the
+/// block is not the plain inverse rotation the gather builds and the port
+/// keeps the client's own mixture.
+pub fn transform_block_with(position: Quad, quaternion: Quad, other: Quad) -> [f32; 8] {
+    let conjugate = [
+        negate([quaternion[0], 0.0, 0.0, 0.0])[0],
+        negate([quaternion[1], 0.0, 0.0, 0.0])[0],
+        negate([quaternion[2], 0.0, 0.0, 0.0])[0],
+        quaternion[3],
+    ];
+    let (px, py, pz, pw) = (position[0], position[1], position[2], position[3]);
+    let (oy, oz) = (other[1], other[2]);
+    let (qx, qy, qz, qw) = (conjugate[0], conjugate[1], conjugate[2], conjugate[3]); // The three rows of the inverse rotation and the translation row.
+    let m0 = qw * px + (oz * qy - qz * py);
+    let m1 = qw * py + (px * qz - qx * pz);
+    let m2 = qw * pz + (oy * qx - qy * px);
+    // The client's own fourth term is `w * pw + (pw * w - w * pw)` and its
+    // fourth row is `-(m3 * w - m3 * w + m3 * w - m3 * w + pw)`. Both
+    // differences are the client's own, and the sign of their zero is
+    // observable, so the forms are kept and the lint is allowed.
+    #[allow(clippy::eq_op)]
+    let m3 = qw * pw + (pw * qw - qw * pw);
+    let r0 = m1 * qx - m0 * qy;
+    let r1 = m2 * qy - m1 * qz;
+    let r2 = m0 * qz - m2 * qx;
+    #[allow(clippy::eq_op)]
+    let r3 = m3 * qw - m3 * qw;
+    [
+        -(r1 + r1 + px),
+        -(r2 + r2 + py),
+        -(r0 + r0 + pz),
+        -(r3 + r3 + pw),
+        qx,
+        qy,
+        qz,
+        qw,
+    ]
+}
+
+/// `0x142cc5ba0`: the triangle's head - its three points and the constant
+/// radius `0.01`.
+///
+/// The head is a `0x20`-byte record: the points pointer at `+0x00`, the count
+/// (`3`) at `+0x08` and the radius at `+0x10`, which is the constant at
+/// `0x14311e0c0`.
+pub fn triangle_head(triangle: &[u8], out: &mut [u8; 0x20]) {
+    out[0x00..0x08].copy_from_slice(&(triangle.as_ptr() as u64).to_le_bytes());
+    out[0x08..0x0c].copy_from_slice(&3u32.to_le_bytes());
+    out[0x10..0x20].copy_from_slice(&quad_bytes(splat(0.01)));
+}
+
+/// `CVTTSS2SI`: the truncation, with the invalid result - a NaN or a value
+/// out of the range - reading as `0x80000000` the way the hardware does.
+fn client_trunc(value: f32) -> i32 {
+    if value.is_nan() || value >= 2147483648.0 || value < -2147483648.0 {
+        i32::MIN
+    } else {
+        value.trunc() as i32
+    }
+}
+
+/// The client's float-to-int conversion: the truncation, and one step down when
+/// the truncation lost a fraction and the value was negative.
+///
+/// The client's own sequence is `CVTTSS2SI`, the `0x80000000` guard, the
+/// round-trip compare and the sign-bit adjustment (`UNPCKLPS`/`MOVMSKPS`).
+fn client_floor(value: f32) -> i32 {
+    let truncated = client_trunc(value);
+    if truncated == i32::MIN {
+        return truncated;
+    }
+    if truncated as f32 == value {
+        return truncated;
+    }
+    if value < 0.0 {
+        truncated - 1
+    } else {
+        truncated
+    }
+}
+
+/// `FUN_142cd0180`: the runtime's own height-field gather.
+///
+/// The record is a grid: `+0x00` the cells across, `+0x04` the cells down,
+/// `+0x08` the cell size and `+0x38` the vertex array. The function walks the
+/// cells the box touches and appends each cell's two triangles.
+///
+/// A vertex is eight bytes - a height and a kind byte at `+0x07` - and a cell
+/// whose kind byte is `4` has no triangle.
+pub fn runtime_gather(record: &[u8], vertices: &[u8], box8: &[u8], out: &mut Vec<u32>) {
+    let across = i32_at(record, 0x00);
+    let down = i32_at(record, 0x04);
+    let size = f32_at(record, 0x08);
+    let inverse = 1.0 / size;
+    let low = quad_at(box8, 0x00);
+    let high = quad_at(box8, 0x10);
+    let x0 = client_floor(inverse * low[0]);
+    let x1 = client_floor(inverse * high[0]);
+    let y0 = client_floor(inverse * low[1]);
+    let y1 = client_floor(inverse * high[1]);
+    for x in x0..=x1 {
+        if !(-1 < x && x <= across - 2) {
+            continue;
+        }
+        if y0 > y1 {
+            continue;
+        }
+        // The cell's first triangle: two triangles per cell, in a strip. The
+        // client's counter advances by two for every row it walks, the rows
+        // it skips included, so the index is the row's own.
+        for y in y0..=y1 {
+            let triangle = (down * 2 - 2) * x + 2 * y;
+            if !(-1 < y && y <= down - 2) {
+                continue;
+            }
+            let cell = (down * x + y) as usize;
+            let Some(vertex) = vertices.get(cell * 8..cell * 8 + 8) else {
+                continue;
+            };
+            if vertex[7] == 4 {
+                continue;
+            }
+            // The cell's four corners and the box they make.
+            let corners = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)];
+            let mut cell_low = [f32::MAX; 4];
+            let mut cell_high = [f32::MIN; 4];
+            for (cx, cy) in corners.iter() {
+                let index = (down * cx + cy) as usize;
+                let height = f32_at(vertices, index * 8);
+                let point = [*cx as f32 * size, *cy as f32 * size, height, 0.0];
+                for lane in 0..3 {
+                    cell_low[lane] = cell_low[lane].min(point[lane]);
+                    cell_high[lane] = cell_high[lane].max(point[lane]);
+                }
+            }
+            // The box test: the client's own fold, lane for lane.
+            let mut separated = [0u32; 4];
+            for lane in 0..4 {
+                let a = sub_lane(high, cell_low)[lane];
+                let b = sub_lane(cell_high, low)[lane];
+                separated[lane] = (a.to_bits() | b.to_bits()) & 0x8000_0000;
+            }
+            if separated[0] | separated[1] | separated[2] == 0 {
+                out.push(triangle as u32);
+                out.push((triangle + 1) as u32);
+            }
+        }
+    }
+}
+
+/// `FUN_142cfcba0`: the candidate gather.
+///
+/// The gather fills the context's candidate list with the triangles of the
+/// shape the query touches. It first works out the swept box - the other
+/// shape's box carried into the mesh shape's frame - and keeps the old
+/// candidate list when the box has not grown, which is the client's own
+/// optimisation.
+///
+/// `runtime_vertices` is the height field's vertex array, the one the
+/// runtime's own record names at its `+0x38`; the caller resolves it.
+pub fn narrowphase_gather(
+    context: &mut NarrowphaseContext,
+    world: &NarrowphaseWorld<'_>,
+    shape: &[u8],
+    runtime_vertices: &[u8],
+) {
+    let mesh_entry = &world.entries[(i32_at(shape, 0x14) as usize) * 0xc0..];
+    let other_entry = &world.entries[(i32_at(shape, 0x20) as usize) * 0xc0..];
+    let frame = shape_world_transform(mesh_entry, world.record, world.owners, world.poses);
+    let block = transform_block(frame[0], frame[1]);
+    // The other shape's box, carried into the mesh shape's frame.
+    let mut transform_bytes = [0u8; 0x20];
+    transform_bytes[0x00..0x10]
+        .copy_from_slice(&quad_bytes(block[0..4].try_into().expect("four floats")));
+    transform_bytes[0x10..0x20]
+        .copy_from_slice(&quad_bytes(block[4..8].try_into().expect("four floats")));
+    let mut box_in = [0u8; 0x20];
+    transform_shape_box(&transform_bytes, &other_entry[..0x20], &mut box_in);
+    let low = quad_at(&box_in, 0x00);
+    let high = quad_at(&box_in, 0x10);
+    // The old box, and the client's own test: the new box still inside the
+    // old one, and again with the shape's margin widened by four.
+    let old_low = quad_at(&context.box8, 0x00);
+    let old_high = quad_at(&context.box8, 0x10);
+    let margin = f32_at(other_entry, 0x88);
+    let inside = |test_low: Quad, test_high: Quad| -> bool {
+        (0..3).all(|lane| test_high[lane] <= old_high[lane] && old_low[lane] <= test_low[lane])
+    };
+    if inside(low, high) {
+        let widened = |test_low: Quad, test_high: Quad| -> bool {
+            (0..3).all(|lane| {
+                test_low[lane] - margin * 4.0 <= old_low[lane]
+                    && old_high[lane] <= test_high[lane] + margin * 4.0
+            })
+        };
+        if widened(low, high) {
+            // The old candidates still stand.
+            return;
+        }
+    }
+    // The new swept box: the centre, and the half extent plus the margin.
+    let centre = mul_lane(add_lane(high, low), HALF);
+    let half = add_lane(mul_lane(sub_lane(high, low), HALF), splat(margin));
+    let mut swept = [0u8; 0x20];
+    for lane in 0..4 {
+        swept[lane * 4..lane * 4 + 4].copy_from_slice(&sub_lane(centre, half)[lane].to_le_bytes());
+    }
+    for lane in 0..4 {
+        swept[0x10 + lane * 4..0x10 + lane * 4 + 4]
+            .copy_from_slice(&add_lane(half, centre)[lane].to_le_bytes());
+    }
+    context.box8 = swept;
+    // The candidate triangles.
+    let index = i32_at(mesh_entry, 0x24) as usize;
+    let mut ids: Vec<u32> = Vec::new();
+    if mesh_entry[0x20] == 3 {
+        let record = &world.pools[3][index * 0x50..];
+        let mask = u16_at(other_entry, 0x98);
+        ids = mesh_gather(
+            record,
+            world.mesh.as_ref().expect("the mesh world"),
+            &context.box8,
+            mask,
+        );
+    } else {
+        let record = &world.pools[4][index * 0x50..];
+        runtime_gather(record, runtime_vertices, &context.box8, &mut ids);
+    }
+    // The dedup: a candidate that is already in the list keeps its face data.
+    let old_count = context.count;
+    let mut pool = Vec::with_capacity(ids.len() * 0x20);
+    for id in ids {
+        let mut record = [0u8; 0x20];
+        record[0x00..0x04].copy_from_slice(&id.to_le_bytes());
+        record[0x08..0x0c].copy_from_slice(&(-1i32).to_le_bytes());
+        for slot in 0..old_count {
+            let at = (slot as usize) * 0x20;
+            if context.pool.len() < at + 0x20 {
+                break;
+            }
+            if u32::from_le_bytes(context.pool[at..at + 4].try_into().expect("four bytes")) == id {
+                record.copy_from_slice(&context.pool[at..at + 0x20]);
+                break;
+            }
+        }
+        pool.extend_from_slice(&record);
+    }
+    context.pool = pool;
+    context.count = (context.pool.len() / 0x20) as i32;
+    // The client's grow path: the capacity doubles, and never falls below
+    // four.
+    if context.count > context.capacity {
+        context.capacity = (context.count * 2).max(4);
+    }
+}
+
+/// `0x142cfc090`: the capsule narrowphase.
+///
+/// The character's contact against a shape that has triangles. The gather
+/// fills the candidate list, and the loop answers the candidate whose GJK
+/// residual is the smallest.
+///
+/// The output is the contact record - the point at `+0x00`, the normal at
+/// `+0x10`, the residual at `+0x20` and the iteration count at `+0x30` - and
+/// the answer is `true` when a contact was found.
+///
+/// The three frames the client is given are the shape's own frame
+/// (`transform`: its position quad and its quaternion), the **other** shape's
+/// frame (`other`: the same two quads) and the sweep's direction
+/// (`direction`: one quad). `runtime_vertices` is the height field's vertex
+/// array, the one the runtime's own record names at its `+0x38`; the caller
+/// resolves it.
+pub fn capsule_narrowphase(
+    context: &mut NarrowphaseContext,
+    out: &mut [u8],
+    world: &NarrowphaseWorld<'_>,
+    shape: &[u8],
+    transform: &[u8],
+    other: &[u8],
+    direction: &[u8],
+    runtime_vertices: &[u8],
+) -> bool {
+    narrowphase_gather(context, world, shape, runtime_vertices);
+    if context.count <= 0 {
+        return false;
+    }
+    let mesh_entry = &world.entries[(i32_at(shape, 0x14) as usize) * 0xc0..];
+    let other_entry = &world.entries[(i32_at(shape, 0x20) as usize) * 0xc0..];
+    // The second shape's head: the points, their count and the radius.
+    let (other_points, _other_count, other_radius) = shape_head_points(
+        other_entry,
+        world.record,
+        [world.pools[0], world.pools[1], world.pools[2]],
+        &[],
+    );
+    // The frame the query works in: the transform block the client builds
+    // from the shape's own frame and the other shape's position.
+    let frame_position = quad_at(transform, 0x00);
+    let frame_rotation = quad_at(transform, 0x10);
+    let other_position = quad_at(other, 0x00);
+    let other_rotation = quad_at(other, 0x10);
+    let block = transform_block_with(frame_position, frame_rotation, other_position);
+    let mut transform_bytes = [0u8; 0x20];
+    transform_bytes[0x00..0x10]
+        .copy_from_slice(&quad_bytes(block[0..4].try_into().expect("four floats")));
+    transform_bytes[0x10..0x20]
+        .copy_from_slice(&quad_bytes(block[4..8].try_into().expect("four floats")));
+    // The other shape's box, carried into that frame.
+    let mut box_in = [0u8; 0x20];
+    transform_shape_box(&transform_bytes, &other_entry[..0x20], &mut box_in);
+    // The sweep's direction, rotated into the frame, opens the box.
+    let conjugated = [
+        negate([frame_rotation[0], 0.0, 0.0, 0.0])[0],
+        negate([frame_rotation[1], 0.0, 0.0, 0.0])[0],
+        negate([frame_rotation[2], 0.0, 0.0, 0.0])[0],
+        frame_rotation[3],
+    ];
+    let delta = rotate_vector(quad_at(direction, 0x00), conjugated);
+    let mut box_low = quad_at(&box_in, 0x00);
+    let mut box_high = quad_at(&box_in, 0x10);
+    for lane in 0..4 {
+        box_low[lane] = min_ps(box_low[lane], box_low[lane] + delta[lane]);
+        box_high[lane] = max_ps(box_high[lane], box_high[lane] + delta[lane]);
+    }
+    // The GJK's descriptor: the triangle is the first set, the other shape
+    // the second, and the flags are the narrowphase's own - the second one
+    // carries the sweep on when the shapes already touch.
+    let mut budget = [1.0f32; 4];
+    let mut found = false;
+    for slot in 0..context.count as usize {
+        let at = slot * 0x20;
+        if context.pool.len() < at + 4 {
+            break;
+        }
+        let index = u32::from_le_bytes(context.pool[at..at + 4].try_into().expect("four bytes"));
+        // The triangle's three vertices. The client reaches the pool through
+        // the shape entry's index and the triangle through the candidate's.
+        let vertices = if mesh_entry[0x20] == 3 {
+            let mesh = world.mesh.as_ref().expect("the mesh world");
+            let record = &world.pools[3][(i32_at(mesh_entry, 0x24) as usize) * 0x50..];
+            mesh_triangle_points(mesh, record, index as i32)
+        } else {
+            let record = &world.pools[4][(i32_at(mesh_entry, 0x24) as usize) * 0x50..];
+            // The triangle record is `0x84` bytes: the three vertices and the
+            // two layer words.
+            let mut buffer = [0u8; 0x84];
+            runtime_triangle(record, runtime_vertices, index as i32, None, &mut buffer);
+            [
+                quad_at(&buffer, 0x00),
+                quad_at(&buffer, 0x10),
+                quad_at(&buffer, 0x20),
+            ]
+        };
+        // The box test: the triangle's box against the swept box.
+        let mut tri_low = vertices[0];
+        let mut tri_high = vertices[0];
+        for point in vertices.iter().skip(1) {
+            for lane in 0..4 {
+                tri_low[lane] = min_ps(tri_low[lane], point[lane]);
+                tri_high[lane] = max_ps(tri_high[lane], point[lane]);
+            }
+        }
+        let mut separated = [0u32; 4];
+        for lane in 0..4 {
+            let a = sub_lane(tri_high, box_low)[lane];
+            let b = sub_lane(box_high, tri_low)[lane];
+            separated[lane] = (a.to_bits() | b.to_bits()) & 0x8000_0000;
+        }
+        if separated[0] | separated[1] | separated[2] != 0 {
+            continue;
+        }
+        // The closest-point solver, with the narrowphase's own flags.
+        let input = GjkInput {
+            a: &vertices,
+            b: &other_points,
+            shape_a: GjkShape {
+                radius: splat(0.01),
+                translation: frame_position,
+                rotation: frame_rotation,
+            },
+            shape_b: GjkShape {
+                radius: other_radius,
+                translation: other_position,
+                rotation: other_rotation,
+            },
+            direction: quad_at(direction, 0x00),
+            motion: budget,
+            flag0: 0,
+            flag1: 1,
+        };
+        let mut result = GjkOutput::default();
+        if !closest_point(&input, &mut result) {
+            continue;
+        }
+        // The accept: the residual must be below the running minimum in all
+        // four lanes, and it becomes the new minimum - and the new budget.
+        let mut better = [false; 4];
+        for lane in 0..4 {
+            better[lane] = result.residual[lane] < budget[lane];
+        }
+        eprintln!(
+            "DBG cand {} res {:?} budget {:?} better {:?}",
+            index, result.residual, budget, better
+        );
+        if !better.iter().all(|lane| *lane) {
+            continue;
+        }
+        found = true;
+        out[0x00..0x10].copy_from_slice(&quad_bytes(result.point));
+        out[0x10..0x20].copy_from_slice(&quad_bytes(result.normal));
+        out[0x20..0x30].copy_from_slice(&quad_bytes(result.residual));
+        out[0x30..0x34].copy_from_slice(&result.iterations.to_le_bytes());
+        budget = result.residual;
+    }
+    found
+}
+
+/// `MINPS`: the smaller of two lanes, with the source lane winning a `NaN`.
+///
+/// The client's own instruction takes the second operand when either side
+/// is a `NaN` and when the two are equal, which is not what Rust's `f32::min`
+/// does.
+#[inline]
+fn min_ps(a: f32, b: f32) -> f32 {
+    if b.is_nan() || a.is_nan() || b < a {
+        b
+    } else {
+        a
+    }
+}
+
+/// `MAXPS`: the larger of two lanes, with the source lane winning a `NaN`.
+#[inline]
+fn max_ps(a: f32, b: f32) -> f32 {
+    if b.is_nan() || a.is_nan() || b > a {
+        b
+    } else {
+        a
+    }
+}
+
+/// The client's rotation of a vector by a quaternion, lane for lane.
+///
+/// The narrowphase opens its swept box by the direction the sweep travels,
+/// rotated into the frame the box is in. The client's sequence is the
+/// cross-product form: `shuf_c9(v) * q - shuf_c9(q) * v`, the `w * v` term,
+/// then the same cross a second time. The shuffles permute the lanes, so the
+/// port keeps them exactly.
+fn rotate_vector(vector: Quad, quaternion: Quad) -> Quad {
+    // `shuf_c9(q)`: `(y, z, x, w)`.
+    let spun = shufps(quaternion, quaternion, 0xc9);
+    // The first cross product, before the client's `shuf_c9` puts the lanes
+    // back in order.
+    let cross = sub_lane(
+        mul_lane(shufps(vector, vector, 0xc9), quaternion),
+        mul_lane(spun, vector),
+    );
+    // `t = w * v + cross(q.xyz, v)`.
+    let t = add_lane(
+        mul_lane(shufps(quaternion, quaternion, 0xff), vector),
+        shufps(cross, cross, 0xc9),
+    );
+    // The second cross product, and the client's `2 * cross + v`.
+    let cross = sub_lane(mul_lane(shufps(t, t, 0xc9), quaternion), mul_lane(spun, t));
+    let doubled = shufps(cross, cross, 0xc9);
+    add_lane(add_lane(doubled, doubled), vector)
+}
+
+/// The type-3 mesh's own triangle record, as three points.
+///
+/// The mesh record carries the scale quad at `+0x00`, the vertices at `+0x28`
+/// and the triangle array at `+0x30`; a triangle record is `0x20` bytes with
+/// its three vertex indices at `+0x00`, `+0x04` and `+0x08`.
+fn mesh_triangle_points(mesh: &MeshWorld<'_>, record: &[u8], index: i32) -> [Quad; 3] {
+    let scale = quad_at(record, 0x00);
+    let vertices = read_pointer(record, 0x28);
+    let triangles = read_pointer(record, 0x30);
+    let triangle = offset(triangles, i64::from(index) * 0x20);
+    let mut out = [[0.0f32; 4]; 3];
+    for slot in 0..3usize {
+        let vertex = mesh.i32(triangle, slot * 4);
+        out[slot] = mul_lane(mesh.quad(offset(vertices, i64::from(vertex) * 0x10)), scale);
+    }
+    out
+}
+
+/// `0x142cd5c80`: the shape's own box, carried into the frame the query uses.
+///
+/// The capsule narrowphase (`0x142cfc090`) and the candidate gather
+/// (`0x142cfcba0`) both call this to get the *other* shape's world box. The
+/// caller passes a transform block - the rotation's first row at `+0x00` and
+/// the quaternion at `+0x10` - and the shape's local box, its minimum at
+/// `+0x00` and its maximum at `+0x10`. The function writes the transformed
+/// box's minimum at the output's `+0x00` and its maximum at `+0x10`.
+///
+/// The quaternion arrives already conjugated: the caller flips the sign of its
+/// vector part with the mask at `0x143110d50` before it builds the transform,
+/// so the box is carried by the **inverse** rotation. The fourth lane carries
+/// a fourth component the client never reads.
+///
+/// The arithmetic is the machine's, one SSE instruction at a time. The
+/// shuffles, the two different absolute-value masks and the order of the
+/// additions are all observable in the last bit, so the transcription below
+/// follows the instruction stream and not a formula: the client's order is
+/// `1 - |2q1*q1| - |2q2*q2|` and not `1 - (|2q1*q1| + |2q2*q2|)`.
+pub fn transform_shape_box(transform: &[u8], shape_box: &[u8], out: &mut [u8]) {
+    // `0x142cd5c89`: `XMM6` = the box's maximum; `0x142cd5c94`: `XMM8` = the
+    // quaternion.
+    let mut xmm6 = quad_at(shape_box, 0x10);
+    let xmm8 = quad_at(transform, 0x10);
+    // `0x142cd5c9f`: `XMM3` = `2 * q`.
+    let mut xmm3 = [
+        xmm8[0] + xmm8[0],
+        xmm8[1] + xmm8[1],
+        xmm8[2] + xmm8[2],
+        xmm8[3] + xmm8[3],
+    ];
+    // `0x142cd5cbf`: `XMM4` = the quaternion's `w` lane, splatted.
+    let xmm4 = [xmm8[3]; 4];
+    // `0x142cd5cb6`: `XMM11` = `(1, 1, 1, 0)`, the constant at `0x1430a4bf0`.
+    let mut xmm11 = DIAG_BASE;
+    // `0x142cd5cca`: `XMM1` = `(2q2, 2q1, 2q2, 2q3)`.
+    let mut xmm1 = shufps(xmm3, xmm3, 0xe6);
+    // `0x142cd5cce`: `XMM2` = `(2q0*q0, 2q1*q1, 2q2*q2, 2q3*q3)`.
+    let mut xmm2 = [
+        xmm3[0] * xmm8[0],
+        xmm3[1] * xmm8[1],
+        xmm3[2] * xmm8[2],
+        xmm3[3] * xmm8[3],
+    ];
+    // `0x142cd5cd2` and `0x142cd5cd6`: `XMM3` = `(2q1, 2q0, 2q2, 2q3) * w`.
+    let spin = shufps(xmm3, xmm3, 0xc9);
+    xmm3 = [
+        spin[0] * xmm4[0],
+        spin[1] * xmm4[1],
+        spin[2] * xmm4[2],
+        spin[3] * xmm4[3],
+    ];
+    // `0x142cd5cdc` and `0x142cd5ce0`: the first diagonal term. The mask at
+    // `0x1430a4b40` is `0x7fffffff` on lanes 0..2 and **zero** on lane 3, so
+    // the fourth lane of the term is `+0.0` whatever the quaternion holds.
+    let diagonal = shufps(xmm2, xmm2, 0xc1);
+    let mut xmm0 = [
+        abs_lane(diagonal[0]),
+        abs_lane(diagonal[1]),
+        abs_lane(diagonal[2]),
+        0.0,
+    ];
+    // `0x142cd5ce7`: `XMM11` = `1 - |2q1*q1|`.
+    xmm11 = [
+        xmm11[0] - xmm0[0],
+        xmm11[1] - xmm0[1],
+        xmm11[2] - xmm0[2],
+        xmm11[3] - xmm0[3],
+    ];
+    // `0x142cd5ceb` and `0x142cd5cef`: the second diagonal term, masked the
+    // same way.
+    let second = shufps(xmm2, xmm2, 0xda);
+    xmm2 = [
+        abs_lane(second[0]),
+        abs_lane(second[1]),
+        abs_lane(second[2]),
+        0.0,
+    ];
+    // `0x142cd5cf6`: `XMM10` = the off-diagonal term.
+    let mut xmm10 = xmm3;
+    // `0x142cd5cfe`: `XMM0` = `(q0, q0, q1, q3)`.
+    xmm0 = shufps(xmm8, xmm8, 0xd0);
+    // `0x142cd5d03`: `XMM1` = the off-diagonal product.
+    xmm1 = [
+        xmm1[0] * xmm0[0],
+        xmm1[1] * xmm0[1],
+        xmm1[2] * xmm0[2],
+        xmm1[3] * xmm0[3],
+    ];
+    // `0x142cd5d06`: `XMM11` = `1 - |2q1*q1| - |2q2*q2|`.
+    xmm11 = [
+        xmm11[0] - xmm2[0],
+        xmm11[1] - xmm2[1],
+        xmm11[2] - xmm2[2],
+        xmm11[3] - xmm2[3],
+    ];
+    // `0x142cd5d0e`: `XMM2` = `(q1, q0, q2, q3)`.
+    xmm2 = shufps(xmm8, xmm8, 0xc9);
+    // `0x142cd5d13`: `XMM10` = the off-diagonal sum.
+    xmm10 = [
+        xmm10[0] + xmm1[0],
+        xmm10[1] + xmm1[1],
+        xmm10[2] + xmm1[2],
+        xmm10[3] + xmm1[3],
+    ];
+    // `0x142cd5d17`: `XMM1` = the off-diagonal difference.
+    xmm1 = [
+        xmm1[0] - xmm3[0],
+        xmm1[1] - xmm3[1],
+        xmm1[2] - xmm3[2],
+        xmm1[3] - xmm3[3],
+    ];
+    // `0x142cd5d1d` and `0x142cd5d21`: the box's sum and difference.
+    let box_min = quad_at(shape_box, 0x00);
+    xmm3 = [
+        xmm6[0] + box_min[0],
+        xmm6[1] + box_min[1],
+        xmm6[2] + box_min[2],
+        xmm6[3] + box_min[3],
+    ];
+    xmm6 = [
+        xmm6[0] - box_min[0],
+        xmm6[1] - box_min[1],
+        xmm6[2] - box_min[2],
+        xmm6[3] - box_min[3],
+    ];
+    // `0x142cd5d25` and `0x142cd5d29`: the two copies of the diagonal.
+    let mut xmm5 = xmm11;
+    let mut xmm9 = xmm11;
+    // `0x142cd5d31`: `XMM0` = `(P1, P2, D0, D1)`.
+    xmm0 = shufps(xmm10, xmm1, 0x49);
+    // `0x142cd5d35` and `0x142cd5d3c`: the box's centre and half extent.
+    xmm3 = [
+        xmm3[0] * HALF[0],
+        xmm3[1] * HALF[1],
+        xmm3[2] * HALF[2],
+        xmm3[3] * HALF[3],
+    ];
+    xmm6 = [
+        xmm6[0] * HALF[0],
+        xmm6[1] * HALF[1],
+        xmm6[2] * HALF[2],
+        xmm6[3] * HALF[3],
+    ];
+    // `0x142cd5d43`: `XMM10` = `(P0, P0, D2, D2)`.
+    xmm10 = shufps(xmm10, xmm1, 0xa0);
+    // `0x142cd5d48`: `XMM0` = `(P1, P1, D1, D2)`.
+    xmm0 = shufps(xmm0, xmm0, 0x78);
+    // `0x142cd5d4c`: `XMM1` = the centre.
+    xmm1 = xmm3;
+    // `0x142cd5d4f`: `XMM9` = `(m1, 0, D1, D2)`.
+    xmm9 = shufps(xmm9, xmm0, 0xed);
+    // `0x142cd5d54`: `XMM5` = `(m0, 0, P1, P1)`.
+    xmm5 = shufps(xmm5, xmm0, 0x4c);
+    // `0x142cd5d5b`: `XMM0` = `(q1*cx, q0*cy, q2*cz, q3*cw)`.
+    xmm0 = [
+        xmm2[0] * xmm3[0],
+        xmm2[1] * xmm3[1],
+        xmm2[2] * xmm3[2],
+        xmm2[3] * xmm3[3],
+    ];
+    // `0x142cd5d5e` and `0x142cd5d62`: `XMM1` = the centre's own rotation.
+    let centre = shufps(xmm1, xmm3, 0xc9);
+    xmm1 = [
+        centre[0] * xmm8[0],
+        centre[1] * xmm8[1],
+        centre[2] * xmm8[2],
+        centre[3] * xmm8[3],
+    ];
+    // `0x142cd5d66` and `0x142cd5d6b`: the `y` extent's absolute terms. The
+    // mask at `0x142f7aaf0` is `0x7fffffff` on all four lanes.
+    let y_terms = shufps(xmm9, xmm9, 0x72);
+    xmm9 = [
+        abs_lane(y_terms[0]),
+        abs_lane(y_terms[1]),
+        abs_lane(y_terms[2]),
+        abs_lane(y_terms[3]),
+    ];
+    // `0x142cd5d73`: `XMM10` = `(P0, P2, P0, P2)`.
+    xmm10 = shufps(xmm10, xmm10, 0x88);
+    // `0x142cd5d78`: the rotation's difference.
+    xmm1 = [
+        xmm1[0] - xmm0[0],
+        xmm1[1] - xmm0[1],
+        xmm1[2] - xmm0[2],
+        xmm1[3] - xmm0[3],
+    ];
+    // `0x142cd5d7b` and `0x142cd5d7f`: the `x` extent's absolute terms.
+    let x_terms = shufps(xmm5, xmm5, 0x78);
+    xmm5 = [
+        abs_lane(x_terms[0]),
+        abs_lane(x_terms[1]),
+        abs_lane(x_terms[2]),
+        abs_lane(x_terms[3]),
+    ];
+    // `0x142cd5d89`: the centre's `w` term.
+    xmm0 = [
+        xmm3[0] * xmm4[0],
+        xmm3[1] * xmm4[1],
+        xmm3[2] * xmm4[2],
+        xmm3[3] * xmm4[3],
+    ];
+    // `0x142cd5d8c` and `0x142cd5d91`: the `z` extent's absolute terms.
+    let z_terms = shufps(xmm10, xmm11, 0xe4);
+    xmm10 = [
+        abs_lane(z_terms[0]),
+        abs_lane(z_terms[1]),
+        abs_lane(z_terms[2]),
+        abs_lane(z_terms[3]),
+    ];
+    // `0x142cd5d99` and `0x142cd5d9d`: the rotated centre.
+    let rotated = shufps(xmm1, xmm1, 0xc9);
+    xmm1 = [
+        rotated[0] + xmm0[0],
+        rotated[1] + xmm0[1],
+        rotated[2] + xmm0[2],
+        rotated[3] + xmm0[3],
+    ];
+    // `0x142cd5da3`: the `y` half extent, splatted.
+    xmm0 = shufps(xmm6, xmm6, 0x55);
+    // `0x142cd5da7`: the `y` extent.
+    xmm9 = [
+        xmm9[0] * xmm0[0],
+        xmm9[1] * xmm0[1],
+        xmm9[2] * xmm0[2],
+        xmm9[3] * xmm0[3],
+    ];
+    // `0x142cd5dae`: the `x` half extent, splatted.
+    xmm0 = shufps(xmm6, xmm6, 0x00);
+    // `0x142cd5db2`: `XMM4` = the rotated centre.
+    let mut xmm4 = xmm1;
+    // `0x142cd5db5`: the `x` extent.
+    xmm5 = [
+        xmm5[0] * xmm0[0],
+        xmm5[1] * xmm0[1],
+        xmm5[2] * xmm0[2],
+        xmm5[3] * xmm0[3],
+    ];
+    // `0x142cd5db8` and `0x142cd5dbc`: the rotated centre's other product.
+    let other = shufps(xmm4, xmm1, 0xc9);
+    xmm4 = [
+        other[0] * xmm8[0],
+        other[1] * xmm8[1],
+        other[2] * xmm8[2],
+        other[3] * xmm8[3],
+    ];
+    // `0x142cd5dc0`: the rotated centre's third product.
+    xmm1 = [
+        xmm1[0] * xmm2[0],
+        xmm1[1] * xmm2[1],
+        xmm1[2] * xmm2[2],
+        xmm1[3] * xmm2[3],
+    ];
+    // `0x142cd5dc3`: the `x` and `y` extents together.
+    xmm9 = [
+        xmm9[0] + xmm5[0],
+        xmm9[1] + xmm5[1],
+        xmm9[2] + xmm5[2],
+        xmm9[3] + xmm5[3],
+    ];
+    // `0x142cd5dc7`: the `z` half extent, splatted.
+    xmm6 = shufps(xmm6, xmm6, 0xaa);
+    // `0x142cd5dcb`: the `z` extent.
+    xmm10 = [
+        xmm10[0] * xmm6[0],
+        xmm10[1] * xmm6[1],
+        xmm10[2] * xmm6[2],
+        xmm10[3] * xmm6[3],
+    ];
+    // `0x142cd5dcf`: the centre's last difference.
+    xmm4 = [
+        xmm4[0] - xmm1[0],
+        xmm4[1] - xmm1[1],
+        xmm4[2] - xmm1[2],
+        xmm4[3] - xmm1[3],
+    ];
+    // `0x142cd5dd2` and `0x142cd5dd6`: the difference, doubled.
+    let doubled = shufps(xmm4, xmm4, 0xc9);
+    xmm4 = [
+        doubled[0] + doubled[0],
+        doubled[1] + doubled[1],
+        doubled[2] + doubled[2],
+        doubled[3] + doubled[3],
+    ];
+    // `0x142cd5dd9` and `0x142cd5ddc`: the centre and the transform's row.
+    xmm4 = [
+        xmm4[0] + xmm3[0],
+        xmm4[1] + xmm3[1],
+        xmm4[2] + xmm3[2],
+        xmm4[3] + xmm3[3],
+    ];
+    let row = quad_at(transform, 0x00);
+    xmm4 = [
+        xmm4[0] + row[0],
+        xmm4[1] + row[1],
+        xmm4[2] + row[2],
+        xmm4[3] + row[3],
+    ];
+    // `0x142cd5de4`: the three extents together.
+    xmm9 = [
+        xmm9[0] + xmm10[0],
+        xmm9[1] + xmm10[1],
+        xmm9[2] + xmm10[2],
+        xmm9[3] + xmm10[3],
+    ];
+    // `0x142cd5dff`: the minimum.
+    let low = [
+        xmm4[0] - xmm9[0],
+        xmm4[1] - xmm9[1],
+        xmm4[2] - xmm9[2],
+        xmm4[3] - xmm9[3],
+    ];
+    // `0x142cd5e03`: the maximum.
+    let high = [
+        xmm9[0] + xmm4[0],
+        xmm9[1] + xmm4[1],
+        xmm9[2] + xmm4[2],
+        xmm9[3] + xmm4[3],
+    ];
+    out[..0x10].copy_from_slice(&quad_bytes(low));
+    out[0x10..0x20].copy_from_slice(&quad_bytes(high));
+}
+
 // ---------------------------------------------------------------------------
 // The query driver's per-entry pruning (`0x142cbd510`, the walk's inner body).
 // ---------------------------------------------------------------------------
@@ -1259,8 +2361,17 @@ mod mesh_gather_test {
 /// `count` is the query block's support-point count, forwarded untouched from
 /// the block the walk copies, and `support` is that copy's point array - the
 /// hull's transformed points with the centre subtracted, which is what the
-/// client's descriptor points at (`0x142caf170`). `flag0` is the query block's
-/// byte at `+0x72`, the descriptor's `+0xa0` flag.
+/// client's descriptor points at (`0x142caf170`). `flag0` and `flag1` are the
+/// closest-point solver's descriptor flags at `+0xa0` and `+0xa1`.
+///
+/// **The flags decide what happens to a shape that is already touching.** The
+/// mesh leaf takes them from the query block (`+0x72` and zero), so a sweep
+/// whose start is on or inside a surface reports nothing. The character's
+/// narrowphase (`0x142cfc090`) passes **one** for both, and the solver then
+/// answers such a sweep with the contact it would otherwise refuse - the
+/// four-simplex penetration case included (`0x142cc9a28`, `0x142cc9d51`).
+/// That is the difference between the client stopping at a wall and the leaf
+/// sailing through it.
 ///
 /// Every other state - a support-point count of any size, or an expansion lane
 /// above `0.005` - builds the descriptor at `0x142cce6e8` and calls the
@@ -1275,6 +2386,7 @@ fn mesh_triangle(
     count: i32,
     support: &[Quad],
     flag0: u8,
+    flag1: u8,
 ) -> Option<(Quad, Quad, Quad)> {
     // The client's fast path runs when every lane of the scaled expansion is
     // at most 0.005; anything else is the support-point (slow) path.
@@ -1306,7 +2418,7 @@ fn mesh_triangle(
             direction: sub_lane(end, start),
             motion,
             flag0,
-            flag1: 0,
+            flag1,
         };
         let mut out = GjkOutput::default();
         if !closest_point(&input, &mut out) {
@@ -1594,6 +2706,23 @@ pub fn mesh_sweep_with_points(
     xform: &[u8],
     points: &[u8],
 ) -> MeshSweep {
+    mesh_sweep_with_flags(record, world, block, xform, points, block[0x72], 0)
+}
+
+/// The same leaf with the closest-point solver's flags given explicitly.
+///
+/// The mesh leaf takes them from the query block (`+0x72` and zero); the
+/// character's narrowphase (`0x142cfc090`) passes one for both, which is what
+/// makes it answer a sweep that starts inside a shape. See [`mesh_triangle`].
+pub fn mesh_sweep_with_flags(
+    record: &[u8],
+    world: &MeshWorld,
+    block: &[u8],
+    xform: &[u8],
+    points: &[u8],
+    flag0: u8,
+    flag1: u8,
+) -> MeshSweep {
     let missed = MeshSweep {
         hit: None,
         internals: 0,
@@ -1627,7 +2756,6 @@ pub fn mesh_sweep_with_points(
     // The recentred support points the walk keeps for the triangle test
     // (`0x142caf170`); empty when the query carries none.
     let mut support: Vec<Quad> = Vec::new();
-    let flag0 = block[0x72];
     let mut start = mul_lane(rotate_to_local(q, sub_lane(start_world, position)), inverse);
     let mut end = mul_lane(rotate_to_local(q, sub_lane(end_world, position)), inverse);
     let mut step = if all_lanes(|lane| 0.0 < expansion[lane]) {
@@ -1719,6 +2847,7 @@ pub fn mesh_sweep_with_points(
                         count,
                         &support,
                         flag0,
+                        flag1,
                     ) {
                         motion = fraction;
                         low = quad_min(start, point);
@@ -4085,6 +5214,66 @@ mod tests {
         assert_eq!(hit.fraction, [0.5; 4]);
         assert_eq!(hit.point, [0.75, 0.9, 0.0, 0.0]);
         assert_eq!(hit.normal, [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    /// The capsule narrowphase (`0x142cfc090`) passes the solver the second
+    /// flag, and that is the difference between the leaf's answer and the
+    /// client's: a shape that is already inside the other's radius is refused
+    /// by the leaf's pair and carried on by the narrowphase's.
+    #[test]
+    fn the_second_flag_carries_a_shape_that_is_already_inside() {
+        // A triangle in the `z = 0` plane and a point `0.02` above it, with a
+        // radius of `0.05`: the two are inside each other's radius, so the
+        // solver converges at once.
+        let a = [
+            [0.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ];
+        let b = [[0.2, 0.2, 0.02, 0.0]];
+        let identity = [0.0, 0.0, 0.0, 1.0];
+        let shape_a = GjkShape {
+            radius: splat(0.01),
+            translation: [0.0; 4],
+            rotation: identity,
+        };
+        let shape_b = GjkShape {
+            radius: splat(0.05),
+            translation: [0.0; 4],
+            rotation: identity,
+        };
+        // The leaf's own pair: the solver refuses the pair.
+        let refused = GjkInput {
+            a: &a,
+            b: &b,
+            shape_a,
+            shape_b,
+            direction: [0.0, 0.0, -1.0, 0.0],
+            motion: splat(1.0),
+            flag0: 0,
+            flag1: 0,
+        };
+        let mut out = GjkOutput::default();
+        assert!(
+            !closest_point(&refused, &mut out),
+            "the leaf's pair refuses a shape that is already inside"
+        );
+        // The narrowphase's pair: the solver carries on and answers.
+        let carried = GjkInput {
+            a: &a,
+            b: &b,
+            shape_a,
+            shape_b,
+            direction: [0.0, 0.0, -1.0, 0.0],
+            motion: splat(1.0),
+            flag0: 0,
+            flag1: 1,
+        };
+        let mut out = GjkOutput::default();
+        assert!(
+            closest_point(&carried, &mut out),
+            "the narrowphase's pair carries the sweep on"
+        );
     }
 
     #[test]

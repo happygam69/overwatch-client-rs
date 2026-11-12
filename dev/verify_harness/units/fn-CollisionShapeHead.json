@@ -1,0 +1,55 @@
+{
+  "id": "fn/CollisionShapeHead",
+  "title": "tier-2 shipped code: the shape's head - its points, count and radius - against 0x142cb8950",
+  "address": {
+    "v2b": "0x7ff7c79d8950"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_shape_head",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "entry",
+      "kind": "ptr",
+      "ptr_len": 192
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "blob",
+      "kind": "ptr",
+      "ptr_len": 3584
+    }
+  ],
+  "returns": "void",
+  "argFactory": "collision_shape_head_fixture",
+  "options": {
+    "iterations": 120,
+    "coverageThreshold": 100,
+    "mutationCount": 6,
+    "mutationKillRate": 0.8,
+    "seed": 23680,
+    "coverageWindow": 138,
+    "allowedImageReads": [
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a0f",
+      "0x7ff7c7e3e0c0-0x7ff7c7e3e0cf"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (shape_head), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_shape_head entry.",
+    "The oracle runs the real 0x142cb8950 and the harness compares the whole 0x20-byte head byte for byte: the points pointer, the count, the radius quad and the word at +0x0c, which the client never writes - the fixture starts the head with a 0xa5 pattern so that word proves it stayed put.",
+    "The head's pointer is an absolute address, so the world record's pool pointers are absolute arena addresses in the fixture and the probe resolves them back into the blob the way ARENA_BASE fixes it. The head the client writes is therefore the same number on both sides and is compared, not masked.",
+    "The three pools are laid out at the client's own strides (0x20, 0x30 and 0x50) and each element carries a different radius, so a wrong pool or a wrong stride shows up in the head's radius and not only in the pointer.",
+    "The declared cases pin every type byte: zero (the sphere pool), one (the capsule pool) and every other value - two, three, four, seven and 255 - which takes the counted pool. The index runs 0..7, so the stride arithmetic is exercised at every element.",
+    "The image constants the function reads are the zero quad at 0x142f84a00, which it writes over the head's +0x10, and the constant radius 0.01 at 0x14311e0c0, which the counted branch splats over the four lanes.",
+    "Two of the six mutants are killed by the port's own bounds check firing (the stride multiply and the type dispatch put the element outside the pool slice), which is the client's out-of-bounds read answered by a panic instead of a wrong number; the harness counts a probe death after a panic as the divergence it is."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the head only. The narrowphase 0x142cfc090 that asks for it, the query's own dispatch 0x142cc1610, the triangle head 0x142cc5ba0 and the two triangle records remain open."
+  ]
+}

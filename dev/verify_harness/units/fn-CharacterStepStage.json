@@ -1,0 +1,68 @@
+{
+  "id": "fn/CharacterStepStage",
+  "title": "tier-2 shipped code: the character controller's step stage against 0x142cf5020",
+  "address": {
+    "v2b": "0x7ff7c7a15020"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "controller_step_stage",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "block",
+      "kind": "ptr",
+      "ptr_len": 0
+    },
+    {
+      "name": "out_pos",
+      "kind": "ptr",
+      "ptr_len": 16
+    },
+    {
+      "name": "out_count",
+      "kind": "ptr",
+      "ptr_len": 4
+    },
+    {
+      "name": "requested",
+      "kind": "ptr",
+      "ptr_len": 16
+    },
+    {
+      "name": "eps",
+      "kind": "ptr",
+      "ptr_len": 16
+    }
+  ],
+  "returns": "void",
+  "argFactory": "step_stage_fixture",
+  "options": {
+    "iterations": 96,
+    "coverageThreshold": 90,
+    "mutationCount": 10,
+    "mutationKillRate": 0.8,
+    "seed": 5020,
+    "coverageWindow": 933,
+    "allowedImageReads": [
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a10",
+      "0x7ff7c830d220-0x7ff7c830d230",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9ab00",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17b0",
+      "0x7ff7c8fc1eb0-0x7ff7c8fc1eb4"
+    ],
+    "allowedImageWrites": [
+      "0x7ff7c8fc1eb0-0x7ff7c8fc1eb4"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/controller.rs (step_stage), called by crates/ow-sim/src/bin/verify_probe.rs through the controller_step_stage entry.",
+    "The oracle runs the real 0x142cf5020 - the character's step stage, a call-free leaf - and the harness compares the output position quad, the round count and the plane records' accumulated pushes byte for byte.",
+    "The plane array lives right after the variant block inside the block's own pointee and the block's +0x440 holds the arena address of the array, so the oracle dereferences the real records.",
+    "The epsilon is the client's own: MoverAdvance writes 0x3ba3d70a into the sweep block every frame."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the step stage only. The pair walk that fills the plane array (the face records at +0xc0 and +0x18, the count at +0xf6), the narrowphase that produces the resolve's factor and the solver's fixed point around them are separate reads."
+  ]
+}

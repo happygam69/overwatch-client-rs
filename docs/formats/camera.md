@@ -152,6 +152,5 @@ component class.
    read coefficient set; its target writer is open.
 4. **3P and shake.** Read the consumers before implementing them.
 
-The current viewer's camera framing options (`--fp-cam-drop`, `--fp-cam-back`,
-`--cam-look-inverse`) are deviations in `docs/deviations.md`, not client
-behaviour.
+The current viewer's camera framing options (`--fp-cam-drop`, `--fp-cam-back`)
+are deviations in `docs/deviations.md`, not client behaviour.

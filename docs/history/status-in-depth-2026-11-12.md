@@ -1,9 +1,18 @@
-# Status in depth
+# Status in depth (archived 2026-11-12)
+
+The long-form status that used to open the README, moved out of `docs/` when
+the per-system ledger became the one owner of the state. It duplicates
+`docs/systems-coverage.md` and its numbers are frozen at its snapshot; it is
+kept verbatim because a snapshot is a record, not a page to maintain.
+
+The one mechanical change: three relative links were re-pointed one
+directory up, because the file now sits in `docs/history/`.
+
 
 The long-form status the README used to carry: every verified address, chunk
 count and read value behind its summary table. The per-system ledger is
-[`systems-coverage.md`](systems-coverage.md); the work queue is
-[`open-questions.md`](open-questions.md).
+[`systems-coverage.md`](../systems-coverage.md); the work queue is
+[`open-questions.md`](../open-questions.md).
 
 **The one client launches the real practice range.** `ow-client` and `ow-scene`
 are workspace members; `ow-sim` is now a workspace member too and holds the
@@ -156,7 +165,7 @@ client-side mode→variation selector.
   decode* and mesh assembly are the viewer's own reading; they are listed as
   open, not as client behaviour.
 
-The rebuild order is [`rebuild-plan.md`](rebuild-plan.md).
+The rebuild order is [`rebuild-plan.md`](../rebuild-plan.md).
 
 The renderer's 1:1 target is **D3D11** (the production path); D3D12 is the
 client's beta path. `crates/ow-render` has stages **D1-D4 and the D5

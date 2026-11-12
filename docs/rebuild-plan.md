@@ -1,24 +1,18 @@
-# Rebuild plan: current state
+# Rebuild plan: the stage order
 
 The client is one executable. Its default launch resolves the real practice
-range from the operator's install and draws that map's own chunk set. Gameplay
-is not implemented yet.
+range from the operator's install and draws that map's own chunk set, and the
+per-frame movement law is read and verified
+([`systems-coverage.md`](systems-coverage.md)).
 
 **The rule: 1 to 1 or not at all.** A gameplay feature counts only when the
 client's own code or value has been read from the current `Overwatch.exe`, the
 Rust implementation follows it operation for operation, and a test proves the
 result identical. Anything else stays open.
 
-## Stage status
-
-| stage | state | gate |
-|---|---|---|
-| 1. CASC primitives against the client | 5 units verified; the rest open | `cli.py casc` |
-| 2. build-154504 manifest | derivation and bundle path read and implemented | records GUID-sorted; all headers open |
-| 3. map resolver | practice range resolves and renders | 34/34 chunks, exact bounds |
-| 4. materials and textures | first pass in the viewer; client renderer not claimed | open |
-| 5. the one executable | done | default launch opens the practice range |
-| 6. gameplay | started: movement arithmetic leaves verified | no playable movement/combat claim yet |
+The stages below are the order and the gate for each. The state of each one is
+[`systems-coverage.md`](systems-coverage.md); the queue is
+[`open-questions.md`](open-questions.md).
 
 ## Stage 1 - CASC primitives
 

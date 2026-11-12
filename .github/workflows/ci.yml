@@ -6,9 +6,9 @@
 # gate off.
 #
 # `cargo xtask verify` is the same gate the project runs locally: fmt, clippy
-# (warnings are errors), every test target in the workspace, the dev/ tool
-# index check, the deviations check, the address-frame check and the PE layout
-# check.
+# (warnings are errors), every test target in the workspace, the generated
+# tool-table check, the deviations check, the address-frame check and the PE
+# layout check.
 #
 # The runner is Windows because the D3D11 backend (`ow-render`) is
 # `#![cfg(windows)]` and `ow-client` uses it unconditionally; on Linux that
@@ -56,5 +56,5 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: The gate (fmt, clippy, tests, dev index, deviations, addresses)
+      - name: The gate (fmt, clippy, tests, tool tables, deviations, addresses)
         run: cargo xtask verify

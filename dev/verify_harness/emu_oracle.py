@@ -204,6 +204,12 @@ class EmuOracle:
         self.state: Optional[Tuple[int, bytes]] = None
         self._state_restore: Optional[Tuple[int, bytes]] = None
         self._extra_maps: List[Tuple[int, int]] = []
+        # Inclusive ranges of image addresses the callee may write. The
+        # client keeps some of its runtime statistics in the image's
+        # zero-fill region (the step stage's round counter, for one), and a
+        # unit that proves such a leaf declares the global it expects the
+        # write in.
+        self.allowed_writes: List[Tuple[int, int]] = []
 
     def set_state(self, base: int, data: bytes) -> None:
         """Preload a controlled memory snapshot for a stateful unit.
@@ -434,9 +440,15 @@ class EmuOracle:
             # A write into the image itself: the function patched shipped
             # code/data. Undeclared by definition - unless it is a write into
             # the controlled state region, which is the unit's declared state
-            # (the state channel compares it).
+            # (the state channel compares it), or a write into a global the
+            # unit declared (`allowedImageWrites`): the client keeps its
+            # runtime statistics in the image's zero-fill region, and a leaf
+            # that updates one is still a leaf.
             if state_lo is not None and state_lo <= address < state_hi:
                 return
+            for lo, hi in self.allowed_writes:
+                if lo <= address and address + size - 1 <= hi:
+                    return
             oow.append((address, size))
 
         def hook_image_read(uu, access, address, size, value, ud):

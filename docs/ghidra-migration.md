@@ -1,8 +1,12 @@
 # Ghidra clean-map migration
 
+**Done.** `owmod_clean` is the working project
+([`ghidra-project.md`](ghidra-project.md)); this is the runbook that built it,
+kept as the reproducible path for a lost project. The `owmod` project is the
+pre-cleanup backup.
+
 The clean map is the executable's own `.pdata` function set, not Ghidra's
-byte-pattern function search. The live `owmod` project is the pre-cleanup map;
-`owmod_clean` is the target. This runbook is the reproducible path.
+byte-pattern function search. This runbook is the reproducible path.
 
 The clean map has **119,805 functions** at import (119,802 real `.pdata`
 entries, 0 chained-fragment starts, 0 functions inside another real function,

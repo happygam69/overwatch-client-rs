@@ -1,11 +1,11 @@
-# Static collision: three bounded checks
+# Static collision: eighteen bounded checks
 
 The brush route turned out to be the *fracturable* path: the descriptor `C`
 (`0x564B1018`, `formats/model-collision.md`) is reached through entity components
 and its payload is a fracture-piece list, and no practice-range asset carries it.
 This file asks the other question -- where the map's **static** collision comes
-from -- with three bounded checks, each of which records its counts and a verdict
-even when the verdict is negative.
+from -- with eighteen bounded checks, each of which records its counts and a
+verdict even when the verdict is negative.
 
 Evidence class per claim: **install** = measured on the operator's installation;
 **decompiled** / **assembly** = read from the Ghidra program `owmod_clean`,

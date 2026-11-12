@@ -19,7 +19,7 @@ to the current-image address with
 `v2b - 0x7ff7c4d20000 == exe - 0x140000000`; every citation in this page is the
 `0x140000000 + RVA` form.
 
-**Gate.** `python dev/verify_harness/cli.py casc` runs the twenty-seven CASC
+**Gate.** `python dev/verify_harness/cli.py casc` runs the thirty-five CASC
 units (about seven minutes cold; select with a unit name for one). `cargo xtask verify` does **not**
 run the differential harness, so a CASC regression can pass the nominal gate.
 The ledger binds a verdict to the candidate source and the git revision;

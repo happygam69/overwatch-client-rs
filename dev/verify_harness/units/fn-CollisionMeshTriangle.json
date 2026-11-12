@@ -1,0 +1,49 @@
+{
+  "id": "fn/CollisionMeshTriangle",
+  "title": "tier-2 shipped code: the type-3 mesh's own triangle record against 0x142cae760",
+  "address": {
+    "v2b": "0x7ff7c79ce760"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_mesh_triangle",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "blob",
+      "kind": "ptr",
+      "ptr_len": 2560
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 134
+    },
+    {
+      "name": "index",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "collision_mesh_triangle_fixture",
+  "options": {
+    "iterations": 120,
+    "coverageThreshold": 100,
+    "mutationCount": 6,
+    "mutationKillRate": 0.8,
+    "seed": 23680,
+    "coverageWindow": 118,
+    "allowedImageReads": []
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (mesh_triangle_record), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_mesh_triangle entry.",
+    "The oracle runs the real 0x142cae760 and the harness compares the whole 0x86-byte output byte for byte: the three scaled vertices at +0x00, +0x10 and +0x20 and the three layer words at +0x80, +0x82 and +0x84.",
+    "The mesh record is the front of one blob that also holds the vertex and the triangle arrays, and the record's two pointers are absolute arena addresses, so the probe resolves them back into the blob the way ARENA_BASE fixes it.",
+    "The declared cases pin every scale (one, a half, a mixed scale with a negative lane and a zero scale) and every triangle index, the first and the last. Each triangle points at its own three vertices, so a wrong stride or a wrong index shows up in the output. A negative index is not in the corpus: the client sign-extends it and reads before the array, which faults.",
+    "The function reads no image constant: the scale comes from the record itself."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the mesh's own triangle record only. The narrowphase 0x142cfc090 that calls it, the runtime's own triangle record 0x142ccf540 and the candidate gather 0x142cfcba0 remain open."
+  ]
+}

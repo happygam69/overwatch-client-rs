@@ -5,10 +5,11 @@ and the Ghidra project, never write to the game. `patch_clean_pe.py` writes a
 patched analysis copy under the git-ignored `dev/data/offline_recover/`; it
 never writes to the install.
 
-- **[INDEX.md](INDEX.md)** — every tool and the question it answers. Generated
-  by `python make_index.py`; `--check` fails when it is stale.
-- **[../docs/tools.md](../docs/tools.md)** — the tool table by task, with the
-  probes that live in the Rust crates.
+- **[../docs/tools.md](../docs/tools.md)** — the one tool list: every script in
+  this folder, the harness, the data probes, the client and the Ghidra scripts,
+  each with the question it answers. Its tables are generated from the tools'
+  own headers by `python dev/make_index.py`; `--check` fails when they are
+  stale.
 - **[verify_harness/PERFORMANCE.md](verify_harness/PERFORMANCE.md)** — the
   harness's measured wall time, where it goes, and the quality proof for the
   parallel mutation stage (`--jobs`, `--mutation-timeout`).
@@ -25,14 +26,8 @@ Nothing that came out of the game is tracked: no disassembly, no extracted
 strings, no raw asset bytes. A tool that writes those writes them outside the
 repository.
 
-## Housekeeping rules
-
-1. A tool stays only if `INDEX.md` lists it and it still answers a question
-   someone will ask again. One-off probes whose answer is already in
-   `docs/formats/` are deleted, not parked.
-2. A tool that is a superset of another is deleted, and the surviving one's
-   header says what it replaced.
-3. Every tool's header says what question it answers, in one line. That line
-   is the index entry.
-4. Outputs larger than about 1 MB go outside the repo.
-5. The tools must run from this folder (`python dev/<tool>.py`).
+The housekeeping rules for this folder are in
+[`../docs/tools.md#housekeeping-rules`](../docs/tools.md#housekeeping-rules):
+a tool stays only while the list names it and it still answers a question,
+a superset of another tool is deleted, every header is its table entry, large
+outputs stay out of the repo, and tools run from the repository root.

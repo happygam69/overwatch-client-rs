@@ -932,6 +932,95 @@ fn out_pointee(original: &[u8], quad: [f32; 4]) -> Vec<u8> {
     bytes
 }
 
+/// `0x142cf5020`: the client's step stage.
+///
+/// The signature is `void (block*, out_pos[4], out_count*, requested[4],
+/// eps[4])`. The block carries the plane array's pointer at `+0x440` and the
+/// plane count at `+0x44c`; a plane record is `0x40` bytes - the normal and
+/// the offset at `+0x00`, the push limit at `+0x10` and the accumulated push
+/// at `+0x20`. The array lives right after the block inside the block's own
+/// pointee, so the probe parses it out of the same bytes the oracle reads.
+fn controller_step_stage_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 5 {
+        return Err(format!("expected 5 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let block = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x450 => b,
+        _ => return Err("arg0 must be the variant block".into()),
+    };
+    let out_pos = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 16 => b,
+        _ => return Err("arg1 must be the 16-byte position output".into()),
+    };
+    let out_count = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 4 => b,
+        _ => return Err("arg2 must be the 4-byte round-count output".into()),
+    };
+    let requested = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 16 => b,
+        _ => return Err("arg3 must be the 16-byte requested position".into()),
+    };
+    let eps = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 16 => b,
+        _ => return Err("arg4 must be the 16-byte epsilon".into()),
+    };
+    let count = i32::from_le_bytes(block[0x44c..0x450].try_into().unwrap());
+    let mut planes = Vec::new();
+    for index in 0..count.max(0) as usize {
+        let at = 0x450 + index * 0x40;
+        if at + 0x40 > block.len() {
+            break;
+        }
+        let record = &block[at..at + 0x40];
+        planes.push(ow_sim::controller::Plane {
+            normal: [
+                f32_at(record, 0x00),
+                f32_at(record, 0x04),
+                f32_at(record, 0x08),
+                f32_at(record, 0x0c),
+            ],
+            limit: [
+                f32_at(record, 0x10),
+                f32_at(record, 0x14),
+                f32_at(record, 0x18),
+                f32_at(record, 0x1c),
+            ],
+            accumulated: [
+                f32_at(record, 0x20),
+                f32_at(record, 0x24),
+                f32_at(record, 0x28),
+                f32_at(record, 0x2c),
+            ],
+        });
+    }
+    let target = [
+        f32_at(&requested, 0x00),
+        f32_at(&requested, 0x04),
+        f32_at(&requested, 0x08),
+        f32_at(&requested, 0x0c),
+    ];
+    let epsilon = f32_at(&eps, 0x00);
+    let (position, rounds) = ow_sim::controller::step_stage(target, &mut planes, epsilon);
+    // The stage writes the accumulated push back into the records.
+    let mut block = block;
+    for (index, plane) in planes.iter().enumerate() {
+        let at = 0x450 + index * 0x40 + 0x20;
+        for lane in 0..4 {
+            block[at + lane * 4..at + lane * 4 + 4]
+                .copy_from_slice(&plane.accumulated[lane].to_le_bytes());
+        }
+    }
+    let mut out_pos = out_pos;
+    out_pos[..16].copy_from_slice(&quad_bytes(position));
+    let mut out_count = out_count;
+    out_count[..4].copy_from_slice(&(rounds as i32).to_le_bytes());
+    Ok((
+        "-".to_string(),
+        vec![block, out_pos, out_count, requested, eps],
+    ))
+}
+
 /// `0x142cd5540`: the collision sweep's bounds stage.
 ///
 /// One pointer carries the query block (0x80 bytes) followed by the local
@@ -968,6 +1057,279 @@ fn collision_sweep_bounds_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>)
             out_pointee(&end_out, end),
         ],
     ))
+}
+
+/// `0x142cfc090`: the capsule narrowphase.
+///
+/// The signature is `bool (context, out[0x40], world, shape, transform[0x20],
+/// other[0x20], direction[0x10])`. The world is one blob holding the world
+/// record and everything behind it, and every pointer in it is an absolute
+/// arena address, so the probe resolves them back into the blob the way
+/// `ARENA_BASE` fixes it.
+///
+/// The context carries the candidate list the gather fills, so the probe
+/// reads it, hands it over and writes the count back.
+fn collision_capsule_narrowphase_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    const ARENA: u64 = 0x2_0000_0000;
+    const ENTRY_COUNT: usize = 3;
+    if args.len() != 7 {
+        return Err(format!("expected 7 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let mut context = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x40 => b,
+        _ => return Err("arg0 must be the 0x40-byte context".into()),
+    };
+    let mut out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x40 => b,
+        _ => return Err("arg1 must be the 0x40-byte contact record".into()),
+    };
+    let blob = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x340 => b,
+        _ => return Err("arg2 must be the world blob".into()),
+    };
+    let shape = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x28 => b,
+        _ => return Err("arg3 must be the shape record".into()),
+    };
+    let transform = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x20 => b,
+        _ => return Err("arg4 must be the shape's frame".into()),
+    };
+    let other = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x20 => b,
+        _ => return Err("arg5 must be the other shape's frame".into()),
+    };
+    let direction = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x10 => b,
+        _ => return Err("arg6 must be the sweep's direction".into()),
+    };
+    let read_u64 = |bytes: &[u8], at: usize| -> u64 {
+        u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+    };
+    let slice = |address: u64, len: usize| -> Result<&[u8], String> {
+        let start = address.wrapping_sub(ARENA) as usize;
+        blob.get(start..start + len)
+            .ok_or_else(|| "world pointer".to_string())
+    };
+    let record = &blob[..0x340];
+    let entries = slice(read_u64(record, 0x2b8), 0xc0 * ENTRY_COUNT)?;
+    let owners = slice(read_u64(record, 0x2a0), 0x50 * ENTRY_COUNT)?;
+    let poses = slice(read_u64(record, 0x288), 0x1c0 * ENTRY_COUNT)?;
+    let bases = [0x2d0usize, 0x2e8, 0x300, 0x318, 0x330];
+    let strides = [0x20usize, 0x30, 0x50, 0x50, 0x50];
+    let mut pools: [&[u8]; 5] = [&[], &[], &[], &[], &[]];
+    for slot in 0..5 {
+        pools[slot] = slice(read_u64(record, bases[slot]), strides[slot] * ENTRY_COUNT)?;
+    }
+    // The runtime's height field: the vertex array its own record names.
+    let runtime_vertices = slice(read_u64(&pools[4][..0x50], 0x38), 0x100)?;
+    let world = ow_sim::collide::NarrowphaseWorld {
+        record,
+        entries,
+        owners,
+        poses,
+        filter: &record[0x08..0x10],
+        pools,
+        mesh: Some(ow_sim::collide::MeshWorld {
+            base: ARENA,
+            bytes: &blob,
+        }),
+    };
+    let mut state = ow_sim::collide::NarrowphaseContext {
+        count: i32::from_le_bytes(context[0x30..0x34].try_into().expect("four bytes")),
+        capacity: i32::from_le_bytes(context[0x34..0x38].try_into().expect("four bytes")),
+        pool: Vec::new(),
+        box8: {
+            let mut box8 = [0u8; 0x20];
+            box8.copy_from_slice(&context[0x10..0x30]);
+            box8
+        },
+    };
+    let mut contact = [0u8; 0x40];
+    let found = ow_sim::collide::capsule_narrowphase(
+        &mut state,
+        &mut contact,
+        &world,
+        &shape[..0x28],
+        &transform[..0x20],
+        &other[..0x20],
+        &direction[..0x10],
+        runtime_vertices,
+    );
+    out[..0x40].copy_from_slice(&contact);
+    // The gather leaves the context's swept box and its candidate count.
+    context[0x10..0x30].copy_from_slice(&state.box8);
+    context[0x30..0x34].copy_from_slice(&state.count.to_le_bytes());
+    Ok((
+        if found { "1" } else { "0" }.to_string(),
+        vec![context, out, blob, shape, transform, other, direction],
+    ))
+}
+
+/// `FUN_142ccf540`: the runtime's own height-field triangle record.
+///
+/// The signature is `void (record, out[0x84], triangle_index)`. The record is
+/// the front of one blob that also holds the height field's vertex array and
+/// the callback stub, and the record's two pointers are absolute arena
+/// addresses, so the probe resolves them back into the blob the way
+/// `ARENA_BASE` fixes it.
+///
+/// The callback is the client's own indirect call, so the probe hands the
+/// candidate the answer the stub in the blob returns.
+fn collision_runtime_triangle_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    const ARENA: u64 = 0x2_0000_0000;
+    const RECORD_LEN: usize = 0x48;
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let blob = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= RECORD_LEN => b,
+        _ => return Err("arg0 must be the record blob".into()),
+    };
+    let mut out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x84 => b,
+        _ => return Err("arg1 must be the 0x84-byte output".into()),
+    };
+    let index = match it.next() {
+        Some(Arg::U64(v)) => v as u32 as i32,
+        _ => return Err("arg2 must be the triangle index".into()),
+    };
+    let record = &blob[..RECORD_LEN];
+    let read_u64 = |bytes: &[u8], at: usize| -> u64 {
+        u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+    };
+    let slice = |address: u64| -> Result<&[u8], String> {
+        let start = address.wrapping_sub(ARENA) as usize;
+        blob.get(start..)
+            .ok_or_else(|| "runtime pointer".to_string())
+    };
+    let vertices = slice(read_u64(record, 0x38))?;
+    let callback = read_u64(record, 0x40);
+    let layer = |_index: u32, _byte: u8| -> u16 { 0x1234 };
+    let callback = if callback == 0 {
+        None
+    } else {
+        Some(&layer as &dyn Fn(u32, u8) -> u16)
+    };
+    ow_sim::collide::runtime_triangle(record, vertices, index, callback, &mut out);
+    Ok(("-".to_string(), vec![blob, out]))
+}
+
+/// `0x142cae760`: the type-3 mesh's own triangle record.
+///
+/// The signature is `void (mesh_record, out[0x86], triangle_index)`. The mesh
+/// record is the front of one blob that also holds the vertex and the
+/// triangle arrays, and the record's two pointers are absolute arena
+/// addresses, so the probe resolves them back into the blob the way
+/// `ARENA_BASE` fixes it.
+fn collision_mesh_triangle_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    const ARENA: u64 = 0x2_0000_0000;
+    const RECORD_LEN: usize = 0x50;
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let blob = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= RECORD_LEN => b,
+        _ => return Err("arg0 must be the mesh blob".into()),
+    };
+    let mut out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x86 => b,
+        _ => return Err("arg1 must be the 0x86-byte output".into()),
+    };
+    let index = match it.next() {
+        Some(Arg::U64(v)) => v as u32 as i32,
+        _ => return Err("arg2 must be the triangle index".into()),
+    };
+    let record = &blob[..RECORD_LEN];
+    let read_u64 = |bytes: &[u8], at: usize| -> u64 {
+        u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+    };
+    let slice = |address: u64| -> Result<&[u8], String> {
+        let start = address.wrapping_sub(ARENA) as usize;
+        blob.get(start..).ok_or_else(|| "mesh pointer".to_string())
+    };
+    let vertices = slice(read_u64(record, 0x28))?;
+    let triangles = slice(read_u64(record, 0x30))?;
+    ow_sim::collide::mesh_triangle_record(record, vertices, triangles, index, &mut out);
+    Ok(("-".to_string(), vec![blob, out]))
+}
+
+/// `0x142cb8950`: the shape's head - its points, their count and its radius.
+///
+/// The signature is `void *(entry, out[0x20], world)`. The world is one blob
+/// holding the world record at its front and the three shape pools behind
+/// it, and the record's pool pointers are absolute arena addresses, so the
+/// probe resolves them back into the blob the way `ARENA_BASE` fixes it.
+fn collision_shape_head_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    const ARENA: u64 = 0x2_0000_0000;
+    const WORLD_LEN: usize = 0x340;
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let entry = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0xc0 => b,
+        _ => return Err("arg0 must be the 0xc0-byte shape entry".into()),
+    };
+    let mut out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 0x20 => b,
+        _ => return Err("arg1 must be the 0x20-byte head".into()),
+    };
+    let blob = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= WORLD_LEN => b,
+        _ => return Err("arg2 must be the world blob".into()),
+    };
+    let world = &blob[..WORLD_LEN];
+    let read_u64 = |bytes: &[u8], at: usize| -> u64 {
+        u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+    };
+    let pool = |at: usize| -> Result<&[u8], String> {
+        let address = read_u64(world, at);
+        let start = address.wrapping_sub(ARENA) as usize;
+        blob.get(start..).ok_or_else(|| "pool pointer".to_string())
+    };
+    let pools = [pool(0x2d0)?, pool(0x2e8)?, pool(0x300)?];
+    ow_sim::collide::shape_head(&entry[..0xc0], world, pools, &mut out);
+    Ok(("-".to_string(), vec![entry, out, blob]))
+}
+
+/// `0x142cd5c80`: the shape's own box, carried into the query's frame.
+///
+/// The signature is `float *(out[8], transform[8], shape_box[8])`. The out
+/// block's `+0x00` is the transformed box's minimum and its `+0x10` its
+/// maximum; the transform block's `+0x00` is the rotation's first row and
+/// its `+0x10` the quaternion (already conjugated by the caller); the shape
+/// box's `+0x00` is the local minimum and `+0x10` the local maximum.
+///
+/// The client returns the out pointer, so the compared channel is the
+/// pointee and the return value is not one.
+fn collision_shape_box_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 32 => b,
+        _ => return Err("arg0 must be the 32-byte output".into()),
+    };
+    let transform = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 32 => b,
+        _ => return Err("arg1 must be the 32-byte transform".into()),
+    };
+    let shape_box = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() >= 32 => b,
+        _ => return Err("arg2 must be the 32-byte shape box".into()),
+    };
+    let mut result = [0u8; 32];
+    ow_sim::collide::transform_shape_box(&transform[..32], &shape_box[..32], &mut result);
+    let mut out = out;
+    out[..32].copy_from_slice(&result);
+    // One buffer per pointer argument: the out block is written, the other
+    // two are only read.
+    Ok(("-".to_string(), vec![out, transform, shape_box]))
 }
 
 fn shape_bounds_entry(
@@ -2046,6 +2408,11 @@ fn handle_call(
         "shape_points" => shape_points_entry(args),
         "shape_dispatch" => shape_dispatch_entry(args),
         "collision_sweep_bounds" => collision_sweep_bounds_entry(args),
+        "collision_shape_head" => collision_shape_head_entry(args),
+        "collision_mesh_triangle" => collision_mesh_triangle_entry(args),
+        "collision_runtime_triangle" => collision_runtime_triangle_entry(args),
+        "collision_capsule_narrowphase" => collision_capsule_narrowphase_entry(args),
+        "collision_shape_box" => collision_shape_box_entry(args),
         "collision_sphere" => collision_sphere_entry(args),
         "collision_filter" => collision_filter_entry(args),
         "box_triangle_overlap" => box_triangle_overlap_entry(args),
@@ -2055,6 +2422,7 @@ fn handle_call(
         "triangle_degenerate" => triangle_degenerate_entry(args),
         "float_to_q12" => float_to_q12_entry(args),
         "collision_capsule" => collision_capsule_entry(args),
+        "controller_step_stage" => controller_step_stage_entry(args),
 
         // crates/ow-sim/src/collide.rs, the closest-point GJK
         "gjk_simplex3" => gjk_simplex_entry(args, 3),

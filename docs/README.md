@@ -16,15 +16,20 @@ operator's install; behaviour comes from the complete current-build
 | **implement movement** | **[`movement-plan.md`](movement-plan.md)** |
 | know how evidence is classified | [`provenance.md`](provenance.md) |
 | work in the decompiler | [`ghidra-project.md`](ghidra-project.md) |
-| rebuild the clean Ghidra image | [`ghidra-migration.md`](ghidra-migration.md) |
+| read how the clean Ghidra image was built (done) | [`ghidra-migration.md`](ghidra-migration.md) |
 | find a function's current address | [`function-names.csv`](function-names.csv) |
-| know what is not 1 to 1 yet | [`deviations.md`](deviations.md), [`ow-tank-1to1.md`](ow-tank-1to1.md), [`casc-1to1.md`](casc-1to1.md) |
+| know what is not 1 to 1 yet | [`deviations.md`](deviations.md), [`ow-tank-1to1.md`](ow-tank-1to1.md), [`casc-1to1.md`](casc-1to1.md), [`texture-1to1.md`](texture-1to1.md) |
+| know the port scope and the unit vocabulary | [`port-plan.md`](port-plan.md) |
+| run the port procedure | [`port-playbook.md`](port-playbook.md) |
+| read the `ow-tank` defect audit | [`audit-ow-tank.md`](audit-ow-tank.md) |
 | know the crates and data flow | [`architecture.md`](architecture.md) |
 | look up a term | [`glossary.md`](glossary.md) |
-| know which tool answers a question | [`tools.md`](tools.md), [`../dev/INDEX.md`](../dev/INDEX.md) |
+| know which tool answers a question | [`tools.md`](tools.md) — every tool, and the question it answers |
 | read the findings for a system | [`formats/`](formats/) |
-| see the current state | [`../STATUS-handoff.md`](../STATUS-handoff.md) |
-| read the long-form status that used to open the README | [`status-in-depth.md`](status-in-depth.md) |
+| see the current state | [`systems-coverage.md`](systems-coverage.md) |
+| run a session by the house loop | [`../STATUS-handoff.md`](../STATUS-handoff.md) |
+| read the old long-form status (archived) | [`history/status-in-depth-2026-11-12.md`](history/status-in-depth-2026-11-12.md) |
+| read a rotated ledger or snapshot | [`history/`](history/) |
 | see how the project got here | [`../MODLOG.md`](../MODLOG.md) |
 
 ## Reading orders

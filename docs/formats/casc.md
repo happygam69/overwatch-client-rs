@@ -2041,7 +2041,8 @@ cargo test --release -p ow-tank --test manifest_154504_real -- --nocapture
 
 Three previously declared walls turned out to be closable, and one of the
 declarations was wrong about the machine. All three units are `verified` in
-the ledger and the CASC suite is 30/30.
+the ledger and the CASC suite is 35/35 (35 unit descriptors, every verdict
+`verified` in this machine's ledger).
 
 **`ConfigKeyEntryParse` (`0x1424cebd0`, 481 B, `0x1424cebd0..0x1424cedb1`,
 `fn/ConfigKeyEntryParse`).** The wall was "it grows its vector through an

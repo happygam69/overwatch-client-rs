@@ -56,7 +56,15 @@ LEDGER_PATH = os.path.join(os.path.dirname(__file__), "ledger.json")
 #    function of the digests the ledger already binds (args surface, options
 #    incl. seed/iterations/cap/step, oracle window, harness version), so a
 #    fresh replay is still the verdict the same digests produced.
-HARNESS_VERSION = "8"
+# 9: a unit may declare the image globals its callee is allowed to write
+#    (`options.allowedImageWrites`). The client keeps some runtime statistics
+#    in the image's zero-fill region - the character controller's step stage
+#    updates the global that holds the largest round count it has seen - and
+#    a leaf that updates one was unverifiable by emulation alone, because the
+#    oracle's read-only image turned the write into a fault. The write is
+#    still declared per unit and still outside the compared channels: the
+#    statistic does not feed the callee's answer.
+HARNESS_VERSION = "9"
 
 
 def sha256_bytes(b: bytes) -> str:

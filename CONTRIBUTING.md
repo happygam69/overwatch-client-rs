@@ -57,16 +57,17 @@ normal ignore list.
 ## Where the work queue lives
 
 `docs/open-questions.md` is the queue: the next thing to work on is at the top,
-and each entry says what would settle it. `docs/systems-coverage.md` tracks
-every client system's state, and `STATUS-handoff.md` is the living summary.
+and each entry says what would settle it. `docs/systems-coverage.md` owns the
+per-system state, and `STATUS-handoff.md` is the loop a session runs.
 
 ## Files every change keeps updated
 
 - `MODLOG.md` — one short entry per change; milestones, not a diary.
 - `docs/open-questions.md` — close or re-point entries your change settles.
 - `docs/formats/<system>.md` — the findings, addresses and evidence class.
-- `dev/INDEX.md` — generated; `python dev/make_index.py` refreshes it, and the
-  gate fails when it is stale.
+- `docs/tools.md` — the one tool list; its generated tables come from the
+  tools' own headers (`python dev/make_index.py`), and the gate fails when
+  they are stale.
 
 ## Asking questions
 

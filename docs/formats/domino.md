@@ -599,4 +599,5 @@ Once the schema and the arithmetic are read, a pure body step gets a golden
 vector and a multi-step run gets a first-divergence test. A formula that is
 "close" is not a result. Status of this pass: schema tables above are
 current-image reads with the `(1 fn)` marks showing what still needs a second
-read; no Rust code was changed, so there is nothing to verify by test yet.
+read. This pass changed no Rust code, so it adds no test of its own; the
+Domino arithmetic that is implemented is tested in `ow-sim`.

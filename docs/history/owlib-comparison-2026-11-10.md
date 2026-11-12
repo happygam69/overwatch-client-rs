@@ -1,4 +1,9 @@
-# Side-by-side comparison: `overwatch-client-rs` vs `OWLib`
+# OWLib comparison (archived 2026-11-12)
+
+A one-time side-by-side of `overwatch-client-rs` and the OWLib tree, written
+against commit `ce9dacd` and never linked from the docs index. Kept verbatim
+as the record of that comparison; the live state is `docs/systems-coverage.md`
+and the open items are `docs/open-questions.md`.
 
 Companion to `docs/systems-coverage.md`, `docs/deviations.md` and
 `docs/open-questions.md`. Written from a read of both trees (file lists,

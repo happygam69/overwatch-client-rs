@@ -166,14 +166,16 @@ Delete this section when the operator lifts it.
   moving entries older than the current period, verbatim, to
   `docs/history/modlog-YYYY-MM.md` (one file per month). Never edit a moved
   entry; a correction is a new entry.
-- `STATUS-handoff.md`: what works, what is open, what is next. When a section
-  stops being live (the narrative behind a finished system, the per-unit
-  evidence ledger), move it verbatim to `docs/history/status-<date>.md` and
-  leave a pointer. The live per-system state belongs in
-  `docs/systems-coverage.md`, not here.
+- `STATUS-handoff.md`: the loop a session runs and the rules that bind it — it
+  carries no state table. When a section stops being live (the narrative behind
+  a finished system, the per-unit evidence ledger), move it verbatim to
+  `docs/history/status-<date>.md` and leave a pointer. The live per-system state
+  belongs in `docs/systems-coverage.md`, not here.
 - `README.md`: the public "what works / what does not" list.
 - `docs/systems-coverage.md`: every client system, its state, its next anchor.
 - `docs/formats/<system>.md`: findings, addresses, evidence class.
 - `docs/deviations.md`: legacy non-1:1 code, to be removed.
 - `docs/open-questions.md`: the work queue; next thing at the top.
-- `dev/INDEX.md`: generated tool list; `python dev/make_index.py` refreshes it.
+- `docs/tools.md`: **the** tool list — every tool and the question it answers,
+  including the generated tables of `dev/` scripts (refreshed by
+  `python dev/make_index.py`). Keep this page the only list.

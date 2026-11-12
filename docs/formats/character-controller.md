@@ -78,10 +78,12 @@ integrates the per-frame step.
   The conversion to the `0x20`-byte runtime nodes (`0x142ccad80`) and the
   appender `0x142cca460` are still unread, as is the pool importer
   `0x1421363d1`; the weld's neighbour links have no known reader.
-- **Implementation status:** no playable movement is implemented. The old
-  trace-measured approximation was deleted with `ow-sim/movement.rs`; the
-  client's own control law is the only acceptable source. The verified leaves
-  are arithmetic, not a per-frame step.
+- **Implementation status:** the read per-frame velocity law ships
+  (`ow_sim::frame`, `ow_client::walk`); the verified leaves below are what it is
+  built from. The old trace-measured approximation was deleted with
+  `ow-sim/movement.rs`, and the client's own control law remains the only
+  acceptable source. The input->wish stage is still the viewer's (see Open,
+  above), and the collision response is open.
 
 ## The component
 
@@ -365,9 +367,10 @@ each and the choice is measured rather than argued.
 `0x142cf3f80`), which walks the character's Domino **pair list**: each pair's
 face records are read at `+0xc0` (normal) and `+0xf6` (count), the pair list is
 rebuilt by `0x142cd4d90`, the position comes back through `0x142cd5270`, and the
-loop iterates a resolve to a `0.005` fixed point, up to `step_state[0x94]`
-iterations, with the per-frame step height `body[0x628] * scale_b`
-(`_DAT_143872ebc` times the block's `+0x58`). There is **no snap** in that path.
+loop iterates a resolve to a `0.005` fixed point, up to
+`min(step_state[0x94], body[0x1a88])` iterations, with the push limit
+`_DAT_143872ebc` (1.0) times `body[0x628]` times the frame duration at the
+block's `+0x14`. There is **no snap** in that path.
 
 The stand-in had a concrete defect: `ow_sim::walk::snap_to_floor`'s "only down"
 guard compared the probe's answer with the **probe origin**, which the caller
@@ -479,7 +482,7 @@ body is:
 
 ```text
 eps   = 0.005                                  ; the solver's own constant
-cap   = the sweep block's +0x1c                ; the advance fills it from step_state+0x94
+cap   = the sweep block's +0x2c                ; the advance fills it from step_state+0x94
 again:
     pair_build(world_handle)                  ; 0x142cd4d90: the world's pairs
     for each pair:                             ; the contact collection
@@ -513,7 +516,9 @@ Four facts, each read from the image:
    and calls `0x142cd4610`, which rebuilds the body's broadphase entry at the
    requested position and lets the runtime's contacts push it out. The
    resolved position is the body's new position - the runtime's depenetration,
-   not a projection the solver computes.
+   not a projection the solver computes. (Read further on 2026-11-12: the
+   resolve's own rule is the motion scaled by the contact factor, and the
+   runtime's push-out is the step stage - see "The resolve, read (2026-11-12)".)
 4. **The iteration count is written out** (`body+0x664`) next to the resolved
    position (`body+0x620`/`+0x628`/`+0x62c`), so the client itself records how
    many rounds the resolve took. The bound is a dword the solver reads from
@@ -521,19 +526,20 @@ Four facts, each read from the image:
    `cmp edx, dword ptr [rsi + 0x2c]` at `0x142cf49f0`); the advance fills that
    block's `+0x1c` with `step_state[0x94]`, clamped by `body[0x1a88]` when the
    global is set (the read expression is already in this file, "The advance's
-   read expression").
+   read expression"). The block's `+0x1c` is the *advance's* copy of the cap;
+   the solver reads it at the block's `+0x2c`, two bytes further on.
 
-**What this means for the walk.** The client's resolve has **no slide**: it
-puts the body where it was asked to go and lets the runtime push it out of
-what it overlaps, and the loop's answer is the body's resting place. The walk's
-stand-in does the opposite: it projects the *residual* along the contact
-normal and keeps going, which is what makes a body in a corner drift sideways
-instead of stopping. Porting the client's answer needs the runtime's body
-records and its contact collection (`0x142cc5600`), so the stage stays **open**
-- but the shape, the convergence test and the cap are now read, and the
-walker's own `ow_sim::walk` stand-in can be measured against them.
+**What this means for the walk.** The client's resolve has **no residual
+slide**: it scales the motion by the contact factor and stops. The slide the
+client *does* have is the step stage's: the **target** is pushed out of the
+faces the body overlaps before the resolve runs. The walk's stand-in does
+neither: it projects the *residual* along the contact normal and keeps going,
+which is what makes a body in a corner drift sideways instead of stopping.
+The stage stays **open** - the shape, the convergence test, the cap, the step
+stage and the factor are now read (see "The resolve, read (2026-11-12)"), and
+what is left is the narrowphase the factor comes from.
 
-### The resolve's shape, and the factor it is still missing (2026-11-11)
+### The resolve's shape (2026-11-11; the factor's value read 2026-11-12)
 
 `0x142cd4610`'s tail is now read, and it is the **shape** of the client's
 answer rather than its value:
@@ -561,34 +567,473 @@ Three facts, each from the image:
    contact only when the residual is strictly below the running minimum in all
    four lanes (`cmpltps` + `movmskps` + `cmp eax, 0xf`).
 
-**What is still missing is the factor's value.** The GJK's residual is the
-sweep's time of impact *when the GJK sweeps* and the overlap depth when it
-does not, and the narrowphase's descriptor decides which: its direction
-(`descriptor+0x80`) and motion budget (`+0x90`) read as zero in the narrowphase
-as read so far, which would make the GJK a static test - and then the residual
-is not a fraction and cannot scale the motion. **That link is open**, and it
-is the one that decides the rule:
+**The factor's value is now read (2026-11-12): it is a fraction.** The
+narrowphase's descriptor is built in `0x142cfc090` and the GJK
+(`0x142cc9460`) reads it at these offsets:
 
-- if the narrowphase sweeps, the factor is the time of impact, the resolve is
-  a swept stop, and the loop's iteration is what pushes the body out;
-- if the narrowphase is static, the factor is an overlap depth, and the
-  resolve is a push-out whose units are metres, not a fraction.
+| descriptor | value | written by |
+|---|---|---|
+| `+0x00` | shape A's points pointer, `+0x08` its point count, `+0x10` its radius | the shape's descriptor builder |
+| `+0x20` | shape B's points pointer, `+0x28` its point count, `+0x30` its radius | `FUN_142cb8950`, through the builder |
+| `+0x40`, `+0x50` | the **first** shape's translation and rotation | `0x142cfc090` (`0x142cfc1f8`, `0x142cfc1d5`), from the narrowphase's **fifth** argument - the shape's own frame |
+| `+0x60` | the **second** shape's translation (four floats) | `0x142cfc090` (`0x142cfc204`), from the narrowphase's **sixth** argument - the other shape's frame, its position quad |
+| `+0x70` | the second shape's rotation quad | `0x142cfc090` (`0x142cfc1e0`), the **next** sixteen bytes of that same frame - its quaternion |
+| `+0x80` | the **direction** (the sweep's direction) | `0x142cfc090` (`0x142cfc223`), from the narrowphase's **seventh** argument - the sixteen bytes `FUN_142cc5600` copies out of its sixth argument |
+| `+0x90` | the motion budget, `1.0` in all four lanes | `0x142cfc090` (`movaps`, `0x3f800000` twice) |
+| `+0xa0` | the GJK's flag 0, **0** | `0x142cfc090` (`mov byte ptr [rbp + 0xd0], al` with `al = 0`) |
+| `+0xa1` | the GJK's flag 1, **1** | `0x142cfc090` (`mov byte ptr [rbp + 0xd1], 1`) |
 
-A first implementation of the swept reading was measured and **rejected**: it
-lets the body through a wall on the second round, because the leaf reports
-nothing for a sweep that starts on a surface (`docs/formats/static-collision.md`'s
-leaf rule) - so the body, parked exactly on the contact, sails on to where it
-was asked to go. The client's own answer to that case is the runtime's GJK
-penetration path, which is not read. The reading therefore stays a reading:
-the walk's slide remains a declared stand-in, now with the reason written
-down - it is not the client's rule, and the client's rule is not yet known
-well enough to write down.
+**The table's third to sixth rows were wrong (corrected 2026-11-19).** The
+earlier text called `+0x40`/`+0x50` "the moving shape's transform", `+0x60`
+"the motion" and `+0x80` "the other shape's transform", and attributed them to
+`FUN_142cc5600`'s fifth and sixth arguments. The instruction stream says
+otherwise, and the GJK's own descriptor layout settles the names: the client's
+GJK reads `+0x40`/`+0x50` as the **first** set's translation and rotation,
+`+0x60`/`+0x70` as the **second** set's translation and rotation, `+0x80` as
+the **direction** and `+0x90` as the **motion budget**
+(`dev/verify_harness/gjk_closest_fixture.py`, the descriptor the
+`fn/ClosestPointGjk` unit drives). The narrowphase writes them in that order:
+the triangle is the first set (`FUN_142cc5ba0` builds its head at `+0x00`) and
+the other shape - the capsule - is the second set (`FUN_142cb8950` builds its
+head at `+0x20`).
 
-**The next link is named:** the narrowphase's GJK descriptor - its direction
-and motion budget (`0x142cfc090`'s `uStack_1b8`/`uStack_1c8`, the descriptor's
-`+0x80`/`+0x90`) - and, behind it, `FUN_142cc5ba0`, which builds the triangle
-descriptor the GJK takes.
+**The table's third to sixth rows were wrong again (corrected 2026-11-12).**
+The 2026-11-19 correction put the **sixteenth-byte copy** in `+0x60` and the
+**direction** in `+0x80`, and called `+0x70` "the caller's unwritten frame".
+The instruction stream says otherwise. `FUN_142cc5600` hands the narrowphase
+three stack arguments: its own fourth argument (the query's frame) as the
+narrowphase's fifth, its own fifth argument - a **pointer** to a `0x20`-byte
+frame - as the narrowphase's sixth, and a **copy of sixteen bytes** out of its
+sixth argument as the narrowphase's seventh. The narrowphase then writes:
 
+- `+0x60` from the sixth argument's **first** sixteen bytes (`movups [rax]`
+  at `0x142cfc1fc`, stored at `0x142cfc204`), and
+- `+0x70` from the **next** sixteen bytes of the same frame (`movups [rax +
+  0x10]` at `0x142cfc1dc`, stored at `0x142cfc1e0`), and
+- `+0x80` from the seventh argument (`movups [rax]` at `0x142cfc219`, stored
+  at `0x142cfc223`).
+
+So the second set's rotation is the **other shape's own quaternion**, a real
+value the caller passes, and the direction is the sixteen-byte copy. The
+port's differential unit confirms it: the corpus turns the other shape's
+frame in every case, and the client's answers follow.
+
+**`+0x90` carries two things.** It is the motion budget the GJK reads (the
+constant `1.0` at `0x14306ad20`), and it is also the narrowphase's **running
+minimum**: the accept test compares the GJK's residual against it lane-wise
+(`cmpltps` against `[rbp + 0xc0]` at `0x142cfc3f8`, `movmskps` and `cmp eax,
+0xf`), and every accepted contact overwrites it with the residual
+(`movaps [rbp + 0xc0], xmm2` at `0x142cfc429`). So the budget **shrinks** to
+the last accepted residual, and the next candidate's GJK is solved against
+that smaller budget. The initial value is `1.0`, which is why the first
+contact is the one that sets the budget.
+
+So the GJK **sweeps**: it takes a direction and a budget, and the residual it
+returns is the swept extension - the fraction of the motion at which the
+contact happens. The client's own GJK
+writes that extension at the output's `+0x20` (`movups [r9 + 0x20], xmm15`,
+`0x142cc9f76`), the narrowphase copies it to the contact's `+0x20`, and the
+resolve scales the motion by it. The residual is therefore **a fraction of
+the motion**, never a depth in metres, and the resolve is a **swept stop**.
+
+The first (rejected) implementation of the swept reading let the body through
+a wall on the second round because *the leaf* reports nothing for a sweep that
+starts on a surface. That is the leaf's own rule and not the client's: the
+narrowphase passes the GJK `+0xa0 = 0` and `+0xa1 = 1`, while the mesh leaf
+passes the query block's `+0x72` byte as flag 0 and zero as flag 1. The second
+flag is the narrowphase's own difference: with it set the solver does not
+refuse a shape that is already touching - it shrinks its radius and carries the
+sweep on (`0x142cc9d51`), so the sweep finds the contact past the touching
+point instead of stopping at it. The mesh leaf's pair (`0, 0`) refuses it, and
+that is the leaf's documented rule: a sweep that starts on or inside a surface
+reports nothing. The port needs the narrowphase, not the leaf's answer, and the
+next link is named below.
+
+**The next link is named:** the capsule narrowphase `0x142cfc090` itself - the
+triangle descriptor `FUN_142cc5ba0` builds, the shape transform
+`FUN_142cb8950` reads, and the second GJK flag (`+0xa1 = 1`) that the mesh leaf
+does not set. Until that is ported the walk's contact source is the mesh leaf,
+and the client's resolve cannot be substituted into the walk.
+
+### The capsule narrowphase, read (2026-11-12)
+
+`0x142cfc090` (1,016 bytes over five `.pdata` pieces) is the character's
+contact against a shape that has triangles, and it is where the resolve's
+factor comes from.
+
+**The four descriptor builders.** Four tiny functions, none of them in the
+unwind table, build the closest-point solver's *shape head* - the pointer to
+the shape's points, the point count and the radius:
+
+| builder | address | points | count | radius |
+|---|---|---|---|---|
+| the triangle's | `0x142cc5ba0` | the pointer it is given | `3` | the constant quad |
+| the two-point shape's | `0x142cc5b40` | the pointer it is given | `2` | `splat(src[0x20])` |
+| the one-point shape's | `0x142cc5b80` | the pointer it is given | `1` | `splat(src[0x10])` |
+| the counted shape's | `0x142cc5b60` | `src[0x10]` | `src[0x30]` | the constant quad |
+
+**The shape's own head** comes from `FUN_142cb8950` (138 bytes), which picks
+the builder by the shape record's type byte at `+0x20` and the shape's index
+at `+0x24`: type `0` takes the `0x20`-stride table at `world+0x2d0`, type `1`
+the `0x50`-stride table at `world+0x300`, anything else the `0x30`-stride
+table at `world+0x2e8`.
+
+**The narrowphase's own loop**, per triangle of the shape:
+
+```text
+the triangle record:  the type-3 mesh's own record (0x142cae760) when the
+                      shape's byte is 3, otherwise the runtime's own
+                      (0x142ccf540)
+the box test:         the triangle's box against the swept box (0x142cf391)
+the descriptor:       FUN_142cc5ba0 builds the triangle's head
+the solver:           0x142cc9460, with the flags above
+the acceptance:       the residual must be strictly below the running minimum
+                      in all four lanes; the minimum starts at 1.0
+```
+
+The accepted contact's descriptor is the resolve's contact record: the point
+at `+0x00`, the normal at `+0x10`, **the residual at `+0x20`** and the
+iteration count at `+0x30`. `FUN_142cc5600` is the family dispatch in front of
+it - family `0` (the sphere's own narrowphase `0x142cfddf0`) and family `1`
+(this one); every other family returns no contact.
+
+**The flag that matters.** The mesh leaf takes the solver's two flags from the
+query block (`+0x72` and zero). The narrowphase takes the first from the same
+place - a moving sweep leaves it clear - and sets the **second** to one. With
+it set the solver does not refuse a shape that is already touching: it shrinks
+its radius and carries the sweep on (`0x142cc9d51`), so the sweep finds the
+contact past the touching point. That is the difference between the client
+stopping at a wall and the mesh leaf's documented rule - a sweep that starts
+on or inside a surface reports nothing - letting the walk sail through it.
+
+`ow_sim::collide::mesh_sweep_with_flags` is the leaf with the flags given
+explicitly, so the narrowphase's pair is available to a caller; the leaf's own
+pair is unchanged.
+
+### The narrowphase's own body, and its first leaf (2026-11-19)
+
+`0x142cfc090` is 1,016 bytes over five `.pdata` pieces, and its body is now
+read instruction for instruction. Its shape:
+
+```text
+FUN_142cfcba0(context, world, shape_record, 0)   the candidate gather
+if (context->count == 0) return false             (cmp dword ptr [r15 + 0x30], 0)
+build the GJK descriptor                        (the table above)
+for each candidate triangle:
+    the triangle record                          (0x142cae760 for a type-3 shape,
+                                                 0x142ccf540 otherwise)
+    the triangle's box against the swept box     (movmskps at 0x142cfc3a2)
+    the triangle's head                          (FUN_142cc5ba0)
+    the GJK, with the flags (0, 1)               (0x142cc9460)
+    accept when the residual is below the running minimum in all four lanes
+```
+
+The **swept box** the triangle is tested against is the other shape's box
+carried into the query's frame, and that is the function the first leaf of this
+cluster is: **`0x142cd5c80`**, 95 straight-line SSE instructions, no callee and
+no branch. It takes a transform block (the rotation's first row at `+0x00` and
+the quaternion at `+0x10`, already conjugated by the caller) and the shape's
+local box (its minimum at `+0x00`, its maximum at `+0x10`), and writes the
+transformed box's minimum at the output's `+0x00` and its maximum at `+0x10`.
+
+It is **shipped and verified** as `ow_sim::collide::transform_shape_box`, unit
+`fn/CollisionShapeBox`: 264 differential cases against the client's own bytes,
+the whole 32-byte output compared, 100% branch coverage (the function has no
+conditional branch at all) and 9/9 mutants killed. The port keeps the client's
+order, which is observable in the last bit: the diagonal is
+`1 - |2q1*q1| - |2q2*q2|` and not `1 - (|2q1*q1| + |2q2*q2|)`, and the two
+absolute-value masks differ - `0x1430a4b40` is `0x7fffffff` on lanes 0..2 and
+**zero** on lane 3, `0x142f7aaf0` is `0x7fffffff` on all four.
+
+Three mutants are declared equivalent, and the proof is the client's own
+arithmetic: the output's **fourth lane does not depend on the quaternion's
+`w`**, because the rotation's fourth-lane terms cancel pairwise
+(`centre[3]*w - w*centre[3]` and `centre[3]*w*w - centre[3]*w*w`) and the
+extents' fourth lane comes from the diagonal, whose fourth lane the three-lane
+mask writes to zero. So the fourth lane is a function of the box, the row and
+the quaternion's vector part alone.
+
+The rest of the cluster is now named, in the order the port needs it:
+
+| function | size | what it does | state |
+|---|---|---|---|
+| `0x142cd5c80` | 95 instr. | the shape's box carried into the query's frame | **shipped, verified** |
+| `0x142cb8950` | 138 bytes | the shape's head: its points, their count and its radius | **shipped, verified** |
+| `0x142cae760` | 118 bytes | the type-3 mesh's own triangle record | **shipped, verified** |
+| `0x142ccf540` | 734 bytes | the runtime's own height-field triangle record | **shipped, verified** |
+| `0x142cc5ba0` | 23 bytes | the triangle's head: three points and the constant radius `0.01` | read, not ported |
+| `0x142cfcba0` | 384 bytes | the candidate gather: the mesh's triangles against the swept box | read, not ported |
+| `0x142cd0180` | 288 bytes | the runtime's own height-field gather | read, not ported |
+| `0x142cd00c0` | 38 bytes | the candidate list's append | read, not ported |
+
+The four head builders are tiny and read: `0x142cc5ba0` (a triangle: the
+pointer it is given, three points, the constant radius `0.01` at
+`0x14311e0c0`), `0x142cc5b40` (two points, the radius splatted from the
+element's `+0x20`), `0x142cc5b60` (the counted shape: the pointer at the
+element's `+0x10`, the count at its `+0x30`) and `0x142cc5b80` (one point, the
+radius splatted from the element's `+0x10`). `0x142cb8950` picks one by the
+shape entry's type byte at `+0x20` and takes it from the world's pool at
+`+0x2d0` (type 0, a `0x20` stride), `+0x2e8` (type 1, a `0x30` stride) or
+`+0x300` (anything else, a `0x50` stride).
+
+**The shape head is shipped and verified** (2026-11-19) as
+`ow_sim::collide::shape_head`, unit `fn/CollisionShapeHead`: 120 differential
+cases against the client's bytes, the whole `0x20`-byte head compared, 100%
+branch coverage and 6/6 mutants killed. The head is a byte record, so it
+carries an **absolute** address - the world's pool pointer already carries the
+base, and the element's address is that pointer plus the index times the
+stride. Two details the port keeps:
+
+- the client writes `+0x00`..`+0x0c` and `+0x10`..`+0x20` and **nothing at
+  `+0x0c`**, so the word in the middle of the record is whatever was there;
+- the zero quad it writes at `+0x10` is the constant at `0x142f84a00`, and the
+  counted builder's radius is the constant `0.01` at `0x14311e0c0`.
+
+**The mesh's own triangle record is shipped and verified** as
+`ow_sim::collide::mesh_triangle_record`, unit `fn/CollisionMeshTriangle`: 120
+differential cases, the whole `0x86`-byte output compared, 6/6 mutants killed.
+The triangle record is **`0x20` bytes** - the client's own `shl r10, 0x5`
+multiplies the index by 32, not by 0x50 - with the three vertex indices at
+`+0x00`, `+0x04` and `+0x08` and the three layer words at `+0x18`, `+0x1a` and
+`+0x1c`. The vertices are scaled by the mesh record's own quad at `+0x00`.
+
+**The runtime's own triangle record is shipped and verified** as
+`ow_sim::collide::runtime_triangle`, unit `fn/CollisionRuntimeTriangle`: 120
+differential cases, 8/8 mutants killed. It reads a **height field**: the
+record's `+0x04` the cells per row, `+0x08` the cell size, `+0x30` a layer
+word, `+0x38` the vertex array and `+0x40` an optional callback. A vertex is
+eight bytes - a height and a kind byte at `+0x07` - and the triangle index
+picks a quad of the grid:
+
+```text
+q    = (index >> 1) / (count - 1)
+r    = (index >> 1) - q * (count - 1)
+base = q * count + r
+```
+
+The four corners are `(q, r)`, `(q, r+1)`, `(q+1, r)` and `(q+1, r+1)`, and the
+base vertex's kind byte picks the diagonal: `0` takes it by the parity of `q`
+and `r`, `1` always takes it, and `4` means there is no triangle at all (the
+client returns without touching the output). The three corners the client
+picks, read off the client's own answers, are:
+
+| the diagonal | the index's parity | the corners |
+|---|---|---|
+| yes | even | `(q, r)`, `(q+1, r)`, `(q+1, r+1)` |
+| yes | odd | `(q, r)`, `(q+1, r+1)`, `(q, r+1)` |
+| no | even | `(q, r)`, `(q+1, r)`, `(q, r+1)` |
+| no | odd | `(q+1, r)`, `(q+1, r+1)`, `(q, r+1)` |
+
+The callback is the client's own indirect call (`u16 cb(record, index, byte)`),
+and its answer is the output's second layer word; the no-callback path takes
+the record's own layer word at `+0x30`. The narrowphase never reads either
+layer - it uses only the three vertices.
+
+### The narrowphase is shipped and verified (2026-11-12)
+
+`0x142cfc090` is now ported as `ow_sim::collide::capsule_narrowphase`, with its
+gather (`0x142cfcba0`) and the runtime's own height-field gather
+(`0x142cd0180`) beside it. Unit `fn/CapsuleNarrowphase` proves it: the oracle
+runs the client's own bytes and the harness compares the whole `0x40`-byte
+contact record, the context's candidate count and the return flag.
+
+**The three frames the client is given.** The narrowphase takes the shape's
+own frame, the **other** shape's frame and the sweep's direction, and each
+one is used for something different:
+
+| argument | what it is | where it lands |
+|---|---|---|
+| the shape's frame (a position quad and a quaternion) | the query's own frame | the descriptor's `+0x40`/`+0x50`, and the transform block the box is carried through |
+| the other shape's frame (a position quad and a quaternion) | the capsule's place in the world | the descriptor's `+0x60`/`+0x70` |
+| the sweep's direction (one quad) | the sweep | the descriptor's `+0x80`, and the swept box's opening |
+
+**The transform block.** The gather (`0x142cfcba0`) and the narrowphase build
+the *same* block - the inverse transform, the translation `-conj(q) * p` and
+the conjugated quaternion - but the narrowphase's own first cross product
+takes the `y` and `z` of the rotated vector from the **other** shape's
+position and its `x` from the frame's own position. Its `SHUFPS` reads the
+two sources from different registers, so the narrowphase's block is not the
+plain inverse rotation the gather builds. The port keeps both:
+`transform_block` and `transform_block_with`.
+
+**The swept box** the triangle is tested against is the other shape's box
+carried through that block and opened by the sweep's direction rotated into
+the same frame.
+
+**The runtime's height-field gather** (`0x142cd0180`) walks the cells the box
+touches: the cells across from the record's `+0x00`, the cells down from its
+`+0x04` and the cell size from its `+0x08`, with the vertex array at its
+`+0x38`. A cell's box is the box of its four corner heights and it is tested
+against the query box with the same sign-bit fold the type-3 mesh uses. The
+client's triangle counter advances by two for **every** row it walks, the
+rows it skips included, so the index is the row's own.
+
+**The accept rule** is the residual against the running minimum in all four
+lanes, and the minimum starts at `1.0` (`0x14306ad20`) and becomes the last
+accepted residual. The same value is the solver's motion budget, so the
+second candidate's own budget is the first one's residual. The edge that
+turns a candidate down is reached when a residual is exactly zero: the first
+candidate sets the minimum at zero and the next one is not below it.
+
+**The unit's corpus** walks both of the client's shape paths (the type-3
+mesh's own records and the runtime's height field), with real rotations in
+all three frames, with contacts, without contacts, with the gather's
+candidate list empty, with the count left negative by the gather's "the old
+candidates still stand" path, and with a `NaN` in the capsule's frame. Every
+case compares the client's bytes, and the branch coverage is 100%.
+
+**The next anchor** is the resolve that consumes the contact - the factor
+`0x142cd4610` scales the motion by - and the pair build `0x142cd4d90` that
+feeds it. The gather's grow path calls the allocator (`FUN_142cede40`/
+`FUN_142cee060` through the
+global allocator object at `0x144188200`), which is zero in the offline image;
+a fixture that gives the context a capacity larger than the candidate count
+never reaches it.
+
+**What the gather and the runtime path need, read (2026-11-19).** The gather
+`0x142cfcba0` builds the swept box (the other shape's box carried into the
+frame, `0x142cd5c80`), tests it against the previous frame's box and, when
+they overlap, collects the candidate triangles: `MeshGather` (`0x142caea70`,
+ported and verified) for a type-3 shape and `FUN_142cd0180` for anything else.
+`FUN_142cd0180` (288 bytes) walks the runtime's **height-field** grid - the
+cell's own bounds at `+0x08` and `+0x04`, the vertex stride at `+0x08` and the
+cell stride at `+0x04` - and appends each cell's two triangles through
+`FUN_142cd00c0` (38 bytes: a growable `u32` array at `+0x200`, the capacity at
+`+0x208` and the count at `+0x20c`).
+
+
+### The resolve, read (2026-11-12)
+
+The whole chain from the mover's target to the body's resting place is read.
+Four bodies, in this order:
+
+```text
+MoverAdvance 0x140ca7f30
+  -> builds the sweep block, calls RunCharacterControllerSweep 0x142cbcee0
+     -> the thunk 0x142cf5660 -> CollisionSolver 0x142cf3f80
+          -> CharacterPairBuild 0x142cd4d90   (the world's pairs)
+          -> the pair walk writes the contact planes
+          -> step_stage 0x142cf5020           (the planes push the target out)
+          -> CharacterPositionResolve 0x142cd5270
+               -> CharacterBodyUpdate 0x142cd4610
+                    -> the narrowphase gives each contact a factor
+                    -> the motion is scaled by the smallest factor
+```
+
+#### The sweep block
+
+`MoverAdvance` (`0x140ca7f30`) builds a block and `RunCharacterControllerSweep`
+(`0x142cbcee0`) copies it into the one the solver reads, so there are two
+layouts and the copy shifts the tail by `0x10`:
+
+| the advance's block | the solver's block | value | written by |
+|---|---|---|---|
+| `+0x00` | `+0x00` | the frame's **displacement** (four lanes) | `MoverAdvance`, the state transform and the wish (`0x140ca82d2`) |
+| - | `+0x10` | zero | `RunCharacterControllerSweep` (`0x142cbcf59`) |
+| `+0x10` | `+0x20` | the frame duration | `MoverAdvance` (`0x140ca82d6` area) |
+| `+0x14` | `+0x24` | the push limit: `_DAT_143872ebc` (1.0) times `body+0x628` times the frame duration | `MoverAdvance` (`0x140ca82de`) |
+| `+0x18` | `+0x28` | the epsilon, `0.005` (`0x3ba3d70a`) | `MoverAdvance` (`0x140ca831c`) |
+| `+0x1c` | `+0x2c` | the iteration cap: `min(step_state[0x94], body+0x1a88)` | `MoverAdvance` (`0x140ca830c`) |
+| `+0x20` | `+0x30` | one byte from `step_state[0x9a]` | `MoverAdvance` (`0x140ca8319`) |
+
+The solver's requested position is the **displacement added to the body's
+current position**: `requested = old + block[0x00..0x10]` (`0x142cf4229`,
+`0x142cf422d`). The block's `+0x10` is zero, so the `dt * block[+0x10]` term
+those two instructions multiply by contributes nothing, and the infinity test
+the solver runs on the block's `+0x10` (`0x142cf41ba..0x142cf41ce`) is a test
+of a constant.
+
+#### The step stage (`0x142cf5020`)
+
+A **leaf**: it calls nothing, so it is portable as it stands. It pushes the
+requested position out of every contact plane it penetrates.
+
+The plane record is `0x40` bytes - the normal and the offset at `+0x00`, the
+push limit at `+0x10` and the accumulated push at `+0x20`; the pair walk
+writes it at `0x142cf46dd` (the normal quad), `0x142cf46e2` (the limit),
+`0x142cf46e7` (the accumulated push, zeroed) and `0x142cf46ec` (the body
+handle). The normal comes from the shape record's `+0xc0` quad
+(`0x142cf451c`), signed by the direction of the pair, and the offset is the
+record's `+0x18` distance (`0x142cf4524`) reduced by the minimum over the
+record's faces - the face count at `+0xf6` (`0x142cf4514`) and the faces
+themselves at `+0x78`, `0x30` bytes each. The limit is one float splatted
+over four lanes: `FUN_142cb99c0(body)` on one branch (`0x142cf4634`) and the
+block's `+0x24` (`param_3[9]`) on the other.
+
+The rule, per plane (`0x142cf50f0..0x142cf52b6`):
+
+```text
+distance = dot(normal.xyz, position.xyz) - normal.w      ; the signed distance
+candidate = -(distance + 0.005) + accumulated             ; the skin is 0x3ba3d70a
+accumulated = max(0, min(candidate, limit))               ; MINPS then MAXPS
+push = accumulated - the old accumulated
+position = position + push * normal                       ; all four lanes
+```
+
+and the stage repeats until the largest push over the four lanes is below the
+epsilon or the **200**-round cap is reached (`cmp r11d, 0xc8` at
+`0x142cf5367`). The accumulated push survives the rounds - that is what makes
+the stage converge - and the count of rounds that did *not* converge is what
+the stage returns. The stage also updates a global - the largest round count
+the client has seen, `_DAT_1442a1eb0` (`0x142cf53a1`).
+
+So the accumulated value is an **integrator**: each round it grows by the
+penetration, the limit caps the total, and the position moves by the change.
+The client's slide is here and not in the resolve: the **target** is pushed
+out of the faces the body overlaps, and the body then travels towards the
+pushed target.
+
+#### The resolve (`0x142cd4610`)
+
+The motion is `requested - body[0x10]`, the factor is the lane-wise minimum
+over the contacts' factors (`minps`, `0x142cd4a79`), each of which starts at
+one, and the new position is `body[0x10] + motion * factor` (`0x142cd4b0a`).
+The motion is **scaled**, not projected: the client's resolve has no residual
+slide. A lane that comes out infinite - or NaN, because the client's test is
+the exponent field (`0x142cd4ac0`) - discards the whole update and the old
+position stands.
+
+#### The fixed point (`0x142cf3f80`)
+
+The solver runs the step stage and the resolve until the resolved position is
+within the epsilon of the stepped one: the correction's three lanes are
+squared and summed and compared against `eps * eps` (`0x142cf49bb`,
+`0x142cf49d8`). The correction is measured against the **stepped** position,
+not against the previous round. The bound is the block's `+0x2c` (the solver
+reads it as `param_3[0xb]`, `cmp edx, dword ptr [rsi + 0x2c]` at
+`0x142cf49f0`) - the earlier note in this file that put it at `+0x1c` was
+wrong. The count of rounds that did not converge is published at `body+0x664`
+and the resolved position at `body+0x620..0x62f`; the body's velocity is the
+resolved position minus the old one over the block's `+0x20` (`0x142cf49f9`
+onwards).
+
+#### What this means for the walk
+
+The rules are in `ow_sim::controller` (`step_stage`, `resolve_motion`,
+`factor_min`, `resolve_loop`), with the arithmetic taken from the machine
+rather than from the C: the three-lane dot product's order, the `MINPS`/`MAXPS`
+NaN rule, the sign flip that negates the distance, the absolute-value mask
+and the four lanes the client writes even where only three are read.
+
+The step stage is **verified** against the client's bytes as
+`fn/CharacterStepStage`: 160 differential cases (the output position quad, the
+round count and the plane records' accumulated pushes, byte for byte), 100%
+branch coverage of the seven reachable branch sites and 8/8 mutants killed.
+The stage writes one global - the largest round count the client has seen,
+`_DAT_1442a1eb0` - so the harness grew an `allowedImageWrites` option for a
+unit that proves a leaf which updates a global in the image's zero-fill
+region; the statistic does not feed the callee's answer.
+
+The walk's **slide** is still a stand-in, and the reason is now exact rather
+than general: the client gets its factor from the **capsule narrowphase**
+(`0x142cfc090`), whose second GJK flag (`+0xa1 = 1`) makes the solver carry a
+sweep that starts on a surface on instead of refusing it. The walk's contact
+source is the **mesh leaf**
+(`0x142caed30`), whose own rule is the opposite - it reports nothing for a
+sweep that starts on or inside a surface - so substituting the client's
+resolve into the walk today would let the body through a wall on the second
+round, which is exactly what the first (rejected) implementation measured.
+The next link is the narrowphase itself.
 
 ## The jump struct
 

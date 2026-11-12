@@ -35,22 +35,12 @@ A tolerance is not acceptance.
 
 ## Current position
 
-The data path is working and the client launches the practice range. The five
-CASC primitives are verified by the differential harness. The map chain, bundle
-path and manifest derivation are read and tested against the install, but not
-yet harness-verified; their gaps are itemised in
-[`ow-tank-1to1.md`](ow-tank-1to1.md). Gameplay is not.
-
-- **Done:** CASC oracle, build-154504 manifest, bundle assets, map resolver,
-  the one executable rendering the practice range.
-- **Next:** the producer of the level-load GUID lists, then movement.
-- **Open:** movement, combat, camera application, view model, retarget, Pose2d
-  VM, collision, streaming, the bundle directory producer and the level-load
-  GUID-list producer.
-
-The stage order and gates are in [`rebuild-plan.md`](rebuild-plan.md). The
-work queue is [`open-questions.md`](open-questions.md). Current state is
-[`../STATUS-handoff.md`](../STATUS-handoff.md).
+There is one copy of the state: [`systems-coverage.md`](systems-coverage.md),
+system by system, with the next anchor for each. The queue is
+[`open-questions.md`](open-questions.md) (next thing at the top), the handoff
+loop is [`../STATUS-handoff.md`](../STATUS-handoff.md), and the stage order and
+gates are [`rebuild-plan.md`](rebuild-plan.md). This page keeps the goal and
+what 1-to-1 means; it does not repeat the state.
 
 ## Scope
 

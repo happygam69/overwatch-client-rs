@@ -54,14 +54,15 @@ per-system ledger is [`docs/systems-coverage.md`](docs/systems-coverage.md).
 
 ## Status in depth
 
-- [`docs/status-in-depth.md`](docs/status-in-depth.md) — the long-form status
-  this README used to carry: the verified addresses, chunk counts and read
-  values behind the table above.
-- [`STATUS-handoff.md`](STATUS-handoff.md) — what works, what is open, what is
-  next.
+- [`docs/systems-coverage.md`](docs/systems-coverage.md) — the per-system state,
+  with the verified addresses, chunk counts and read values behind the table
+  above.
+- [`STATUS-handoff.md`](STATUS-handoff.md) — the loop a session runs, and the
+  rules that bind it.
 - [`docs/open-questions.md`](docs/open-questions.md) — the work queue, next
   thing at the top.
-- [`MODLOG.md`](MODLOG.md) — how the project got here.
+- [`MODLOG.md`](MODLOG.md) — how the project got here; older entries are in
+  [`docs/history/`](docs/history/).
 
 ## Sources
 
@@ -85,7 +86,7 @@ export OW_TACTLIB='path/to/TACTLib/TACTLib'             # older-build manifest k
 export OW_OWLIB='path/to/OWLib'                         # optional, STU class names
 export OW_SUPPORT_KEYRING='path/to/Overwatch.keyring'   # optional
 
-cargo xtask verify                                      # fmt, clippy, tests, index, deviations, addresses
+cargo xtask verify                                      # fmt, clippy, tests, tool tables, deviations, addresses
 cargo xtask verify --fast                               # without the install-reading tests
 cargo xtask verify -p ow-casc                           # one crate (iteration only)
 
@@ -106,7 +107,8 @@ cargo run -p ow-tank --bin look -- --why 0x080000000f69002e  # its scene map
 default and a chunk list is not a map. `--no-map` is the explicit stand-in
 course for viewer work.
 
-Data probes:
+Data probes — everything that reads the install, with the question each one
+answers, is in [`docs/tools.md`](docs/tools.md). Some starting points:
 
 ```sh
 cargo run -p ow-tank --example blendset_probe -- 3    # FP items, clips, slots, tree

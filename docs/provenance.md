@@ -63,9 +63,9 @@ finding; it is an open question.
 ## Development tools
 
 `dev/` holds the read-only analysis and verification tools: Ghidra bridge
-helpers, data probes, format scans, the differential harness and the tool
-index. They are original work and are tracked; their output is not. The tool
-list is `dev/INDEX.md`.
+helpers, data probes, format scans and the differential harness. They are
+original work and are tracked; their output is not. The tool list is
+[`tools.md`](tools.md).
 
 ## Open questions
 

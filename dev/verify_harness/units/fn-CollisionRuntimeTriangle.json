@@ -1,0 +1,50 @@
+{
+  "id": "fn/CollisionRuntimeTriangle",
+  "title": "tier-2 shipped code: the runtime's own height-field triangle record against 0x142ccf540",
+  "address": {
+    "v2b": "0x7ff7c79ef540"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_runtime_triangle",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "blob",
+      "kind": "ptr",
+      "ptr_len": 1536
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 132
+    },
+    {
+      "name": "index",
+      "kind": "u64"
+    }
+  ],
+  "returns": "void",
+  "argFactory": "collision_runtime_triangle_fixture",
+  "options": {
+    "iterations": 120,
+    "coverageThreshold": 100,
+    "mutationCount": 8,
+    "mutationKillRate": 0.8,
+    "seed": 23680,
+    "coverageWindow": 734,
+    "allowedImageReads": []
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (runtime_triangle), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_runtime_triangle entry.",
+    "The oracle runs the real 0x142ccf540 and the harness compares the whole 0x84-byte output byte for byte: the three vertices at +0x00, +0x10 and +0x20, the vertex's own layer word at +0x80 and the record's (or the callback's) layer at +0x82.",
+    "The record is the front of one blob that also holds the height field's vertex array and the callback stub, and the record's two pointers are absolute arena addresses, so the probe resolves them back into the blob the way ARENA_BASE fixes it.",
+    "The callback is the client's own indirect call: the fixture puts a `mov eax, 0x1234; ret` stub in the blob and points the record's +0x40 at it, and the probe hands the candidate the same answer. The no-callback path takes the record's own layer word at +0x30, and the declared cases run both.",
+    "The declared cases walk every diagonal the client's rule can pick: the vertex's kind byte 0 with both parities of the cell, the kind byte 1, and the kind byte 4, which means there is no triangle and the client returns without touching the output.",
+    "The function reads no image constant: the layer words come from the record and the vertex array."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the runtime's own triangle record only. The narrowphase 0x142cfc090 that calls it, the runtime's height-field gather 0x142cd0180 and the candidate gather 0x142cfcba0 remain open."
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "id": "fn/CapsuleNarrowphase",
+  "title": "tier-2 shipped code: the capsule narrowphase - the contact source - against 0x142cfc090",
+  "address": {
+    "v2b": "0x7ff7c7a1c090"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "collision_capsule_narrowphase",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "context",
+      "kind": "ptr",
+      "ptr_len": 64
+    },
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 64
+    },
+    {
+      "name": "blob",
+      "kind": "ptr",
+      "ptr_len": 8192
+    },
+    {
+      "name": "shape",
+      "kind": "ptr",
+      "ptr_len": 40
+    },
+    {
+      "name": "transform",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "other",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "direction",
+      "kind": "ptr",
+      "ptr_len": 16
+    }
+  ],
+  "returns": "u8",
+  "argFactory": "collision_capsule_narrowphase_fixture",
+  "options": {
+    "iterations": 120,
+    "coverageThreshold": 100,
+    "mutationCount": 10,
+    "mutationKillRate": 0.8,
+    "seed": 23680,
+    "coverageWindow": 1016,
+    "allowedImageReads": [
+      "0x7ff7c7c9aae4-0x7ff7c7c9aae7",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaf7",
+      "0x7ff7c7c9aaf8-0x7ff7c7c9aaff",
+      "0x7ff7c7ca17a0-0x7ff7c7ca17a7",
+      "0x7ff7c7ca17a8-0x7ff7c7ca17af",
+      "0x7ff7c7ca44e0-0x7ff7c7ca44e7",
+      "0x7ff7c7ca44e8-0x7ff7c7ca44ef",
+      "0x7ff7c7cc62f0-0x7ff7c7cc62f7",
+      "0x7ff7c7ca4a00-0x7ff7c7ca4a07",
+      "0x7ff7c7ca4a08-0x7ff7c7ca4a0f",
+      "0x7ff7c7ca4b38-0x7ff7c7ca4b3f",
+      "0x7ff7c7cc62f8-0x7ff7c7cc62ff",
+      "0x7ff7c7d8ad20-0x7ff7c7d8ad27",
+      "0x7ff7c7d8ad28-0x7ff7c7d8ad2f",
+      "0x7ff7c7dc4b40-0x7ff7c7dc4b47",
+      "0x7ff7c7dc4b48-0x7ff7c7dc4b4f",
+      "0x7ff7c7dc4bf0-0x7ff7c7dc4bf7",
+      "0x7ff7c7dc4bf8-0x7ff7c7dc4bff",
+      "0x7ff7c7e30818-0x7ff7c7e3081b",
+      "0x7ff7c7e30d50-0x7ff7c7e30d57",
+      "0x7ff7c7e30d58-0x7ff7c7e30d5f",
+      "0x7ff7c7e3e0c0-0x7ff7c7e3e0c7",
+      "0x7ff7c7e3e0c8-0x7ff7c7e3e0cf",
+      "0x7ff7c80b1030-0x7ff7c80b1037",
+      "0x7ff7c80b1038-0x7ff7c80b103f",
+      "0x7ff7c80b2af0-0x7ff7c80b2af7",
+      "0x7ff7c80b2af8-0x7ff7c80b2aff",
+      "0x7ff7c830ccb0-0x7ff7c830ccb7",
+      "0x7ff7c830ccb8-0x7ff7c830ccbf",
+      "0x7ff7c830ccc0-0x7ff7c830ccc7",
+      "0x7ff7c830ccc8-0x7ff7c830cccf",
+      "0x7ff7c830ccd0-0x7ff7c830ccd7",
+      "0x7ff7c830ccd8-0x7ff7c830ccdf",
+      "0x7ff7c830ccf0-0x7ff7c830ccf7",
+      "0x7ff7c830ccf8-0x7ff7c830ccff",
+      "0x7ff7c830cfc0-0x7ff7c830cfc7",
+      "0x7ff7c830cfc8-0x7ff7c830cfcf",
+      "0x7ff7c830cfd0-0x7ff7c830cfd7",
+      "0x7ff7c830cfd8-0x7ff7c830cfdf",
+      "0x7ff7c87e5f40-0x7ff7c87e5f47",
+      "0x7ff7c8fc1370-0x7ff7c8fc1370",
+      "0x7ff7c8fc16f0-0x7ff7c8fc16f0",
+      "0x7ff7c8fc14f0-0x7ff7c8fc14f0"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/collide.rs (capsule_narrowphase), called by crates/ow-sim/src/bin/verify_probe.rs through the collision_capsule_narrowphase entry.",
+    "The oracle runs the real 0x142cfc090 and the harness compares the whole 0x40-byte contact record byte for byte - the point at +0x00, the normal at +0x10, the residual at +0x20 and the iteration count at +0x30 - plus the context's candidate count, and the return value is the client's own \"found\" flag.",
+    "The world is one blob holding the world record, the shape entries, the owner and pose pools, the shape pools, the mesh pool and the runtime pool behind it, and every pointer in it is an absolute arena address, so the probe resolves them back into the blob the way ARENA_BASE fixes it.",
+    "The declared cases walk both of the client's shape paths: the type-3 path, where the shape's triangles come from the mesh's own records, and the runtime path, where they come from a height field. The narrowphase branches on that type byte, so both edges of the branch are needed and both are run.",
+    "The context's candidate pool is the client's own heap block; the fixture points the context at a block in the arena with a capacity of eight, so the gather's grow path - the only path that calls the allocator - is never reached.",
+    "The candidate records the gather writes carry the client's unwritten stack in the face data, and the offline image's stack is zeroed; the port writes zeros there too, and the narrowphase reads only the candidate's index, so the face data never reaches the answer."
+  ],
+  "acknowledgedGaps": [
+    "This unit verifies the narrowphase itself. The resolve 0x142cd4610 that consumes its factor, the pair build 0x142cd4d90 and the solver's fixed point 0x142cf3f80 remain open."
+  ]
+}

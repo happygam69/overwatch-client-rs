@@ -56,8 +56,9 @@ streaming policy and collision path are open.
   not read.
 - **Open:** the client's *producer* of the bundle directory (the blob handed to
   the bundle job), the producer of the level-load GUID lists (which resolves a
-  map request to the scene map), the streaming policy (which chunks load when),
-  the entity-placeable layout and the collision mesh.
+  map request to the scene map), the streaming policy (which chunks load when)
+  and the entity-placeable layout. The level's collision mesh is read
+  (`formats/chunk-kinds.md` section 4b) and the walk uses it.
 
 
 ## The chunk vocabulary
@@ -829,7 +830,9 @@ the client's own kind table and its name decoder — full evidence in
 the **pathing** chunk; until 2026-11-02 this file called it the collision chunk,
 and that label is corrected in place here but not rewritten throughout, so read
 "collision chunk" in the older paragraphs as "pathing chunk". The client draws
-the visual mesh only; there is no character collision implementation.
+the visual mesh from this chunk; the walk's collision comes from the level
+collider (`formats/chunk-kinds.md` section 4b, `ow_tank::collision_level`,
+install test `collision_level_real`), not from this container.
 
 ### The pathing chunk's container: 220 cells (2026-11-01; kind corrected 2026-11-02)
 
@@ -1435,7 +1438,7 @@ its `0xFF`-separated index runs (`arr3`/`arr11`/`arr12`) **without** calling
 `BrushTreeToMesh`. `dev/probe_node_types.py --ingest` lists types whose build
 touches a collider producer as a starting filter.
 
-### The pathing container's consumer: **open** (2026-11-02, census corrected)
+### The pathing container's consumer - "the cell path's consumer": **open** (2026-11-02, census corrected)
 
 This is the **pathing** container, not the collision one (`formats/chunk-kinds.md`);
 "cell path" is the historical name. Nothing below identifies it as collision, and

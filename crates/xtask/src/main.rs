@@ -7,7 +7,7 @@
 //! cargo xtask verify --test-jobs N      # run N test binaries at once
 //! cargo xtask verify -p ow-casc         # clippy and tests for one crate
 //! cargo xtask verify --skip index_find_real   # leave the 19-minute suite out
-//! cargo xtask dev-index                 # is dev/INDEX.md up to date?
+//! cargo xtask dev-index                 # are the tool tables in docs/tools.md current?
 //! cargo xtask deviation-check           # does the code match the deviations table?
 //! cargo xtask frame-check               # do the docs cite only the one address frame?
 //! ```
@@ -455,7 +455,8 @@ cargo xtask <command>
                     do not run a test binary whose label matches (e.g.
                     --skip index_find_real); for the binaries that still
                     run, pass `--skip <name>` to libtest as well
-  dev-index         check that dev/INDEX.md matches the tools on disk
+  dev-index         check that the generated tool tables in docs/tools.md
+                    match the tools on disk
   deviation-check   check that the deviations table and the code agree
   frame-check       check that the docs cite only the one address frame
   pe-layout         check which addresses are install bytes and which are BSS
