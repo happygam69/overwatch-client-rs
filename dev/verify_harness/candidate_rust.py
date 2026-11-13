@@ -123,6 +123,11 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "collision_shape_box": ["crates/ow-sim/src/collide.rs"],
     "collision_sphere": ["crates/ow-sim/src/collide.rs"],
     "collision_filter": ["crates/ow-sim/src/collide.rs"],
+    "segment_aabb_transform": ["crates/ow-sim/src/aabb.rs"],
+    "scope_pop_guest": ["crates/ow-sim/src/scope.rs"],
+    "keytable_find": ["crates/ow-sim/src/keytable.rs"],
+    "keytable_find_mask": ["crates/ow-sim/src/keytable.rs"],
+    "camera_chain_scale": ["crates/ow-sim/src/chain.rs"],
     "collision_transform": ["crates/ow-sim/src/collide.rs"],
     "triangle_degenerate": ["crates/ow-sim/src/collide.rs"],
     "float_to_q12": ["crates/ow-sim/src/fixed.rs"],
@@ -186,6 +191,9 @@ ENTRY_SOURCES: Dict[str, List[str]] = {
     "mrnm_fixup": ["crates/ow-tank/src/mrnm.rs"],
     "mesh_shape_fill": ["crates/ow-tank/src/mesh_shape.rs"],
     "shape_pool_alloc": ["crates/ow-tank/src/domino_world.rs"],
+    # The steps variant reaches the same shipped function through a state
+    # region, so it is bound to the same source and the same mutation target.
+    "shape_pool_alloc_guest": ["crates/ow-tank/src/domino_world.rs"],
     "mrnm_runtime_size": ["crates/ow-tank/src/mrnm.rs"],
     "mrnm_load": ["crates/ow-tank/src/mrnm.rs"],
     "cmf_key_154504": ["crates/ow-tank/src/manifest.rs"],
@@ -243,6 +251,11 @@ ENTRY_MUTATION: Dict[str, str] = {
     "collision_shape_box": "transform_shape_box",
     "collision_sphere": "sphere_sweep",
     "collision_filter": "shape_filter",
+    "segment_aabb_transform": "segment_aabb_transform",
+    "scope_pop_guest": "scope_pop",
+    "keytable_find": "find",
+    "keytable_find_mask": "find_mask",
+    "camera_chain_scale": "chain_scale",
     "collision_transform": "shape_world_transform",
     "triangle_degenerate": "triangle_degenerate",
     "float_to_q12": "scale_q12",
@@ -299,6 +312,7 @@ ENTRY_MUTATION: Dict[str, str] = {
     "mrnm_fixup": "fixup",
     "mesh_shape_fill": "shape_record",
     "shape_pool_alloc": "shape_pool_alloc",
+    "shape_pool_alloc_guest": "shape_pool_alloc",
     "mrnm_runtime_size": "runtime_size",
     "mrnm_load": "load",
     "cmf_key_154504": "key_154504",
@@ -895,6 +909,32 @@ class RustCandidate:
                     pass
             raise RuntimeError(f"rust probe died: {stderr.strip()}")
         return resp.strip()
+
+    def reset_state(self) -> None:
+        """Put the probe's state buffer back to the unit's snapshot.
+
+        A steps unit calls the entry several times on one state region, so the
+        probe must keep its buffer between the steps of a case - and start the
+        next case from the snapshot again. The oracle gets that for free (it is
+        built per case); the probe process is shared, so the harness asks.
+        """
+        if not self.state_mode:
+            return
+        resp = self._roundtrip("reset")
+        if resp != "ok":
+            raise RuntimeError(f"rust probe state reset failed: {resp!r}")
+
+    def set_persist(self, persist: bool) -> None:
+        """Keep the state region between calls, or re-seed it every call.
+
+        A steps unit needs the region live across its calls; that is the only
+        difference between a steps unit and a single-call unit on this side.
+        """
+        if not self.state_mode:
+            return
+        resp = self._roundtrip(f"persist {'on' if persist else 'off'}")
+        if resp != "ok":
+            raise RuntimeError(f"rust probe persist failed: {resp!r}")
 
     def call(self, args: Sequence[ArgSpec]) -> RustCandidateResult:
         parts = ["call", self.entry, str(len(args))]

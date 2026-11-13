@@ -13,9 +13,11 @@
 //! policy reads are still open (`docs/open-questions.md`), so they are not
 //! implemented in this crate.
 
+pub mod aabb;
 pub mod air;
 pub mod body;
 pub mod camera;
+pub mod chain;
 pub mod collide;
 pub mod collider;
 pub mod controller;
@@ -24,10 +26,12 @@ pub mod fixed;
 pub mod frame;
 pub mod gate;
 pub mod jump;
+pub mod keytable;
 pub mod modifiers;
 pub mod movement;
 pub mod policy;
 pub mod resolve;
+pub mod scope;
 pub mod settings;
 pub mod shapes;
 pub mod state;

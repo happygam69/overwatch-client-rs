@@ -1,0 +1,53 @@
+{
+ "id": "fn/KeyTableFindMask",
+ "title": "the keyed search's index as a bit mask, 0x141b330c0",
+ "address": {
+  "v2b": "0x7ff7c68530c0"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "keytable_find_mask",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-sim",
+ "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+ "args": [
+  {
+   "name": "records",
+   "kind": "ptr",
+   "ptr_len": 192
+  },
+  {
+   "name": "count",
+   "kind": "u64"
+  },
+  {
+   "name": "key",
+   "kind": "ptr",
+   "ptr_len": 40
+  },
+  {
+   "name": "flags",
+   "kind": "u64"
+  }
+ ],
+ "returns": "u64",
+ "argFactory": "keytable_mask_fixture",
+ "notes": [
+  "Read from the body: the four arguments are forwarded unchanged to 0x141b331f0, then `mov ecx,eax; xor edx,edx; mov eax,1; shl rax,cl; cmp ecx,-1; cmove rax,rdx` - so the result is 0 for -1 and 1 << (index & 63) otherwise.",
+  "The shift masks `cl` to six bits, which only shows on a table with more than 64 records: case 0 is 70 records with the match at index 64, so the result is 1 (1 << 0), not 1 << 64.",
+  "Composition unit: the callee 0x141b331f0 is fn/KeyTableFind, verified separately, and this unit proves the wrapper's own two instructions."
+ ],
+ "options": {
+  "iterations": 240,
+  "coverageThreshold": 100,
+  "mutationCount": 10,
+  "mutationKillRate": 1.0,
+  "seed": 6093
+ },
+ "knownEquivalentMutants": [
+  {
+   "kind": "mask widen",
+   "line": 109,
+   "rationale": "Widening `& 63` to a wider mask cannot change the result on x86-64: `1u64 << n` lowers to `shl rax, cl`, and the instruction masks the count to six bits itself, so the explicit mask is redundant at machine level. Equivalent for this target (and NOT in the abstract - a shift by 64 is undefined in Rust), which is exactly why the client's `cl` use and this line agree."
+  }
+ ]
+}

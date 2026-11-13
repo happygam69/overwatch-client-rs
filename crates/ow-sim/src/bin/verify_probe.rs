@@ -31,6 +31,12 @@ struct State {
     base: u64,
     snapshot: Vec<u8>,
     buf: Vec<u8>,
+    /// Keep `buf` between calls. False for a single-call unit, whose every call
+    /// must answer from the snapshot (the runner caches answers for identical
+    /// args, so a call that inherited another call's writes could not be
+    /// reproduced). True for a steps unit, which calls the entry several times
+    /// on one region and compares it after each call (`persist on`).
+    persist: bool,
 }
 
 impl State {
@@ -39,11 +45,26 @@ impl State {
             base: 0,
             snapshot: Vec::new(),
             buf: Vec::new(),
+            persist: false,
         }
     }
 
     fn loaded(&self) -> bool {
         !self.snapshot.is_empty()
+    }
+
+    /// A guest address inside the state region, as an offset into `buf`.
+    fn off(&self, guest: u64) -> Option<usize> {
+        let off = guest.checked_sub(self.base)? as usize;
+        (off <= self.buf.len()).then_some(off)
+    }
+
+    /// Put the buffer back to the unit's snapshot. A steps unit keeps the
+    /// buffer between its calls and starts every corpus case from here.
+    fn reset(&mut self) {
+        if self.loaded() {
+            self.buf.copy_from_slice(&self.snapshot);
+        }
     }
 }
 
@@ -1549,6 +1570,197 @@ fn box_triangle_overlap_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), 
 /// quad), `arg2` the world record, and `arg3`/`arg4` the two pools the
 /// record's `+0x2a0`/`+0x288` point at, resolved by the fixture. The leaf
 /// returns the output pointer, so the compared channel is the output pointee.
+/// `0x142cee300`: `(container, array)` as **guest addresses** inside the state
+/// region, so a steps unit's pops all act on one buffer.
+///
+/// The container's `+0x18` holds the array pointer; the probe resolves it the
+/// way the emulator does (guest -> offset) and hands the shipped function the
+/// two slices. The client's argument order is `(container, array)`, so the
+/// second guest must equal the value the container carries.
+fn scope_pop_guest_entry(
+    args: Vec<Arg>,
+    state: &mut State,
+) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let container_guest = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg0 must be the container's guest address".into()),
+    };
+    let array_guest = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg1 must the array's guest address".into()),
+    };
+    let c_off = state
+        .off(container_guest)
+        .ok_or("container outside the state")?;
+    let a_off = state.off(array_guest).ok_or("array outside the state")?;
+    if c_off + 0x24 > state.buf.len() {
+        return Err("container is truncated".into());
+    }
+    if a_off > state.buf.len() {
+        return Err("array starts past the state".into());
+    }
+    // The container carries the array pointer; the probe translates it, which
+    // is exactly the guest -> offset step the emulator performs.
+    let stored = u64::from_le_bytes(state.buf[c_off + 0x18..c_off + 0x20].try_into().unwrap());
+    if stored != array_guest {
+        return Err(format!(
+            "container+0x18 is {stored:#x}, not the array guest {array_guest:#x}"
+        ));
+    }
+    let guard = std::mem::take(&mut state.buf);
+    let mut container = guard.clone();
+    let verdict = ow_sim::scope::scope_pop(&mut container[c_off..], &guard[a_off..]);
+    state.buf = container;
+    if verdict.is_some() {
+        Ok(("-".to_string(), Vec::new()))
+    } else {
+        Err("scope-pop: the element's flag selects the unported thunk path".into())
+    }
+}
+
+/// `0x141ffe590`: `(base, node)` -> the chain scale, a chain of guest links.
+///
+/// The client follows absolute pointers; the probe resolves the snapshot by
+/// subtracting `base`, which is the same arithmetic one translation earlier.
+fn camera_chain_scale_entry(
+    args: Vec<Arg>,
+    state: &mut State,
+) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 2 {
+        return Err(format!("expected 2 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    // The client's only argument is the node (`rcx`); the guest base rides in
+    // `rdx`, which the body never reads, so translating the links changes
+    // nothing the client does.
+    let node = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg0 must the node's guest address".into()),
+    };
+    let base = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg1 must be the snapshot's guest base".into()),
+    };
+    if node < base || state.off(base).is_none() || state.off(node).is_none() {
+        return Err("the node is outside the snapshot".into());
+    }
+    let off = state.off(node).ok_or("node outside the state")?;
+    if off + ow_sim::chain::LINK + 8 > state.buf.len() {
+        return Err("the node is truncated".into());
+    }
+    let ret = ow_sim::chain::chain_scale(&state.buf, base, node);
+    Ok((format!("{:x}", ret.to_bits()), Vec::new()))
+}
+
+/// `0x141b331f0`: `(records, count, key, flags)` -> the matched index in `rax`.
+///
+/// The client returns `eax`, which zero-extends into `rax`, so the return is
+/// compared as a `u64` and `-1` reads as `0xffffffff`.
+fn keytable_find_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let records = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg0 must be the record block".into()),
+    };
+    let count = match it.next() {
+        Some(Arg::U64(v)) => v as u32 as i32,
+        _ => return Err("arg1 must be the record count".into()),
+    };
+    let key_bytes = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 0x28 => b,
+        _ => return Err("arg2 must be the 0x28-byte key".into()),
+    };
+    let flags = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg3 must be the flags".into()),
+    };
+    if count > 0 && records.len() < count as usize * ow_sim::keytable::STRIDE {
+        return Err("the record block is shorter than count * 0x30".into());
+    }
+    let key = ow_sim::keytable::key_of(&key_bytes);
+    let ret = ow_sim::keytable::find(&records, count, &key, (flags & 0xff) != 0);
+    // One pointee per `ptr` argument, in argument order: the block and the key
+    // are unchanged by the call, but the protocol compares them.
+    Ok((format!("{:x}", ret as u32 as u64), vec![records, key_bytes]))
+}
+
+/// `0x141b330c0`: `(records, count, key, flags)` -> the match as a bit mask.
+///
+/// The client forwards all four arguments to `0x141b331f0` and shifts `1` by
+/// the returned index (`cl`), yielding `0` when the search returned `-1`.
+fn keytable_find_mask_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 4 {
+        return Err(format!("expected 4 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let records = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() => b,
+        _ => return Err("arg0 must be the record block".into()),
+    };
+    let count = match it.next() {
+        Some(Arg::U64(v)) => v as u32 as i32,
+        _ => return Err("arg1 must be the record count".into()),
+    };
+    let key_bytes = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 0x28 => b,
+        _ => return Err("arg2 must be the 0x28-byte key".into()),
+    };
+    let flags = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg3 must be the flags".into()),
+    };
+    if count > 0 && records.len() < count as usize * ow_sim::keytable::STRIDE {
+        return Err("the record block is shorter than count * 0x30".into());
+    }
+    let key = ow_sim::keytable::key_of(&key_bytes);
+    let ret = ow_sim::keytable::find_mask(&records, count, &key, (flags & 0xff) != 0);
+    Ok((format!("{:x}", ret), vec![records, key_bytes]))
+}
+
+/// `0x142697ac0`: `(out[8], matrix[16], segment[8])`, the two AABB corners.
+fn segment_aabb_transform_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let out = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 32 => b,
+        _ => return Err("arg0 must be the 8-float output".into()),
+    };
+    let matrix = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 64 => b,
+        _ => return Err("arg1 must be the 16-float matrix".into()),
+    };
+    let seg = match it.next() {
+        Some(Arg::Ptr(b, r, g)) if r.is_empty() && g.is_none() && b.len() == 32 => b,
+        _ => return Err("arg2 must be the two endpoints".into()),
+    };
+    let mut m = [0.0f32; 16];
+    for (i, slot) in m.iter_mut().enumerate() {
+        let b = &matrix[i * 4..i * 4 + 4];
+        *slot = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    }
+    let mut segf = [0.0f32; 8];
+    for (i, slot) in segf.iter_mut().enumerate() {
+        let b = &seg[i * 4..i * 4 + 4];
+        *slot = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    }
+    let r = ow_sim::aabb::segment_aabb_transform(&m, &segf);
+    let mut after = out;
+    for (i, v) in r.iter().enumerate() {
+        after[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    // Closed form: the input buffers come back unchanged and are still compared.
+    Ok(("-".to_string(), vec![after, matrix, seg]))
+}
+
 fn collision_transform_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     if args.len() != 5 {
         return Err(format!("expected 5 args, got {}", args.len()));
@@ -2120,7 +2332,7 @@ fn mover_apply_character_move_entry(
     if base != state.base {
         return Err("state base mismatch".into());
     }
-    let mut after = state.snapshot.clone();
+    let mut after = state.buf.clone();
     ow_sim::world::apply_character_controller_move(
         handle,
         vec4_at(&velocity, 0),
@@ -2156,7 +2368,7 @@ fn mover_set_velocity_entry(
     if base != state.base {
         return Err("state base mismatch".into());
     }
-    let mut after = state.snapshot.clone();
+    let mut after = state.buf.clone();
     ow_sim::world::set_character_controller_velocity(
         slot,
         vec4_at(&velocity, 0),
@@ -2421,6 +2633,13 @@ fn handle_call(
         "query_driver" => query_driver_entry(args),
         "triangle_degenerate" => triangle_degenerate_entry(args),
         "float_to_q12" => float_to_q12_entry(args),
+        // crates/ow-sim/src/aabb.rs, the segment-AABB transform
+        "segment_aabb_transform" => segment_aabb_transform_entry(args),
+        // crates/ow-sim/src/scope.rs, the profiling scope stack pop
+        "scope_pop_guest" => scope_pop_guest_entry(args, state),
+        "camera_chain_scale" => camera_chain_scale_entry(args, state),
+        "keytable_find" => keytable_find_entry(args),
+        "keytable_find_mask" => keytable_find_mask_entry(args),
         "collision_capsule" => collision_capsule_entry(args),
         "controller_step_stage" => controller_step_stage_entry(args),
 
@@ -2487,6 +2706,21 @@ fn main() {
             state.base = base;
             state.buf = bytes.clone();
             state.snapshot = bytes;
+            let _ = writeln!(out, "ok");
+            let _ = out.flush();
+            continue;
+        }
+        if toks[0] == "reset" {
+            state.reset();
+            let _ = writeln!(out, "ok");
+            let _ = out.flush();
+            continue;
+        }
+        if toks[0] == "persist" {
+            // A steps unit keeps the state region between calls. The runner
+            // sets this once per unit, before its first case.
+            let persist_on = toks.get(1).is_some_and(|s| &**s == "on" || &**s == "1");
+            state.persist = persist_on;
             let _ = writeln!(out, "ok");
             let _ = out.flush();
             continue;
@@ -2595,6 +2829,13 @@ fn main() {
             let _ = writeln!(out, "err {}", e);
             let _ = out.flush();
             continue;
+        }
+        // A single-call unit answers from the snapshot every time: the runner
+        // caches answers for identical args, so a call that inherited another
+        // call's writes could not be reproduced. A steps unit (`persist on`)
+        // keeps the region, which is what its next call reads.
+        if state.loaded() && !state.persist {
+            state.reset();
         }
         match handle_call(entry, args, &mut state) {
             Ok((ret, outs)) => {

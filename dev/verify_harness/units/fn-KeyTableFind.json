@@ -1,0 +1,56 @@
+{
+ "id": "fn/KeyTableFind",
+ "title": "keyed record search over a 0x30-byte-stride table, 0x141b331f0",
+ "address": {
+  "v2b": "0x7ff7c68531f0"
+ },
+ "image": "dev/data/offline_recover/module_offline.bin",
+ "entry": "keytable_find",
+ "candidateLoader": "cargo",
+ "candidateCrate": "ow-sim",
+ "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+ "args": [
+  {
+   "name": "records",
+   "kind": "ptr",
+   "ptr_len": 192
+  },
+  {
+   "name": "count",
+   "kind": "u64"
+  },
+  {
+   "name": "key",
+   "kind": "ptr",
+   "ptr_len": 40
+  },
+  {
+   "name": "flags",
+   "kind": "u64"
+  }
+ ],
+ "returns": "u64",
+ "argFactory": "keytable_find_fixture",
+ "notes": [
+  "Read from the body: prefilter on rec[0x10] and rec[0x18] (and rec[0x20] when r9b is non-zero), then a sticky partial-match flag - set by any record with rec[8] != 0 and rec[0] == 0 - decides whether a record whose rec[8] equals key[8] is a candidate. The last candidate wins; an exact match (rec[0] == key[0]) returns immediately.",
+  "The return is eax, zero-extended into rax by `mov eax, ebx`, so it compares as a u64 and -1 reads 0xffffffff.",
+  "ucov: no calls and no globals - the body is self-contained, which is why it was the first pick from dev/queue.py."
+ ],
+ "options": {
+  "iterations": 240,
+  "coverageThreshold": 100,
+  "mutationCount": 12,
+  "mutationKillRate": 1.0,
+  "seed": 6091
+ },
+ "acknowledgedGaps": [
+  "What the records and the key describe is not read: the unit pins the arithmetic, not the meaning of the fields."
+ ],
+ "knownEquivalentMutants": [
+  {
+   "kind": "cmp-flip <=to<",
+   "line": 68,
+   "rationale": "`if count <= 0 { return -1 }` widened to `count < 0`: at count == 0 the loop runs zero times and `best` stays -1, so the early exit and the loop exit produce the same value. Equivalent for every input, not just this corpus."
+  }
+ ]
+}

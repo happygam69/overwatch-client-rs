@@ -1,0 +1,56 @@
+{
+  "id": "fn/SegmentAabbTransform",
+  "title": "tier-2 shipped code: the segment's AABB corners in a matrix frame, 0x142697ac0",
+  "address": {
+    "v2b": "0x7ff7c73b7ac0"
+  },
+  "image": "dev/data/offline_recover/module_offline.bin",
+  "entry": "segment_aabb_transform",
+  "candidateLoader": "cargo",
+  "candidateCrate": "ow-sim",
+  "candidateProbe": "crates/ow-sim/src/bin/verify_probe.rs",
+  "args": [
+    {
+      "name": "out",
+      "kind": "ptr",
+      "ptr_len": 32
+    },
+    {
+      "name": "matrix",
+      "kind": "ptr",
+      "ptr_len": 64
+    },
+    {
+      "name": "segment",
+      "kind": "ptr",
+      "ptr_len": 32
+    }
+  ],
+  "returns": "void",
+  "argFactory": "segment_aabb_fixture",
+  "options": {
+    "iterations": 200,
+    "coverageThreshold": 0,
+    "mutationCount": 10,
+    "mutationKillRate": 1.0,
+    "seed": 90210,
+    "coverageWindow": 175,
+    "allowedImageReads": [
+      "0x7ff7c7ca44e0-0x7ff7c7ca44ef",
+      "0x7ff7c7c9aaf0-0x7ff7c7c9aaff"
+    ]
+  },
+  "notes": [
+    "SHIPPED-CODE tier-2 unit. The candidate is crates/ow-sim/src/aabb.rs (segment_aabb_transform), called through the probe's segment_aabb_transform entry.",
+    "Read from the body, not the C: c = (high+low)*0.5 and e = (high-low)*0.5 on all four lanes; ext = (e.y*|m1| + e.x*|m0|) + e.z*|m2|; cen = ((c.x*m0 + t) + c.y*m1) + c.z*m2; out[0..4] = cen - ext, out[4..8] = cen + ext.",
+    "The extent's add order is the client's: the 0x55 broadcast (lane 1) is multiplied first (0x142697b0c), the 0x00 broadcast (lane 0) second (0x142697b19), and the two are added (0x142697b27) before the 0xaa term (0x142697b3b). The centre adds t before the y and z terms (0x142697b46, 0x142697b4a, 0x142697b4d).",
+    "The two constants are image data: 0x142f844e0 is 0.5 four times, 0x142f7aaf0 is 0x7fffffff four times (andps abs mask). Lane 3 is computed, never masked off.",
+    "coverageThreshold is 0 because the body has no conditional branch: the ladder's coverage stage finds no site to sweep, which is why the differential and mutation stages carry this unit.",
+    "NaN *inputs* are excluded: where the body meets two NaNs the emulator clears the sign of the one it returns (0x7fc00001 whichever operand carries it, measured with m0[0] = 0xffc00001 and 0x7fc00001), while subps/addps keep the destination's NaN. +-inf inputs do agree and are covered."
+  ],
+  "acknowledgedGaps": [
+    "The client returns its first argument in rax (mov rax, rcx at 0x142697acc, never overwritten). The Rust entry returns nothing and the harness compares the 32-byte output buffer; a pointer return cannot be compared across the two address frames.",
+    "The caller-facing meaning of the two endpoints is not read: the body only needs them as low/high 4-wide values, and lane 3 participates, so a caller's use of lane 3 is open.",
+    "Two-NaN operands cannot be compared across the two engines: the oracle's softfloat returns a sign-cleared NaN regardless of which operand carries it, the instruction returns the destination's. Measured 2026-11-20; a NaN reaching this function is already a broken position, so no gameplay path depends on it."
+  ]
+}
