@@ -1,5 +1,7 @@
 //! The practice-range map header, opened through the client's own asset path.
 //!
+//! proof-covers: 0x141fd5820
+//!
 //! The header is not in the encoded store: its CMF record byte is `132`
 //! (`0x84`), so the payload lives inside a type-`0x09C` bundle. This test opens
 //! it with [`GameData::open_asset`] — the record byte decides, the bundle entry

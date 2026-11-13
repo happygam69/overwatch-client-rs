@@ -61,7 +61,7 @@ fn open() -> Option<(GameData, ow_tank::keytable::Sources)> {
 fn print_census(survey: &Survey) {
     println!(
         "0x{:03X} {:<20} registered={:<6} scanned={:<5} readable={:<5} parsed={:<5} \
-not-downloaded={:<5} unparsed={:<4} as-stu={:<5} as-wem={:<5} v1={:<3} instances={:<6} unrecognised={}{}",
+not-downloaded={:<5} unparsed={:<4} as-stu={:<5} as-wem={:<5} as-bank={:<5} v1={:<3} instances={:<6} unrecognised={}{}",
         survey.type_id,
         types::label(survey.type_id),
         survey.assets,
@@ -72,6 +72,7 @@ not-downloaded={:<5} unparsed={:<4} as-stu={:<5} as-wem={:<5} v1={:<3} instances
         survey.unparsed,
         survey.as_stu,
         survey.as_wem,
+        survey.as_bank,
         survey.version_1,
         survey.instances,
         survey.unrecognised,
@@ -134,7 +135,7 @@ fn real_sound_surface_census_and_invariants() {
             survey.type_id
         );
         assert_eq!(
-            survey.as_stu + survey.as_wem + survey.unparsed,
+            survey.as_stu + survey.as_wem + survey.as_bank + survey.unparsed,
             survey.readable,
             "type 0x{:03X}: every readable asset parsed one way or the other, or is counted as unparsed",
             survey.type_id

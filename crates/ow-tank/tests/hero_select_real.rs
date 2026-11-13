@@ -1,5 +1,7 @@
 //! The hero selector's roster, read from the install's own mode data.
 //!
+//! proof-covers: 0x140ca9730 0x140cb7700
+//!
 //! A mode team's `m_availableHeroes` is one of three answers: absent, the empty
 //! marker (`STU_D1DC7C55`) meaning every hero, or a whitelist
 //! (`STU_3C14F504` / `STU_C45DE560`) naming the heroes. The fixtures below are
@@ -337,11 +339,16 @@ fn every_mode_team_pool_is_a_known_class() {
 /// (`0x1972C687`), `+0x7c` (`0x7A70E3E3`) and `+0x80` (`0x4A576BC2`) through
 /// `ow_tank::character_collision::capsule_from_mover`.
 ///
-/// Measured on this install: the roster is dominated by `0.5 / 1.5` (radius,
-/// height), the large heroes carry `0.7 / 1.8` and `0.7 / 2.0`, and two heroes
-/// are neither - 6 at `1.2` and 657 at `0.54 / 1.67`. Hero 458 lands exactly on
-/// the client's `0.1 * r` segment floor (`0.7 / 0.07`), which makes it the
-/// floor-branch anchor.
+/// Measured on this install, **declared** radius and height: 37 heroes at
+/// `0.5 / 1.5`, 12 at `0.7 / 1.8`, 2 at `0.7 / 2.0`, one at `0.7 / 1.47`, one
+/// at `0.54 / 1.67` and one at `0.5 / 1.2`. The returned capsule's radius is
+/// **capped at `0.5`** by the client's own body copy (`0x140cb7700`), so the
+/// fifteen heroes that declare `0.7` all collide as `0.5` — this test pins
+/// both the declared values and the cap. **No hero on this roster reaches the
+/// `0.1 * r` segment floor once the cap applies** — hero 458, which would hit
+/// it at its declared `0.7`, carries a `0.47` segment against a `0.05` floor
+/// — so the floor rule is asserted as an invariant (`segment >= 0.1 * r`) and
+/// the floor branch itself has no real-data anchor.
 #[test]
 fn every_hero_declares_a_collision_capsule() {
     use ow_tank::character_collision::SEGMENT_FRACTION;
@@ -363,6 +370,23 @@ fn every_hero_declares_a_collision_capsule() {
             continue;
         };
         measured += 1;
+        // The mover's **declared** radius, before the body's cap. `capsule`
+        // is what the client would collide with; `declared` is what the hero's
+        // data says, and the two are compared below.
+        let mut stu = data.stu_of(entity).expect("the entity's STU reads");
+        let mover = stu
+            .instance(ow_tank::classes::CHARACTER_MOVER_COMPONENT)
+            .expect("a playable hero carries a mover component");
+        let declared = stu
+            .read_f32(mover, ow_tank::entity::mover_fields::CAPSULE_RADIUS)
+            .expect("the mover declares a capsule radius");
+        assert_eq!(
+            capsule.radius,
+            declared.min(ow_tank::character_collision::MAX_RADIUS),
+            "hero {}: the body's cap is min({}, {declared})",
+            hero.index,
+            ow_tank::character_collision::MAX_RADIUS
+        );
         assert!(
             capsule.radius >= 0.02,
             "hero {}: radius {}",
@@ -385,7 +409,7 @@ fn every_hero_declares_a_collision_capsule() {
         if (capsule.radius - 0.5).abs() < 1e-6 && (capsule.height() - 1.5).abs() < 1e-6 {
             common += 1;
         }
-        if (capsule.radius - 0.7).abs() < 1e-6 {
+        if (declared - 0.7).abs() < 1e-6 {
             tall += 1;
         }
     }
@@ -399,7 +423,7 @@ fn every_hero_declares_a_collision_capsule() {
     );
     assert!(
         tall >= 5,
-        "the roster should carry the large 0.7 m capsule: {tall} of {measured}"
+        "the roster should declare the large 0.7 m capsule: {tall} of {measured}"
     );
 
     let capsule_of = |index: u32| {
@@ -412,29 +436,50 @@ fn every_hero_declares_a_collision_capsule() {
             .unwrap_or_else(|| panic!("hero {index} has no mover"))
     };
 
-    // The large-hero anchor.
+    // The large-hero anchor: declared 0.7, capped to 0.5, 1.8 m tall.
     let large = capsule_of(7);
-    assert!((large.radius - 0.7).abs() < 1e-6, "{}", large.radius);
-    assert!((large.segment() - 0.4).abs() < 1e-6, "{}", large.segment());
+    assert!((large.radius - 0.5).abs() < 1e-6, "{}", large.radius);
+    assert!((large.segment() - 0.8).abs() < 1e-6, "{}", large.segment());
     assert!((large.height() - 1.8).abs() < 1e-6, "{}", large.height());
 
-    // The segment floor, in real data.
+    // The declared 0.7 that the cap bites on, and the invariant that the
+    // segment never falls under `0.1 * r` (the floor).
+    for index in [7u32, 458] {
+        let c = capsule_of(index);
+        assert!(
+            c.segment() >= SEGMENT_FRACTION * c.radius - 1e-6,
+            "hero {index}: segment {} is under the floor {}",
+            c.segment(),
+            SEGMENT_FRACTION * c.radius
+        );
+    }
     let floored = capsule_of(458);
     assert!(
-        (floored.segment() - SEGMENT_FRACTION * floored.radius).abs() < 1e-6,
-        "hero 458 should hit the floor: {} vs {}",
-        floored.segment(),
-        SEGMENT_FRACTION * floored.radius
+        (floored.height() - 1.47).abs() < 1e-6,
+        "{}",
+        floored.height()
+    );
+    assert!(
+        (floored.segment() - 0.47).abs() < 1e-6,
+        "{}",
+        floored.segment()
     );
 
-    // Two heroes that are neither of the two common shapes.
+    // Two heroes that are neither of the two common shapes: the short one
+    // declares the common 0.5 radius, the custom one declares 0.54 and is
+    // capped like the large heroes.
     let short = capsule_of(6);
     assert!((short.height() - 1.2).abs() < 1e-6, "{}", short.height());
     let custom = capsule_of(657);
-    assert!((custom.radius - 0.54).abs() < 1e-6, "{}", custom.radius);
+    assert!((custom.radius - 0.5).abs() < 1e-6, "{}", custom.radius);
+    assert!(
+        (custom.segment() - 0.67).abs() < 1e-6,
+        "{}",
+        custom.segment()
+    );
     assert!((custom.height() - 1.67).abs() < 1e-6, "{}", custom.height());
 
-    println!("capsules: {measured} playable heroes, {common} at 0.5/1.5, {tall} at r0.7");
+    println!("capsules: {measured} playable heroes, {common} at 0.5/1.5, {tall} declaring r0.7");
 }
 
 /// The mover's vertical step limits, `+0x688`/`+0x68c`, read from

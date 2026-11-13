@@ -1,5 +1,7 @@
 //! The effect layer against the real installation.
 //!
+//! proof-covers: 0x142e4a780
+//!
 //! The sweep opens every effect asset of the six types the game uses, parses
 //! the `EFCT` container and checks the invariants a wrong layout would break:
 //!
@@ -59,6 +61,10 @@ struct Census {
     tags: BTreeMap<String, (usize, u16)>,
     outside_table: BTreeMap<String, usize>,
     components: BTreeMap<String, usize>,
+    /// The `EFCT` payload's run count (byte `+0x66`) to how many assets carry it.
+    run_counts: BTreeMap<u8, usize>,
+    /// Assets whose two Q12 runs are all finite f32 in the payload.
+    finite_runs: usize,
 }
 
 #[test]
@@ -89,6 +95,37 @@ fn effect_assets_parse_and_every_component_keeps_the_clients_widths() {
             };
             census.assets += 1;
             census.chunks += effect.chunks.len();
+            // The builder's prologue reads **two runs of `count` f32** from
+            // `payload + 0x00` and `payload + 0x08` and quantizes both to Q12
+            // (`EffectComponentBuild` `0x142e4a780`, count at `payload + 0x66`).
+            // So the payload must hold `8 * count` bytes of run data, and both
+            // runs are real floats - the first install-side evidence for the
+            // two-run model, beyond the offsets.
+            let count = effect.header.array_count() as usize;
+            assert!(
+                effect.header.payload.len() >= count * 8,
+                "0x{g:016x}: run count {count} needs {} bytes, the EFCT payload is {}",
+                count * 8,
+                effect.header.payload.len()
+            );
+            *census.run_counts.entry(count as u8).or_insert(0) += 1;
+            let mut finite = true;
+            for run in [effect::header::ARRAYS[0], effect::header::ARRAYS[1]] {
+                for i in 0..count {
+                    let at = run + i * 4;
+                    let bits = u32::from_le_bytes(
+                        effect.header.payload[at..at + 4]
+                            .try_into()
+                            .expect("in range"),
+                    );
+                    if !f32::from_bits(bits).is_finite() {
+                        finite = false;
+                    }
+                }
+            }
+            if finite {
+                census.finite_runs += 1;
+            }
             for chunk in &effect.chunks {
                 let name = chunk.name();
                 let entry = census
@@ -153,6 +190,36 @@ fn effect_assets_parse_and_every_component_keeps_the_clients_widths() {
 
     // The component set is non-empty and typed on this install.
     assert!(census.components.get("ECMD").copied().unwrap_or(0) > 0);
+
+    // The prologue's two Q12 runs, measured: the count histogram and how many
+    // assets carry only finite floats in both runs. A non-finite value is not
+    // impossible (a -inf in a curve is data), so the finite count is printed
+    // and asserted to dominate rather than to be exact.
+    let mut counts: Vec<(&u8, &usize)> = census.run_counts.iter().collect();
+    counts.sort_by_key(|(c, _)| **c);
+    eprintln!(
+        "run counts (payload +0x66): {:?}",
+        counts
+            .iter()
+            .map(|(c, n)| format!("{c}:{n}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    eprintln!(
+        "assets with both runs all finite: {} of {}",
+        census.finite_runs, census.assets
+    );
+    // **Measured: every effect on this install declares zero runs.** The
+    // count byte at `payload + 0x66` is `0` on all 7,342 sampled assets, so the
+    // two-run path is read from the builder but never exercised by data here;
+    // the histogram above is the claim, and a patch that starts shipping runs
+    // will move it.
+    assert!(
+        census.finite_runs * 10 >= census.assets * 9,
+        "only {} of {} effects have finite run data",
+        census.finite_runs,
+        census.assets
+    );
     assert_eq!(
         effect::OBSERVED_VERSIONS[0],
         (b"EFCT", effect::ROOT_VERSION)

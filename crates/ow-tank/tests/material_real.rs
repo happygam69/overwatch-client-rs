@@ -1,5 +1,7 @@
 //! Type-`0B3` material data and the client's texture-name binding.
 //!
+//! proof-covers: 0x141b1a7b0 0x141f1ca80 0x141b52ca0
+//!
 //! The parser's layout is read from the client's material-data load callback
 //! (`FUN_141b1a7b0`, job 28) and its texture-set consumer (`FUN_141f1ca80`):
 //! the count is the byte at `+0x3C`, the array offset the i64 at `+0x10`, and

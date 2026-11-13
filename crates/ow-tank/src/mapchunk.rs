@@ -31,7 +31,7 @@
 //!   point, text, sound, effect, sequence, area**) are ported from the
 //!   reference reader `TankLib/teMapChunk.cs` (the public C# Overwatch asset
 //!   library), field offset for field offset. They are **not verified against a
-//!   real chunk of their kind** here; the sweep in `tests/mapchunk_kinds.rs`
+//!   real chunk of their kind** here; the sweep in `tests/mapchunk_kinds_real.rs`
 //!   measures how they fare on the install rather than asserting they are
 //!   right.
 
@@ -872,6 +872,15 @@ fn read_placeable(
         }
         // Reference reader teMapChunk.cs, teMapPlaceableReflectionPoint.
         Kind::ReflectionPoint => {
+            // **The declared body may be shorter than the reference struct.**
+            // Measured on this install: one chunk
+            // (`0x0dd000043f7d3ca0`, 62 placeables) carries reflection-point
+            // bodies of 152, 168, 184 and 200 bytes where the reference's
+            // `Structure` is 168, so 22 of its placeables have no room for the
+            // tail the reference reads. Bounding every read by the placeable's
+            // own `size` makes a short body read defaults instead of the next
+            // placeable's UUID; `docs/formats/maps.md` records the measurement.
+            let data = &data[..body_end];
             let translation = rd_vec3(data, body).unwrap_or([0.0; 3]);
             let scale = rd_vec3(data, body + 12).unwrap_or([1.0; 3]);
             let rotation = rd_quat(data, body + 24).unwrap_or([0.0, 0.0, 0.0, 1.0]);

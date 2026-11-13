@@ -1,5 +1,7 @@
 //! The texture mip chain and the array/cubemap layout, against the install.
 //!
+//! proof-covers: 0x141e296a0 0x142e36e80
+//!
 //! The client's copy order is read from `0x141e296a0`: the outer loop is the
 //! array element (then the cube face), the inner loop is the mip from the
 //! largest to the smallest, and the data pointer advances by each level's own

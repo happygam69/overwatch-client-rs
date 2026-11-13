@@ -1,6 +1,8 @@
 //! The collision descriptor `C` (registered class `0x564B1018`) out of the
 //! install, and a real brush decoded from it.
 //!
+//! proof-covers: 0x142ced620 0x142cf23c0
+//!
 //! `C` is not stored in a model: all 32,278 readable model assets in this
 //! install were scanned and none mentions the class hash. It is reached as the
 //! loaded target of an asset reference: nine entity assets carry an instance of

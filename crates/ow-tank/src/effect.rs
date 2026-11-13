@@ -182,15 +182,35 @@ pub struct Header<'a> {
     pub payload: &'a [u8],
 }
 
-/// Offsets the builder's prologue reads out of the `EFCT` payload.
+/// Offsets the builder's prologue reads out of the `EFCT` payload
+/// (`payload = record + 0x10`; the client reads the record).
+///
+/// Read in full from `EffectComponentBuild` (`0x142e4a780`) on 2026-11-20. The
+/// prologue copies the record's header into the runtime record's `+0x60..+0xbb`
+/// and then converts **two runs of `count` f32 into Q12** at the runtime
+/// record's `+0xc0`: the first from `payload + 0x00` and the second from
+/// `payload + 0x08`, with `count` taken from the byte at `payload + 0x66` and
+/// the two pointers stored at runtime `+0x50` and `+0x58`. The two earlier
+/// values of `ARRAYS` and `DWORDS` here were those *record*-relative offsets
+/// used without the `+0x10` translation, which put them 16 bytes too high;
+/// the run sources are the payload's first two qwords. `docs/formats/effects.md`
+/// carries the whole table.
 pub mod header {
-    /// Two `u64` fields the prologue copies arrays from.
-    pub const ARRAYS: [usize; 2] = [0x10, 0x18];
-    /// The `u64` fields the prologue copies into the runtime header.
+    /// The two f32 runs the prologue converts to Q12: payload `+0x00`, `+0x08`.
+    ///
+    /// The conversion itself is the client's `ScaleFloatRunToQ12`
+    /// (`0x141c6c830`), verified as `fn/FloatToQ12` and shipped as
+    /// `ow_sim::fixed::quantize_q12`. This crate does not run it: nothing here
+    /// consumes the runtime record yet, so the port waits for that consumer
+    /// rather than adding an unconsumed copy of the client's loop.
+    pub const ARRAYS: [usize; 2] = [0x00, 0x08];
+    /// The `u64` fields the prologue copies into the runtime header's
+    /// `+0x60`, `+0x68`, `+0x70`.
     pub const QWORDS: [usize; 3] = [0x10, 0x18, 0x20];
-    /// The `u32` fields it copies (`+0x40` first, then `+0x18`..`+0x34`).
-    pub const DWORDS: [usize; 5] = [0x40, 0x18, 0x1c, 0x20, 0x24];
-    /// The byte the client multiplies by four: the first array's length.
+    /// The `u32` fields it copies: `+0x40` into runtime `+0x78`, then
+    /// `+0x28..+0x34` into `+0x7c..+0x88`.
+    pub const DWORDS: [usize; 5] = [0x40, 0x28, 0x2c, 0x30, 0x34];
+    /// The byte the client multiplies by four: the length of both runs.
     pub const COUNT: usize = 0x66;
 }
 

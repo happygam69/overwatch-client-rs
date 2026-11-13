@@ -1,6 +1,8 @@
 //! The client's CDN index footer and page layout against the install's real
 //! index files.
 //!
+//! proof-covers: 0x1424d9af0 0x1424d9c90 0x1424d9f20
+//!
 //! `FUN_1424d9af0` (`0x1424d9af0`) parses the last 20 bytes of an
 //! `indices/<hash>.index`: version 0/1, checksum size <= 16, page size in KiB,
 //! entry stride `offset + size + key`, `pageCount = ceil(elements /

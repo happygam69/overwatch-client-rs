@@ -1,6 +1,8 @@
 //! The practice range's models, through the per-instance body builder's filter:
 //! which holders become a Domino shape, of which kind, and in which order.
 //!
+//! proof-covers: 0x14201ae60
+//!
 //! The filter and the mode switch are `ow_tank::model_body`, read from the
 //! builder `0x14201ae60` (`docs/formats/static-collision.md`, check 9). The
 //! holder field hashes are read against the class declaration's declared offsets

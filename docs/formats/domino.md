@@ -152,6 +152,21 @@ the release path reads). This is the "pop" the earlier note searched for; it
 is shared by every pool because each entry carries its own next index in its
 first free dword.
 
+**The pop is verified twice, and the second way is the new one.**
+`fn/ShapePoolAlloc` (one call per case, a fresh pool handed to the probe)
+compares the pool record and the entries array after the call, and kills 7 of
+7 mutants. `fn/ShapePoolAlloc-steps` (2026-11-20) is the first **steps** unit:
+it calls the same client bytes 1 to 4 times in a row on one pool that lives in
+a state region, so the second pop reads the free head the first pop wrote and
+the link the first pop stored - 16 chained pops over 8 pools (chain lengths
+1-4, a non-contiguous `2 -> 0` chain, a saturated used count, a high-water
+mark that must not fall), 80 corpus cases, every channel compared after every
+call, 6 of 6 mutants killed. It is not stronger than the single-call unit for
+this leaf - a call's whole mutation is already in the compared state - which is
+exactly the finding that matters: the steps shape pays on a **driver**, where
+one call's writes feed the next call's control flow through many functions.
+`docs/port-plan.md` section S3.
+
 `FUN_142cb7f10(entry, record, source)` (`ShapeEntryFromDescriptor`) is the
 geometry writer. It copies the source descriptor's bounds quad, filter words,
 ids, radii and flags into the 0xc0-byte shape entry, then switches on the
@@ -601,3 +616,50 @@ vector and a multi-step run gets a first-divergence test. A formula that is
 current-image reads with the `(1 fn)` marks showing what still needs a second
 read. This pass changed no Rust code, so it adds no test of its own; the
 Domino arithmetic that is implemented is tested in `ow-sim`.
+
+## The keyed table search (`0x141b331f0`) — read and verified
+
+A flat record search, no calls and no globals, used by the camera/Domino
+component path (`0x141b330c0` asks it for an index and turns that index into a
+bit mask with `1 << index`, `-1` meaning "none").
+
+```text
+find(records, count, key, require_extra):
+    partial = key[8] != 0 && key[0] == 0
+    best = -1
+    if count <= 0: return -1
+    for i in 0 .. count:
+        rec = records + i * 0x30
+        if rec[0x10] != key[0x10]: continue
+        if rec[0x18] != key[0x18]: continue
+        if require_extra && rec[0x20] != key[0x20]: continue
+        if rec[8] != 0 && rec[0] == 0: partial = true        # sticky
+        if key[8] == rec[8]:
+            if rec[0] == key[0]: return i                     # exact
+            if partial: best = i                              # last wins
+    return best
+```
+
+Three details are the whole function: the partial flag is **sticky** across
+records (one qualifying record arms every later comparison), the candidate index
+**overwrites** (the last partial match wins, not the first), and the `+0x20`
+comparison only happens when the fourth argument's low byte is non-zero (the
+one caller in the image passes `0`).
+
+The return is `eax`, and `mov eax, ebx` zero-extends it: `-1` reads as
+`0xffffffff` in `rax`, which the port reproduces.
+
+Its consumer `0x141b330c0` turns the index into a bit mask: it forwards its own
+four arguments, then does `eax = 1; shl rax, cl; if ecx == -1 then rax = 0`, so
+the result is `1 << (index & 63)` - and the `& 63` is what the instruction
+itself does, which only shows on a table with more than 64 records. Unit:
+`fn/KeyTableFindMask` (`ow_sim::keytable::find_mask`), whose corpus includes a
+70-record table with the match at index 64.
+
+Unit: `fn/KeyTableFind` (`ow_sim::keytable::find`) — 304 differential cases,
+100% branch coverage (12/12 sites), 11/12 mutants killed with the twelfth
+declared equivalent (`count <= 0` widened to `count < 0` is the same function:
+at `count == 0` the loop runs zero times and `best` stays `-1`).
+
+Open: what the records and key fields *mean* is not read — the unit pins the
+arithmetic, not the vocabulary.

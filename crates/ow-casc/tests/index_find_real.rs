@@ -1,5 +1,7 @@
 //! The client's index-entry search and duplicate choice against the install.
 //!
+//! proof-covers: 0x1425111a0
+//!
 //! `DynamicIndexFindEntry` (`0x1425111a0`) lower-bound searches the 18-byte
 //! entries, expands the equal range and decodes it. The first equal entry is
 //! the chosen one. This install has 806 keys listed twice: the first entry is

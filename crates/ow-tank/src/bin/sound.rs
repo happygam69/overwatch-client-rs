@@ -24,6 +24,7 @@
 use std::path::PathBuf;
 
 use ow_tank::sound::{self, types, Codec, Record, Sound, Survey, WemHeader};
+use ow_tank::wwise_bank;
 use ow_tank::{guid, GameData, ManifestSelector};
 
 const USAGE: &str = "\
@@ -32,6 +33,7 @@ usage: ow-tank-sound <subcommand>
   types                       census every sound type against the install
   dump <type>                 print sample records of one type
   wem <0xGUID>                one payload's Wwise RIFF header
+  bank <0xGUID>               one Wwise sound bank: header, sections, media index
   payloads <type>             follow Sound -> WEM payload -> header, on real data
   speech                      the per-locale speech manifest (voice lives there)
 
@@ -62,6 +64,7 @@ fn main() -> std::process::ExitCode {
         "types" => cmd_types(&args[1..]),
         "dump" => cmd_dump(&args[1..]),
         "wem" => cmd_wem(&args[1..]),
+        "bank" => cmd_bank(&args[1..]),
         "payloads" => cmd_payloads(&args[1..]),
         "speech" => cmd_speech(&args[1..]),
         other => {
@@ -122,7 +125,7 @@ fn open_with_sources() -> Option<(GameData, ow_tank::keytable::Sources)> {
 fn print_survey(survey: &Survey, records: bool) {
     println!(
         "type 0x{:03X} {:<26} registered={:<6} scanned={:<5} readable={:<5} parsed={:<5} \
-not-downloaded={:<5} unparsed={:<4} as-stu={:<5} as-wem={:<5} v1={:<3} instances={}{}",
+not-downloaded={:<5} unparsed={:<4} as-stu={:<5} as-wem={:<5} as-bank={:<4} v1={:<3} instances={}{}",
         survey.type_id,
         types::label(survey.type_id),
         survey.assets,
@@ -133,6 +136,7 @@ not-downloaded={:<5} unparsed={:<4} as-stu={:<5} as-wem={:<5} v1={:<3} instances
         survey.unparsed,
         survey.as_stu,
         survey.as_wem,
+        survey.as_bank,
         survey.version_1,
         survey.instances,
         if survey.capped {
@@ -207,11 +211,12 @@ fn cmd_types(args: &[String]) -> std::process::ExitCode {
     for t in types::WEM_PAYLOAD {
         let survey = sound::survey_type_capped(&data, *t, 0, cap);
         println!(
-            "  0x{:03X} {:<18} declared a WEM container; measured: {} STU, {} RIFF, {} neither, {} not downloaded",
+            "  0x{:03X} {:<18} declared a WEM container; measured: {} STU, {} RIFF, {} bank, {} neither, {} not downloaded",
             t,
             types::label(*t),
             survey.as_stu,
             survey.as_wem,
+            survey.as_bank,
             survey.unparsed,
             survey.unreadable
         );
@@ -817,6 +822,101 @@ fn cmd_wem(args: &[String]) -> std::process::ExitCode {
     println!(
         "The payload is the game's own bytes. This tool did not decode it — see \
          docs/formats/sound.md."
+    );
+    std::process::ExitCode::SUCCESS
+}
+
+fn cmd_bank(args: &[String]) -> std::process::ExitCode {
+    let Some(data) = open() else {
+        return std::process::ExitCode::from(2);
+    };
+    let Some(guid_text) = args.first() else {
+        eprintln!("bank wants a GUID\n\n{USAGE}");
+        return std::process::ExitCode::from(2);
+    };
+    let Ok(asset) = u64::from_str_radix(guid_text.trim_start_matches("0x"), 16) else {
+        eprintln!("{guid_text:?} is not a hex GUID");
+        return std::process::ExitCode::from(2);
+    };
+    let bytes = match data.bytes_of(asset) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("0x{asset:016x}: {e}");
+            return std::process::ExitCode::from(1);
+        }
+    };
+    let bank = match wwise_bank::parse(&bytes) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("0x{asset:016x}: {e}");
+            return std::process::ExitCode::from(1);
+        }
+    };
+    let h = &bank.header;
+    println!(
+        "asset 0x{asset:016x}  type 0x{:03X} ({})  {} bytes",
+        guid::type_of(asset),
+        types::label(guid::type_of(asset)),
+        bytes.len()
+    );
+    println!(
+        "\nBKHD  version 0x{:X}  bank id 0x{:08X}  language id 0x{:08X}",
+        h.version, h.bank_id, h.language_id
+    );
+    println!(
+        "      alignment {}  bank type {}  unknown 0x0c=0x{:X} 0x0e=0x{:X} 0x10=0x{:X}",
+        h.data_alignment(),
+        h.bank_type
+            .map(|t| format!("0x{t:X}"))
+            .unwrap_or_else(|| "absent (version < 0x8f)".into()),
+        h.unknown_0c,
+        h.unknown_0e,
+        h.unknown_10
+    );
+    if let Some(tail) = h.tail {
+        println!(
+            "      tail {}",
+            tail.iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join("")
+        );
+    }
+    println!("\nsections:");
+    for s in &bank.sections {
+        println!(
+            "  {:<4}  payload {:>8}  size {:>9}",
+            s.name(),
+            s.payload,
+            s.size
+        );
+    }
+    if !bank.media.is_empty() {
+        let data_section = bank.section(wwise_bank::SECTION_DATA);
+        println!("\nDIDX media ({} record(s)):", bank.media.len());
+        for m in bank.media.iter().take(12) {
+            let in_data = data_section
+                .map(|s| (m.offset as usize + m.size as usize) <= s.size as usize)
+                .unwrap_or(false);
+            println!(
+                "  id {:>10}  offset {:>9}  size {:>8}  {}",
+                m.id,
+                m.offset,
+                m.size,
+                if in_data {
+                    "inside DATA"
+                } else {
+                    "OUTSIDE DATA"
+                }
+            );
+        }
+        if bank.media.len() > 12 {
+            println!("  ... {} more", bank.media.len() - 12);
+        }
+    }
+    println!(
+        "\nHIRC content is not read: the object graph is the client's reader at 0x1428fcc40 and \
+         its body is not read yet. See docs/formats/sound.md."
     );
     std::process::ExitCode::SUCCESS
 }

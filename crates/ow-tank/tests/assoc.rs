@@ -3,7 +3,7 @@
 //! The synthetic tests build a structured-data file byte by byte, so they run
 //! with no install present and they fail if an offset, a filter or the shape of
 //! the result drifts rather than quietly agreeing with it. The install pass is
-//! skipped when there is no install, like `tests/mapchunk_kinds.rs`.
+//! skipped when there is no install, like `tests/mapchunk_kinds_real.rs`.
 //!
 //! Two properties are pinned here that were both wrong once, and both were
 //! wrong *quietly*:

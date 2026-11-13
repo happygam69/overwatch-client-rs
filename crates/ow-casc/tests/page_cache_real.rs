@@ -1,5 +1,7 @@
 //! The archive page cache on real stored records.
 //!
+//! proof-covers: 0x1424f48d0 0x1424fcd20
+//!
 //! `DynamicContainerRead` (`0x1424f48d0`) asks the key state for
 //! `(0x1e, size - 0x1e)` and passes the resolved absolute range to
 //! `DynamicContainerReadPage` (`0x1424fcd20`). That function's reader uses the

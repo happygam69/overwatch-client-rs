@@ -2,6 +2,8 @@
 //! key/IV derivation, checked against the plaintext `WinPrism` manifest of the
 //! same build, and the type-0x079 records enumerated.
 //!
+//! proof-covers: 0x142e48a20 0x142e48700
+//!
 //! The type-0x079 prefix is **not** `STUMapHeader` (that is class `0x02514B6A`
 //! / tool type `0x09F`); this test pins the 25 records the earlier notes
 //! mislabelled, and reports that their payloads are not local.

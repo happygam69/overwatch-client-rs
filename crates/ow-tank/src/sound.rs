@@ -1469,6 +1469,15 @@ pub struct WemFile {
     pub header: WemHeader,
 }
 
+/// A Wwise sound bank file: the container [`crate::wwise_bank`] parsed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BankFile {
+    pub asset: u64,
+    /// Size the manifest recorded for the asset, when known.
+    pub manifest_size: Option<u32>,
+    pub bank: crate::wwise_bank::Bank,
+}
+
 // ---------------------------------------------------------------------------
 // Metadata readers
 // ---------------------------------------------------------------------------
@@ -2220,6 +2229,9 @@ pub enum Record {
     WemWrapper(Box<WemWrapper>),
     /// A Wwise RIFF container: the header was read and no audio was decoded.
     Wem(Box<WemFile>),
+    /// A Wwise sound bank (`BKHD`): the container was read and the `HIRC`
+    /// object graph was not.
+    Bank(Box<BankFile>),
     /// The asset parsed, and this reader has no class for its root. Recorded
     /// rather than skipped: "there is a shape here nobody has read" is exactly
     /// what a survey exists to report.
@@ -2242,6 +2254,7 @@ impl Record {
             Record::VoiceLineSet(r) => r.asset,
             Record::WemWrapper(r) => r.asset,
             Record::Wem(r) => r.asset,
+            Record::Bank(r) => r.asset,
             Record::Unnamed { asset, .. } => *asset,
         }
     }
@@ -2259,6 +2272,7 @@ impl Record {
             Record::WemWrapper(r) => r.root_class,
             Record::Unnamed { root_class, .. } => *root_class,
             Record::Wem(_) => 0,
+            Record::Bank(_) => 0,
         }
     }
 
@@ -2389,6 +2403,23 @@ impl Record {
                         .unwrap_or_else(|| "none".into()),
                 )
             }
+            Record::Bank(r) => format!(
+                "BANK            v0x{:X} id=0x{:08X} language=0x{:08X} alignment={} sections=[{}] media={} bytes={}",
+                r.bank.header.version,
+                r.bank.header.bank_id,
+                r.bank.header.language_id,
+                r.bank.header.data_alignment(),
+                r.bank
+                    .sections
+                    .iter()
+                    .map(|s| format!("{}:{}", s.name(), s.size))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                r.bank.media.len(),
+                r.manifest_size
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+            ),
             Record::Unnamed {
                 root_class,
                 instances,
@@ -2420,6 +2451,8 @@ pub struct Survey {
     pub as_stu: usize,
     /// Assets that parsed as a Wwise RIFF container.
     pub as_wem: usize,
+    /// Assets that parsed as a Wwise sound bank.
+    pub as_bank: usize,
     /// Assets that parsed as a version 1 STU, which has no per-instance field bag,
     /// so a record would read as empty rather than wrong.
     pub version_1: usize,
@@ -2447,7 +2480,7 @@ pub struct Survey {
 impl Survey {
     /// Assets that opened and parsed, within what was scanned.
     pub fn parsed(&self) -> usize {
-        self.as_stu + self.as_wem
+        self.as_stu + self.as_wem + self.as_bank
     }
 
     /// How many sample records are typed rather than [`Record::Unnamed`].
@@ -2539,6 +2572,33 @@ pub fn survey_type_capped(data: &GameData, type_id: u16, limit: usize, cap: usiz
                 }
             }
             Err(e) => {
+                // A `BKHD` file is a Wwise sound bank: a Wwise container, just
+                // not the media one this function wants. Read it as a bank
+                // before calling it unparsed.
+                if bytes.starts_with(&crate::wwise_bank::MAGIC) {
+                    match crate::wwise_bank::parse(&bytes) {
+                        Ok(bank) => {
+                            survey.as_bank += 1;
+                            if survey.records.len() < limit {
+                                survey.records.push(Record::Bank(Box::new(BankFile {
+                                    asset,
+                                    manifest_size: Some(size),
+                                    bank,
+                                })));
+                            }
+                            continue;
+                        }
+                        Err(bank_error) => {
+                            survey.unparsed += 1;
+                            if survey.errors.len() < 8 {
+                                survey.errors.push(format!(
+                                    "0x{asset:016x}: BKHD but not a readable bank: {bank_error}"
+                                ));
+                            }
+                            continue;
+                        }
+                    }
+                }
                 survey.unparsed += 1;
                 if survey.errors.len() < 8 {
                     // A `BKHD` header is a Wwise soundbank: a Wwise file, but not

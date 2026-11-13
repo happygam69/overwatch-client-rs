@@ -1,6 +1,8 @@
 //! The practice range through the **shape-source assembler's** filter: how many
 //! of the range's holders it takes, and into which of its four arrays.
 //!
+//! proof-covers: 0x14209fc90
+//!
 //! The filter and the arm set are `ow_tank::model_shape_source`, read from
 //! `0x14209fc90` (`docs/formats/static-collision.md`, check 15). It walks the
 //! *same* holder list the per-instance body builder walks (the model's field

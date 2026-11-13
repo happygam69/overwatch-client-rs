@@ -164,9 +164,17 @@ origin at the floor plane, not half a radius above it.
 
 `ow_tank::character_collision::capsule_from_mover` is that construction and
 `ow_tank::entity::mover_capsule_of` reads the three fields per hero. Measured
-on this install (54 playable heroes): 37 at `0.5 / 1.5` (radius, height), 15 at
-`0.7` with heights `1.8` and `2.0`, hero 6 at `1.2`, hero 657 at `0.54 / 1.67`,
-and hero 458 lands exactly on the `0.1 * r` segment floor (`0.7 / 0.07`).
+on this install (54 playable heroes), **declared** radius and the capped height
+the body ends up with: 37 at `0.5 / 1.5`, 12 at `0.7 / 1.8`, 2 at `0.7 / 2.0`,
+one at `0.7 / 1.47` (hero 458), one at `0.54 / 1.67` (hero 657) and one at
+`0.5 / 1.2` (hero 6).
+
+**No hero on this roster reaches the `0.1 * r` segment floor.** Hero 458 is the
+closest: declared `0.7` with extent `1.47` gives `raised = 2.1 * 0.7 = 1.47`
+(the extent term, raw radius), so `d = 1.47 - (0.5 + 0.5) = 0.47` against a
+`0.05` floor. The floor branch is therefore exercised by synthetic cases only
+(`character_collision`'s unit tests), and the roster test asserts the
+invariant `d >= 0.1 * r` instead of a real-data anchor.
 
 On the geometry side, `ow_sim::walk::World::sweep_capsule` sweeps the capsule
 through the same verified mesh leaf, and `collide::mesh_sweep_with_points`
@@ -1616,7 +1624,26 @@ differential units now pin the read arithmetic against the client's bytes:
   character handle, rejects an inf/NaN exponent in xyz (w is ignored), gates
   on record `+0x15c == 0`, then calls the move. Cases cover changed and
   unchanged velocities, inf/nan in each lane, the record gate, null/count-0
-  records, count/entry/generation failures and the space bound.
+  records, count/entry/generation failures and the space bound. The velocity
+  guard is a **bit mask, not a compare against values**: `andps` with the
+  16-byte constant at `0x143083290` (`0x7f800000` four times) keeps each lane's
+  exponent field, `cmpeqps` against the *same* address compares it to the
+  all-ones pattern, and `movmskps` + `test al,7` takes lanes 0-2 - so +-inf and
+  every NaN payload are declined and w is never tested. That is the expression
+  the Rust transcribes per lane; the constant looks like a table of `inf`
+  values in a byte preview and is used as a mask (`docs/port-playbook.md` 2b).
+- `fn/ApplyCharacterControllerMove-steps` (`0x142cd5370`): the same function
+  called **three times in a row** on one character in the state region, a
+  different velocity each step, the whole region compared after every call.
+  200 cases, 100% branch coverage (9/9), 10/10 mutants - the strongest proof of
+  the apply path, because the third call integrates from what the first two
+  wrote. The port already agreed with the client: the 1-ULP difference the
+  first run reported came from the probe re-seeding its working copy from the
+  snapshot inside the entry, which made the candidate normalise the original
+  quaternion on every call while the client normalised its own output. The
+  declined-move cases (inf/NaN in a middle step) prove that a rejected call
+  writes nothing and the next move still starts from the last accepted
+  position.
 - `fn/SetCharacterControllerVelocity` (`0x142cbd1b0`): the slot wrapper's
   character path. 12 cases, 100% of the wrapper branch, 7/7 mutants. The slot
   points at the variant; tag 0 uses `[variant+8]`, tag 1 is the rigid path and
@@ -4291,6 +4318,7 @@ python dev/verify_harness/cli.py fn/VariantPosition
 python dev/verify_harness/cli.py fn/WorldPosition
 python dev/verify_harness/cli.py fn/MoveCharacterController
 python dev/verify_harness/cli.py fn/ApplyCharacterControllerMove
+python dev/verify_harness/cli.py fn/ApplyCharacterControllerMove-steps
 python dev/verify_harness/cli.py fn/SetCharacterControllerVelocity
 python dev/verify_harness/cli.py fn/ShapeSphere
 python dev/verify_harness/cli.py fn/ShapeCapsule

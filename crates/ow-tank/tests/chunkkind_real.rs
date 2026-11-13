@@ -1,6 +1,8 @@
 //! The kind table decides which chunk kind is collision, and the collision
 //! chunk parses as the client's sector container.
 //!
+//! proof-covers: 0x1404c19b0 0x141b32e70 0x142e492a0
+//!
 //! The first half needs no install: the 0x24 names, the slot ids and the
 //! fixup's arithmetic are all read from the image and pinned here. The second
 //! half opens the practice range's `0x0DD0001100000688` and pins the header,

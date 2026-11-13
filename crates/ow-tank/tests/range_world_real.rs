@@ -1,6 +1,8 @@
 //! The practice range as a collision world: the model meshes placed where the
 //! map chunk puts them, swept with the verified mesh narrowphase.
 //!
+//! proof-covers: 0x14201ae60 0x142caed30
+//!
 //! `ow_tank::range_world` assembles the world from the install's own data (the
 //! holder filter of `0x14201ae60` and the `STU_537E56E4` blocks), and
 //! `ow_sim::walk` is the collision world the movement step sweeps: the verified

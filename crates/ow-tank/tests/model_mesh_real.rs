@@ -1,6 +1,8 @@
 //! The model's prebuilt collision mesh (`STU_537E56E4`) as a practice-range
 //! model carries it, and the shape record the client builds from it.
 //!
+//! proof-covers: 0x141b53af0 0x142cae540
+//!
 //! The consumer of `STUModel`'s collision list is `FUN_14210bac0`
 //! (`docs/formats/static-collision.md`): it walks the list, unpacks each
 //! `STU_537E56E4` with `0x141b53af0`, fills a shape record with `MeshShapeFill`

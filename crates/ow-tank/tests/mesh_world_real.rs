@@ -1,5 +1,7 @@
 //! The range's model meshes in one world image, and a swept query through it.
 //!
+//! proof-covers: 0x142caed30 0x14201ae60
+//!
 //! Two things are pinned here:
 //!
 //! 1. one real block (`STU_537E56E4` of model `0x0d0000000000078c`) laid out by

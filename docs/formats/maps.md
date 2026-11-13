@@ -102,7 +102,7 @@ Walking each placeable by its declared size (the reference reader's
 | `0x0C` | sound | 17 | 2,641 | 2,641/2,641 |
 | `0x0D` | effect | 15 | 2,734 | 2,734/2,734 |
 
-Two boundaries:
+Three boundaries:
 
 - **No `0x08` bucket exists on this install.** The reference's
   `MAP_PLACEABLE_MODEL` (id `0x08`) matches no sampled chunk. The flat "Model"
@@ -111,10 +111,42 @@ Two boundaries:
   resolve to an asset, so the field is not a GUID — either the layout differs
   or the values are runtime ids. The size walk itself is exact (every
   placeable ends where the next begins).
+- **The sequence kind (`0x18`) is unmeasured on this install.** Its 1,316
+  assets are all in the registry, but every one of the twenty sampled is
+  **not downloaded**, so `Kind::Sequence` has never been handed a real sequence
+  chunk. The sweep says so rather than reporting a parse failure.
 
 Reader: `ow-tank::mapchunk` (`Kind::from_type_id`,
-`MapChunk::parse` takes the declared kind). The per-kind numbers are pinned by
-`crates/ow-tank/tests/mapchunk_kinds.rs`.
+`MapChunk::parse` takes the declared kind). The per-kind numbers are **asserted**
+by `crates/ow-tank/tests/mapchunk_kinds.rs`: for every kind whose GUID declares
+it, the walk must be clean, every body must fit the kind's struct, and every
+typed reference must resolve — with the two measured exceptions named below
+(reflection-point body sizes, entity references).
+
+### The reflection-point body is not always the reference size (2026-11-20)
+
+The reference's `teMapPlaceableReflectionPoint.Structure` is 168 bytes
+(`0xA8`), and 1,840 of the 1,862 reflection-point placeables measured here are
+at least that long. **The other 22 are not, and they sit in one chunk**:
+`0x0dd000043f7d3ca0` (62 placeables) carries bodies of 152, 168, 184 and 200
+bytes in the same file, with valid transforms in every case — the first body
+reads translation, scale `(1,1,1)` and a unit quaternion at the reference's
+offsets. So the tail the reference reads (seven floats and five ints past
+`+0x78`) is not a fixed part of the record.
+
+The client's own body dispatch is the only thing that can settle what the
+variable tail is; it is not read yet, so:
+
+- the body read is **bounded by each placeable's declared size**, so a short
+  body yields defaults instead of the next placeable's UUID
+  (`ow_tank::mapchunk`, `Kind::ReflectionPoint`);
+- the sweep does not assert a body size for this kind, and prints the fitted
+  count instead.
+
+The client's per-placeable dispatch is where the tail would be read from: the
+chunk assembler `0x14209fc90` (chain root; the fragment `0x1420a02f6` sits
+inside it — `docs/systems-coverage.md` row 12 tracks the chain). Its body is
+not read yet.
 
 ### The entity component vocabulary is data (2026-11-03)
 

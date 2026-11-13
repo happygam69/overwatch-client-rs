@@ -10,7 +10,7 @@
 //! Run the sweep with:
 //!
 //! ```text
-//! cargo test -p ow-tank --release --test mapchunk_kinds -- --nocapture
+//! cargo test -p ow-tank --release --test mapchunk_kinds_real -- --nocapture
 //! ```
 
 use std::collections::BTreeMap;
@@ -746,12 +746,14 @@ fn real_map_chunks_match_their_declared_kinds() {
     let mut by_kind: BTreeMap<Kind, KindTally> = BTreeMap::new();
     let mut by_declared: BTreeMap<u8, KindTally> = BTreeMap::new();
     let mut unreadable = 0usize;
+    let mut not_downloaded: BTreeMap<u8, usize> = BTreeMap::new();
 
     for (declared_id, g) in &sample {
         let bytes = match data.bytes_of(*g) {
             Ok(bytes) => bytes,
             Err(_) => {
                 unreadable += 1;
+                *not_downloaded.entry(*declared_id).or_default() += 1;
                 continue;
             }
         };
@@ -813,12 +815,14 @@ fn real_map_chunks_match_their_declared_kinds() {
             );
             continue;
         };
+        let missing = not_downloaded.get(id).copied().unwrap_or(0);
         match by_declared.get(id) {
             Some(t) => eprintln!(
-                "  0x{id:02X} {:<16} {} asset(s) in the type, {} read: {} clean, \
+                "  0x{id:02X} {:<16} {} asset(s) in the type, {} not on disk, {} read: {} clean, \
                  {} exact-end, {} placeables, {} fitted, refs {}/{}",
                 kind.label(),
                 gs.len(),
+                missing,
                 t.assets,
                 t.clean_walks,
                 t.exact_end_walks,
@@ -828,9 +832,10 @@ fn real_map_chunks_match_their_declared_kinds() {
                 t.refs_seen
             ),
             None => eprintln!(
-                "  0x{id:02X} {:<16} {} asset(s) in the type, none readable",
+                "  0x{id:02X} {:<16} {} asset(s) in the type, none read ({} not on disk)",
                 kind.label(),
-                gs.len()
+                gs.len(),
+                missing
             ),
         }
     }
@@ -853,6 +858,51 @@ fn real_map_chunks_match_their_declared_kinds() {
         model_group.refs_resolved > 0,
         "no model reference resolved on any sampled chunk"
     );
+
+    // Every kind the reader has a body for, on the chunks whose GUID declares
+    // it: the walk must be clean and every placeable must fit its own body.
+    //
+    // Two measured exceptions, both on this install and both recorded in
+    // `docs/formats/maps.md`:
+    //
+    // * reflection point -- one chunk (`0x0dd000043f7d3ca0`) carries 22
+    //   placeables whose bodies are 152/184/200 bytes where the reference
+    //   struct is 168, so "fits the reference size" is not the right test
+    //   there; the body read is bounded by the declared size instead.
+    // * entity -- its placeables name entity-definition assets and **none** of
+    //   the 39,156 references resolves through the loaded manifests, which is
+    //   why the reference check is skipped for it (the count is printed).
+    for (id, tally) in &by_declared {
+        let kind = Kind::from_type_id(*id).expect("only kinds with a body are tallied");
+        assert_eq!(
+            tally.clean_walks,
+            tally.assets,
+            "{}: the placeable walk was not clean on {} of {} declared-kind chunk(s)",
+            kind.label(),
+            tally.assets - tally.clean_walks,
+            tally.assets
+        );
+        if kind != Kind::ReflectionPoint {
+            assert_eq!(
+                tally.fitted,
+                tally.placeables,
+                "{}: {} of {} placeable bodies do not fit their kind",
+                kind.label(),
+                tally.placeables - tally.fitted,
+                tally.placeables
+            );
+        }
+        if !matches!(kind, Kind::Entity | Kind::ReflectionPoint | Kind::Area) {
+            assert_eq!(
+                tally.refs_resolved,
+                tally.refs_seen,
+                "{}: {} of {} typed references do not resolve",
+                kind.label(),
+                tally.refs_seen - tally.refs_resolved,
+                tally.refs_seen
+            );
+        }
+    }
 
     let non_model: Vec<&'static str> = KINDS
         .iter()

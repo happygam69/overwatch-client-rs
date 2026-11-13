@@ -2,6 +2,8 @@
 //! the semantics the parser was written against: the header's offset is
 //! relative to the MSTU payload, not the asset.
 //!
+//! proof-covers: 0x141b5df70 0x141b88df0
+//!
 //! Skipped when no install is present.
 
 use ow_tank::chunks::Chunks;

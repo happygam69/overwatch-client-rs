@@ -67,6 +67,7 @@ pub mod trg;
 pub mod unlocks;
 pub mod volley;
 pub mod weapons;
+pub mod wwise_bank;
 
 use ow_casc::Store;
 use ow_stu::Stu;

@@ -39,6 +39,119 @@ slot 0C ECDF   slot 19 ECFS   slot 26 ECSC   slot 33 CLBN
 slot 0D ECRE   slot 1A ECEC   slot 27 TCER   slot 34 CLTN
 ```
 
+## The builder's prologue, read in full (2026-11-20)
+
+`EffectComponentBuild` (`0x142e4a780`, **9,432 bytes in three `.pdata`
+pieces**) is the client's component constructor, and it is the largest function
+`ow-tank` cites. Every branch — 31 `if` chains and 6 `switch` cases, covering
+the 52 tags the kind table names — runs the same prologue first, then copies its
+component's payload. The prologue is what this section records.
+
+Arguments: `param_1` is the chunk context (`+0x08` the chunk's record, `+0x10`
+its payload, `+0x18`/`+0x20` two optional array sub-records), `param_3` the
+runtime record being built.
+
+### The header copy: record `+0x20..+0x75` into runtime `+0x60..+0xbb`
+
+All offsets below are **payload** offsets (`payload = record + 0x10`), which is
+the frame this crate uses.
+
+| runtime | payload | width | | runtime | payload | width |
+|---|---|---|---|---|---|---|
+| `+0x60` | `+0x10` | 8 | | `+0x98` | `+0x44` | 2 |
+| `+0x68` | `+0x18` | 8 | | `+0x9c` | `+0x46` | 2 |
+| `+0x70` | `+0x20` | 8 | | `+0x9e` | `+0x48` | 2 |
+| `+0x78` | `+0x40` | 4 | | `+0xa0` | `+0x4a` | 2 |
+| `+0x7c` | `+0x28` | 4 | | `+0xa2` | `+0x4c` | 2 |
+| `+0x80` | `+0x2c` | 4 | | `+0xa4` | `+0x4e` | 2 |
+| `+0x84` | `+0x30` | 4 | | `+0xa6` | `+0x50` | 2 |
+| `+0x88` | `+0x34` | 4 | | `+0xa8` | `+0x52` | 2 |
+| `+0x90` | `+0x38` | 2 | | `+0xaa` | `+0x54` | 2 |
+| `+0x92` | `+0x3a` | 2 | | `+0xac` | `+0x56` | 2 |
+| `+0x94` | `+0x3c` | 2 | | `+0xae` | `+0x58` | 2 |
+| `+0x96` | `+0x3e` | 2 | | `+0xb0` | `+0x5c` | 4 |
+
+then seven bytes and the run count:
+
+| runtime | payload | what |
+|---|---|---|
+| `+0xb4` | `+0x60` | byte |
+| `+0xb5` | `+0x61` | byte |
+| `+0xb6` | `+0x66` | **the run count** (see below), copied *and* used |
+| `+0xb7` | `+0x62` | byte |
+| `+0xb8` | — | the **kind slot**, written by the tag branch |
+| `+0xb9` | `+0x63` | byte |
+| `+0xba` | `+0x64` | byte |
+| `+0xbb` | `+0x65` | byte |
+
+Five payload bytes in that window are **not** copied: `+0x36`, `+0x40..+0x43`,
+`+0x5a`, `+0x5b` and `+0x5d..+0x5f`.
+
+This table is why `ow-tank::effect::header::DWORDS` now reads
+`[0x40, 0x28, 0x2c, 0x30, 0x34]`; the previous `[0x40, 0x18, 0x1c, 0x20, 0x24]`
+mixed the record and payload frames and sat 16 bytes high. `QWORDS`
+(`[0x10, 0x18, 0x20]`) was already right; `ARRAYS` was wrong the same way and is
+now `[0x00, 0x08]`.
+
+### Two f32 runs converted to Q12
+
+The record carries **two runs of `count` numbers**, at runtime `+0xc0`:
+
+```text
+count  = payload[0x66]                        ; the byte copied to runtime +0xb6
+run A  = quantize_q12(payload + 0x00, count)  ; into runtime +0xc0
+run B  = quantize_q12(payload + 0x08, count)  ; into runtime +0xc0 + 4 * count
+runtime +0x50 = runtime +0xc0                 ; pointer to run A
+runtime +0x58 = runtime +0xc0 + 4 * count     ; pointer to run B
+```
+
+The conversion is the client's `ScaleFloatRunToQ12` (`0x141c6c830`), already
+read and verified as `fn/FloatToQ12` (value × 4096, truncated, saturating,
+through integer bit manipulation) and shipped as `ow_sim::fixed::quantize_q12`.
+`ow-tank` does not run it: nothing in the crate consumes the runtime record yet,
+so the port waits for that consumer instead of shipping an unconsumed copy of
+the loop. Both runs' sources are the payload's first two qwords, which is what
+`header::ARRAYS` names.
+
+**And on this install the runs are empty.** The count byte at `payload + 0x66`
+is `0` on **all 7,342 sampled effects** (every asset of the six types, capped
+per type), so `+0xc0` is never written with data, both run pointers point at
+each other, and the Q12 path is read from the builder but never exercised by
+this game's assets. `tests/effect_real.rs` prints the count histogram and
+asserts the run windows stay inside the payload either way, so a patch that
+starts shipping run data is visible rather than silent.
+
+### The aligned component payload
+
+The prologue occupies `0xc0 + 8 * count` bytes of the runtime record; it then
+rounds that up to 16 and stores the result as a **32-bit offset at runtime
+`+0x8c`**. Every tag branch writes its fields at `runtime + that offset + N`, so
+the component's copied payload is a separate, 16-byte-aligned region of the
+record and the header copy above is fixed-size.
+
+### The two optional array sub-records
+
+`param_1 + 0x18` and `param_1 + 0x20` are optional; each is a chunk record whose
+payload starts at `+0x10`.
+
+- `+0x18` → `FUN_142e4fbe0(context, sub + 0x10, runtime, &size)`: the array
+  sub-chunk handler the crate already names. It advances the record's size (it
+  is handed the aligned offset and writes the new one back) and a `0` return
+  aborts the build. The same handler is called inside several tag branches
+  (`ECLT`, `ECPR`, `ECRM`), which is how a component's variable-length array
+  gets its place.
+- `+0x20` → a fixed two-run copy: `count = sub[0x20]` into runtime `+0x48`, the
+  first run (`4 * count` bytes) from `sub + 0x10` with its pointer at runtime
+  `+0x38`, then the second from `sub + 0x18` with its pointer at `+0x40`.
+
+### The kind table, checked against the image
+
+`python` reading `0x143610490` gives 0x35 records of 8 bytes: `{u32 tag, u8
+slot, 3 bytes zero}`, and record `i` carries slot `i` (record 0 is all zero).
+**The tag is stored as the little-endian dword**, so `.rdata` reads `BLEE` for
+the file's `EELB`. All 52 non-empty tags match `ow_tank::effect::KIND_TABLE`
+exactly, in order — the transcription is verified, not assumed.
+
 ## Payload layouts the client reads
 
 `FUN_142e4a780` builds one runtime record per chunk. Each tag's branch copies a

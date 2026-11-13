@@ -1,5 +1,7 @@
 //! Type-`004` texture assets from the operator's installation.
 //!
+//! proof-covers: 0x141dacf00
+//!
 //! The unit tests in `ow_tank::texture` pin six real headers byte for byte.
 //! This test is the other direction: it reads the live install through the
 //! client's bundle-aware open (`GameData::open_asset`, not the store-only

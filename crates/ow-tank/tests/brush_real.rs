@@ -1,5 +1,7 @@
 //! Where the brush would have to come from, measured against the install.
 //!
+//! proof-covers: 0x141fd3b20
+//!
 //! The brush itself is not stored as a chunk of any asset this install's
 //! content manifests list, and the one route the image does name — a source
 //! record whose asset reference must resolve to GUID type `0x00A` — has no

@@ -56,7 +56,18 @@ looks. Cosmetic coverage is not part of the gameplay gate.
 ## Open
 
 - The unlock reader has no real-data test.
-- The catalog (`0x063`) parses zero of twenty readable assets.
+- The catalog's arrays. All twenty readable type-`0x063` assets parse as STU
+  and are **version 1** (measured: `ow-tank-content types`, 20 version-1, 176
+  instances); a version 1 asset writes **no per-instance field bags**, so the
+  raw reader has no offset to place `m_assets` at and every catalog reports
+  `assets=0 longs=0`. The typed layer, which takes the class layout from the
+  reference's declarations, reads 2,918 GUIDs out of `0x0460000000000001`.
+  Closing this means the client's own v1 class schema, not a reference
+  declaration: the raw reader cannot derive a field offset from the file.
+- Five of the twenty catalogs have a root class no reader here claims
+  (`0x4B69C3BC`, `0x6A887A13`, `0x71172629`, `0x7C543D41`, `0xAEBBF451`; the
+  last one holds 157 instances). The fifteen others are `STUCatalog`
+  `0x85618B21`).
 
 ## Verification
 

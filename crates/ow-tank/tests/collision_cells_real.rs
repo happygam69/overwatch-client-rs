@@ -1,5 +1,7 @@
 //! The practice range's collision chunk parses as the client's cell container.
 //!
+//! proof-covers: 0x141ff51a0 0x142e49360
+//!
 //! The chunk is the base map's kind-`0x12` stored reference. The reader is
 //! `ow_tank::collision::parse`; every boundary is checked against the payload,
 //! and the first cell's layout is pinned because the fixture derived it from

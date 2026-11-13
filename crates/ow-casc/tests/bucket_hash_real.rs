@@ -1,5 +1,7 @@
 //! The key→bucket fold against the installed CASC store.
 //!
+//! proof-covers: 0x142501b40
+//!
 //! `DynamicKeyStateLookup` (`0x142501b40`) computes
 //! `((xor9 >> 4) ^ xor9) + salt) & 0xf` and selects one of sixteen bucket
 //! files. This test reads every entry of every `.idx` file in the operator's

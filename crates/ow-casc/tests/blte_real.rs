@@ -1,5 +1,7 @@
 //! A read-only census of the BLTE containers in the install.
 //!
+//! proof-covers: 0x1424a90e0 0x1424d7850
+//!
 //! The install holds 1.1 million records in 86 GB of archives, so the census
 //! takes a deterministic sample: every 32nd unique salt-0 entry. Each sampled
 //! entry is located through the same index the client reads, then only the

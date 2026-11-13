@@ -3036,3 +3036,28 @@ Ordered next reads (the per-model route):
 | a node's worlds start with no shapes | check 18: the init's `OwnerCreateBody` descriptor is constant (no shape source); shapes are added later by the component builders (checks 9/10) |
 | the 0x300 state record is created by flag `0x20` | check 18: `Alloc(0x300)` + `0x142026e20` (no vtable), stored at `node+0x6a8`; the record's `+0x00` -> `+0x170`, `+0x28`..`+0x48` copied, `+0x50` decoded, `+0x90` copied by `0x141c60250` |
 | the builder's scene component is not the state record | check 18: state record has no vtable and no `+0x250`/`+0xd0`; the builder's argument has vtables `0x1433632e0`/`0x143363320`, pose `+0xd0`/`+0xf0`, node `+0x250`, and is resolved from the `+0x8` handle by `0x142003720` |
+
+## The segment-AABB transform (`0x142697ac0`)
+
+- **Evidence:** assembly, read instruction for instruction (2026-11-20).
+- **Shape:** `(out[8], matrix[16], segment[8])`; `out[0..4]` is the low corner and
+  `out[4..8]` the high one, lane by lane. The matrix is read as four 4-wide rows:
+  `+0x00`, `+0x10`, `+0x20` and the translation at `+0x30`.
+- **The expression:** `c = (hi + lo) * 0.5`, `e = (hi - lo) * 0.5` (both on all
+  four lanes), then
+  `ext = (e.y*|m1| + e.x*|m0|) + e.z*|m2|` and
+  `cen = ((c.x*m0 + t) + c.y*m1) + c.z*m2`, then `out_lo = cen - ext`,
+  `out_hi = cen + ext`. The magnitude is `andps` with the constant at
+  `0x142f7aaf0` (`0x7fffffff` x4), the halving `mulps` with `0x142f844e0`
+  (`0.5` x4). The add order is the client's and is visible in the body: the
+  `0x55` broadcast is multiplied first, the `0x00` broadcast second, and the
+  translation is added before the `y` and `z` terms.
+- **Lane 3 participates.** The client never masks a lane off, so a caller that
+  leaves `lo[3]`/`hi[3]` unrelated still gets a lane-3 result computed from it.
+- **Return:** the body returns its first argument (`rax = rcx`, never rewritten).
+- **Verified:** `fn/SegmentAabbTransform` (`ow_sim::aabb::segment_aabb_transform`),
+  200 cases, 10/10 mutants. The transcription is scalar per lane - bit-identical
+  because the lanes are independent - and the unit's `acknowledgedGaps` records
+  the two open points: a two-NaN operand pair is not comparable across the
+  emulator and the host, and the callers' meaning for the endpoint lanes is not
+  read.

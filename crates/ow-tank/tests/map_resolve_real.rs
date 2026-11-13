@@ -1,6 +1,8 @@
 //! The practice-range map, resolved from the header through the client's own
 //! variation pairing and chunk loader.
 //!
+//! proof-covers: 0x141ff5c80 0x141b32e20
+//!
 //! No GUID list is an input. The header names its variations; the variation
 //! names its map asset; the map asset stores some chunk GUIDs and the rest are
 //! synthesised by the client's table. The constants below are *expected*

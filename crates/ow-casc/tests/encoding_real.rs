@@ -1,6 +1,8 @@
 //! The encoding file's client-defined section layout, walked over the
 //! install's real blob.
 //!
+//! proof-covers: 0x1424d1c60 0x142498880
+//!
 //! `EncodingSectionsRead` (`0x1424d1c60`) places five sections in a fixed
 //! order; `ow-casc` computes them with the client's 32-bit arithmetic and
 //! slices the decoded stream. This test opens the build's encoding manifest

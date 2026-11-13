@@ -87,6 +87,11 @@ struct State {
     /// as the oracle re-seeds its state region before every call.
     snapshot: Vec<u8>,
     buf: Vec<u8>,
+    /// Keep `buf` between calls. A steps unit does, so its next call reads what
+    /// the last one wrote; a single-call unit re-seeds from the snapshot before
+    /// every call (`persist off`), because the oracle does and the runner
+    /// caches answers by args.
+    persist: bool,
 }
 
 impl State {
@@ -95,6 +100,7 @@ impl State {
             base: 0,
             snapshot: Vec::new(),
             buf: Vec::new(),
+            persist: false,
         }
     }
 
@@ -802,6 +808,60 @@ fn shape_pool_alloc_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), Stri
     Ok((format!("{index:x}"), vec![pool, entries]))
 }
 
+/// `ShapePoolAlloc` (`0x142cb00c0`) reached through a state region: the
+/// steps-unit variant.
+///
+/// The pool record and its entries array live in the unit's state snapshot at
+/// guest addresses, so the second call of a case sees what the first one wrote.
+/// The client stores the next free index in the popped entry's own link at
+/// `entry+0xA0`, so the free list only advances if that write lands, and a
+/// single-call unit cannot see it: it hands the probe a fresh pool every time.
+///
+/// Arguments: the pool record's guest address, the entries array's guest
+/// address, and the entries length. Both slices are taken from the state
+/// buffer and written back, because the state channel is the comparison.
+fn shape_pool_alloc_guest_entry(
+    args: Vec<Arg>,
+    state: &mut State,
+) -> Result<(String, Vec<Vec<u8>>), String> {
+    if args.len() != 3 {
+        return Err(format!("expected 3 args, got {}", args.len()));
+    }
+    let mut it = args.into_iter();
+    let pool_guest = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg0 must be the pool record's guest address".into()),
+    };
+    let entries_guest = match it.next() {
+        Some(Arg::U64(v)) => v,
+        _ => return Err("arg1 must be the entries array's guest address".into()),
+    };
+    let entries_len = match it.next() {
+        Some(Arg::U64(v)) => v as usize,
+        _ => return Err("arg2 must be the entries length".into()),
+    };
+    if !state.loaded() {
+        return Err("no-state".into());
+    }
+    // `pool::RECORD_LEN` in ow_tank::domino_world.
+    const POOL_RECORD_LEN: usize = 0x18;
+    let poff = state.off(pool_guest).ok_or("pool-outside-state")?;
+    let eoff = state.off(entries_guest).ok_or("entries-outside-state")?;
+    if poff + POOL_RECORD_LEN > state.buf.len() {
+        return Err("pool-too-long".into());
+    }
+    if eoff + entries_len > state.buf.len() {
+        return Err("entries-too-long".into());
+    }
+    let mut pool = state.buf[poff..poff + POOL_RECORD_LEN].to_vec();
+    let mut entries = state.buf[eoff..eoff + entries_len].to_vec();
+    let index = ow_tank::domino_world::shape_pool_alloc(&mut pool, &mut entries)
+        .map_err(|e| format!("alloc-{e}"))?;
+    state.buf[poff..poff + POOL_RECORD_LEN].copy_from_slice(&pool);
+    state.buf[eoff..eoff + entries_len].copy_from_slice(&entries);
+    Ok((format!("{index:x}"), Vec::new()))
+}
+
 /// `MrnmRuntimeSize` (`0x141b89390`): `int (payload)`.
 fn mrnm_runtime_size_entry(args: Vec<Arg>) -> Result<(String, Vec<Vec<u8>>), String> {
     if args.len() != 1 {
@@ -897,6 +957,7 @@ fn handle_call(
         "map_chunk_header_fixup" => map_chunk_header_fixup_entry(args),
         // crates/ow-tank/src/domino_world.rs
         "shape_pool_alloc" => shape_pool_alloc_entry(args),
+        "shape_pool_alloc_guest" => shape_pool_alloc_guest_entry(args, state),
         // crates/ow-tank/src/mesh_shape.rs
         "mesh_shape_fill" => mesh_shape_fill_entry(args),
         // crates/ow-tank/src/mrnm.rs
@@ -962,6 +1023,23 @@ fn main() {
             state.base = base;
             state.buf = bytes.clone();
             state.snapshot = bytes;
+            let _ = writeln!(out, "ok");
+            let _ = out.flush();
+            continue;
+        }
+        if toks[0] == "persist" {
+            let persist_on = toks.get(1).is_some_and(|s| &**s == "on" || &**s == "1");
+            state.persist = persist_on;
+            let _ = writeln!(out, "ok");
+            let _ = out.flush();
+            continue;
+        }
+        if toks[0] == "reset" {
+            // A steps unit keeps the state buffer between its calls and starts
+            // every corpus case from the snapshot again.
+            if state.loaded() {
+                state.reset();
+            }
             let _ = writeln!(out, "ok");
             let _ = out.flush();
             continue;
@@ -1070,6 +1148,13 @@ fn main() {
             let _ = writeln!(out, "err {}", e);
             let _ = out.flush();
             continue;
+        }
+        // A single-call unit answers from the snapshot every time: the runner
+        // caches answers for identical args, so a call that inherited another
+        // call's writes could not be reproduced. A steps unit (`persist on`)
+        // keeps the region, which is what its next call reads.
+        if state.loaded() && !state.persist {
+            state.reset();
         }
         match handle_call(entry, args, &mut state) {
             Ok((ret, outs)) => {

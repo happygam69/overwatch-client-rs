@@ -154,3 +154,33 @@ component class.
 
 The current viewer's camera framing options (`--fp-cam-drop`, `--fp-cam-back`)
 are deviations in `docs/deviations.md`, not client behaviour.
+
+## The chain scale (`0x141ffe590`) — read and verified
+
+A camera node carries a scale at `+0x270`, a link to its parent at `+0x298`, and
+flags at `+0x230`. The body is four instructions of logic:
+
+```text
+float chain_scale(node):
+    if node[0x298] == 0:                   return node[0x270]
+    if node[0x230] & 0x400000000 != 0:     return node[0x270]
+    return chain_scale(node[0x298]) * node[0x270]
+```
+
+The **order** is the whole function: the link is tested before the flags, so a
+node with no link never reads its flags; and the stop bit ends the walk *at*
+that node while still including its own scale, so the ancestors above the flag
+are never visited. The multiply is `child * own`, recursively.
+
+It takes **one** argument (`rcx` = the node), which is why the unit's second
+argument is a guest base in `rdx`: the body never reads `rdx`, and the probe uses
+it to translate the client's absolute parent pointers into offsets. That is the
+same translation the emulator performs, one step earlier.
+
+Unit: `fn/CameraChainScale` (`ow_sim::chain::chain_scale`) — 184 differential
+cases, 100% branch coverage, mutants killed. Six chains in the snapshot: one
+node, a product of three, the stop bit on the middle and on the root, a zero
+scale, and a chain of eight.
+
+Open: what the scale multiplies and what the `0x400000000` bit means to the
+camera are not read.

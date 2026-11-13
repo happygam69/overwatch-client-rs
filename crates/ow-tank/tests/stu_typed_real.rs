@@ -4,6 +4,8 @@
 //! graph's volley motions, and the version-1 asset buckets — each cross-checked
 //! against the hand-written readers where one exists.
 //!
+//! proof-covers: 0x1421d26d0
+//!
 //! Skipped when no install is present, or when no STU class checkout is
 //! configured (the typed layer is registry-driven).
 
