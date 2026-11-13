@@ -138,6 +138,7 @@ One fixture per unit that cannot be driven from a flat corpus: deterministic
 |---|---|
 | `dev/verify_harness/anim_time_wrap_fixture.py` | Structured input factory for fn/AnimTimeWrap. |
 | `dev/verify_harness/apply_character_move_fixture.py` | Inputs for the `fn/ApplyCharacterControllerMove` unit (no-shape path). |
+| `dev/verify_harness/apply_character_move_steps_fixture.py` | `ApplyCharacterControllerMove` (`0x142cd5370`) as a **steps** trace: the |
 | `dev/verify_harness/archive_set_contains_fixture.py` | Deterministic (reader, archive) cases for `fn/ArchiveSetContains`. |
 | `dev/verify_harness/blte_block_read_stored_fixture.py` | Deterministic cases for `fn/BlteBlockReadStored`. |
 | `dev/verify_harness/box_triangle_fixture.py` | Inputs for the `box_triangle_overlap` unit (`0x142cd58a0`). |
@@ -145,6 +146,7 @@ One fixture per unit that cannot be driven from a flat corpus: deterministic
 | `dev/verify_harness/bundle_directory_fixture.py` | Deterministic synthetic bundle directories for the `fn/BundleDirectoryLookup` |
 | `dev/verify_harness/bundle_lookup_fixture.py` | Deterministic synthetic bundle payloads for the `fn/BundleLookup` unit. |
 | `dev/verify_harness/bvh_fixture.py` | Inputs for the BVH builder unit (`0x142ccb1b0`). |
+| `dev/verify_harness/camera_chain_fixture.py` | Inputs for `fn/CameraChainScale` (`0x141ffe590`), and its snapshot. |
 | `dev/verify_harness/cdn_index_file_parse_fixture.py` | Deterministic (key, file, len, out) cases for `fn/CdnIndexFileParse`. |
 | `dev/verify_harness/cdn_index_footer_fixture.py` | Deterministic inputs for the `fn/CdnIndexFooterParse` unit. |
 | `dev/verify_harness/cdn_page_checksums_fixture.py` | Deterministic (file, len, descriptor) cases for `fn/CdnIndexPageChecksums`. |
@@ -186,6 +188,8 @@ One fixture per unit that cannot be driven from a flat corpus: deterministic
 | `dev/verify_harness/encoding_unnamed_498a70_fixture.py` | Deterministic inputs for the `fn/EncodingEspecStringIndex` unit. |
 | `dev/verify_harness/gjk_closest_fixture.py` | Inputs for the `closest_point` unit (`0x142cc9460`). |
 | `dev/verify_harness/hex_pair_decode_fixture.py` | Deterministic (out, count, text, len) cases for `fn/HexPairDecode`. |
+| `dev/verify_harness/keytable_find_fixture.py` | Inputs for the `fn/KeyTableFind` unit (`0x141b331f0`). |
+| `dev/verify_harness/keytable_mask_fixture.py` | Inputs for `fn/KeyTableFindMask` (`0x141b330c0`). |
 | `dev/verify_harness/map_chunk_header_fixup_fixture.py` | `MapChunkHeaderFixup` (`0x142e49360`) inputs: a pathing chunk's header |
 | `dev/verify_harness/md5_final_fixture.py` | Deterministic context inputs for the `fn/Md5Final` unit. |
 | `dev/verify_harness/md5_init_fixture.py` | Deterministic context inputs for the `fn/Md5Init` unit. |
@@ -233,12 +237,15 @@ One fixture per unit that cannot be driven from a flat corpus: deterministic
 | `dev/verify_harness/rigid_position_fixture.py` | Inputs for the `fn/RigidPosition` unit. |
 | `dev/verify_harness/salsa20_fixture.py` | Deterministic Salsa20 inputs for the `fn/Salsa20Xor` unit. |
 | `dev/verify_harness/salsa20_state_fixture.py` | Deterministic key/nonce/counter inputs for the `fn/Salsa20StateInit` unit. |
+| `dev/verify_harness/scope_pop_steps_fixture.py` | Inputs for the `fn/ScopePop-steps` unit (`0x142cee300`), and its snapshot. |
+| `dev/verify_harness/segment_aabb_fixture.py` | Inputs for the `fn/SegmentAabbTransform` unit (`0x142697ac0`). |
 | `dev/verify_harness/set_velocity_fixture.py` | Inputs for the `fn/SetCharacterControllerVelocity` unit (character path). |
 | `dev/verify_harness/shape_box_fixture.py` | Inputs for the `shape_box` shape-bounds unit. |
 | `dev/verify_harness/shape_capsule_fixture.py` | Inputs for the `shape_capsule` shape-bounds unit. |
 | `dev/verify_harness/shape_dispatch_fixture.py` | Inputs for the `fn/ShapeDispatch` unit. |
 | `dev/verify_harness/shape_points_fixture.py` | Inputs for the `shape_points` shape-bounds unit. |
 | `dev/verify_harness/shape_pool_alloc_fixture.py` | `ShapePoolAlloc` (`0x142cb00c0`) inputs: a shape pool's record and its |
+| `dev/verify_harness/shape_pool_alloc_steps_fixture.py` | `ShapePoolAlloc` (`0x142cb00c0`) as a **steps** trace: the free list walked |
 | `dev/verify_harness/shape_sphere_fixture.py` | Inputs for the `shape_sphere` shape-bounds unit. |
 | `dev/verify_harness/step_stage_fixture.py` | Inputs for the `controller_step_stage` unit (`0x142cf5020`). |
 | `dev/verify_harness/texture_count_bits_fixture.py` | Structured inputs for fn/TextureCountBitsShifted. |
@@ -268,6 +275,16 @@ and the housekeeping rules at the bottom of this page keep it honest.
   from the image. It also reads a body the unwind table does not cover (the
   client has code no `.pdata` entry describes — `MrnmFixup` `0x141b893e0` is
   one) by running the window to the next known function.
+  `packet <addr>` prints everything a reading session needs about one function
+  in a single command: the extent and its `.pdata` chain pieces with their own
+  sizes, the whole-image callers and callees with their names, the instruction
+  shape, the immediates ranked (branch targets excluded, so the real constants
+  show), the bounds/tags in `2..0x200`, **switch tables whose entries all land
+  inside the body** (the data island that makes a linear listing desync and
+  the decompiler time out), every rip-relative data reference with the
+  printable string it points at, and whether the client's C is cached. It
+  found the 113-entry table and the format-string set behind the reflection
+  value reader, and PCRE's compile-option table, each in one command.
   `find <query>` searches by name, by 4CC tag (`MRNM`), by string, by immediate
   or by asset type; a tag is compared by the client as a **big-endian** u32,
   so the tool searches for the immediate and confirms each candidate by
@@ -387,6 +404,7 @@ and the housekeeping rules at the bottom of this page keep it honest.
 | `dev/clip_lab.py` | Analysis workbench for the animation clip chunk (asset type 0x006). |
 | `dev/clip_layout.py` | Map a clip's reference graph and solve for the element size of each block. |
 | `dev/clip_structure.py` | Dump the entire file structure to find pose data. |
+| `dev/cluster.py` | Pick and screen a cluster for §9: leaves first, then the head. |
 | `dev/codec_scan.py` | Enumerate the client's out-of-line 64-bit obfuscation primitives. |
 | `dev/corpus.py` | Build and query a standing corpus for the current image. |
 | `dev/crate_coverage.py` | Which client functions does a crate implement, and in what state. |
@@ -445,8 +463,11 @@ and the housekeeping rules at the bottom of this page keep it honest.
 | `dev/probe_evaluator.py` | Trace one call of an obfuscated function, to map its executed blocks. |
 | `dev/probe_node_types.py` | Recover the node-type registry table from the image. |
 | `dev/probe_policy_blocks.py` | Recover a function's block graph from the image bytes, and tell a computed |
+| `dev/queue.py` | The work queue and the progress number, by tier (`docs/tiers.md`). |
 | `dev/rd.py` | Disassemble or hex-dump a virtual-address range of the local image. |
 | `dev/rdc.py` | Disassemble a VA range, resolving RIP-relative operands to their float quads. |
+| `dev/reach.py` | Which client functions a unit's differential actually executes. |
+| `dev/read.py` | One command that prepares a reading session: the evidence pack for a function. |
 | `dev/remove_fns.py` | Remove a named set of functions from Rust files. |
 | `dev/rip_refs.py` | Find RIP-relative references (lea/mov/cmp, any opcode) to a set of addresses. |
 | `dev/slot_call_backscan.py` | Count every register-indirect dispatch that consumes a vtable slot value. |
@@ -457,6 +478,8 @@ and the housekeeping rules at the bottom of this page keep it honest.
 | `dev/static_rva_tables.py` | The image-base-relative 4-byte RVA dispatch tables, and what they select. |
 | `dev/static_slots.py` | What a set of client functions read and call, by displacement. |
 | `dev/tex_oracle.py` | Cross-check our texture decoders against an independent implementation. |
+| `dev/throughput.py` | How much verified behaviour one unit buys, and what it costs per function. |
+| `dev/verify_changed.py` | The fast loop: prove only what a change can affect (~30 s, not an hour). |
 | `dev/xref_rva.py` | Scan a session image for code references to given rvas. |
 <!-- dev-tools:end -->
 

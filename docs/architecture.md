@@ -70,7 +70,9 @@ readable header and its variation modes.
    `docs/ghidra/`. Record the address and the conclusion in
    `docs/formats/<system>.md`; never paste disassembly.
 3. **Name it.** When the role is settled, add the row to
-   `docs/function-names.csv` and run `python dev/gh_apply_names.py`.
+   `docs/function-names.csv`. Names reach the Ghidra project in batches:
+   `python dev/gh_apply_names.py --pending` applies only the rows that differ,
+   once `--min 20` have queued up; `--addr 0x…` applies one row on the spot.
 4. **Implement it** operation for operation in the verified layer, which is
    `ow-sim`: each leaf gets its harness unit before anything is composed on
    top of it.

@@ -1,9 +1,17 @@
 """Name the client's functions in the Ghidra project, and carry the written findings with them.
 
-    python dev/gh_apply_names.py                     # apply every name, comment and tag
+    python dev/gh_apply_names.py --pending           # the normal run: only names that differ
     python dev/gh_apply_names.py --addr 0x140cb74a0  # one row: rename, document, save
     python dev/gh_apply_names.py --check             # report only; writes nothing
-    python dev/gh_apply_names.py --check --addr 0x…  # check one row
+    python dev/gh_apply_names.py --all               # force every row (rarely wanted)
+
+Names are applied in **batches**: `--pending` asks the project for the current
+name of every row and writes only the ones that differ, and it waits until
+`--min` (default 20) of them have accumulated before touching the project at
+all - a rename is one HTTP call per step, so doing it per row wastes minutes for
+no benefit. The evidence lives in `docs/function-names.csv` either way, so a
+pending name costs nothing while it waits. `--addr` is the deliberate exception
+(a single row you just read) and `--min 1` forces a small batch.
 
 The table is `docs/function-names.csv`: program, address, name, the role text
 the docs already state about the function, and (optionally) a system tag. Two
@@ -58,16 +66,33 @@ def parse_address(text: str) -> int | None:
         return None
 
 
-def cli_args(argv: list[str]) -> tuple[bool, int | None]:
-    """`--check` and `--addr <address>` (also `--addr=…`)."""
+def cli_args(argv: list[str]) -> tuple[bool, int | None, bool, int]:
+    """`--check`, `--addr <address>`, `--pending` (the default) and `--min N`."""
     check = False
     only: int | None = None
     requested = False
+    everything = False
+    minimum = 20
     i = 0
     while i < len(argv):
         arg = argv[i]
         if arg == "--check":
             check = True
+            i += 1
+        elif arg == "--all":
+            everything = True
+            i += 1
+        elif arg == "--min":
+            if i + 1 >= len(argv) or not argv[i + 1].isdigit():
+                raise SystemExit("--min needs a number")
+            minimum = int(argv[i + 1])
+            i += 2
+        elif arg.startswith("--min="):
+            if not arg.split("=", 1)[1].isdigit():
+                raise SystemExit("--min needs a number")
+            minimum = int(arg.split("=", 1)[1])
+            i += 1
+        elif arg == "--pending":
             i += 1
         elif arg == "--addr":
             if i + 1 >= len(argv):
@@ -83,7 +108,7 @@ def cli_args(argv: list[str]) -> tuple[bool, int | None]:
             raise SystemExit(f"unknown argument {arg!r}")
     if requested and only is None:
         raise SystemExit("--addr needs a numeric address")
-    return check, only
+    return check, only, everything, minimum
 
 
 def function_name(program: str, address: str) -> str | None:
@@ -157,8 +182,13 @@ local label) - naming that would either invent a function or split its parent.
     return out
 
 
+def _current(program: str, address: str) -> str | None:
+    """The project's name for one row, or None when there is no function."""
+    return function_name(program, address)
+
+
 def main() -> int:
-    check, only = cli_args(sys.argv[1:])
+    check, only, everything, minimum = cli_args(sys.argv[1:])
     named = 0
     differing = 0
     missing = 0
@@ -170,6 +200,27 @@ def main() -> int:
         if not rows_:
             print(f"no row for {only:#x} in docs/function-names.csv")
             return 1
+    if not check and not everything and only is None:
+        # Batched by design: only the rows the project does not already agree
+        # with, and only once enough of them exist to be worth the round trips.
+        pending = [
+            row
+            for row in rows_
+            if any(
+                _current(p.split("/")[-1], row["address"]) != row["name"]
+                for p in row["program"].split(";")
+            )
+        ]
+        if len(pending) < minimum:
+            print(
+                f"{len(pending)} name(s) pending (< --min {minimum}); nothing applied."
+                "\n"
+                "The rows are already recorded in docs/function-names.csv; run "
+                "--min 1 or --addr <address> to apply them now."
+            )
+            return 0
+        rows_ = pending
+        print(f"{len(pending)} name(s) pending; applying those only")
     for row in rows_:
         programs = [p.split("/")[-1] for p in row["program"].split(";")]
         address = row["address"]

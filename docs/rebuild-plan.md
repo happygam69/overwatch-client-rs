@@ -38,7 +38,7 @@ twelve-byte group.
 synchronous allocator buffer plus one `ReadFile`, the other modes map a
 read-only view, and both share the parse body. `ow-casc` reads the same bytes
 and matches the validation order, including the `block_size / 18` floor.
-Still open: `DynamicContainerRead`'s page cache (`0x1424f48d0`). The encoding
+`DynamicContainerRead`'s page cache (`0x1424f48d0`) is read and proved on the install by `crates/ow-casc/tests/page_cache_real.rs` (16 slots, head/page-run/tail plan, LRU by stamp); `docs/formats/casc.md` has the operation-for-operation record. The encoding
 page lookup is read and verified (`EncodingPageIndexSearch` `0x142498880`,
 `EncodingFindCKey` `0x142498540`, `EncodingFindEKey` `0x142498610`; no read-path
 page-hash check). `EncodingSectionsRead` (`0x1424d1c60`) now mirrors the

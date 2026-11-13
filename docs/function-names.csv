@@ -1,4 +1,5 @@
 program,address,doc_address,name,role,tag,prototype,container
+Overwatch.exe,0x142697ac0,0x142697ac0,SegmentAabbTransform,"Transforms a segment's two 4-wide endpoints into the two corners of their AABB in a matrix's frame",collision,"void (float* out, const float* m4x4, const float* seg2)"
 
 Overwatch.exe,0x140064a30,0x140064a30,CacheFirstPersonFarPlane,Caches one tenth of the world far plane for first person,camera,,
 
@@ -905,17 +906,17 @@ Overwatch.exe,0x141b88df0,0x141b88df0,LoadMstuChunk,"The MSTU chunk load: a zero
 Overwatch.exe,0x1421d88c0,0x1421d88c0,LoadStuBlob,"The STU v2 blob loader: CRC64 over the 36-byte header, the type-hash bags and the instance layout",stu,,
 
 Overwatch.exe,0x14210c450,0x14210c450,BuildModelRuntimeRecord,"Writes one runtime mesh record (0xe8 teaser, 0x1c element blocks, the a8/b0/b8 arrays, the 0x50 tail); each element is {u8 semantic,u8 index,u8 format,u8 stream,u32 offset<<12|stride<<22}",model,,
-Overwatch.exe,0x142ec6cb0,0x142ec6cb0,ValidateBrowserCallbackTable,"Checks a browser callback config against the client's own table: onConnected and onDisconnect required, the optional names accepted, the deprecated ones allowed, every name logged by itself",browser,
+Overwatch.exe,0x142ec6cb0,0x142ec6cb0,ValidateBrowserCallbackTable,"Checks a browser callback config against the client's own table: onConnected and onDisconnect required, the optional names accepted, the deprecated ones allowed, every name logged by itself,browser,",,,
 
-Overwatch.exe,0x142ed1be0,0x142ed1be0,RouteBrowserMessage,"Parses the browser JSON envelope, requires the integer 'type' field, and dispatches service codes 0x00..0x1a (host to browser) or client codes 0x1b..0x31 (browser to host), each handler reading its own named fields",browser,
+Overwatch.exe,0x142ed1be0,0x142ed1be0,RouteBrowserMessage,"Parses the browser JSON envelope, requires the integer 'type' field, and dispatches service codes 0x00..0x1a (host to browser) or client codes 0x1b..0x31 (browser to host), each handler reading its own named fields,browser,",,,
 
-Overwatch.exe,0x142ed5180,0x142ed5180,CallJavascriptCallbackMessage,"Service type 0x0c: reads callback_id and args and calls the page function by id",browser,
+Overwatch.exe,0x142ed5180,0x142ed5180,CallJavascriptCallbackMessage,"Service type 0x0c: reads callback_id and args and calls the page function by id,browser,",,,
 
-Overwatch.exe,0x142ed6180,0x142ed6180,CreateBrowserFromMessage,"Service type 0x00: builds the browser from the page config (start_url, cache_path, user agent, storage/plugin/console switches, background colour, acceleration, process rate)",browser,
+Overwatch.exe,0x142ed6180,0x142ed6180,CreateBrowserFromMessage,"Service type 0x00: builds the browser from the page config (start_url, cache_path, user agent, storage/plugin/console switches, background colour, acceleration, process rate),browser,",,,
 
-Overwatch.exe,0x142ed8160,0x142ed8160,DecodeJavascriptConsoleMessage,"Client type 0x2f: decodes source, line, message and method and fires the console-message callback",browser,
+Overwatch.exe,0x142ed8160,0x142ed8160,DecodeJavascriptConsoleMessage,"Client type 0x2f: decodes source, line, message and method and fires the console-message callback,browser,",,,
 
-Overwatch.exe,0x142eda0d0,0x142eda0d0,RegisterJavascriptVariableMessage,"Service type 0x0b: reads scope and value and registers a javascript variable in the page",browser,
+Overwatch.exe,0x142eda0d0,0x142eda0d0,RegisterJavascriptVariableMessage,"Service type 0x0b: reads scope and value and registers a javascript variable in the page,browser,",,,
 
 Overwatch.exe,0x1402dc690,0x1402dc690,RegisterAvailableHeroesBase,"Registers the available-heroes restriction component (STU_5427ADC1, type hash 0x5427ADC1, size 0x58)",hero,,
 
@@ -944,3 +945,30 @@ Overwatch.exe,0x142cd5270,0x142cd5270,CharacterPositionResolve,Moves the body to
 Overwatch.exe,0x142cd4610,0x142cd4610,CharacterBodyUpdate,Rebuilds the body's shape entries and their transforms at the requested position,domino,,
 Overwatch.exe,0x142cf3f80,0x142cf3f80,CollisionSolver,The Domino collision solver: the pair walk the contact collection and the fixed-point resolve (eps 0.005),domino,,
 Overwatch.exe,0x142cbcee0,0x142cbcee0,RunCharacterControllerSweep,Runs the character controller collision sweep for the desired position and publishes the resolved position,mover,,
+Overwatch.exe,0x1428fc300,0x1428fc300,WwiseBankHeaderParse,Reads the BKHD header: the magic; the XORed version/bank/language words; the version gate and the 0x28-byte extended form,audio,,
+Overwatch.exe,0x1428fa3a0,0x1428fa3a0,WwiseBankLoad,The Wwise bank section loop: the 8-byte section headers and the dispatch on DATA/DIDX/HIRC/STID/STMG/ENVS/PLAT/INIT,audio,,
+Overwatch.exe,0x142e4a780,0x142e4a780,EffectComponentBuild,Builds one effect component: the header copy into the runtime record; the two f32 runs quantized to Q12 at +0xc0; the aligned component payload at +0x8c; the kind slot from the table at 0x143610490; and the per-tag payload copy,effects,,
+Overwatch.exe,0x1423aca10,0x1423aca10,PcreCompile2,PCRE 1 compile into a code block: the error text table at 0x14344c480; the option word and the compiled block layout,regex,,
+Overwatch.exe,0x1423ac9e0,0x1423ac9e0,PcreCompile,The 35-byte wrapper that supplies a null erroroffset over PcreCompile2,regex,,
+Overwatch.exe,0x1423add80,0x1423add80,PcreMatch,The PCRE 1 matcher body: 58068 bytes in three contiguous pieces; reached only from PcreExec; 92 self-calls,regex,,
+Overwatch.exe,0x1423bc3c0,0x1423bc3c0,PcreExec,The PCRE 1 exec entry: the 0x50435245 code magic check the option and subject guards and the UTF-8 validation path,regex,,
+Overwatch.exe,0x1423bd1c0,0x1423bd1c0,PcreFullinfo,PCRE 1 fullinfo: the magic and BADMAGIC/NULL errors and the PCRE_INFO switch 0..0x11,regex,,
+Overwatch.exe,0x1423bf290,0x1423bf290,PcreValidUtf8,PCRE 1 UTF-8 validation: returns the offending offset that PcreExec stores in ovector[0],regex,,
+Overwatch.exe,0x141b39f70,0x141b39f70,RegexCompile,Compiles a holder's pattern with the fixed option base 0x20000801 and the caller's three flag bits,regex,,
+Overwatch.exe,0x141b39d10,0x141b39d10,RegexCaptureSpans,Emits one offset/length record per non-empty capture group using fullinfo capturecount and the name table,regex,,
+Overwatch.exe,0x141b3a000,0x141b3a000,RegexTest,Execs a holder with no ovector and reports whether it matched,regex,,
+Overwatch.exe,0x141b3a040,0x141b3a040,RegexScanCaptures,Execs in a loop keeping the capture spans of every match,regex,,
+Overwatch.exe,0x141b3a120,0x141b3a120,RegexScanAll,Execs in a loop without span extraction resuming at the last non-empty group end,regex,,
+Overwatch.exe,0x141b3a240,0x141b3a240,RegexTestCaptures,Execs with a 30-int ovector and keeps the spans when more than one group matched,regex,,
+Overwatch.exe,0x141b3a2e0,0x141b3a2e0,RegexTestCapturesNamed,Execs then fills 0x48-byte capture records (string at 0x20 offset at 0x40 length at 0x44) and registers named groups,regex,,
+Overwatch.exe,0x141b428c0,0x141b428c0,RegexAnyTest,Matches a subject against an array of holders returning on the first hit,regex,,
+Overwatch.exe,0x141b42950,0x141b42950,RegexAnyScanCaptures,The scan-captures shape over an array of holders,regex,,
+Overwatch.exe,0x141b429f0,0x141b429f0,RegexAnyScanAll,The scan-all shape over an array of holders,regex,,
+Overwatch.exe,0x141b42a90,0x141b42a90,RegexAnyCapturesNamed,The named-capture shape over an array of holders,regex,,
+Overwatch.exe,0x140583c50,0x140583c50,ValueDestroy,Destroys one variant value: returns tags 5 and 0xb to the pool at 0x144137230 and walks the 0xc/0xd arrays destroying each element,reflection,,
+Overwatch.exe,0x14193f560,0x14193f560,ValueToText,Formats a variant value as text: switches on tag-1 and uses the lazily-XOR-decoded format strings from 0x14398f610,reflection,,
+Overwatch.exe,0x141942e50,0x141942e50,ValueSetCString,Initialises a value's string with its 0x28-byte inline buffer and assigns a C string through 0x1419431f0,reflection,,
+Overwatch.exe,0x14217e790,0x14217e790,ValueArrayErase,Destroys the 0x18-byte elements from an index to the end of a value array and resizes it,reflection,,
+Overwatch.exe,0x141b331f0,0x141b331f0,KeyedTableFind,"Searches a 0x30-byte-stride record array for a key: prefilter on +0x10/+0x18 (+0x20 when the flag byte is set), sticky partial-match flag, last candidate wins; returns the index or -1",domino,"int32 (const void* records, int32 count, const void* key, uint8 flag)"
+Overwatch.exe,0x141b330c0,0x141b330c0,KeyedTableFindMask,"Forwards four arguments to the keyed search and returns its index as a bit mask: 1 << (index & 63), or 0 when the search returned -1",domino,"uint64 (const void* records, int32 count, const void* key, uint8 flag)"
+Overwatch.exe,0x141ffe590,0x141ffe590,CameraChainScale,"Multiplies a camera node's scale with its ancestors': stops at a node with no parent link or with bit 0x400000000 set, keeping that node's own scale",camera,"float (const void* node)"

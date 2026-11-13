@@ -1,5 +1,38 @@
 # Open questions: the work queue
 
+## Conflict to settle by reading: is brush-to-mesh implemented?
+
+Two pages disagree and the disagreement is a read, not an edit:
+
+- `docs/formats/brush-collision.md` says "**no brush-to-mesh conversion is
+  implemented** - the six ops are recorded as a classification only", and
+  `docs/movement-plan.md` says "the six op bodies and the emission in
+  `BrushTreeToMesh` (`0x142cf23c0`) are **unread**".
+- `docs/formats/brush-mesh.md` says `ow_tank::brush_convert::tree_to_mesh` is
+  "the read expression of `0x142cf23c0` end to end", and
+  `crates/ow-tank/tests/model_collision_real.rs` declares
+  `proof-covers: 0x142ced620 0x142cf23c0` and passes on the install.
+
+Tier: A (collision), so the ladder decides. Until one of the two is corrected,
+`proof-covers` on `0x142cf23c0` is **withdrawn in spirit even though the header
+is present** - read the six op bodies (`FUN_142cf07d0`, `FUN_142cf0cc0`,
+`FUN_142cf01b0`, `FUN_142cefd70` and the emission) and settle it.
+
+## How this file is used now
+
+This page is the **record** of open questions. The **queue** is
+`python dev/queue.py --next` and the live state is
+[`systems-coverage.md`](systems-coverage.md); this file is neither.
+
+- Every item names its **tier** — A, feel; B, translation; C, structure — and,
+  where it is a function, that function's address. The tier decides the
+  instrument, never whether the code was read ([`tiers.md`](tiers.md)).
+- An item proved at tier B (a green `*_real.rs` over the install) is marked
+  **resolved** in place: `proved` is a done state, and an item is not left
+  looking open for want of an emulator unit.
+- The closure rule below still decides when an item leaves the page. Items are
+  never renumbered, and an address is never changed.
+
 Every open question, in the order worth attacking. The rule behind the queue:
 a question is never closed by a guess. If it is not read, it stays here and the
 gameplay feature stays unimplemented.
@@ -94,6 +127,9 @@ Three ways forward, in order of what actually removes work:
 
 ## 0. The engine object and its subsystem schedule
 
+**Tier C (structure: the engine object and its subsystem schedule)** — proved
+by a recorded run compared to the first divergence; done is `linked`.
+
 **Status: the object, both constructors, its interface registry and the
 subsystem schedule are read and shipped in `crates/ow-engine`; the creation
 step's five callees, the meaning of the 65 subsystem rows and the 20 dropped
@@ -170,6 +206,9 @@ Open, in the order they block progress:
 Where: `docs/formats/engine.md`, `crates/ow-engine/`.
 
 ## 1a. The fan's per-candidate refinement block
+
+**Tier A (feel: collision)** — proved by the emulator ladder; done is
+`verified`.
 
 **Status: the block is read and implemented; the outer walk is open.**
 
@@ -306,6 +345,9 @@ ever non-zero, and check for other callers of `0x14203dae0` that read
 `desc+0x28`.
 
 ## 1. The mover's input→velocity control law
+
+**Tier A (feel: mover, input)** — proved by the emulator ladder; done is
+`verified`.
 
 **Question.** `MoverInvoker` (`0x1407ffc50`, interface vtable `0x142fdbf40`
 slot 9) passes eight arguments to `MoverAdvance` (`0x140ca7f30`): the mover,
@@ -569,6 +611,9 @@ mutation; a per-case state overlay is still the remaining fixture limitation
 
 ## 1b. The live walk in `ow-client`: the four stages it does not have
 
+**Tier A (feel: movement, collision)** — proved by the emulator ladder; done is
+`verified`.
+
 **State.** The client walks (`docs/movement-plan.md`, last section; MODLOG
 2026-11-08) and jumps (MODLOG 2026-11-16). The world is the range's own
 collision (`ow_tank::range_world` + `ow_sim::walk`), the step is the verified
@@ -785,6 +830,8 @@ finite body).
 
 ## 2. The first-person camera consumer and per-frame look
 
+**Tier A (feel: camera)** — proved by the emulator ladder; done is `verified`.
+
 **Question.** `STUFirstPersonComponent` carries `m_position` and four scalars.
 `FpViewmodelConsumer` (`0x140d2f060`) and `FpViewmodelBind` (`0x140d2faa0`)
 store the view-model entity/model references but do not read them. Which system
@@ -808,6 +855,9 @@ applied exactly.
 ---
 
 ## 3. The reference-skeleton retarget
+
+**Tier B (translation: `anim`)** — proved exactly over the install's own data
+(`*_real.rs`); done is `proved`.
 
 **Question.** The client registers `anim.EnableProxyRetarget` and
 `anim.EnableFinalRetarget` ("proxy pose re-target between (inherited) blend
@@ -847,6 +897,9 @@ LayerChild weight writer.
 
 ## 5. The weapon fire loop and damage application
 
+**Tier A (feel: weapon, statescript)** — proved by the emulator ladder; done is
+`verified`.
+
 **Question.** How does a volley fire, and where does per-shot damage come from?
 The volley runtime carries `numShotsPerSecond` at `+0x1c8`,
 `numProjectilesPerShot` at `+0x1c0`, `projectileSpeed`, `projectileLifetime`,
@@ -869,6 +922,9 @@ impact graph and the resolved `amount`.
 ---
 
 ## 6. Character collision: the contact source is the open stage
+
+**Tier A (feel: collision, physics)** — proved by the emulator ladder; done is
+`verified`.
 
 **Read and implemented.** The sweep, the capsule values, the pair walk and
 the resolve loop are read and implemented, and the walk in `ow-client` runs
@@ -922,6 +978,9 @@ walk's slide and floor stage can be replaced by the client's own resolve.
 
 ## 7. Domino schema and integration in the current image
 
+**Tier A (feel: `domino`, physics)** — proved by the emulator ladder; done is
+`verified`.
+
 **Question.** The current image has `DmWorldConstruct` (`0x142cbeb70`),
 `DmWorldInvDt0Writer` (`0x142cc3050`),
 `DmWorldSubstepDriver` (`0x142cc3630`), `DmBroadphaseReinit`
@@ -939,6 +998,9 @@ solve in the current image; write the schema and the arithmetic with addresses.
 
 ## 8. The view-model spring target
 
+**Tier A (feel: the view model)** — proved by the emulator ladder; done is
+`verified`.
+
 **Question.** The per-frame spring is on animation `+0x1350` toward `+0x1370`
 with coefficients `0.235`/`0.48`, a k ramp of `600.0/s` and a settle threshold
 of `0.004 m`. Who writes the target, and in what space?
@@ -951,6 +1013,8 @@ writer.
 ---
 
 ## 9. Camera modes, 3P camera and shake
+
+**Tier A (feel: camera)** — proved by the emulator ladder; done is `verified`.
 
 **Question.** Read the first/third/spectator mode selection, the 3P camera
 consumer (`camera.3PPositionOffsetY.*`, `camera.3PDistanceSmoothing.chaseRate`)
@@ -977,6 +1041,9 @@ graph activation from the current image.
 ---
 
 ## 11. The map request producer and the bundle directory producer
+
+**Tier B (translation: `map`, `asset`)** — proved exactly over the install's
+own data (`*_real.rs`); done is `proved`.
 
 **Question.** Two parts of the map/asset path are not 1:1 yet.
 
@@ -1088,12 +1155,32 @@ the read that settles which of the two operands is a count.
 
 ## 13. v1 STU, replay payload, audio decode
 
-**Question.** v1 STU has synthetic tests only; no v1 asset ships here. The
-replay frame payload is Zstd and is not decoded. Wwise audio metadata is read,
-but no waveform is decoded.
+**Question.** v1 STU has a synthetic unit only, and the one v1 family that
+does ship here — the twenty readable type-`0x063` catalogs — has no field
+layout the raw reader can use. The replay frame payload is Zstd and is not
+decoded. Wwise audio metadata is read, but no waveform is decoded.
+
+**v1 does ship here (2026-11-20).** The earlier line said "no v1 asset ships
+here"; that was wrong. `ow-tank-content types` measures twenty readable
+catalogs, all version 1, 176 instances. A v1 asset has no per-instance field
+bags, so its field offsets come from the class declaration — and the raw
+reader has no declaration, which is why every catalog reports `assets=0
+longs=0` while the typed layer (reference declarations) reads 2,918 GUIDs from
+`0x0460000000000001`. The client's own v1 class schema is the next anchor;
+`formats/content.md` says the same.
 
 **What would settle it.** A v1 asset; a decoded replay frame; an audio
 dependency and the Wwise event-posting path.
+
+**Moved 2026-11-20: the sound bank container is read.** `WwiseBankHeaderParse`
+(`0x1428fc300`) and `WwiseBankLoad` (`0x1428fa3a0`) are read and implemented as
+`ow_tank::wwise_bank`, and all 1,045 readable type-`0x043` assets parse
+(version `0x91`, `BKHD+HIRC`, one init bank with `INIT`/`STMG`/`ENVS`/`PLAT`).
+The bank header is XORed with a key table at `0x144293db8` that is zero-fill
+with no writer, so the XOR is the identity here. What remains on this surface:
+the `HIRC` object graph (the events), the `STID`/`STMG`/`ENVS`/`PLAT`/`INIT`
+bodies, and that no bank on this install carries `DIDX`/`DATA`, so the media
+index is synthetic-only. `formats/sound.md` carries the layout.
 
 **Next anchor.** `formats/stu.md`, `formats/replay.md`, `formats/sound.md`.
 

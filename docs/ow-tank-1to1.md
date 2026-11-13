@@ -12,8 +12,14 @@ different run; it is not evidence. Code whose only citation is a capture is
 **open**, not read. See `provenance.md`.
 
 **"Verified" has one meaning here:** a differential-harness unit passes all
-five stages against the client's bytes. As of 2026-11-10 the harness ledger
-has **103 verified units and sixteen targeting `ow-tank`**, including
+five stages against the client's bytes. As of 2026-11-20 the harness ledger
+(`dev/verify_harness/ledger.json`, local and gitignored) holds **120 rows: 113
+verified, 5 inconclusive, 1 divergent, 1 invalid**, of which **19 unit files
+target `ow-tank`** and 113 verified rows cover **111 distinct client
+functions** (two carry a second tier-2 companion). Nothing in
+`cargo xtask verify` re-runs the harness - a verdict is re-proven with
+`python dev/verify_harness/cli.py <unit>`, and `cli.py all` replays the rows
+whose digests are unchanged. The units below include
 `fn/ChunkGuid`, `fn/MapChunkCellBytesFixup` and `fn/BundleLookup` (section D),
 `fn/BundleDirectoryLookup` (section E, a verified consumer), the three `MRNM`
 units and six texture leaves, and `fn/CmfKey154504` / `fn/CmfIv154504`
@@ -30,7 +36,7 @@ even where the code is read, implemented and exact on the install.
 |---|---|---|---|
 | Bundle directory producer | `ow-tank` builds its bundle index by scanning the manifest's type-`0x09C` records | the client builds a directory blob in its content database (`FUN_141fd53a0`, `0x141fd53a0`); the producer is ours | `src/bundle.rs`, `formats/maps.md` |
 | Map variation selector | `mapresolve::find_practice_range` queries the install for `m_mapName` and a mode display name, then takes the first variation | the client has **no mode→variation selector**: `0xD97BC44F`/`0x78715D57` occur only in the registration functions, the map arrives as type-`0x002` GUIDs in the level-load message (Jam `0x501B`), and a `(mode, variant identifier)` pair can name two scene maps | `formats/maps.md` ("Who chooses a variation"), `open-questions.md` item 11.1 |
-| Map chunk bodies | model and entity bodies are read at real offsets; the other nine (model group, single model, light, reflection point, text, sound, effect, sequence, area) are a TankLib `teMapChunk.cs` port | the nine are explicitly "not verified against a real chunk of their kind"; the sweep only reports tallies | `src/mapchunk.rs`, `formats/maps.md` |
+| Map chunk bodies | model and entity bodies are read at real offsets; the other nine (model group, single model, light, reflection point, text, sound, effect, sequence, area) are a TankLib `teMapChunk.cs` port. The port is now **measured and asserted** on real chunks: `tests/mapchunk_kinds.rs` requires, per declared kind, a clean walk, a body that fits the struct and every typed reference resolving, and the install meets it on eight kinds (6,880 model-group, 9,076 light, 39,156 entity, 2,641 sound, 2,734 effect, 587 area, 98 text, 1,862 reflection-point placeables) | the nine layouts are still the reference's, not the client's: no address is cited for a body, and two measurements bound them — the reflection-point body is **not** a fixed 168 bytes (one chunk ships 152/168/184/200 in the same file, 22 short bodies), and the entity references resolve **0 of 39,156**. The sequence kind (`0x18`) is unmeasured: its 1,316 assets are all not downloaded here | `src/mapchunk.rs`, `formats/maps.md` ("Placeable kinds", "The reflection-point body is not always the reference size") |
 | Clip record layout and kind dispatch | the file walk and 31-kind table were derived from process captures `0x7ff613ecf660`, `0x7ff614ee4130`, `0x7ff6164f38f8`, `0x7ff6162f3ae4` | captures are not the current image; kinds 1, 4, 5, 7, 8, 15, 19 and 31 are cold-unverified, and most kinds share a default stub | `src/clip.rs`, `formats/animation.md` |
 | Skin evaluation | weights, bind pose and palette are implemented and property-tested | the evaluator is known only from capture `0x7ff614e92700`; the install check is a tolerance (`< 2.0`), not bit-exact | `src/skin.rs`, `formats/animation.md` |
 | Bone-index join | `skeleton.rs` parses `mskl`'s Lookup and `skin.rs` maps a vertex's raw blend index through it (slot → bone); the client's reader `MsklTableBuild` (`0x141b894d0`) is what sizes the tables, and the install proves the direction: the Lookup is a permutation on all 7,328 skinned models, `remap_count` is the largest raw index plus one (7,308, the other 20 leave spare slots), the file stores its exact inverse at `mskl +88`, and the geometry prefers it 5–8× over the raw index (`bonemap_probe`) | the *consumer* is unread: whether the client adds the submesh `BoneIdOffset`, how it bounds the index and whether `0xFFFF` means "unbound" are the reference's rules, and all three are unexercisable on this install (every offset `0`, no Lookup hole). Only the first four-wide blend-index set is read: 454 models declare `semantic 4 / index 1` and their eight weights sum to 255, so those influences are dropped | the function that joins a mesh index to a bone (CPU-side, or the buffer upload of the remap) |
@@ -60,6 +66,7 @@ measure the body.
 | Material data join | `0x141b88cb0`, `0x141b894d0`, `0x141b7b9d0` | model → look → material → data → texture chain opens on the install | the client's runtime material application and sampler are unread; the viewer is not the renderer |
 | Model chunk table and `MRNM` runtime block | `0x141b5e1e0`, `0x141b5df70`, `0x141b893e0`, `0x141b89390`, `0x141b88f10` | the per-tag version gate (MDLC `0x165`, MRNM `0x1f`, MSTU `2`), the fixup, the size formula and the whole runtime block are read; `fn/MrnmFixup` (7/7 mutants), `fn/MrnmRuntimeSize` (6/6) and `fn/MrnmHandler` (12/12) pass every channel; MDLC's material list and MSTU's `{u64 offset; u32 size}` header are read and 60/60 install MSTU chunks parse | MDLC has no differential unit (the tail-size function `0x141b88e30` has no Ghidra entry and the harness cannot express absolute pointers in the fixture); the element decode and mesh assembly are section A; MESD/CLTH/MOCL/mskl are not parsed |
 | Effect chunks | `0x143610490` (kind table), `0x142e4a780` (component builder), `0x142e4e8e0` (fixup), `0x142e4fbe0`/`0x142e50110` (array sub-chunks) | `EFCT` root and 0x34 kinds are read; the builder's per-tag payload copies are implemented and seven components are typed (`ECMD`, `ECEF`, `ECEN`, `ECEC`, `ECSO`, `ECVS`, `ECRR`), each field's GUID type pinned on the install (3,369 models, 72,654 sounds, 1,846 voice stimuli, ...) | no harness unit (the builder allocates through a vtable); the runtime record layout and the array consumers are unread; `ECMP`/`ECSS`/`ECAT`/`ESHT`/`ECCV` have no client read site, so they stay raw |
+| Wwise sound bank container | `WwiseBankHeaderParse` `0x1428fc300`, `WwiseBankLoad` `0x1428fa3a0` | `BKHD` header (version, bank id, language id, alignment, bank type, the 16-byte tail), the version window `0x76..=0x91`, the media-only rule below `0x91`, the section table and its ids, and the `DIDX` 12-byte records are read and implemented (`ow_tank::wwise_bank`); all 1,045 readable type-`0x043` assets parse, every one at version `0x91` | no harness unit; the header XOR key at `0x144293db8` is zero-fill with no writer, so the XOR is only exercised as the identity; no bank on this install carries `DIDX`/`DATA`, so that path is synthetic-only; `HIRC`/`STID`/`STMG`/`ENVS`/`PLAT`/`INIT` bodies are unread |
 
 ## C. Open, with no implementation
 
@@ -184,6 +191,47 @@ The other **28** job loaders are not anchored by the crate at all - among them
 the material asset (`0x141b1a8e0`), the three shader jobs (`0x141e73f30`,
 `0x141e74360`, `0x141e73a80`) and the generic job 10 (`0x1421bccc0`), which
 serves 194 of the 403 asset types.
+
+### The largest functions behind the crate (2026-11-20)
+
+`python dev/fn.py biggest ow-tank` ranks the crate's client functions by their
+true extent (chain roots, so a chained `.pdata` continuation counts once, inside
+its function). Three scopes answer three different questions:
+
+| scope | function | extent | state |
+|---|---:|---:|---|
+| the crate's own citations (129 functions) | `ApplyStateModifiers` `0x140cbcbe0` | **11,620 B**, 7 pieces | read and **verified** (`fn/ApplyStateModifiers`) |
+| the same, not yet read | **`EffectComponentBuild` `0x142e4a780`** | **9,432 B**, 3 pieces | **read in full 2026-11-20** — `formats/effects.md`, "The builder's prologue" |
+| everything reachable (`--depth all`: 21,670 functions) | `PcreMatch` `0x1423add80` | **58,068 B**, 3 pieces | **identified 2026-11-20** — it is PCRE 1's matcher body; `formats/regex.md` |
+| the same, largest **unread** (`0x14217f060`) | reflection value reader | **35,848 B**, 4 pieces | **structure read, cases open** 2026-11-20 — a 113-case switch table inside its own extent; `formats/values.md` |
+
+The 58 KB function was the honest boundary of this measurement until 2026-11-20,
+when it was **identified as PCRE 1's matcher body** rather than read body by
+body. The chain that found it: it has one caller function, `0x1423bc3c0`
+(two call sites), which rejects
+a code block whose first dword is not `0x50435245` (the bytes `PCRE`) and takes
+(code, extra, subject, length, startoffset, options, ovector, count) — that is
+`pcre_exec`. Its sibling `0x1423bd1c0` switches on `PCRE_INFO_*`
+(`0x1423aca10` is `pcre_compile2`, which references PCRE's compile-error text
+table at `0x14344c480..`). The five game-side wrappers
+`0x141b3a000..0x141b3a2e0` hold a compiled pattern at `+0x20` and reach it
+through `pcre_exec`; the pattern is compiled by `0x141b39f70` with the fixed
+option base `0x20000801` (UCP | UTF8 | CASELESS) plus three caller bits. It has
+58,068 bytes in three **contiguous** pieces (169 + 55,470 + 2,429), so the
+figure is its own code, not a span over its neighbours. Full evidence, the
+binding table, the size ledger and what stays open: `formats/regex.md`.
+
+Two things this settles for the project: the largest body in the image is
+middleware, not gameplay, so nothing needs to be read out of it operation for
+operation; and the crate's largest *unread* cited function is now
+`EffectComponentBuild` (read above).
+
+The largest body this project has **not** read is `0x14217f060` — 35,848 bytes
+in the reflection value system, four `.pdata` pieces, with a **113-entry switch
+table at `0x142187aa0` inside its own extent**. That table is why a linear walk
+desyncs and why Ghidra's decompiler times out; the structure, the entry
+contract, the type token and the decoded format-string table are read, the 113
+case bodies are not. `formats/values.md`.
 
 ## Closing a row
 

@@ -155,6 +155,7 @@ _KNOWN_UNIT_KEYS = {
     "returns", "options", "base", "knownEquivalentMutants",
     "acknowledgedGaps", "notes", "argFactory", "candidateLoader", "state",
     "scaffold", "candidateCrate", "candidateProbe", "suite", "startRegs",
+    "steps",
 }
 _KNOWN_ARG_KEYS = {"name", "kind", "ptr_len"}
 _KNOWN_OPTION_KEYS = {
@@ -236,6 +237,13 @@ class Unit:
     unreachable_branches: List[Tuple[int, int, str]] = field(default_factory=list)
     # Preloaded state snapshot, if the unit is stateful.
     state: Optional[StateSpec] = None
+    # A steps unit calls its entry several times per corpus case and compares
+    # the declared state region after every call. The fixture module exports
+    # `make_steps(i) -> list[list[ArgSpec]]` instead of `make_args(i)`, and the
+    # oracle keeps the state region between the steps of one case
+    # (`EmuOracle.persist_state`). One unit then proves a driver and every leaf
+    # it reaches, on the step where each leaf is actually executed.
+    steps: bool = False
     # Registers seeded after the normal argument placement. Values are
     # integers or "argN" (the resolved arena pointer of argument N). Used for
     # interior-start leaf blocks whose entry convention takes the pointer in a
@@ -535,6 +543,7 @@ def load_unit(path: str) -> Unit:
         allowed_write_ranges=allowed_write_ranges,
         unreachable_branches=unreachable,
         state=state,
+        steps=bool(d.get("steps", False)),
     )
 
 
@@ -855,26 +864,28 @@ def _batch_matches_baseline(
             crate_dir=cref.crate_dir,
             cargo_probe=cref.probe,
         )
-        args, o = mutation_oracle[0]
-        c = probe.call(args)
-        if not c.ok:
-            return False
-        if unit.ret_kind != "void" and not _bits_equal(
-            o.ret_bits, c.ret_bits, unit.ret_kind
-        ):
-            return False
-        if _mem_channel(o.pointee_after, c.pointee_after, args) is not None:
-            return False
-        if (
-            _state_channel(
-                getattr(o, "state_after", None),
-                getattr(c, "state_after", None),
-                unit,
-                args,
-            )
-            is not None
-        ):
-            return False
+        # Does the batch binary reproduce the baseline? A steps unit is
+        # replayed step by step on one process, the same way the base case ran.
+        for args, o in mutation_oracle:
+            c = probe.call(args)
+            if not c.ok:
+                return False
+            if unit.ret_kind != "void" and not _bits_equal(
+                o.ret_bits, c.ret_bits, unit.ret_kind
+            ):
+                return False
+            if _mem_channel(o.pointee_after, c.pointee_after, args) is not None:
+                return False
+            if (
+                _state_channel(
+                    getattr(o, "state_after", None),
+                    getattr(c, "state_after", None),
+                    unit,
+                    args,
+                )
+                is not None
+            ):
+                return False
         return True
     except Exception:
         return False
@@ -1091,6 +1102,10 @@ def run_unit(
                 cargo_probe=cref.probe,
             )
             log(f"  candidate {unit.candidate_loader} probe: {candidate.exe}")
+            # A steps unit keeps the state region between its calls; every other
+            # unit answers from the snapshot on every call. The probe has to be
+            # told, because the oracle does exactly that on its own side.
+            candidate.set_persist(bool(unit.steps))
         else:
             from candidate_c import CCandidate
 
@@ -1112,7 +1127,7 @@ def run_unit(
         import importlib
 
         mod = importlib.import_module(unit.arg_factory)
-        factory = mod.make_args
+        factory = mod.make_steps if unit.steps else mod.make_args
 
     try:
         # ---- Stage 2: determinism ----------------------------------------
@@ -1120,6 +1135,8 @@ def run_unit(
         log("[2/5] determinism")
         if factory is not None:
             det_args = factory(0)
+            if unit.steps:
+                det_args = det_args[0]
         else:
             det_args = generate_args(unit.args, seed, 0)
         cache: Dict[str, Any] = {}
@@ -1181,6 +1198,96 @@ def run_unit(
         # decompile already inlined). A read of one of these is not
         # undeclared global state: the candidate hardcodes the same value.
 
+        # One emulator serves every steps case unless the unit asks for a
+        # fresh one: building it is the expensive part (measured 12x the cost
+        # of the calls it then runs). Only the state region has to go back to
+        # its snapshot per case, which set_state does.
+        steps_oracle: List[EmuOracle] = []
+
+        def _run_steps(idx: int, steps: Sequence[List[ArgSpec]]) -> bool:
+            """One corpus case of a steps unit: the entry called N times.
+
+            The oracle and the candidate are called alternately on the SAME
+            state, so the state channel compares what each call left behind
+            and the next call inherits it. Every channel is compared after
+            every step, with the step number in the channel name (`ret@2`),
+            because a driver's third call is a different fact from its first.
+            """
+            nonlocal hard_fail
+            created = fresh_oracle or not steps_oracle
+            if created:
+                case_oracle = EmuOracle(unit.image, base=unit.base)
+                if steps_oracle:
+                    steps_oracle[0] = case_oracle
+                else:
+                    steps_oracle.append(case_oracle)
+                tracker.attach(case_oracle)
+            case_oracle = steps_oracle[0]
+            if unit.state is not None:
+                case_oracle.set_state(unit.state.base, unit.state.data)
+            case_oracle.persist_state = True
+            # The oracle starts every case from the snapshot; the candidate
+            # process is shared, so it has to be told the same thing - and it
+            # has to keep the region between the steps, which is what
+            # set_persist turns on for this unit.
+            if unit.state is not None and hasattr(candidate, "reset_state"):
+                candidate.reset_state()
+            for step, args in enumerate(steps):
+                tracker.begin_call()
+                o = case_oracle.call(
+                    unit.address_v2b,
+                    args,
+                    ret_kind=unit.ret_kind,
+                    start_regs=unit.start_regs or {},
+                )
+                if not o.ok:
+                    hard_fail = f"oracle fault at {idx} step {step}: {o.fault}"
+                    return False
+                if o.reads_outside:
+                    undeclared_reads.extend(
+                        r for r in o.reads_outside if not _read_allowed(unit, r[0], r[1])
+                    )
+                if o.out_of_arena_writes:
+                    undeclared_writes.extend(o.out_of_arena_writes)
+
+                c = candidate.call(args)
+                if not c.ok:
+                    divergences.append(
+                        Divergence(
+                            idx,
+                            f"fault@{step}",
+                            "ok",
+                            f"candidate fault: {c.fault}",
+                        )
+                    )
+                else:
+                    if unit.ret_kind != "void" and not _bits_equal(
+                        o.ret_bits, c.ret_bits, unit.ret_kind
+                    ):
+                        divergences.append(
+                            Divergence(
+                                idx,
+                                f"ret@{step}",
+                                f"{o.ret_bits:#x} ({_fmt_ret(o.ret_bits, unit.ret_kind)})",
+                                f"{c.ret_bits:#x} ({_fmt_ret(c.ret_bits, unit.ret_kind)})",
+                            )
+                        )
+                    mem = _mem_channel(o.pointee_after, c.pointee_after, args)
+                    if mem is not None:
+                        divergences.append(Divergence(idx, f"mem@{step}", mem[0], mem[1], mem[2]))
+                    st = _state_channel(
+                        getattr(o, "state_after", None),
+                        getattr(c, "state_after", None),
+                        unit,
+                        args,
+                    )
+                    if st is not None:
+                        divergences.append(Divergence(idx, f"state@{step}", st[0], st[1], st[2]))
+                corpus_args.append(args)
+                if len(divergences) >= 3:
+                    return False
+            return True
+
         def _run_case(idx: int, args: List[ArgSpec]) -> bool:
             """Compare one case on every channel. Returns False when the
             caller must stop (the divergence cap is hit, or the oracle faulted
@@ -1189,6 +1296,8 @@ def run_unit(
             a base case: the same channels, the same undeclared-access
             accounting, the same counterexample format."""
             nonlocal hard_fail
+            if unit.steps:
+                return _run_steps(idx, args)
             tracker.begin_call()
             if fresh_oracle:
                 call_oracle = EmuOracle(unit.image, base=unit.base)
@@ -1474,13 +1583,38 @@ def run_unit(
             mut_cases = cases[: min(len(cases), MUTATION_CORPUS_CASES)]
         _t_oracle = time.perf_counter()
         mutation_oracle: List[Tuple[Any, Any]] = []
-        for args in mut_cases:
-            key = _args_key(args)
-            o = cache.get(key)
-            if o is None:  # defensive; every case ran in stage 3
-                o = oracle.call(unit.address_v2b, args, ret_kind=unit.ret_kind)
-                cache[key] = o
-            mutation_oracle.append((args, o))
+        if unit.steps:
+            # A steps unit's mutant is replayed step by step on one probe
+            # process, so the state the mutant wrote is what its next call
+            # reads - the same contract the base case has. The list holds
+            # (step args, that step's oracle result) in order; the kill loop
+            # below walks it in order against a single candidate process.
+            replay = EmuOracle(unit.image, base=unit.base)
+            if unit.state is not None:
+                replay.set_state(unit.state.base, unit.state.data)
+            replay.persist_state = True
+            # Every case, not only the first: a steps unit's corpus is where
+            # the discriminating inputs are, and one case is a whole chain of
+            # calls that the flat corpus of a single-call unit spends dozens of
+            # cases on. The third element marks a case's first step, where the
+            # mutant's state region has to go back to the snapshot.
+            for case in mut_cases:
+                for step, args in enumerate(case):
+                    o = replay.call(
+                        unit.address_v2b,
+                        args,
+                        ret_kind=unit.ret_kind,
+                        start_regs=unit.start_regs or {},
+                    )
+                    mutation_oracle.append((args, o, step == 0))
+        else:
+            for args in mut_cases:
+                key = _args_key(args)
+                o = cache.get(key)
+                if o is None:  # defensive; every case ran in stage 3
+                    o = oracle.call(unit.address_v2b, args, ret_kind=unit.ret_kind)
+                    cache[key] = o
+                mutation_oracle.append((args, o, False))
         log(f"  [mutation corpus] {time.perf_counter() - _t_oracle:.1f}s ({len(mut_cases)} cases)")
 
         # ---- Stage 5a: the batch build -----------------------------------
@@ -1568,6 +1702,7 @@ def run_unit(
                                     crate_dir=cref.crate_dir,
                                     cargo_probe=cref.probe,
                                 )
+                                mc.set_persist(bool(unit.steps))
                             else:
                                 mc = RustCandidate(
                                     entry=unit.entry,
@@ -1593,6 +1728,7 @@ def run_unit(
                                     crate_dir=cref.crate_dir,
                                     cargo_probe=cref.probe,
                                 )
+                                mc.set_persist(bool(unit.steps))
                         else:
                             from candidate_c import CCandidate
 
@@ -1622,7 +1758,11 @@ def run_unit(
                         last_infra = msg
                         continue
                     evaluated = True
-                    for idx, (args, o) in enumerate(mutation_oracle):
+                    for idx, (args, o, case_start) in enumerate(mutation_oracle):
+                        if case_start:
+                            reset = getattr(mc, "reset_state", None)
+                            if reset is not None:
+                                reset()
                         c = mc.call(args)
                         if not c.ok:
                             if getattr(c, "infra", False):

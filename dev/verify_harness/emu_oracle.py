@@ -203,6 +203,14 @@ class EmuOracle:
         # (base, bytes) of the controlled state region, if one is declared.
         self.state: Optional[Tuple[int, bytes]] = None
         self._state_restore: Optional[Tuple[int, bytes]] = None
+        # A steps unit calls one entry several times and compares the state
+        # region after EVERY call, so what one call writes is what the next
+        # call reads. That is the point of the unit: the client's value can be
+        # right in isolation and still be wrong once the state it mutated is
+        # read back. Default False - a single-call unit must stay stateless
+        # between calls, because the runner caches answers for identical args.
+        self.persist_state = False
+        self._state_seeded = False
         self._extra_maps: List[Tuple[int, int]] = []
         # Inclusive ranges of image addresses the callee may write. The
         # client keeps some of its runtime statistics in the image's
@@ -222,8 +230,16 @@ class EmuOracle:
         if not data:
             raise ValueError("state snapshot is empty")
         self.state = (base, bytes(data))
+        self._state_seeded = False
         page = base & ~0xFFF
         end = base + len(data)
+        if any(p == page for p, _s in self._extra_maps):
+            # Already mapped by an earlier set_state on this emulator (one
+            # emulator serves every case of a steps unit). Keep the mapping and
+            # drop the restore: the region is ours, and the snapshot is
+            # rewritten from `self.state` on the next call.
+            self._state_restore = None
+            return
         if self._overlaps_known(page, end):
             self._state_restore = (base, self._read_any(base, len(data)))
         else:
@@ -288,11 +304,15 @@ class EmuOracle:
         u.reg_write(x.UC_X86_REG_GS_BASE, TEB_BASE)
         # The controlled state region is re-seeded from its snapshot on every
         # call; the caller's per-case pointee writes below then specialise it.
+        # A steps unit seeds it once per case instead (persist_state), so that
+        # the call after the first sees what the first one wrote.
         state_lo = state_hi = None
         if self.state is not None:
             state_lo, state_data = self.state
             state_hi = state_lo + len(state_data)
-            u.mem_write(state_lo, state_data)
+            if not (self.persist_state and self._state_seeded):
+                u.mem_write(state_lo, state_data)
+                self._state_seeded = True
         for reg in (
             x.UC_X86_REG_RAX, x.UC_X86_REG_RBX, x.UC_X86_REG_RCX,
             x.UC_X86_REG_RDX, x.UC_X86_REG_RSI, x.UC_X86_REG_RDI,
@@ -531,8 +551,9 @@ class EmuOracle:
         if self.state is not None:
             state_after = bytes(u.mem_read(state_lo, state_hi - state_lo))
             # Restore the pre-snapshot bytes so the next call starts from the
-            # same state irrespective of what this one wrote.
-            if self._state_restore is not None:
+            # same state irrespective of what this one wrote. A steps unit
+            # keeps them: the next step is meant to inherit them.
+            if self._state_restore is not None and not self.persist_state:
                 rb, rb_data = self._state_restore
                 u.mem_write(rb, rb_data)
 

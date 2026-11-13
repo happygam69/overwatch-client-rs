@@ -38,13 +38,27 @@ full flag list is under [Running it](#running-it).
 
 ## What works today
 
+Proof is graded by tier, and the tier decides the instrument and the word for
+"done" ([`docs/tiers.md`](docs/tiers.md)):
+
+- **Tier A — feel** (movement, camera, collision, weapons, abilities): the
+  emulator ladder, the client's own bytes against the port. Done is `verified`.
+- **Tier B — translation** (formats, registries, tables, asset dispatch): exact
+  over the install's own data. Done is `proved`.
+- **Tier C — structure** (frame loop, object model, anything behind a vtable): a
+  recorded run compared to the first divergence. Done is `linked`.
+
+So the asset and format layer — CASC, STU, models, textures, maps, effects,
+sound — is tier B; the movement arithmetic, the walk and the collision leaves
+are tier A; the renderer, the engine object and the frame loop are tier C.
+
 | system | state |
 |---|---|
 | practice-range launch: header → variation → scene map → chunk loader | works, 34/34 chunks (a viewer default: the image has no mode→variation selector) |
 | walking on the map's own level collider | works: `ow-sim::walk`, swept by the verified type-3 mesh leaf with the **client's own capsule** (`radius 0.5`, height `1.5`) |
 | movement arithmetic: ramp, command, state transform, per-frame velocity law | verified, differential units against the client's bytes |
 | jump and the airborne arc | verified: `ow-sim::jump`, `ow-sim::air` |
-| CASC, STU, entities, weapon graphs, models, textures, maps | verified against the install |
+| CASC, STU, entities, weapon graphs, models, textures, maps | read and exercised on the install, all of it (**tier B, `proved`**) |
 | the model vertex-element decode and mesh assembly | open: the viewer's own reading, not client behaviour |
 | the D3D11 renderer D1-D5 | partial: device, swap chain and frame step list; only `Present` has a read body |
 | combat, materials, streaming, character collision, a client capture | open |

@@ -384,6 +384,249 @@ def cmd_read(args) -> int:
     return 0
 
 
+def _packet_pieces(begin_rva: int) -> list[tuple[int, int]]:
+    """The `.pdata` chain pieces of the function rooted at `begin_rva`, as
+    (begin_rva, end_rva) pairs. Empty when the extent is not a chain root."""
+    funcs, _fragments = corpus.unions()
+    ents = corpus.pdata_entries()
+    idx = {b: i for i, (b, _e, _u) in enumerate(ents)}
+    row = funcs.get(idx.get(begin_rva, -1))
+    if row is None:
+        return []
+    return list(row[2])
+
+
+def _packet_string(va: int, data: bytes, limit: int = 60) -> str | None:
+    """The printable NUL-terminated string at `va`, or None."""
+    off = va - BASE
+    if not 0 <= off < len(data):
+        return None
+    end = data.find(b"\x00", off, off + limit)
+    if end < 0 or end - off < 2:
+        return None
+    text = data[off:end]
+    if not all(0x20 <= c < 0x7F for c in text):
+        return None
+    return text.decode("ascii")
+
+
+def _packet_switch_tables(
+    begin_va: int, end_va: int, data: bytes, minimum: int = 8
+) -> list[tuple[int, int, int, int, int]]:
+    """Four-byte tables inside the body whose entries are all inside it.
+
+    A switch table in this image is an array of image-relative RVAs, so every
+    entry lands inside the function that owns it. A run counts only when it is
+    at least `minimum` entries long: shorter runs are ordinals and floats.
+    These tables are why a linear listing desyncs and why the decompiler can
+    time out on an otherwise ordinary body.
+
+    Returns (address, entries, distinct targets, lowest target, highest target).
+    A run can pick up a trailing dword of padding that also falls in range;
+    `distinct` below `entries` is the sign of it."""
+    body = data[begin_va - BASE : end_va - BASE]
+    out: list[tuple[int, int, int, int, int]] = []
+
+    def report(start: int, stop: int) -> None:
+        values = [
+            int.from_bytes(body[i : i + 4], "little")
+            for i in range(start, stop, 4)
+        ]
+        values = [v + BASE if v < begin_va else v for v in values]
+        if len(values) >= minimum:
+            out.append(
+                (begin_va + start, len(values), len(set(values)), min(values), max(values))
+            )
+
+    start = None
+    for pos in range(0, len(body) - 3, 4):
+        value = int.from_bytes(body[pos : pos + 4], "little")
+        # A table entry is either an image-relative RVA (the client's choice) or
+        # an absolute VA; accept both, because a 64-bit switch may use either.
+        inside = begin_va <= value + BASE < end_va or begin_va <= value < end_va
+        if inside and start is None:
+            start = pos
+        elif not inside and start is not None:
+            report(start, pos)
+            start = None
+    if start is not None:
+        report(start, len(body) - len(body) % 4)
+    return out
+
+
+def _packet_immediates(begin_va: int, end_va: int, data: bytes) -> dict:
+    """Immediates and instruction shape, from a linear decode."""
+    from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+    from capstone.x86 import X86_OP_IMM
+
+    counts: dict[int, int] = {}
+    shape = {"instructions": 0, "calls": 0, "rets": 0}
+    md = Cs(CS_ARCH_X86, CS_MODE_64)
+    md.detail = True
+    for ins in md.disasm(data[begin_va - BASE : end_va - BASE], begin_va):
+        shape["instructions"] += 1
+        if ins.mnemonic == "call":
+            shape["calls"] += 1
+        elif ins.mnemonic.startswith("ret"):
+            shape["rets"] += 1
+        # A branch's immediate is an address, not a value the body compares
+        # against; counting those buried the real bounds under call targets.
+        if ins.mnemonic in ("call", "jmp") or ins.mnemonic.startswith("j"):
+            continue
+        for op in ins.operands:
+            if op.type == X86_OP_IMM:
+                value = op.imm & 0xFFFFFFFFFFFFFFFF
+                counts[value] = counts.get(value, 0) + 1
+    return {"counts": counts, "shape": shape}
+
+
+def _packet_data_refs(begin_va: int, end_va: int) -> list[tuple[int, int]]:
+    """Rip-relative data references in the body, as (target_va, site_count)."""
+    scan = scan_rip()
+    order: dict[int, int] = {}
+    for pos, _reg, target in scan["leas"]:
+        site = BASE + pos
+        if begin_va <= site < end_va:
+            order[target] = order.get(target, 0) + 1
+    return sorted(order.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def _packet_decompile(va: int) -> str:
+    """Where the client's C for this body is cached, if it has been read."""
+    cache = DECOMPILE_DIR / f"{va:x}.c"
+    if cache.is_file():
+        text = cache.read_text(encoding="utf-8", errors="replace")
+        return f"cached {cache.relative_to(ROOT).as_posix()} ({len(text)} chars)"
+    named = sorted((ROOT / "dev" / "decompiles").glob(f"*0x{va:x}.c"))
+    if named:
+        p = named[0]
+        return f"cached {p.relative_to(ROOT).as_posix()} ({p.stat().st_size} bytes)"
+    return "not cached - the Ghidra MCP `get_functions` with `decompiled_code`"
+
+
+def cmd_packet(args) -> int:
+    """One function, everything needed to read it, in one command.
+
+    The packet is what a reading session needs before it can decide anything:
+    the extent and its chain pieces, the whole-image callers and callees with
+    their names, the instruction shape, the immediates that act as bounds and
+    tags, any switch table hidden inside the body, every rip-relative data
+    reference with the string it points at, and whether the client's C is
+    already cached."""
+    addr = parse_addr(args.addr)
+    row = containing(addr - BASE)
+    if row is None:
+        return _read_uncovered(addr, True)
+    begin, end, pieces, opaque = row
+    begin_va, end_va = BASE + begin, BASE + end
+    data = image()
+    limit = args.limit
+
+    name_row = names().get(begin_va)
+    print(f"{addr:#x}  {label(begin_va)}")
+    if name_row and (name_row.get("role") or "").strip():
+        print(f"    role: {name_row['role'].strip()}")
+    if name_row and (name_row.get("tag") or "").strip():
+        print(f"    tag: {name_row['tag'].strip()}")
+    unit = unit_for(begin_va)
+    if unit:
+        status = unit_status(unit)
+        print(f"    unit: {unit}" + (f" - {status}" if status else " (no ledger entry)"))
+    cites = doc_cites(begin_va)
+    if cites:
+        for path, lineno, line in cites[:4]:
+            safe = line.encode("ascii", "replace").decode("ascii")
+            print(f"    docs: {path}:{lineno}  {safe[:100]}")
+        if len(cites) > 4:
+            print(f"    docs: ... and {len(cites) - 4} more")
+
+    print()
+    print(f"    extent: {begin_va:#x}..{end_va:#x}  {end - begin} bytes, {pieces} piece(s)")
+    own = 0
+    for pb, pe in _packet_pieces(begin):
+        own += pe - pb
+        print(f"        {BASE + pb:#x}..{BASE + pe:#x}  {pe - pb:>7} bytes")
+    if own and own != end - begin:
+        print(f"    own code: {own} bytes (the span between pieces is other bodies)")
+    if opaque:
+        print("    opaque: the linear listing desyncs - a data island sits inside the body")
+
+    callers = callers_of(begin_va)
+    callees = callees_of(begin_va)
+    print()
+    print(f"    callers: {len(callers)}")
+    for site, src, form in callers[:limit]:
+        print(f"        {src:#x}  {label(src)}  ({form} at {site:#x})")
+    if len(callers) > limit:
+        print(f"        ... and {len(callers) - limit} more")
+    by_target: dict[int, list[int]] = {}
+    for site, target, _form in callees:
+        by_target.setdefault(target, []).append(site)
+    print(f"    callees: {len(callees)} sites into {len(by_target)} functions")
+    ranked_callees = sorted(by_target.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    for target, sites in ranked_callees[:limit]:
+        print(f"        {target:#x}  x{len(sites):<3} {label(target)}")
+    if len(by_target) > limit:
+        print(f"        ... and {len(by_target) - limit} more")
+
+    imm = _packet_immediates(begin_va, end_va, data)
+    counts = imm["counts"]
+    shape = imm["shape"]
+    print()
+    print(
+        f"    shape: {shape['instructions']} instructions, {shape['calls']} calls, "
+        f"{shape['rets']} rets"
+        + (" (linear decode may desync)" if opaque else "")
+    )
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    print(f"    immediates (top {limit}):")
+    for value, n in ranked[:limit]:
+        print(f"        0x{value:<10x} x{n}")
+    small = sorted(v for v in counts if 2 <= v <= 0x200)
+    if small:
+        shown = " ".join(f"0x{v:x}" for v in small[:20])
+        tail = " ..." if len(small) > 20 else ""
+        print(f"    bounds/tags in 2..0x200: {shown}{tail}")
+
+    tables = _packet_switch_tables(begin_va, end_va, data)
+    if tables:
+        print()
+        print(f"    switch tables inside the body: {len(tables)}")
+        for start, count, distinct, low, high in tables[:6]:
+            note = "" if distinct == count else f", {count - distinct} duplicate(s)"
+            print(
+                f"        {start:#x}  {count} entries ({distinct} distinct{note})  "
+                f"-> {low:#x}..{high:#x}"
+            )
+
+    refs = _packet_data_refs(begin_va, end_va)
+    if refs:
+        strings = 0
+        print()
+        print(f"    data references: {sum(n for _t, n in refs)} sites to {len(refs)} addresses")
+        for target, n in refs[: limit * 2]:
+            text = _packet_string(target, data)
+            if text is not None:
+                strings += 1
+                kind = "str "
+                extra = "  " + repr(text[:70])
+            elif target >= TEXT_END:
+                kind = "data"
+                extra = ""
+            else:
+                kind = "code"
+                extra = ""
+            print(f"        {target:#x} x{n:<3} {kind}{extra}")
+        if len(refs) > limit * 2:
+            print(f"        ... and {len(refs) - limit * 2} more")
+        if strings:
+            print(f"    strings: {strings} of the referenced addresses begin printable text")
+
+    print()
+    print(f"    client's C: {_packet_decompile(begin_va)}")
+    return 0
+
+
 def _read_uncovered(addr: int, no_asm: bool, decompile_it: bool = False) -> int:
     """Read a body the unwind table does not cover.
 
@@ -769,6 +1012,71 @@ def cmd_surface(args) -> int:
     print(
         "  (a shared helper appears in every file whose cluster reaches it)"
     )
+    return 0
+
+
+def cmd_biggest(args) -> int:
+    """The largest client functions behind a crate: cited, or reachable from it.
+
+    `--depth 0` is the crate's own citations - the functions it reads by
+    address. `--depth N` widens the set to the N-hop callee closure, and
+    `--depth all` to everything reachable, which is what "the client's code
+    behind this crate" means in the widest sense. Sizes are the true extents
+    from the corpus index (chain roots, so a chained `.pdata` continuation is
+    counted once, inside its function).
+    """
+    import crate_coverage
+
+    cited = crate_coverage.cited(args.crate)
+    if not cited:
+        print(f"{args.crate} cites no client address")
+        return 1
+    c = need_index()
+    roots: dict[int, tuple[int, int, int, int]] = {}
+    for addr in cited:
+        row = containing(addr - BASE)
+        if row is not None:
+            roots.setdefault(row[0], row)
+    if args.depth == 0:
+        reached = dict(roots)
+    else:
+        reached = dict(roots)
+        seen = set(roots)
+        frontier = list(roots)
+        hops = 0
+        while frontier and (args.depth == "all" or hops < args.depth):
+            nxt = []
+            for src in frontier:
+                for _site, target, _form in c.execute(
+                    "SELECT site,target,form FROM edges WHERE src=?", (src,)
+                ).fetchall():
+                    row = containing(target)
+                    if row is not None and row[0] not in seen:
+                        seen.add(row[0])
+                        nxt.append(row[0])
+                        reached[row[0]] = row
+            frontier = nxt
+            hops += 1
+    ranked = sorted(
+        reached.values(), key=lambda r: (-(r[1] - r[0]), r[0])
+    )[: args.limit]
+    scope = (
+        "cited by"
+        if args.depth == 0
+        else ("reachable from" if args.depth == "all" else f"within {args.depth} hop(s) of")
+    )
+    print(
+        f"{args.crate}: {len(reached)} client function(s) {scope} its "
+        f"{len(cited)} cited address(es); the {len(ranked)} largest:"
+    )
+    print()
+    for begin, end, pieces, _opaque in ranked:
+        addr = BASE + begin
+        cited_here = "cited" if begin in roots else "      "
+        name = label(addr)
+        print(
+            f"  {end - begin:>7}  {addr:#x}  {pieces:>2} piece(s)  {cited_here}  {name}"
+        )
     return 0
 
 
@@ -1565,6 +1873,14 @@ def main() -> int:
         help="also run the client's decompiler (Ghidra) and print the C",
     )
 
+    p = sub.add_parser(
+        "packet", help="one function, every reading aid in one command"
+    )
+    p.add_argument("addr")
+    p.add_argument(
+        "--limit", type=int, default=12, help="rows per section (default 12)"
+    )
+
     p = sub.add_parser("find", help="find functions by name, tag, string or immediate")
     p.add_argument("query")
 
@@ -1590,6 +1906,18 @@ def main() -> int:
     p.add_argument("tag")
 
     p = sub.add_parser(
+        "biggest", help="the largest client functions behind a crate"
+    )
+    p.add_argument("crate")
+    p.add_argument(
+        "--depth",
+        default=0,
+        help="0 = the crate's own citations (default); N = N-hop callees; "
+        "'all' = everything reachable",
+    )
+    p.add_argument("--limit", type=int, default=15)
+
+    p = sub.add_parser(
         "surface", help="the client functions around what a crate cites"
     )
     p.add_argument("crate")
@@ -1604,6 +1932,8 @@ def main() -> int:
     args = ap.parse_args()
     if args.cmd == "read":
         return cmd_read(args)
+    if args.cmd == "packet":
+        return cmd_packet(args)
     if args.cmd == "find":
         return cmd_find(args)
     if args.cmd == "callers":
@@ -1612,6 +1942,10 @@ def main() -> int:
         return cmd_callees(args)
     if args.cmd == "scope":
         return cmd_scope(args)
+    if args.cmd == "biggest":
+        if args.depth != "all":
+            args.depth = int(args.depth)
+        return cmd_biggest(args)
     if args.cmd == "jobs":
         return cmd_jobs(args)
     if args.cmd == "names":

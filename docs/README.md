@@ -21,6 +21,7 @@ operator's install; behaviour comes from the complete current-build
 | know what is not 1 to 1 yet | [`deviations.md`](deviations.md), [`ow-tank-1to1.md`](ow-tank-1to1.md), [`casc-1to1.md`](casc-1to1.md), [`texture-1to1.md`](texture-1to1.md) |
 | know the port scope and the unit vocabulary | [`port-plan.md`](port-plan.md) |
 | run the port procedure | [`port-playbook.md`](port-playbook.md) |
+- [`tiers.md`](tiers.md) - the three proof tiers and what done means for each
 | read the `ow-tank` defect audit | [`audit-ow-tank.md`](audit-ow-tank.md) |
 | know the crates and data flow | [`architecture.md`](architecture.md) |
 | look up a term | [`glossary.md`](glossary.md) |

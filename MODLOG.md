@@ -10,6 +10,543 @@ Rotated 2026-11-12: everything from the `2026-11-19 - gate: the unscoped
 verify is suspended` entry down is now in `docs/history/modlog-2026-11.md`
 (44 entries, moved verbatim). This file keeps the entries written after them.
 
+## 2026-11-20 - two more through the pipeline: 2 for 2, and the mistakes it caught
+
+Asked to take two functions and see how it goes, `dev/queue.py --next` was
+replaced for the occasion by a sharper question - *what has no calls at all, and
+what only calls things already proved* - which is the composition order the
+playbook §9 asks for but the queue did not express. Answer: **60 pure leaves**
+between 30 and 200 bytes, of which one is a wrapper whose only callee had just
+been proved.
+
+- **`fn/KeyTableFindMask`** (`0x141b330c0` -> `ow_sim::keytable::find_mask`), the
+  consumer of `fn/KeyTableFind`: forwards four arguments, then
+  `1 << (index & 63)`, or `0` for `-1`. 304 cases. The corpus gained a 70-record
+  table with the match at **index 64**, because that is the only input on which
+  the shift's `cl` masking is observable: without it the mutant that drops the
+  mask survives, because Rust's `<<` and x86's `shl` disagree exactly there. The
+  survivor was then declared equivalent with that reason (x86 masks the count in
+  the instruction, so the explicit mask is redundant on this target).
+- **`fn/CameraChainScale`** (`0x141ffe590` -> `ow_sim::chain::chain_scale`), a
+  recursive product up a parent chain, stopping at a node with no link or with
+  bit `0x400000000` set. 184 cases, 100% branch coverage. Six chains in the
+  snapshot: one node, a product of three, the stop bit on the middle and on the
+  root, a zero scale, and eight deep.
+
+Three mistakes, all caught by the harness rather than by review:
+
+1. **I overwrote `crates/ow-sim/src/camera.rs`** by writing a new module to a
+   path that already existed - it holds the verified camera-basis arithmetic.
+   `git checkout` restored it and the new code went to `chain.rs`. The lesson is
+   mechanical: check the path before `write`, and `git status` caught it in the
+   same minute only because the probe stopped compiling.
+2. **Argument order.** The chain function takes ONE argument (the node in `rcx`);
+   the unit passed a guest base first, so the client read the base as its node
+   and returned `0.0` against the port's correct product. Fixed by putting the
+   node in `rcx` and the base in `rdx`, which the body never reads - the probe
+   then translates the parent links without changing what the client does.
+3. **Arena overlap.** The mask fixture's key sat at `ARENA + 0x400`, inside the
+   70-record block that starts at `ARENA`. The key overwrote records 34-35, and
+   the divergence showed up as a mem channel difference rather than as an
+   obvious fixture bug. The key moved to `ARENA + 0x1000`.
+
+Both reads are recorded (`docs/formats/camera.md`, `docs/formats/domino.md`) and
+both names are rows in `docs/function-names.csv`, which the batched
+`gh_apply_names.py` now holds until 20 accumulate.
+
+## 2026-11-20 - first function through the new pipeline, and the loop made real
+
+`0x141b331f0` ported end to end as `fn/KeyTableFind`
+(`ow_sim::keytable::find`) - the first function taken from `dev/queue.py --next`
+rather than from a reading session. It is a keyed search over a
+`0x30`-byte-stride record array: prefilter on `+0x10`/`+0x18` (and `+0x20` when
+the caller's `r9b` is set), a **sticky** partial-match flag armed by any record
+with `+8 != 0 && +0 == 0`, and the **last** candidate wins. 304 differential
+cases, 100% branch coverage (12/12 sites), 11/12 mutants killed with the twelfth
+declared equivalent (`count <= 0` widened to `count < 0` returns -1 either way
+at `count == 0`). Read recorded in `docs/formats/domino.md`; named in
+`docs/function-names.csv`.
+
+The harness caught one real mistake in the port before it shipped: the client's
+`mov eax, ebx` **zero**-extends, so `-1` reads `0xffffffff` in `rax`, and the
+probe was sign-extending it to `0xffff...ffff`. Two of my own unit tests were
+also wrong in `keytable.rs` (a key whose `+0x00` is zero is *always* partial, so
+a differing record is a candidate, not a rejection) - the differential passed
+while they failed, which is the right way round.
+
+**The loop is now actually short.** `dev/verify_changed.py` selected by crate
+before, so one module change dragged in 60+ units; it now selects by the
+**entry's own source file** (`candidate_rust.entry_sources`, the same map the
+verdict digest binds to):
+
+```text
+crates/ow-sim/src/keytable.rs  ->   1 unit   (fn/KeyTableFind)
+crates/ow-sim/src/scope.rs     ->   1 unit   (fn/ScopePop-steps)
+crates/ow-sim/src/collide.rs   ->  17 units
+dev/verify_harness/runner.py   -> everything (it decides verdicts)
+dev/queue.py                   -> nothing
+```
+
+One unit's full ladder - differential, coverage, mutation - is **29 s**
+measured, which is the cost of a single-module change.
+
+Also changed: `dev/gh_apply_names.py` now applies names in **batches**. The
+default run asks the project what it already has and writes only the rows that
+differ, and only once `--min 20` (default) have accumulated; `--addr` stays for
+a single row and `--all` forces the old behaviour. Renaming is one HTTP call per
+row, so a per-row run wasted minutes for nothing - the CSV is the record either
+way. Docs that prescribed the per-row call (`AGENTS.md`, `architecture.md`,
+`ghidra-project.md`, the playbook) now prescribe the batch.
+
+## 2026-11-20 - the tier refactor: three proofs, one queue, a 30-second loop
+
+The project had one proof procedure and it was both too strong and too slow:
+the emulator ladder is right for what the player feels and pointless for a codec,
+and running it over everything took an hour that grew with every unit. `docs/tiers.md`
+now defines three tiers - **A feel** (emulator, done `verified`), **B translation**
+(exact over the install's own data, done `proved`), **C structure** (first
+divergence of a recorded run, done `linked`) - and AGENTS.md rule 1 says the
+proof is chosen by tier and never skipped. The rule's own text already named the
+three instruments; the gate had narrowed it to one.
+
+Two tools carry the loop, and the measured numbers are theirs:
+
+- **`dev/verify_changed.py`** proves only what a change can affect. Measured on
+  the tier-B set: **40 of 41 real-data proofs green in 160 s** (`index_find_real`
+  needs `--slow`: minutes), against roughly an hour for the full ladder.
+- **`dev/queue.py`** turns progress into a per-function number and the work into
+  a query: `--next N` screens candidates with `dev/cluster.py`, so a function
+  that cannot be proved is visible before it is read. Its first honest number:
+  **133 of 3,955 known functions done (3.4%)** - tier A 61, tier B 72, tier C 0 -
+  out of the image's 119,802 roots, of which 115,927 carry no system tag and are
+  not queued. Two earlier readings were wrong and are recorded here because the
+  fixes are the point: a crate lookup that matched the wrong symbol name left
+  90 of 121 units unattributable (so a unit fell to a default tier of A and data
+  code was counted as emulator-verified), and a proof on a machine with no
+  install exits 0, which recorded a green proof that never ran. Units are now
+  attributed by `rg` over three symbol shapes; a proof with no install records
+  `skipped-no-install`; a tier-B proof may not credit a tier-A function.
+
+Tier-B coverage needed a way for a test to say *what* it proves, so `*_real.rs`
+files now declare `//! proof-covers: 0x… ` - a green proof with no header proves
+code but contributes no function to the count, which is the honest state rather
+than an inferred one.
+
+Docs refactored to match: `docs/port-playbook.md` is now organised by tier (with
+every hard-won rule and measured number kept), `docs/systems-coverage.md` carries
+a tier column and defines the three done-states, `README.md` attributes the
+existing work to its tier, `STATUS-handoff.md`'s loop is the tier loop, and
+`docs/open-questions.md` gained a header explaining that it is the record, not
+the queue.
+
+## 2026-11-20 - the guard followed to the end: it is the object model
+
+`dev/cluster.py` now resolves the hot-patch guard instead of calling its target
+opaque. It follows store site -> setter region -> the setter's callers -> the
+last `lea <stored reg>` before the call, and reproduces the manual read exactly:
+`0x1442a0158` <- `0x141bb6660`, `0x1442a0160` <- `0x141b328e0`, `0x1442a0168`
+<- `0x14053a420`. Three bugs came out of building it (a section-frame mix-up, an
+off-by-`0x1000` disassembly base, and capstone's `X86_OP_REG` = 1 not 2), all
+caught by asserting the three known values.
+
+**The portable count did not move: 135 of 2,814 (4.8%).** The slot resolves to
+`jmp 0x141bb00e0`, whose body is `call [rax+0x30]` - so "call target with no
+index entry" (2,276 clusters) and "virtual call" (1,769) are largely the *same*
+wall, and the ceiling is the vtable. That corrects the previous entry's claim
+that resolving the guard globals was the lever with volume: it is not.
+
+What the change buys is a truthful message (`via 0x142cadee0[slot] ->
+0x141bb6660 -> 0x141bb00e0: virtual slot [rax+0x30]`) and two smaller
+classification fixes: a pure `jmp [IAT]` thunk is now reported as an import
+thunk rather than an unindexed body, and `chain_to_root` names every hop.
+
+## 2026-11-20 - the hot-patch guard resolved: a zero-fill slot with a readable value
+
+Following up why 2,276 clusters stop at "call target with no index entry": the
+dominant address is `0x142cadee0`, `mov r10,[0x1442a0158]; test; jmp r10` - a
+dispatch through the `.data` zero-fill tail. The slot turned out to be readable
+from the image after all. `0x1442a0158` has a writer (`0x142cadf35`) inside the
+setter pair `0x142cadf20`/`0x142cadf50`; the setters have one caller,
+`0x141ff3190`, registered as a *data pointer* at `0x143360ef8` (an initializer,
+not a call), and it installs three `lea` constants: `0x141bb6660` ->
+`0x141bb00e0` (virtual call `[rax+0x30]`), `0x141b328e0` -> `0x141baff90`
+("call the singleton's vtable slot `+0x40`"), and `0x14053a420` (`ret 0`, a
+no-op hook).
+
+So the guard is statically resolvable and the chain ends at a vtable dispatch -
+an object-model question, not a data one. The rule this adds to
+`docs/ghidra-project.md`: a zero-fill slot is readable from the image when its
+writer is in-line code with static operands, and not when it copies an argument
+or loops a table (the Wwise bank key at `0x144293db8` has readers and no writer,
+so zeros *are* its runtime value).
+
+## 2026-11-20 - why the portable set is 4.8%: the client's three runtime hops
+
+Asked why only two dozen clusters verify, the answer was measured instead of
+argued, and the first answer was wrong. `dev/cluster.py` reported 24 (1.5%) on a
+narrow window; corrected it is **135 of 2,814 unported heads (4.8%)**, and the
+two corrections are both tool bugs, not client facts:
+
+- **A forwarder is not a stub.** `0x141c23490` (`mov ecx,edx; mov edx,r8d; jmp
+  0x141bb00e0`) has no `.pdata` extent but tails into a real in-scope function.
+  Screening it as opaque blocked 113 clusters. The screen now follows a
+  straight-line `jmp <root>` before it blocks.
+- **`0xCC` is padding.** Decoding past the end of a function read `int3` as an
+  ambient trap and blocked 589 clusters that never execute one. The screen stops
+  at `int3`.
+
+What blocks the other 95%, per cluster: a call target with no index entry 2,276
+(docminant case: the hot-patch guard `mov r10,[rip+g]; test r10,r10; jmp r10`,
+whose `g` sits in the `.data` zero-fill tail and is filled at startup - 34
+clusters on that one address alone), a virtual call 1,769, an import thunk 1,694,
+an indirect call 1,135, `rdtsc` 662, `cpuid` 598. For scale: **470 of 3,875
+scope functions (12%) are individually runnable**; a pure leaf is the exception,
+not the rule. So the ceiling on cluster ports is set by three runtime hops - the
+CRT, the vtable, and the client's own guard - and a cluster port must cross one.
+
+The one lever with volume is therefore not more reading: it is a declared
+platform model (memcpy/malloc-family) plus resolving the guard globals by
+finding their initializer in the zero-fill tail.
+
+## 2026-11-20 - §9 and §6.5 dogfooded: six clusters to find one that verifies
+
+The two sections with no tool and no measurement behind them were run for real.
+Outcome: `dev/cluster.py` (the missing §9 picker, screened), one new unit
+`fn/ScopePop-steps` (the second steps unit, and the first whose feedback is a
+*scalar* - the count the previous pop wrote), `ow_sim::scope::scope_pop`, and
+guest-address translation in the `ow-sim` probe, which is now the second probe
+that resolves guest pointers.
+
+The pick is the finding. Of the 1,578 candidate heads in the scope, **24
+clusters (1.5%) are portable**: the rest reach an import thunk, a virtual slot,
+a kernel transition or ambient CPU state somewhere in the cluster, and the
+blocker is usually *outside* the scope. Four screens separated them, each now
+written into §9:
+
+1. A **direct call into code with no `.pdata` extent** - `0x142cee300` calls
+   `0x142cadf00`, a guard-dispatch stub with no function root, no edge row and
+   no triage state, two hops from an import. An in-scope-only walk never sees it,
+   so the screen decodes calls from the body rather than trusting the edge table.
+   The first three picks (a QPC timer cluster, `0x142cf7c10`, `0x140dbc940`) all
+   died here.
+2. **`movaps` needs the fixture's base 16-byte aligned**: an unaligned base
+   faults on the rounded address, so the state base moved to a clear one.
+3. **The state region must not land on the emulator's own blocks.** The first
+   `ScopePop` snapshot put the container inside the oracle's arena and every
+   call zeroed it.
+4. **The snapshot's regions must not overlap each other** - the first snapshot
+   laid the arrays at the container's stride, so the client processed one pair's
+   bytes as another pair's elements and diverged in the *unported* flag path.
+   Both faults are now asserted in the fixture.
+
+`fn/ScopePop-steps` pins the element flag byte to zero: its non-zero branch
+calls the unportable stub, so `unreachableBranches` names the site and calls it
+a fixture-pinned edge, and `acknowledgedGaps` names the stub. §9 now says that
+is honest only for data the client reads, not for a control-flow edge.
+
+Gate: `cargo xtask verify --fast` green; the ladder for `ScopePop-steps` is
+recorded in the unit.
+
+## 2026-11-20 - the playbook, executed on a function nobody had read
+
+`0x142697ac0` taken from §1 to a `verified` unit by following
+`docs/port-playbook.md` literally: one command per step, no improvisation. One
+new unit, `fn/SegmentAabbTransform` (`ow_sim::aabb::segment_aabb_transform`,
+`crates/ow-sim/src/aabb.rs`): 200 cases, every channel, 10/10 mutants. It
+transforms a segment's two 4-wide endpoints into the two AABB corners in a
+matrix's frame - `ext = (e.y*|m1| + e.x*|m0|) + e.z*|m2|`,
+`cen = ((c.x*m0 + t) + c.y*m1) + c.z*m2`, low corner then high, all four lanes.
+`formats/static-collision.md` records the read.
+
+The run found nine places where the procedure was thin or wrong, all fixed:
+
+1. §1's queries need `sqlite3`; the fallback is now written out, together with
+   the query that implements the stated preference order. Measured while doing
+   it: **one** function in the 3,875-function scope has no callee and no
+   dispatch, so preference 2 is effectively unavailable.
+2. §1.5's screening table had no row for **ambient CPU state**. The first pick
+   was `0x142701520`, which is `stmxcsr` + `mov eax, [rsp]` - unprovable, and
+   the table would have sent a session into it.
+3. §3 gains the NaN rule: `addps`/`subps` return the destination's NaN, scalar
+   Rust leaves that to the backend, and the emulator *clears the sign*
+   (`0x7fc00001` whichever operand carries it, measured), so a two-NaN case is
+   not comparable. Also measured: intrinsics hide the arithmetic from the
+   mutation stage (2 mutants, both the `0.5` literal) while the scalar form
+   gives 10 and kills all 10.
+4. §4 said "return the mutated buffers"; the protocol needs **one buffer per
+   `ptr` argument**, and a short vec is `missing pointee in response`.
+5. §5 gains the NaN-operand rule and the exponent mask a random tail needs.
+6. §6 gains `allowedImageReads` ranges: a 16-byte SIMD constant declared as one
+   address fails with `oracle reads outside declared args/stack at +8`.
+7. §8 gains three symptom rows for the faults this run actually produced.
+8-9. §12's checklist gains the ambient-state screen and the range form.
+
+Tool fix found the same way: `dev/read.py`'s caller window decoded from an
+unaligned offset and printed nonsense; it now decodes from the caller's own
+chain root (`dev/read.py` `caller_window`).
+
+## 2026-11-20 - the read is now one command, and the procedure is written down
+
+`dev/read.py <addr>` writes the evidence pack a reading session needs, joined:
+the extent and pieces, callers/callees, **the field map** (every memory access
+folded through a conservative register dataflow to `argN+offset`, with
+write/read/addr and `+idx` for indexed bases), **globals classified**
+`raw`/`zero-fill`/`unmapped` from the image's section table with read/write
+counts and a value preview, switch tables, immediates, the argument setup at
+each call site, the units and docs that already cite it, and an evidence
+skeleton for `docs/formats/<system>.md`.
+
+Measured: on `MoveCharacterController` the map reproduces the client's C
+exactly (arg0+0x000/0x010/0x024, arg1+0x190/0x1b0/0x2b8, arg2+0x000/0x010), and
+on `0x140f84590` it flags the known BSS trap `0x143c3c620` plus 14 more globals
+- a check that used to be a `pe_layout.py` call per address.
+
+`docs/port-playbook.md` §2 is rewritten around it: the pack first, then reading
+the C against the map with the five rules that encode this project's known
+traps (BSS is not a value, `addr` is a handed-on pointer, `+idx` hides the stride,
+keep the client's f32 association, the disassembly decides `f32` vs `double`).
+§1 gains the measured selection criteria from S4 (dispatch fan-out, inline
+functions ride on their caller).
+
+## 2026-11-20 - what one unit actually buys, measured
+
+Two new read-only tools: `dev/throughput.py` (static callee closure per unit, and
+what the verified set reaches) and `dev/reach.py` (which functions a unit's
+corpus **executes**, under `UC_HOOK_CODE`). The measurement corrects the plan's
+own arithmetic:
+
+- The static closure is an upper bound and badly one: the 14 units with the
+  largest closures execute **31 distinct functions between them**;
+  `fn/ApplyMoverSettings` reaches 491 statically and executes **2**.
+- Only **510 of 3,875** scope functions contain any memory-indirect dispatch, and
+  the largest fan-out is **12 slots** (`MoverUpdateFrame`: 8 slots, 14 sites).
+  That is why one call walks one path: the leaves sit behind populated vtables.
+- A fresh 6-unit verification takes **90 s** -> 15 s/unit, so all 3,875 would be
+  **~16 h of machine time**. The harness is not the bottleneck; the read is.
+- Of **115** verified units, **51** have an entry in the gameplay scope; those
+  touch **70** in-scope functions (1.8%) by the entry + direct-callee bound.
+
+`docs/port-plan.md` S4 records it and drops S3's un-measured "toward ~400 units"
+estimate until the world lands, since the trace gain exists only where a slot is
+populated.
+
+## 2026-11-20 - the second steps pilot is a real driver, and the harness was wrong
+
+`fn/ApplyCharacterControllerMove-steps`: the client's `ApplyCharacterControllerMove`
+(`0x142cd5370`) called three times in a row on one character inside the state
+region, a different velocity each step, every channel compared after every call.
+200 cases, coverage 9/9 branches (100%), **10/10 mutants**, verified. The port
+needed no change - the first run's 1-ULP divergence was the harness re-seeding
+its state region inside the entry (`state.snapshot` instead of `state.buf`), so
+three calls each normalized the original quaternion while the client normalized
+its own output.
+
+Two harness bugs found and fixed: the probe now keeps one live buffer and
+re-seeds it before each call unless the unit sends `persist on` (both probes,
+one rule), and the mutation stage replays **every** case of a steps unit instead
+of case 0 only, resetting the mutant's state at each case's first step - that
+one was worth 50% -> 100% kill rate on this unit, because the discriminating
+NaN-payload and boundary-handle cases sat in the tail. `docs/port-playbook.md`
+§6.5 carries both traps; `docs/port-plan.md` S3 the numbers.
+
+## 2026-11-20 - steps units exist, and the pilot says where they pay
+
+A harness unit can now call its entry several times per corpus case and compare
+the state region after **every** call (`docs/port-plan.md` S3). What landed:
+`steps: true` + a `make_steps(i)` fixture, `EmuOracle.persist_state` (the state
+region survives between steps and is re-seeded per case), one emulator for all
+cases, `RustCandidate.reset_state` + a `reset` command in the probe, and a
+mutation stage that replays a case's steps in order.
+
+**Pilot green:** `fn/ShapePoolAlloc-steps` - the shape pool's free list walked
+1-4 pops per case on one pool inside a state region: 16 chained pops over 8
+pools (chain lengths 1-4, a non-contiguous `2 -> 0` chain, a saturated used
+count, a high-water mark that must not fall), 80 cases, every channel per step,
+**6/6 mutants killed**, differential 0.2 s for 160 client calls, one unit.
+`fn/ShapePoolAlloc` still passes on the old single-call path.
+
+**The finding that changes the plan:** for that leaf the steps unit is not
+stronger than the single-call one - a single-call unit already compares the
+whole mutation of one call. Steps pay only where a call's writes feed the next
+call's control flow, i.e. on a **driver**. Building one emulator per case cost
+12x the calls it ran (1.2 s -> 0.2 s differential once it was shared); the
+`u64`-guest-address rule and the two `candidate_rust.py` bindings are the two
+traps a new steps unit hits, both written into `port-playbook.md` section 6.5.
+Next: guest translation for `ptr` arguments so a driver can reach a world, then
+`fn/MoverUpdateFrame-trace`.
+
+## 2026-11-20 - a read packet in one command, and the trace-unit plan
+
+`python dev/fn.py packet <addr>` is new: extent and chain pieces, named
+callers/callees, instruction shape, immediates ranked with branch targets
+excluded, bounds/tags in `2..0x200`, **switch tables whose entries all land
+inside the body**, every rip-relative data reference with its printable
+string, and whether the client's C is cached. It is the answer to a reading
+session that spent ~40 tool calls on archaeology: on `0x14217f060` it prints
+the 114-dword table (112 distinct) that makes the body opaque, and on
+`0x1423aca10` it prints PCRE's compile-option strings (`UTF8)`, `UCP)`,
+`LIMIT_MATCH=`, `Error text not found (please report)`) without a decompile.
+
+Also written: `port-plan.md` section S3, the trace-unit design. Measured
+finding that shaped it: a `ptr` argument on the candidate wire carries the
+pointee's bytes and every probe arm re-seeds them per call (`verify_probe.rs`
+`Arg::Ptr(b, r, g) if r.is_empty() && g.is_none()`), so **state does not carry
+between calls through an argument** - which is also why the one state-mode
+pilot, `fn/OrthonormalizeCameraBasis-state`, is divergent. The plan fixes that
+with a session buffer in the probe (additive to the wire), a `steps: true`
+unit flag with a `make_steps` factory, and `fn/ShapePoolAlloc-steps` as the
+pilot (pop the free list `2 -> 0 -> -1` twice). Not implemented this session.
+
+## 2026-11-20 - the largest unread body is the reflection value reader
+
+The image's largest body this project has not read is `0x14217f060`
+(35,848 B, four `.pdata` pieces) in the reflection value system. It cannot be
+decompiled in one pass - Ghidra reports `decompile_failed: timeout` - and the
+reason is structural: its **switch table sits inside its own extent** at
+`0x142187aa0..0x142187c64`, 113 four-byte RVAs (112 distinct, all targets in
+the body, guarded by `cmp eax, 0x71`), so a linear walk decodes the table as
+code and desyncs. What is read: the entry contract (a string-carrying object
+in, a variant out with an optional output pointer and an early exit on an empty
+string), the three callers and the type token `0x143d04610`, the variant record
+(tag at `+0x0c`, arrays of `0x10`/`0x20`, tag `0xff` = unspecified), the
+destructor `ValueDestroy` (464 callers) and 4 of the 87 helpers it calls.
+
+The find worth carrying: the value system's **format strings are XOR-encrypted
+in `.rdata` and decoded in place on first use** (8-byte key, length + decoded
+flag dword, ciphertext at `+0x0c`). Decoding them names the whole vocabulary -
+`%d`, `%f`, `%.4f`, `%016llx`, `[%f, %f, %f]`, `(%.3f, %.3f, %.3f)`,
+`(%d, %d, %d, %d)`, `Array of %d`, `Object`, `Unspecified`, `true`/`false`.
+Page: `formats/values.md`; ledger: `systems-coverage.md` (not in scope).
+
+## 2026-11-20 - the image's largest function is PCRE, and it is middleware
+
+The 58,068-byte `0x1423add80` that `dev/fn.py biggest` left open is **PCRE 1's
+matcher body**, not gameplay. One caller function (`0x1423bc3c0`, two sites)
+rejects a block whose first dword is not `0x50435245` (`PCRE`) and takes the
+exec argument list; its sibling `0x1423bd1c0` switches on `PCRE_INFO_*` and
+`0x1423aca10` references PCRE's compile-error text table at `0x14344c480..`.
+The game-side binding is 11 functions (2,240 B): a holder with the compiled
+block at `+0x20`, compile with the fixed option base `0x20000801`
+(UCP | UTF8 | CASELESS) plus three caller bits, five exec shapes and four
+"match any holder in this array" variants. The size is its own code (three
+contiguous pieces, 169 + 55,470 + 2,429). The release is **not pinned** - the
+image carries no PCRE version string - and one latent overrun is recorded, not
+reproduced: the named-capture path loops over the pattern's capture count but
+reads a 15-pair ovector. Page: `formats/regex.md`; ledger: `systems-coverage.md`
+(not in scope), `ow-tank-1to1.md` section F.
+
+## 2026-11-20 - the effect builder is read, and the crate's biggest function is measured
+
+`python dev/fn.py biggest ow-tank` is new: it ranks the client functions behind
+a crate by true extent, at `--depth 0` (the crate's own citations), N, or `all`.
+The answer for `ow-tank`: `ApplyStateModifiers` (11,620 B, already verified) is
+the largest it cites, `EffectComponentBuild` `0x142e4a780` (9,432 B) the largest
+it cites and had not read, and `0x1423add80` (58,068 B) the largest anywhere in
+reach - unnamed, recursive, and not decompilable in one pass, so it stays open
+with its call chain written down in `ow-tank-1to1.md` section F.
+
+**`EffectComponentBuild` is read in full.** Its prologue is now in
+`formats/effects.md`: the header copy from payload `+0x20..+0x75` into runtime
+`+0x60..+0xbb` (with the five payload bytes it skips), the **two f32 runs
+quantized to Q12** at runtime `+0xc0` from payload `+0x00`/`+0x08` with the
+count at `+0x66`, the 16-byte-aligned component payload whose offset the record
+keeps at `+0x8c`, the kind slot at `+0xb8`, and the two optional array
+sub-records (`+0x18` through `FUN_142e4fbe0`, `+0x20` as a two-run copy).
+The crate's `header::ARRAYS` and `header::DWORDS` were **wrong by 0x10**: they
+used record-relative offsets in a payload-relative frame. Fixed, with the
+decompile cited.
+
+Two measurements that matter more than the offsets:
+
+* **The two Q12 runs are empty on this install.** The count byte at
+  `payload + 0x66` is `0` on all 7,342 sampled effects, so the run path is read
+  from the builder and never exercised by this game's data. `effect_real` now
+  prints the histogram and asserts the run windows stay inside the payload, so
+  a patch that ships runs is visible.
+* **The kind table transcription is verified.** Reading `0x143610490` gives
+  0x35 eight-byte records `{u32 tag, u8 slot, 3 zero}` with slot `i` at record
+  `i`, and the tag stored as a little-endian dword (`BLEE` on disk for `EELB`).
+  All 52 non-empty tags match `effect::KIND_TABLE` exactly, in order.
+
+## 2026-11-20 - the hero capsule test caught up with the cap
+
+`hero_select_real::every_hero_declares_a_collision_capsule` had been red since
+the body's radius cap was read: it asserted that the five-plus large heroes
+carry a `0.7` m capsule, but the client writes `min(0.5, radius)` into the
+body's copy (`0x140cb7700`), so every hero that declares `0.7` collides as
+`0.5` and the test could never pass. It now reads the **declared** radius from
+`STUCharacterMoverComponent` alongside the capped capsule and asserts the cap
+itself (`capsule.radius == min(0.5, declared)`) plus the declared `0.7` count
+(15 of 54). Two other anchors in the same test were stale for the same reason:
+hero 7's `0.7 / segment 0.4` is `0.5 / 0.8`, and hero 657's `0.54` reads back
+as the capped `0.5`. And the "hero 458 lands on the `0.1 * r` segment floor"
+claim is false under the cap — it measures `0.47` against a `0.05` floor — so
+`formats/character-controller.md` now says no hero on this roster reaches the
+floor, and the floor rule is asserted as an invariant instead. The crate's
+scoped gate is green on this suite again.
+
+## 2026-11-20 - the map chunk bodies are asserted, not just tallied
+
+`docs/formats/maps.md` listed the per-kind placeable counts and said they were
+"pinned by `crates/ow-tank/tests/mapchunk_kinds.rs`". They were not: the test
+asserted only that *some* placeable and *some* reference existed. It now
+asserts, for every kind a chunk's GUID declares: the placeable walk is clean,
+every body fits the kind's struct, and every typed reference resolves. The
+install meets it on eight kinds — 6,880 model-group, 9,076 light, 39,156
+entity, 2,641 sound, 2,734 effect, 587 area, 98 text and 1,862
+reflection-point placeables — with two measured exceptions, both now in
+`formats/maps.md`.
+
+**The reflection-point body is not a fixed 168 bytes.** One chunk
+(`0x0dd000043f7d3ca0`, 62 placeables) carries bodies of 152, 168, 184 and 200
+bytes in the same file, all with valid transforms, so 22 of the 1,862
+reflection-point placeables have no room for the tail the reference reads
+(seven floats and five ints past `+0x78`). The body read is now bounded by each
+placeable's declared size, so a short body yields defaults instead of the next
+placeable's UUID — the same rule the model body already followed. What the
+variable tail *is* needs the client's per-placeable dispatch
+(`0x14209fc90`), which is not read.
+
+**The sequence kind (`0x18`) is not a parse failure.** The sweep printed "none
+readable" for all twenty sampled sequence chunks; they are all **not
+downloaded**, so the kind has never seen a real sequence chunk. The per-kind
+report now separates "not on disk" from "could not parse" instead of
+conflating them, which is how the difference was found.
+
+## 2026-11-20 - the sound bank container is read, and 1,045 banks parse
+
+Type `0x043` was the one measured parse hole left in the census: 356 of 356
+sampled assets opened as `BKHD` and every one was counted *unparsed*, because
+the module tried the Wwise **media** container and gave up on the bank. The
+container is now read from the client's own code — `WwiseBankHeaderParse`
+(`0x1428fc300`) and `WwiseBankLoad` (`0x1428fa3a0`), both named in
+`docs/function-names.csv` — and implemented as `ow_tank::wwise_bank`.
+
+What the read settled: the `BKHD` payload at 0..0x28 (version, bank id,
+language id, alignment, bank type from version `0x8f`, a 16-byte tail), the
+version window `0x76..=0x91` with a media-only rule below `0x91`, the 8-byte
+section headers and the eight ids the dispatcher names, and `DIDX` as flat
+12-byte records with the client's floor count. The first 16 header bytes are
+XORed with a key table at `0x144293db8` that is `zero-fill` `.data` with two
+readers and no writer, so the XOR is the identity on this install.
+
+**The install agrees.** All **1,045** readable banks parse: every one is
+version `0x91`, `BKHD+HIRC` on 1,044 and one init bank carrying
+`INIT+STMG+HIRC+ENVS+PLAT`, one `BKHD` payload declares `0x30` where the
+reader consumes `0x28` (the client skips the remainder, and so does the
+reader), and **no bank here carries `DIDX`/`DATA`** — this install keeps audio
+in the `0x03F`/`0x0BB` payload assets, so that path is synthetic-only and is
+said so in `docs/formats/sound.md`. The census line is now `parsed=356,
+as-bank=356, unparsed=0`.
+
+Also corrected on the way: `docs/formats/content.md` said the catalog type
+`0x063` "parses zero of twenty readable assets". It parses twenty of twenty;
+what reads empty is the two **array fields**, because every catalog on this
+install is a **version 1** asset and v1 writes no per-instance field bags —
+the raw reader has no class layout to place `m_assets` with, while the typed
+layer reads 2,918 GUIDs out of one. `docs/open-questions.md` item 13 said "no
+v1 asset ships here"; twenty do.
+
 ## 2026-11-12 - the capsule narrowphase is shipped and verified
 
 The **capsule narrowphase** `0x142cfc090` - the character's contact source -

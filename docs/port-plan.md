@@ -194,6 +194,202 @@ declaring the unit, reading the ladder, triaging a failure, closing a cluster,
 and the checklists - is **`docs/port-playbook.md`**. This page holds the scope
 and the file layout; the playbook holds the method.
 
+## S3: trace units (built 2026-11-20, pilot green)
+
+The plan above spends one unit per function: 1,551 of them, of which **1,303 are
+`unit`-state functions with two or more callers in scope** (`corpus.py triage`).
+At the measured rate - 1 to 9 units a day, with one 51-unit day when a *family*
+was done - that is a year. The family day is the tell: a repeated shape is
+cheap. A trace unit is the same idea applied to control flow.
+
+**What it is.** One unit runs an *entry point* against the client's bytes for N
+sequential steps, with a scripted input sequence, and compares the declared
+state region after **every** step. One unit then proves the driver and every
+leaf it calls, on the step where each leaf is actually reached. AGENTS.md
+already admits this evidence class: *first-divergence for a trace*. A leaf that
+was invented rather than read diverges on the step that touches it, and the
+coverage stage still reports which branches the trace reached.
+
+**What is built.** The mechanism is in the harness and the pilot is green:
+`fn/ShapePoolAlloc-steps` calls the client's `ShapePoolAlloc` 1-4 times in a row
+on one pool inside a state region - 16 chained pops over 8 pools, 80 corpus
+cases, every channel compared after every call, **6 of 6 mutants killed** - in
+the same wall clock as a single-call unit (differential 0.2 s for 160 client
+calls, mutation ~8 s, one unit).
+
+**The number that shapes the plan.** For that leaf the steps unit is **not
+stronger** than the single-call one, because a single-call unit already compares
+the whole mutation of one call. `steps` pays only where a call's writes feed the
+**next call's control flow** - a driver. Trace units are for drivers, not for
+leaves, and the 1,303 shared functions are only worth tracing where a driver
+reaches them.
+
+**How it works.**
+
+1. `steps: true` in the unit; the fixture module exports
+   `make_steps(i) -> list[list[ArgSpec]]` instead of `make_args(i)`. Each case
+   is a list of steps.
+2. The oracle keeps its state region between the steps of a case
+   (`EmuOracle.persist_state`) and re-seeds it from the snapshot at the start of
+   each case. One emulator serves every case: building one costs 12x the calls
+   it then runs (measured, the differential stage went from 1.2 s to 0.2 s).
+3. The candidate probe keeps its state buffer between calls too, and the harness
+   sends a `reset` command before each case (`RustCandidate.reset_state`, and
+   the `reset` command in `verify_probe.rs`).
+4. The region is addressed by **guest** addresses: a `u64` argument carries a
+   guest address and the probe slices its own state buffer there, so the data
+   survives the call. A `ptr` argument cannot be used: its pointee bytes are
+   re-sent by the wire on every call, which re-seeds them.
+5. The mutation stage replays the first case's steps in order on one mutant
+   process, so a mutant is killed by the step where it first diverges.
+
+**The pilot.** `fn/ShapePoolAlloc-steps`: the pool record and its entries array
+live in the state snapshot, reached through `shape_pool_alloc_guest` in
+`crates/ow-tank/src/bin/verify_probe.rs`; the fixture is
+`dev/verify_harness/shape_pool_alloc_steps_fixture.py` and prints the snapshot
+hex the unit carries. Cases cover chain lengths 1-4, a non-contiguous `2 -> 0`
+chain, a saturated used count and a high-water mark that must not fall. The last
+pop of a case leaves the free head at `-1`; the call after that is the client's
+allocator path, which cannot run offline, so no case goes past the end of its
+chain. `formats/domino.md`, "the fill path".
+
+**Pilot two, a real driver (`fn/ApplyCharacterControllerMove-steps`).** The
+client's `ApplyCharacterControllerMove` (`0x142cd5370`) called three times in a
+row on one character in the state region, with a different velocity each step,
+compared after every call - 200 cases, coverage 100% of the compared window
+(9/9 branches), **10/10 mutants killed**. It found that the **harness** was
+wrong, not the port: the ow-sim entry built its working copy from
+`state.snapshot`, so every call started from the snapshot and the client's own
+1-ULP double normalization was invisible. The port needed no change.
+
+**Two harness bugs that pilot found, both fixed.**
+
+1. The probe re-seeded its state region *inside the entry* (`state.snapshot`
+   instead of the live `state.buf`), so a steps unit's later calls silently saw
+   the snapshot. The probe now holds one live buffer, re-seeds it before every
+   call unless the unit asks otherwise (`persist on`, which the runner sends for
+   a steps unit), and the ow-tank probe follows the same rule - a single-call
+   unit must answer from the snapshot every time, because the runner caches
+   answers by args. This is why the first run looked like a mover bug: the
+   candidate normalized the original quaternion three times while the client
+   normalized its own output.
+2. The mutation corpus for a steps unit was **case 0 only**, so a mutant that
+   only shows on a boundary handle or a NaN payload survived: measured 50%
+   (5/10), then 100% (10/10) once the kill loop replays every case and resets the
+   mutant's state at each case's first step. A steps unit has far fewer cases
+   than a single-call unit, so "case 0 carries the corpus" was silently too
+   weak.
+
+**Next.** The mover driver (`fn/MoverUpdateFrame-trace`, 30 frames on a
+controlled mover state) needs one more piece: the client's driver calls through
+vtables and a world, so the state region has to reach the **arena**, not only
+the snapshot - guest translation for `ptr` arguments, which the state-mode pilot
+names as missing (`crates/ow-sim/src/bin/verify_probe.rs:1860`). Section S4
+measures what that is worth before promising a number for it.
+
+**What it does not do.** It does not make reading optional: a trace proves
+equivalence, not that the Rust came from the client's expression. A leaf per
+unit still has to be read - but once, inside the driver's read, with its
+contract visible at the call site.
+
+## S4: what one unit actually buys (measured 2026-11-20)
+
+S3 argued the shape from the client's graph. This section measures the yield, so
+the plan is chosen by numbers instead of by the shape's plausibility. Two tools,
+both read-only and reproducible:
+
+```sh
+python dev/throughput.py                # static closure per unit, coverage of the scope
+python dev/reach.py <unit>... --cases 6 # functions a unit's corpus EXECUTES
+```
+
+### The static closure is fiction; execution is the number
+
+`dev/throughput.py` reports the transitive callee closure of each unit's entry.
+Summed over 114 verified units it reads as **817 of 3,875 scope functions
+(21.1%)**, and the top entries look enormous - `fn/ApplyMoverSettings` 491
+functions, 278 KB. `dev/reach.py` runs the unit's own corpus under
+`UC_HOOK_CODE` and folds every executed instruction up to its chain root:
+
+| unit | static closure | **executed** | bytes executed |
+|---|---|---|---|
+| `fn/ApplyMoverSettings` | 491 | **2** | 995 |
+| `fn/StateTransform` | 361 | **2** | 3,201 |
+| `fn/MoverResolveVector` | 305 | **3** | 2,800 |
+| `fn/QueryDriver` | - | **8** | 5,573 |
+| `fn/MoverWishSpring` | 32 | **8** | 2,278 |
+| `fn/ApplyCharacterControllerMove-steps` | 23 | **3** | 700 |
+| `fn/ApplyCharacterControllerMove` | 23 | **3** | 700 |
+| `fn/MapChunkCellBytesFixup` | 33 | **1** | 567 |
+
+The 14 units with the largest static closures execute **31 distinct functions
+between them** (union, 15.9 KB). The closure counts everything a *branch could
+lead to*; a controlled call walks one path through it.
+
+### Why: this graph is dispatch, not calls
+
+| measure (3,875 functions in scope) | value |
+|---|---|
+| functions with any memory-indirect dispatch (`slot_sites`) | **510** |
+| distinct slots per dispatching function | 1 slot: 362, 2-3: 121, 4-7: 24, **8+: 3** |
+| largest dispatch fan-out in the scope | **12 slots** (`0x1421482d0`), then 8 (`0x140cbb260` `MoverUpdateFrame`, 14 sites), 8, 7, 6... |
+| functions with >= 1 direct in-scope callee | 2,973 (1 callee 1,127; 2: 662; 3: 370; >= 8: 235) |
+
+So the leaves a unit *would* cover sit behind slots whose targets are set at
+runtime from a world the unit does not have. That is why `ApplyMoverSettings`
+reaches 2 functions and not 491, and why the ceiling on a *perfect* driver trace
+is about 10-30 functions, not thousands: `MoverUpdateFrame` has 8 distinct
+slots, and only three functions in the whole scope have 8 or more.
+
+### The harness is not the bottleneck
+
+| measure | value |
+|---|---|
+| fresh verification of 6 units (differential + coverage + mutation) | **90 s wall** -> 15 s/unit |
+| per unit: batch build of mutants / mutation stage / differential | ~12 s / ~12 s / 0.2 s |
+| all 3,875 scope functions at 15 s/unit | **~16 h of machine time** |
+| a 9-unit day (the best measured day) | ~2.3 min of machine time |
+| a unit's fixture, the part a human writes | median **116 lines** |
+
+The harness is ~0.5% of a working day. What costs the day is the *read* (the
+client's expression, operation for operation) and the fixture that pins its
+inputs. That is what `python dev/fn.py packet <addr>` attacks (one command: the
+function, its pieces, switch tables, immediates, data refs, callers, callees and
+the units that already cite it), and it is why the plan's own measured rate was
+1-9 units a day and not 1-9 an hour.
+
+### Where the verified units actually are
+
+| | units |
+|---|---|
+| verified units in the ledger | 115 |
+| entry inside the gameplay scope | **51** |
+| entry outside it (formats, crypto, asset plumbing) | 63 |
+| in-scope functions touched by those 51 (lower bound: entry + direct callees) | **70** (1.8%) |
+
+Most of the verification effort so far bought data-path behaviour, not gameplay
+functions. That is the honest number for "how much gameplay is proven": 1.8% by
+the lower bound, ~2-4% by the executed sample, not 21%.
+
+### What this changes
+
+1. **Queue by scope, not by convenience.** A format unit does not move the
+gameplay number; the 51/115 split is the cost of that already having happened.
+2. **Trace units pay on drivers only, and modestly.** Measured: the same leaf as
+   a 3-call trace executes the same 3 functions as its single-call twin. The gain
+   exists only where a slot is populated - which needs the world.
+3. **The world is the highest-leverage missing piece** because it is what turns
+   8 dispatch slots into 8+ executed functions per unit, on every driver at
+   once. Below it, every unit stays a 1-4 function unit.
+4. **Do not optimize the harness further.** 16 h total for the whole scope;
+   the read is the cost.
+
+Side note on the shape: a unit is not a function's *only* proof. 2,313 of the
+3,875 are `inline` - they have one caller, so a unit on the caller covers them
+without a unit of their own. That is the one place the 1,551-unit plan
+over-counted, and it is measurable: `python dev/corpus.py triage` prints the
+split (`entry 248`, `unit 1,303`, `inline 2,313`).
+
 ## Worked example: one unit, end to end
 
 `fn/FloatToQ12` (`0x141c6c830`), done 2026-11-17. Picked from `triage` because it

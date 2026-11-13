@@ -248,6 +248,42 @@ value is runtime-only: read the **writer** (or emulate the client's init), and
 record the finding as "written at runtime by <function>", never as "the value
 is zero".
 
+### A runtime-filled slot you can still read (measured 2026-11-20)
+
+Three readers and no writer proves a slot is *not* filled by the code, not that
+its value is unknowable. The recipe, and it works whenever the writer takes
+static operands:
+
+```sh
+python dev/rip_refs.py 0x1442a0158     # readers *and* writers, by opcode
+python dev/callers.py 0x142cadf50      # the setter's callers
+```
+
+The client's hot-patch guard is the worked case. `0x142cadee0` is
+`mov r10,[0x1442a0158]; test r10,r10; jmp r10` - it dispatches through a slot in
+the zero-fill tail, which is why 2,276 clusters screen as "call target with no
+index entry". But `0x1442a0158` **has** a writer, `0x142cadf35`, inside the
+setter pair `0x142cadf20`/`0x142cadf50`; the setters have exactly one caller,
+`0x141ff3190`, which is registered as a *data pointer* at `0x143360ef8` (an
+initializer, not a call) and passes three `lea` constants:
+
+| slot | value installed | what it is |
+|---|---|---|
+| `0x1442a0158` | `0x141bb6660` | `jmp 0x141bb00e0`, whose body is a virtual call `[rax+0x30]` |
+| `0x1442a0160` | `0x141b328e0` | `jmp 0x141baff90`: "call the singleton's vtable slot `+0x40`" |
+| `0x1442a0168` | `0x14053a420` | `ret 0` - a no-op hook |
+
+So the guard is statically resolvable, and reading the installer's operands is
+the read: no emulation needed. The chain then ends at a vtable dispatch on a
+global singleton, which is a *different* open question (the runtime object
+model), not a data one.
+
+The distinction that matters: a slot is readable from the image when its writer
+is in-line code with static operands (`lea`/`mov imm`); it is not when the writer
+copies from an argument or loops over a table. The Wwise bank XOR key at
+`0x144293db8` is the second kind - readers, no writer at all, so its file value
+(zeros) is the runtime value.
+
 ## Working in it
 
 **In the GUI** (the operator's Ghidra, MCP-connected):
@@ -284,7 +320,7 @@ The decompiler shows `FUN_140ca7f30`; the docs call the same function
 **`docs/function-names.csv`**: program, address, name and role.
 
 ```sh
-python dev/gh_apply_names.py          # apply every name
+python dev/gh_apply_names.py --pending # apply the names that differ (>= 20)
 python dev/gh_apply_names.py --check  # report what is named and what is not
 ```
 
